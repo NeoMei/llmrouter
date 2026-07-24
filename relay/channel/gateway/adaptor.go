@@ -183,7 +183,10 @@ func (a *Adaptor) handleUpstreamError(c *gin.Context, resp *http.Response) {
 // ─── 纯委托方法 ───
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, body io.Reader) (any, error) {
-	return a.Inner.DoRequest(c, info, body)
+	// CRITICAL: must call DoApiRequest with `a` (self), not a.Inner.
+	// DoApiRequest calls a.GetRequestURL() internally — if we delegate to Inner,
+	// Inner's GetRequestURL uses the channel's empty base_url instead of our profile's base_url.
+	return channel.DoApiRequest(a, c, info, body)
 }
 func (a *Adaptor) GetModelList() []string { return a.Inner.GetModelList() }
 func (a *Adaptor) GetChannelName() string { return ChannelName }

@@ -80,6 +80,34 @@ func ListUserProviderKeys(c *gin.Context) {
 	common.ApiSuccess(c, keys)
 }
 
+// ListProviderProfiles — GET /api/gateway/providers
+// Returns active provider profiles so users know which profile_id to use for BYOK.
+func ListProviderProfiles(c *gin.Context) {
+	var profiles []model.ProviderProfile
+	err := model.DB.Where("status = 'active'").Order("id ASC").Find(&profiles).Error
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, profiles)
+}
+
+// ListProviderModels — GET /api/gateway/models
+// Returns active provider models, optionally filtered by profile_id.
+func ListProviderModels(c *gin.Context) {
+	profileId, _ := strconv.Atoi(c.Query("profile_id"))
+	query := model.DB.Where("status = 'active'").Order("profile_id ASC, model_id ASC")
+	if profileId > 0 {
+		query = query.Where("profile_id = ?", profileId)
+	}
+	var models []model.ProviderModel
+	if err := query.Find(&models).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, models)
+}
+
 type platformKeyRequest struct {
 	ProfileId int    `json:"profile_id" binding:"required"`
 	ApiKey    string `json:"api_key" binding:"required"`

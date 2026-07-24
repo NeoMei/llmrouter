@@ -11,6 +11,8 @@ func registerGatewayRoutes(apiRouter *gin.RouterGroup) {
 	byokGroup := apiRouter.Group("/gateway")
 	byokGroup.Use(middleware.UserAuth())
 	{
+		byokGroup.GET("/providers", controller.ListProviderProfiles)
+		byokGroup.GET("/models", controller.ListProviderModels)
 		byokGroup.GET("/byok", controller.ListUserProviderKeys)
 		byokGroup.POST("/byok", controller.AddUserProviderKey)
 		byokGroup.DELETE("/byok/:id", controller.DeleteUserProviderKey)

@@ -26,6 +26,15 @@ func InitGlobals(loader *profile.Loader, keySel *KeySelector) {
 	GlobalKeySel = keySel
 }
 
+// AESGCM returns the process-wide AES-GCM instance used for provider key
+// encryption, or nil if the gateway subsystem is not configured.
+func AESGCM() *crypto.AESGCM {
+	if GlobalKeySel == nil {
+		return nil
+	}
+	return GlobalKeySel.crypto
+}
+
 // InitFromEnv wires GlobalLoader and GlobalKeySel from runtime infrastructure.
 //
 // Each component is optional and degrades gracefully:

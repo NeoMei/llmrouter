@@ -1,0 +1,25 @@
+{
+  "name": "codex-gateway",
+  "version": "1.0.0",
+  "description": "Configure Codex CLI / Claude Code to use Codex Gateway",
+  "type": "module",
+  "bin": {
+    "codex-gateway": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "^7.2.1",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

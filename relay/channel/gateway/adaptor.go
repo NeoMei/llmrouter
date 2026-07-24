@@ -109,8 +109,9 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	if p.QuirkRules.BracketStrip {
 		info.UpstreamModelName = stripBracketSuffix(info.UpstreamModelName)
 	}
-	// 首批 provider 都是 Chat Completions 兼容，统一走 /v1/chat/completions
-	return p.BaseURL + "/v1/chat/completions", nil
+	// ponytail: base URLs already include version path (e.g. /v1, /v4, /coding/v1).
+	// Append /chat/completions, not /v1/chat/completions — matches opencodex behavior.
+	return p.BaseURL + "/chat/completions", nil
 }
 
 // ─── Header 设置（BYOK / 平台 key）───

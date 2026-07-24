@@ -25,6 +25,7 @@ import (
 	"github.com/QuantumNous/new-api/oauth"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay"
+	"github.com/QuantumNous/new-api/relay/channel/gateway"
 	"github.com/QuantumNous/new-api/router"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
@@ -330,6 +331,15 @@ func InitResources() error {
 	err = common.InitRedisClient()
 	if err != nil {
 		return err
+	}
+
+	// Initialize codex-gateway provider subsystem (profile loader + platform key
+	// pool). Each component is optional and degrades gracefully when unset; see
+	// gateway.InitFromEnv. Needs both the SQL DB and Redis client.
+	if sqlDB, dbErr := model.DB.DB(); dbErr == nil {
+		gateway.InitFromEnv(common.RDB, sqlDB)
+	} else {
+		common.SysError("failed to obtain *sql.DB for gateway init: " + dbErr.Error())
 	}
 
 	perfmetrics.Init()

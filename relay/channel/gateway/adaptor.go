@@ -30,6 +30,9 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) { a.Inner.Init(info) }
 // ─── 请求转换 ───
 
 func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayInfo, req *dto.GeneralOpenAIRequest) (any, error) {
+	if a.Loader == nil {
+		return a.Inner.ConvertOpenAIRequest(c, info, req)
+	}
 	p, err := a.Loader.Get(c.Request.Context(), info.UpstreamModelName)
 	if err != nil {
 		return nil, err
@@ -60,6 +63,9 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 	if !ok {
 		return result, nil
 	}
+	if a.Loader == nil {
+		return openaiReq, nil
+	}
 	p, pErr := a.Loader.Get(c.Request.Context(), info.UpstreamModelName)
 	quirkpkg.NeutralizeIdentity(openaiReq)
 	quirkpkg.RepairDanglingToolCalls(openaiReq)
@@ -73,6 +79,9 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 // ─── URL 构建 ───
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
+	if a.Loader == nil {
+		return a.Inner.GetRequestURL(info)
+	}
 	p, err := a.Loader.Get(context.Background(), info.UpstreamModelName)
 	if err != nil {
 		return "", err
@@ -90,7 +99,7 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *
 	if err := a.Inner.SetupRequestHeader(c, header, info); err != nil {
 		return err
 	}
-	if a.KeySel == nil {
+	if a.KeySel == nil || a.Loader == nil {
 		return nil
 	}
 

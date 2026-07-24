@@ -2,9 +2,11 @@ package gateway
 
 import (
 	"database/sql"
+	"encoding/hex"
 	"os"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/crypto"
 	"github.com/QuantumNous/new-api/relay/profile"
 
@@ -36,26 +38,43 @@ func AESGCM() *crypto.AESGCM {
 }
 
 // InitFromEnv wires GlobalLoader and GlobalKeySel from runtime infrastructure.
-//
-// Each component is optional and degrades gracefully:
-//   - A missing/invalid GATEWAY_AES_KEY leaves GlobalKeySel nil; the adaptor
-//     then keeps whatever Authorization header the inner adaptor set.
-//   - The production profile DBQuerier (provider_models JOIN provider_profiles)
-//     is added in the model-layer task. Until then GlobalLoader stays nil and
-//     the adaptor delegates to its inner OpenAI adaptor. Wire it here once the
-//     querier exists: GlobalLoader = profile.NewLoader(rdb, querier).
 func InitFromEnv(rdb *redis.Client, db *sql.DB) {
 	var keySel *KeySelector
 	if aesKey := os.Getenv("GATEWAY_AES_KEY"); aesKey != "" {
-		c, err := crypto.NewAESGCM([]byte(aesKey))
+		keyBytes := decodeAESKey(aesKey)
+		c, err := crypto.NewAESGCM(keyBytes)
 		if err != nil {
 			common.SysLog("GATEWAY_AES_KEY invalid (" + err.Error() + "), platform key pool disabled")
 		} else if db != nil {
 			keySel = NewKeySelector(db, c)
 		}
 	}
-	// ponytail: GlobalLoader intentionally nil until the profile DBQuerier
-	// (provider_models JOIN provider_profiles) lands in the model-layer task.
-	// Adaptor nil-guards make this safe; nil Loader => delegate to Inner.
-	InitGlobals(nil, keySel)
+
+	// Wire the profile loader with the GORM-backed querier.
+	// This requires model.DB to be initialized before InitFromEnv is called.
+	var loader *profile.Loader
+	if querier := model.NewGormProfileQuerier(); querier != nil {
+		loader = profile.NewLoader(rdb, querier)
+	}
+
+	InitGlobals(loader, keySel)
+}
+
+// decodeAESKey tries hex-decoding first (standard for key exchange), falls back
+// to raw bytes for ASCII keys. Returns nil if the result isn't a valid AES key size.
+func decodeAESKey(s string) []byte {
+	// Try hex decode first
+	if decoded, err := hex.DecodeString(s); err == nil {
+		switch len(decoded) {
+		case 16, 24, 32:
+			return decoded
+		}
+	}
+	// Fall back to raw bytes
+	switch len(s) {
+	case 16, 24, 32:
+		return []byte(s)
+	}
+	// Not a valid key size — return as-is and let AES-GCM reject it
+	return []byte(s)
 }

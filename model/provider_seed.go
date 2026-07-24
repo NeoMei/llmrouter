@@ -21,18 +21,21 @@ var seedProviderCatalog = []struct {
 			DisplayName: "DeepSeek",
 			BaseURL:     "https://api.deepseek.com",
 			AuthMode:    "api_key",
+			Status:      "active",
 		},
 		Models: []ProviderModel{
 			{
 				ModelId:       "deepseek-v4-flash",
 				DisplayName:   "DeepSeek V4 Flash",
 				ContextWindow: 131072,
+				Status:        "active",
 				QuirkRules:    `{"reasoning_mode": "effort", "preserve_reasoning": true}`,
 			},
 			{
 				ModelId:       "deepseek-v4-pro",
 				DisplayName:   "DeepSeek V4 Pro",
 				ContextWindow: 131072,
+				Status:        "active",
 				QuirkRules:    `{"reasoning_mode": "effort", "preserve_reasoning": true}`,
 			},
 		},
@@ -43,18 +46,21 @@ var seedProviderCatalog = []struct {
 			DisplayName: "Kimi Coding Plan",
 			BaseURL:     "https://api.kimi.com/coding/v1",
 			AuthMode:    "api_key",
+			Status:      "active",
 		},
 		Models: []ProviderModel{
 			{
 				ModelId:       "kimi-for-coding",
 				DisplayName:   "Kimi for Coding",
 				ContextWindow: 262144,
+				Status:        "active",
 				QuirkRules:    `{"reasoning_mode": "effort", "preserve_reasoning": true, "strip_params": ["temperature", "top_p", "presence_penalty", "frequency_penalty"], "tool_choice": "auto_only"}`,
 			},
 			{
 				ModelId:       "k3",
 				DisplayName:   "Kimi K3",
 				ContextWindow: 262144,
+				Status:        "active",
 				QuirkRules:    `{"reasoning_mode": "effort", "preserve_reasoning": true, "strip_params": ["temperature", "top_p", "presence_penalty", "frequency_penalty"], "effort_map": {"none": "none", "low": "low", "medium": "high", "high": "high", "xhigh": "max", "max": "max"}}`,
 			},
 		},
@@ -65,12 +71,14 @@ var seedProviderCatalog = []struct {
 			DisplayName: "Zhipu Coding Plan",
 			BaseURL:     "https://open.bigmodel.cn/api/coding/paas/v4",
 			AuthMode:    "api_key",
+			Status:      "active",
 		},
 		Models: []ProviderModel{
 			{
 				ModelId:       "glm-5.2",
 				DisplayName:   "GLM-5.2",
 				ContextWindow: 131072,
+				Status:        "active",
 				QuirkRules:    `{"reasoning_mode": "effort", "preserve_reasoning": true, "bracket_strip": true}`,
 			},
 		},
@@ -81,12 +89,14 @@ var seedProviderCatalog = []struct {
 			DisplayName: "Alibaba Coding Plan",
 			BaseURL:     "https://coding.dashscope.aliyuncs.com/v1",
 			AuthMode:    "api_key",
+			Status:      "active",
 		},
 		Models: []ProviderModel{
 			{
 				ModelId:       "qwen3-coder-next",
 				DisplayName:   "Qwen3 Coder Next",
 				ContextWindow: 131072,
+				Status:        "active",
 				QuirkRules:    `{"reasoning_mode": "effort", "preserve_reasoning": true}`,
 			},
 		},

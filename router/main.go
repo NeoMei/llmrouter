@@ -1,6 +1,7 @@
 package router
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -8,11 +9,31 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/middleware"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/health"
+	"github.com/QuantumNous/new-api/pkg/observability"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func SetRouter(router *gin.Engine, assets WebAssets) {
+	observability.Init()
+
+	// Health + metrics endpoints (registered before web fallback / auth so they
+	// remain reachable during incidents). Healthz/readyz ping DB + Redis.
+	dbPing := func(ctx context.Context) error {
+		sqlDB, err := model.DB.DB()
+		if err != nil {
+			return err
+		}
+		return sqlDB.PingContext(ctx)
+	}
+	checker := health.NewChecker(common.RDB, dbPing)
+	router.GET("/healthz", checker.HealthzHandler)
+	router.GET("/readyz", checker.ReadyzHandler)
+	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
+
 	SetApiRouter(router)
 	SetDashboardRouter(router)
 	SetRelayRouter(router)

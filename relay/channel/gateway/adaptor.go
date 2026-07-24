@@ -9,9 +9,11 @@ import (
 
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
+	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/profile"
 	quirkpkg "github.com/QuantumNous/new-api/relay/quirk"
+	"github.com/QuantumNous/new-api/service/relayconvert"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -45,13 +47,31 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, req dto.OpenAIResponsesRequest) (any, error) {
-	// ponytail: Responses 格式的消息结构（json.RawMessage input/instructions）与
-	// Chat Completions 不同，quirk/profile 的 ApplyRules 仅适配 GeneralOpenAIRequest。
-	// 这里只加载 profile（供后续 URL/key 选择使用）， Responses 专用 quirk 待后续补齐。
-	if a.Loader != nil {
-		_, _ = a.Loader.Get(c.Request.Context(), info.UpstreamModelName)
+	if a.Loader == nil {
+		return a.Inner.ConvertOpenAIResponsesRequest(c, info, req)
 	}
-	return a.Inner.ConvertOpenAIResponsesRequest(c, info, req)
+	// Convert Responses → Chat Completions format so we can apply quirks
+	// and send to providers that only support /v1/chat/completions.
+	result, err := relayconvert.ConvertRequest(c, info, types.RelayFormatOpenAI, &req)
+	if err != nil {
+		// fallback: let inner adaptor handle as-is
+		return a.Inner.ConvertOpenAIResponsesRequest(c, info, req)
+	}
+	openaiReq, ok := result.Value.(*dto.GeneralOpenAIRequest)
+	if !ok {
+		return a.Inner.ConvertOpenAIResponsesRequest(c, info, req)
+	}
+	// Apply quirk + profile on the Chat Completions format request
+	p, pErr := a.Loader.Get(c.Request.Context(), info.UpstreamModelName)
+	quirkpkg.NeutralizeIdentity(openaiReq)
+	quirkpkg.RepairDanglingToolCalls(openaiReq)
+	quirkpkg.GuardEmptyAssistant(openaiReq)
+	if pErr == nil && p != nil {
+		profile.ApplyRules(openaiReq, p)
+	}
+	// Mark that response needs Chat→Responses conversion
+	c.Set("gateway_responses_via_chat", true)
+	return openaiReq, nil
 }
 
 func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, req *dto.ClaudeRequest) (any, error) {
@@ -133,6 +153,15 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
 	if resp.StatusCode >= 400 {
 		a.handleUpstreamError(c, resp)
+	}
+	// When we converted Responses→Chat for the upstream, the response comes back
+	// in Chat Completions format but the client expects Responses format.
+	// Route through the Chat→Responses conversion handler.
+	if c.GetBool("gateway_responses_via_chat") {
+		if info.IsStream {
+			return openai.OaiChatToResponsesStreamHandler(c, info, resp)
+		}
+		return openai.OaiChatToResponsesHandler(c, info, resp)
 	}
 	return a.Inner.DoResponse(c, resp, info)
 }

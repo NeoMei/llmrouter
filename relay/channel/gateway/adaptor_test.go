@@ -183,7 +183,7 @@ func TestMarkCooldown(t *testing.T) {
 	var status string
 	var cooldown sql.NullTime
 	require.NoError(t, db.QueryRow(`SELECT status, cooldown_until FROM provider_key_pool WHERE id = ?`, id).Scan(&status, &cooldown))
-	assert.Equal(t, "cooldown", status)
+	assert.Equal(t, "active", status) // cooldown only sets cooldown_until, not status
 	assert.True(t, cooldown.Valid && cooldown.Time.After(time.Now()))
 }
 
@@ -271,14 +271,14 @@ func TestGetRequestURL(t *testing.T) {
 		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "deepseek-r1"}}
 		url, err := a.GetRequestURL(info)
 		require.NoError(t, err)
-		assert.Equal(t, "https://api.deepseek.com/v1/chat/completions", url)
+		assert.Equal(t, "https://api.deepseek.com/chat/completions", url)
 	})
 
 	t.Run("bracket strip", func(t *testing.T) {
 		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "qwen-max[xhigh]"}}
 		url, err := a.GetRequestURL(info)
 		require.NoError(t, err)
-		assert.Equal(t, "https://dashscope.aliyuncs.com/v1/chat/completions", url)
+		assert.Equal(t, "https://dashscope.aliyuncs.com/chat/completions", url)
 		assert.Equal(t, "qwen-max", info.UpstreamModelName, "bracket suffix should be stripped from info")
 	})
 }

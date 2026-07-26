@@ -80,10 +80,12 @@ func (ks *KeySelector) GetBYOKKey(ctx context.Context, userID, profileID int) (s
 }
 
 // MarkCooldown puts a platform key into cooldown for the given duration.
+// Only sets cooldown_until — does NOT change status, so the key automatically
+// becomes selectable again once cooldown_until < NOW().
 func (ks *KeySelector) MarkCooldown(ctx context.Context, keyID int, duration time.Duration) {
 	ks.db.ExecContext(ctx, rebind(`
 		UPDATE provider_key_pool
-		SET cooldown_until = ?, status = 'cooldown'
+		SET cooldown_until = ?
 		WHERE id = ?
 	`), time.Now().Add(duration), keyID)
 }

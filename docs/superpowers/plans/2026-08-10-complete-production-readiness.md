@@ -698,7 +698,7 @@ git commit -m "feat: complete public relay operations and provider contracts"
 **Interfaces:**
 - Produces: `resolveIframePolicy(url, preset, env): IframePolicy` and sanitized footer rendering.
 
-- [ ] **Step 1: Add URL/sandbox/permission/sanitization tests**
+- [x] **Step 1: Add URL/sandbox/permission/sanitization tests**
 
 ```ts
 assert.equal(resolveIframePolicy('javascript:alert(1)', preset, env).allowed, false)
@@ -706,23 +706,23 @@ assert.equal(policy.sandbox.includes('allow-same-origin') && policy.sandbox.incl
 assert.equal(sanitizeConfiguredHtml('<img src=x onerror=alert(1)>').includes('onerror'), false)
 ```
 
-- [ ] **Step 2: Run security tests**
+- [x] **Step 2: Run security tests**
 
 Run: `cd web && npm test -- --test-name-pattern='iframe|sanitize'`
 
 Expected: FAIL because the shared policy is absent/current iframe attributes are unsafe.
 
-- [ ] **Step 3: Implement the shared policy**
+- [x] **Step 3: Implement the shared policy**
 
 Permit HTTPS in production and explicit localhost HTTP in development. Default sandbox excludes camera, microphone, forms, popups, downloads, presentation, and same-origin. Scripts plus same-origin are permitted only on a separately configured preview origin. Chat launch uses a short-lived server credential bound to user/preset/origin; raw long-lived key interpolation requires an admin compatibility flag and warning. Route configured footer HTML through the existing DOMPurify utility.
 
-- [ ] **Step 4: Run web tests and lint on changed files**
+- [x] **Step 4: Run web tests and lint on changed files**
 
 Run: `cd web && npm test && npx eslint 'src/lib/security/**' 'src/routes/_authenticated/chat/$chatId.tsx' 'src/components/ai-elements/web-preview.tsx' 'src/components/layout/components/footer.tsx'`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src

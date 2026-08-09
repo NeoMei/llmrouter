@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -87,6 +88,18 @@ func TryUserAuth() func(c *gin.Context) {
 		}
 		c.Next()
 	}
+}
+
+func chatCredentialOriginMatches(boundOrigin, rawOrigin string) bool {
+	bound, err := url.Parse(boundOrigin)
+	if err != nil || bound.Scheme == "" || bound.Host == "" {
+		return false
+	}
+	origin, err := url.Parse(strings.TrimSpace(rawOrigin))
+	if err != nil || origin.Scheme == "" || origin.Host == "" {
+		return false
+	}
+	return strings.EqualFold(bound.Scheme, origin.Scheme) && strings.EqualFold(bound.Host, origin.Host)
 }
 
 func UserAuth() func(c *gin.Context) {
@@ -421,6 +434,10 @@ func TokenAuth() func(c *gin.Context) {
 				abortWithOpenAiMessage(c, http.StatusUnauthorized,
 					common.TranslateMessage(c, i18n.MsgTokenInvalid))
 			}
+			return
+		}
+		if token.Purpose == "chat_embed" && !chatCredentialOriginMatches(token.BoundOrigin, c.GetHeader("Origin")) {
+			abortWithOpenAiMessage(c, http.StatusForbidden, "chat credential origin mismatch", types.ErrorCodeAccessDenied)
 			return
 		}
 

@@ -28,6 +28,8 @@ type Token struct {
 	UsedQuota          int            `json:"used_quota" gorm:"default:0"` // used quota
 	Group              string         `json:"group" gorm:"default:''"`
 	CrossGroupRetry    bool           `json:"cross_group_retry"` // 跨分组重试，仅auto分组有效
+	Purpose            string         `json:"-" gorm:"type:varchar(32);index"`
+	BoundOrigin        string         `json:"-" gorm:"type:varchar(512)"`
 	DeletedAt          gorm.DeletedAt `gorm:"index"`
 }
 
@@ -287,6 +289,10 @@ func (token *Token) Insert() error {
 	var err error
 	err = DB.Create(token).Error
 	return err
+}
+
+func DeleteExpiredChatCredentials(userID int, now int64) error {
+	return DB.Unscoped().Where("user_id = ? AND purpose = ? AND expired_time < ?", userID, "chat_embed", now).Delete(&Token{}).Error
 }
 
 // Update Make sure your token's fields is completed, because this will update non-zero values

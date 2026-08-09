@@ -3,6 +3,7 @@ package controller
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -231,6 +232,49 @@ func AddToken(c *gin.Context) {
 		"success": true,
 		"message": "",
 	})
+}
+
+type chatCredentialRequest struct {
+	PresetID string `json:"preset_id"`
+	URL      string `json:"url"`
+}
+
+func CreateChatCredential(c *gin.Context) {
+	var request chatCredentialRequest
+	if err := c.ShouldBindJSON(&request); err != nil || len(request.PresetID) > 64 {
+		common.ApiError(c, fmt.Errorf("invalid chat credential request"))
+		return
+	}
+	target, err := url.Parse(strings.TrimSpace(request.URL))
+	if err != nil || target.Host == "" {
+		common.ApiError(c, fmt.Errorf("invalid chat URL"))
+		return
+	}
+	localDevelopment := gin.Mode() != gin.ReleaseMode && target.Scheme == "http" &&
+		(target.Hostname() == "localhost" || target.Hostname() == "127.0.0.1" || target.Hostname() == "::1")
+	if target.Scheme != "https" && !localDevelopment {
+		common.ApiError(c, fmt.Errorf("chat URL must use HTTPS"))
+		return
+	}
+	key, err := common.GenerateKey()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	now := common.GetTimestamp()
+	expiresAt := now + 5*60
+	userID := c.GetInt("id")
+	_ = model.DeleteExpiredChatCredentials(userID, now)
+	token := &model.Token{
+		UserId: userID, Name: "chat:" + request.PresetID, Key: key,
+		Status: common.TokenStatusEnabled, CreatedTime: now, AccessedTime: now,
+		ExpiredTime: expiresAt, UnlimitedQuota: true, Purpose: "chat_embed", BoundOrigin: target.Scheme + "://" + target.Host,
+	}
+	if err := token.Insert(); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{"credential": "sk-" + key, "expires_at": expiresAt, "origin": token.BoundOrigin})
 }
 
 func DeleteToken(c *gin.Context) {

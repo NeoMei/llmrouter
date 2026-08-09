@@ -23,12 +23,13 @@ import { useTranslation } from 'react-i18next'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import { useActiveChatKey } from '@/features/chat/hooks/use-active-chat-key'
+import { useChatCredential } from '@/features/chat/hooks/use-active-chat-key'
 import { useChatPresets } from '@/features/chat/hooks/use-chat-presets'
 import {
   chatLinkRequiresApiKey,
   resolveChatUrl,
 } from '@/features/chat/lib/chat-links'
+import { resolveIframePolicy } from '@/lib/security/iframe-policy'
 
 export const Route = createFileRoute('/_authenticated/chat/$chatId')({
   loader: async ({ params }) => {
@@ -61,7 +62,11 @@ function ChatRouteComponent() {
     isPending,
     isError,
     error,
-  } = useActiveChatKey(Boolean(preset && requiresActiveKey))
+  } = useChatCredential(
+    Boolean(preset && requiresActiveKey),
+    preset?.id ?? '',
+    preset?.url ?? ''
+  )
 
   const iframeSrc = useMemo(() => {
     if (!preset || !isWebLink) return ''
@@ -72,6 +77,15 @@ function ChatRouteComponent() {
       serverAddress,
     })
   }, [activeKey, isWebLink, preset, requiresActiveKey, serverAddress])
+
+  const iframePolicy = useMemo(
+    () =>
+      resolveIframePolicy(iframeSrc, { allowScripts: true }, {
+        production: import.meta.env.PROD,
+        trustedPreviewOrigin: import.meta.env.VITE_TRUSTED_PREVIEW_ORIGIN,
+      }),
+    [iframeSrc]
+  )
 
   if (!preset) {
     return (
@@ -138,7 +152,7 @@ function ChatRouteComponent() {
     )
   }
 
-  if (!requiresActiveKey && !iframeSrc) {
+  if ((!requiresActiveKey && !iframeSrc) || (iframeSrc && !iframePolicy.allowed)) {
     return (
       <div className='flex h-full flex-col items-center justify-center p-6'>
         <Alert variant='destructive' className='max-w-xl'>
@@ -155,10 +169,12 @@ function ChatRouteComponent() {
 
   return (
     <iframe
-      src={iframeSrc}
+      src={iframePolicy.url}
       key={iframeSrc}
       className='h-full w-full border-0'
-      allow='camera; microphone'
+      allow={iframePolicy.allow || undefined}
+      referrerPolicy='no-referrer'
+      sandbox={iframePolicy.sandbox}
       title={`Chat preset: ${preset.name}`}
     />
   )

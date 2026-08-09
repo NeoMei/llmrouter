@@ -833,7 +833,7 @@ git commit -m "chore: make web and CLI release gates clean"
 **Interfaces:**
 - Produces: `npm run build:all`, `npm test`, and `npm run probe -- <artifact>` on Windows/macOS/Linux.
 
-- [ ] **Step 1: Add packaged startup probe test**
+- [x] **Step 1: Add packaged startup probe test**
 
 ```js
 test('wrapper starts backend, waits for readyz, and terminates children', async () => {
@@ -841,23 +841,23 @@ test('wrapper starts backend, waits for readyz, and terminates children', async 
 })
 ```
 
-- [ ] **Step 2: Run Electron test**
+- [x] **Step 2: Run Electron test**
 
 Run: `cd electron && npm test`
 
 Expected: FAIL because startup lifecycle is not testable/current package has no test script.
 
-- [ ] **Step 3: Implement one build pipeline and CI matrix**
+- [x] **Step 3: Implement one build pipeline and CI matrix**
 
 Make the wrapper accept injected backend path/port/readiness URL for tests, terminate child processes on all exit signals, and surface startup errors. `build:all` builds web/backend/wrapper from the same version. CI matrix builds Windows/macOS/Linux, runs startup probe against unpacked package, then emits SHA-256 checksums.
 
-- [ ] **Step 4: Run local Electron verification**
+- [x] **Step 4: Run local Electron verification**
 
 Run: `cd electron && npm test && npm run build:all && npm run probe -- dist`
 
 Expected: tests/build/probe exit 0 on the current platform.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add electron .github/workflows/electron.yml

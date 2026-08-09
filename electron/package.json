@@ -4,12 +4,15 @@
   "description": "New API - AI Model Gateway Desktop Application",
   "main": "main.js",
   "scripts": {
+    "test": "node --test test/*.test.js",
     "start-app": "electron .",
     "dev-app": "cross-env NODE_ENV=development electron .",
     "build": "electron-builder",
-    "build:mac": "electron-builder --mac",
-    "build:win": "electron-builder --win",
-    "build:linux": "electron-builder --linux"
+    "build:all": "bash ./build.sh",
+    "package:mac": "electron-builder --mac",
+    "package:win": "electron-builder --win",
+    "package:linux": "electron-builder --linux",
+    "probe": "node scripts/package-probe.js"
   },
   "keywords": [
     "ai",
@@ -25,8 +28,12 @@
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
-    "electron": "39.8.5",
-    "electron-builder": "^26.7.0"
+    "electron": "39.8.10",
+    "electron-builder": "^26.15.0"
+  },
+  "allowScripts": {
+    "electron@39.8.10": true,
+    "electron-winstaller@5.4.0": true
   },
   "build": {
     "appId": "com.newapi.desktop",
@@ -37,6 +44,7 @@
     },
     "files": [
       "main.js",
+      "server-runtime.js",
       "preload.js",
       "icon.png",
       "tray-iconTemplate.png",

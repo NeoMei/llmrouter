@@ -878,20 +878,20 @@ git commit -m "build: add reproducible cross-platform desktop packaging"
 **Interfaces:**
 - Produces: identical test command locally and in merge CI; provider fixtures keyed by capability registry entries.
 
-- [ ] **Step 1: Add a matrix completeness test**
+- [x] **Step 1: Add a matrix completeness test**
 
 ```go
 func TestEverySupportedCapabilityHasProviderFixture(t *testing.T) { /* exact key-set equality */ }
 func TestAllPublicResourceRoutesHaveE2ECase(t *testing.T) { /* exact operation-set equality */ }
 ```
 
-- [ ] **Step 2: Run completeness tests**
+- [x] **Step 2: Run completeness tests**
 
 Run: `go test ./tests/contracts/...`
 
 Expected: FAIL until every supported capability/resource operation has a fixture.
 
-- [ ] **Step 3: Implement the integration stack and fixtures**
+- [x] **Step 3: Implement the integration stack and fixtures**
 
 Compose starts gateway, MySQL, PostgreSQL, Redis, and MinIO with isolated credentials/volumes. The runner executes migrations/repositories on SQLite/MySQL/PostgreSQL, object-store contracts against MinIO, distributed rate limiting and worker claims across two gateway instances, simulated upstream success/error/timeout/malformed/retry/billing cases for every supported capability, and Files/Fine-tuning/variation/model-delete E2E.
 
@@ -901,7 +901,7 @@ Run: `bash scripts/run-integration-matrix.sh`
 
 Expected: all database, Redis, MinIO, provider-contract, and API-E2E suites pass; containers are removed by trap.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docker-compose.test.yml tests scripts/run-integration-matrix.sh .github/workflows/integration.yml

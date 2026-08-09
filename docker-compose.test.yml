@@ -7,7 +7,13 @@ services:
       POSTGRES_USER: gateway
       POSTGRES_PASSWORD: test-only-postgres-secret
       POSTGRES_DB: gateway
-    ports: ["55432:5432"]
+    ports: ['55432:5432']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U gateway -d gateway']
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
   mysql:
     image: mysql:8.4.2
     environment:
@@ -15,15 +21,91 @@ services:
       MYSQL_USER: gateway
       MYSQL_PASSWORD: test-only-mysql-secret
       MYSQL_DATABASE: gateway
-    ports: ["53306:3306"]
+    ports: ['53306:3306']
+    healthcheck:
+      test: ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1 -ugateway -ptest-only-mysql-secret']
+      interval: 2s
+      timeout: 2s
+      retries: 60
+
   redis:
     image: redis:7.4.0-alpine
-    command: ["redis-server", "--requirepass", "test-only-redis-secret"]
-    ports: ["56379:6379"]
+    command: ['redis-server', '--requirepass', 'test-only-redis-secret']
+    ports: ['56379:6379']
+    healthcheck:
+      test: ['CMD-SHELL', 'redis-cli -a test-only-redis-secret ping | grep -q PONG']
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
   minio:
     image: quay.io/minio/minio:RELEASE.2024-08-03T04-33-23Z
     command: server /data
     environment:
       MINIO_ROOT_USER: test-access-key
       MINIO_ROOT_PASSWORD: test-secret-key-that-is-long-enough
-    ports: ["59000:9000"]
+    ports: ['59000:9000']
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://127.0.0.1:9000/minio/health/live']
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  minio-init:
+    image: quay.io/minio/mc:RELEASE.2024-07-31T15-58-33Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - >-
+        mc alias set test http://minio:9000 test-access-key test-secret-key-that-is-long-enough &&
+        mc mb --ignore-existing test/gateway-files
+
+  gateway-a:
+    build: .
+    environment: &gateway-environment
+      SQL_DSN: postgresql://gateway:test-only-postgres-secret@postgres:5432/gateway
+      REDIS_CONN_STRING: redis://default:test-only-redis-secret@redis:6379/0
+      SESSION_SECRET: integration-session-secret-at-least-32-bytes
+      GATEWAY_AES_KEY: integration-aes-key-at-least-32-bytes
+      OBJECT_STORE_TYPE: s3
+      OBJECT_STORE_ENDPOINT: http://minio:9000
+      OBJECT_STORE_BUCKET: gateway-files
+      OBJECT_STORE_REGION: us-east-1
+      OBJECT_STORE_ACCESS_KEY_ID: test-access-key
+      OBJECT_STORE_SECRET_ACCESS_KEY: test-secret-key-that-is-long-enough
+      OBJECT_STORE_USE_PATH_STYLE: 'true'
+      TRUSTED_PROXIES: 127.0.0.1/32
+      NODE_NAME: integration-a
+      PORT: '3000'
+    ports: ['53001:3000']
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ['CMD-SHELL', "wget -q -O - http://127.0.0.1:3000/readyz | grep -q '\"status\":\"ok\"'"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+      start_period: 10s
+
+  gateway-b:
+    build: .
+    environment:
+      <<: *gateway-environment
+      NODE_NAME: integration-b
+    ports: ['53002:3000']
+    depends_on:
+      gateway-a:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', "wget -q -O - http://127.0.0.1:3000/readyz | grep -q '\"status\":\"ok\"'"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+      start_period: 10s

@@ -1,0 +1,14 @@
+[
+  {"method":"DELETE","pattern":"^/v1/models/[^/]+$","protocol":"openai","operation":"models.delete"},
+  {"method":"POST","pattern":"^/v1/images/variations$","protocol":"openai","operation":"images.variations.create"},
+  {"method":"GET","pattern":"^/v1/files$","protocol":"openai","operation":"files.list"},
+  {"method":"POST","pattern":"^/v1/files$","protocol":"openai","operation":"files.create"},
+  {"method":"GET","pattern":"^/v1/files/[^/]+/content$","protocol":"openai","operation":"files.content"},
+  {"method":"GET","pattern":"^/v1/files/[^/]+$","protocol":"openai","operation":"files.retrieve"},
+  {"method":"DELETE","pattern":"^/v1/files/[^/]+$","protocol":"openai","operation":"files.delete"},
+  {"method":"POST","pattern":"^/v1/(fine-tunes|fine_tuning/jobs)$","protocol":"openai","operation":"fine_tuning.jobs.create"},
+  {"method":"GET","pattern":"^/v1/(fine-tunes|fine_tuning/jobs)$","protocol":"openai","operation":"fine_tuning.jobs.list"},
+  {"method":"POST","pattern":"^/v1/(fine-tunes|fine_tuning/jobs)/[^/]+/cancel$","protocol":"openai","operation":"fine_tuning.jobs.cancel"},
+  {"method":"GET","pattern":"^/v1/(fine-tunes|fine_tuning/jobs)/[^/]+/events$","protocol":"openai","operation":"fine_tuning.events.list"},
+  {"method":"GET","pattern":"^/v1/(fine-tunes|fine_tuning/jobs)/[^/]+$","protocol":"openai","operation":"fine_tuning.jobs.retrieve"}
+]

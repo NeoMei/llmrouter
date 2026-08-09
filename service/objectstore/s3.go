@@ -54,8 +54,11 @@ func (s *S3Store) Put(ctx context.Context, key string, body io.Reader, opts PutO
 	hash := sha256.New()
 	input := &s3.PutObjectInput{
 		Bucket: aws.String(s.bucket), Key: aws.String(key), Body: io.TeeReader(body, hash),
-		ContentType: aws.String(opts.ContentType), ContentLength: aws.Int64(opts.Size),
-		Metadata: map[string]string{"sha256": opts.ChecksumSHA256},
+		ContentType: aws.String(opts.ContentType),
+		Metadata:    map[string]string{"sha256": opts.ChecksumSHA256},
+	}
+	if opts.Size >= 0 {
+		input.ContentLength = aws.Int64(opts.Size)
 	}
 	output, err := s.client.PutObject(ctx, input)
 	if err != nil {

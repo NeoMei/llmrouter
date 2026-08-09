@@ -475,30 +475,30 @@ git commit -m "feat: publish and verify capability contracts"
 - Consumes/Produces: `objectstore.Store` defined in File Map.
 - Produces: `model.CreateAPIFile`, `ListAPIFiles`, `GetOwnedAPIFile`, `MarkAPIFileDeleted`.
 
-- [ ] **Step 1: Add a reusable storage contract and ownership repository tests**
+- [x] **Step 1: Add a reusable storage contract and ownership repository tests**
 
 ```go
 func RunStoreContract(t *testing.T, store Store) { /* put/open/checksum/delete/health/path traversal */ }
 func TestGetOwnedAPIFileHidesOtherTenant(t *testing.T) { /* expect gorm.ErrRecordNotFound */ }
 ```
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
 Run: `go test ./service/objectstore ./model -run 'Store|APIFile'`
 
 Expected: FAIL because implementations/models do not exist.
 
-- [ ] **Step 3: Implement local/S3 stores and `api_files`**
+- [x] **Step 3: Implement local/S3 stores and `api_files`**
 
 Local keys are generated server-side and resolved under one configured root after `filepath.Clean`; S3 uses path-style/region/endpoint configuration and verifies SHA-256 while streaming. The model records tenant, owner, purpose, filename, size, checksum, media type, storage key, channel/provider mapping, upstream ID, status, created/expiry/deleted timestamps. Add migration and AutoMigrate registration.
 
-- [ ] **Step 4: Run local and MinIO contracts plus all DB repository tests**
+- [x] **Step 4: Run local and MinIO contracts plus all DB repository tests**
 
 Run: `go test ./service/objectstore ./model -run 'Store|APIFile'`
 
 Expected: local contract passes; S3 contract passes when `TEST_S3_ENDPOINT` is set and otherwise skips with an explicit reason.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add service/objectstore model migrations
@@ -519,7 +519,7 @@ git commit -m "feat: add tenant-owned object storage resources"
 **Interfaces:**
 - Produces: list/upload/metadata/content/delete handlers for `/v1/files`.
 
-- [ ] **Step 1: Add E2E handler tests for all five routes and error codes**
+- [x] **Step 1: Add E2E handler tests for all five routes and error codes**
 
 ```go
 func TestFilesLifecycle(t *testing.T) { /* upload -> list -> metadata -> content -> delete -> 404 */ }
@@ -527,23 +527,23 @@ func TestFilesRejectCrossTenantAccess(t *testing.T) { /* all resource routes ret
 func TestFilesRejectOversizeAndMimeMismatch(t *testing.T) { /* 413 then 422 */ }
 ```
 
-- [ ] **Step 2: Run tests against placeholder routes**
+- [x] **Step 2: Run tests against placeholder routes**
 
 Run: `go test ./controller ./service -run Files`
 
 Expected: FAIL because routes return 501.
 
-- [ ] **Step 3: Implement streaming validation and handlers**
+- [x] **Step 3: Implement streaming validation and handlers**
 
 Authorize token/user before multipart parsing. Apply `http.MaxBytesReader`, stream to object storage while hashing, verify media type/extension/archive expansion/path safety, persist only after storage succeeds, and delete the object on DB failure. List is owner-scoped and cursor-paginated; content streams with safe headers; delete is idempotent for the owner while invisible resources remain 404. Replace all Files `RelayNotImplemented` registrations.
 
-- [ ] **Step 4: Run API tests and OpenAPI consistency**
+- [x] **Step 4: Run API tests and OpenAPI consistency**
 
 Run: `go test ./controller ./service ./router -run 'Files|RelayRoute'`
 
 Expected: PASS and no Files route points to `RelayNotImplemented`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add dto service controller router docs/openapi/relay.json

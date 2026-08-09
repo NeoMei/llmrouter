@@ -2109,21 +2109,34 @@
     },
     "/v1/files": {
       "get": {
-        "summary": "列出文件 (未实现)",
+        "summary": "列出当前用户的文件",
         "deprecated": false,
-        "description": "此接口尚未实现",
+        "description": "按所有者隔离列出文件，支持 after 游标与 1-100 的 limit。",
         "operationId": "listFiles",
         "tags": [
-          "未实现/Files"
+          "Files"
         ],
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}
+          }
+        ],
         "responses": {
-          "501": {
-            "description": "未实现",
+          "200": {
+            "description": "文件列表",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/FileList"
                 }
               }
             },
@@ -2137,12 +2150,12 @@
         ]
       },
       "post": {
-        "summary": "上传文件 (未实现)",
+        "summary": "上传文件",
         "deprecated": false,
-        "description": "此接口尚未实现",
+        "description": "流式上传 jsonl、json、txt 或 csv 文件，并计算 SHA-256。",
         "operationId": "createFile",
         "tags": [
-          "未实现/Files"
+          "Files"
         ],
         "parameters": [],
         "requestBody": {
@@ -2166,12 +2179,12 @@
           }
         },
         "responses": {
-          "501": {
-            "description": "未实现",
+          "200": {
+            "description": "上传完成",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/FileObject"
                 }
               }
             },
@@ -2187,12 +2200,12 @@
     },
     "/v1/files/{file_id}": {
       "get": {
-        "summary": "获取文件信息 (未实现)",
+        "summary": "获取文件信息",
         "deprecated": false,
-        "description": "此接口尚未实现",
+        "description": "仅返回当前所有者可见的文件。",
         "operationId": "retrieveFile",
         "tags": [
-          "未实现/Files"
+          "Files"
         ],
         "parameters": [
           {
@@ -2207,12 +2220,12 @@
           }
         ],
         "responses": {
-          "501": {
-            "description": "未实现",
+          "200": {
+            "description": "文件信息",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/FileObject"
                 }
               }
             },
@@ -2226,12 +2239,12 @@
         ]
       },
       "delete": {
-        "summary": "删除文件 (未实现)",
+        "summary": "删除文件",
         "deprecated": false,
-        "description": "此接口尚未实现",
+        "description": "删除对象内容并软删除所有者范围内的元数据。",
         "operationId": "deleteFile",
         "tags": [
-          "未实现/Files"
+          "Files"
         ],
         "parameters": [
           {
@@ -2246,12 +2259,12 @@
           }
         ],
         "responses": {
-          "501": {
-            "description": "未实现",
+          "200": {
+            "description": "删除结果",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/FileDeleteResponse"
                 }
               }
             },
@@ -2267,12 +2280,12 @@
     },
     "/v1/files/{file_id}/content": {
       "get": {
-        "summary": "获取文件内容 (未实现)",
+        "summary": "下载文件内容",
         "deprecated": false,
-        "description": "此接口尚未实现",
+        "description": "以安全的 Content-Disposition 响应流式返回文件内容。",
         "operationId": "downloadFile",
         "tags": [
-          "未实现/Files"
+          "Files"
         ],
         "parameters": [
           {
@@ -2287,12 +2300,13 @@
           }
         ],
         "responses": {
-          "501": {
-            "description": "未实现",
+          "200": {
+            "description": "文件二进制内容",
             "content": {
-              "application/json": {
+              "application/octet-stream": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "type": "string",
+                  "format": "binary"
                 }
               }
             },
@@ -2344,6 +2358,36 @@
               }
             }
           }
+        }
+      },
+      "FileObject": {
+        "type": "object",
+        "required": ["id", "object", "bytes", "created_at", "filename", "purpose", "status"],
+        "properties": {
+          "id": {"type": "string"},
+          "object": {"type": "string", "enum": ["file"]},
+          "bytes": {"type": "integer", "format": "int64"},
+          "created_at": {"type": "integer", "format": "int64"},
+          "filename": {"type": "string"},
+          "purpose": {"type": "string"},
+          "status": {"type": "string", "enum": ["pending", "ready", "failed"]}
+        }
+      },
+      "FileList": {
+        "type": "object",
+        "required": ["object", "data"],
+        "properties": {
+          "object": {"type": "string", "enum": ["list"]},
+          "data": {"type": "array", "items": {"$ref": "#/components/schemas/FileObject"}}
+        }
+      },
+      "FileDeleteResponse": {
+        "type": "object",
+        "required": ["id", "object", "deleted"],
+        "properties": {
+          "id": {"type": "string"},
+          "object": {"type": "string", "enum": ["file"]},
+          "deleted": {"type": "boolean"}
         }
       },
       "Usage": {

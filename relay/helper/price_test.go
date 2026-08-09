@@ -17,7 +17,6 @@ import (
 )
 
 func TestModelPriceHelperTieredUsesPreloadedRequestInput(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	saved := map[string]string{}
 	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
@@ -65,7 +64,6 @@ func TestModelPriceHelperTieredUsesPreloadedRequestInput(t *testing.T) {
 }
 
 func TestModelPriceHelperTieredPreConsumeMaxTokensFallback(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	saved := map[string]string{}
 	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
@@ -143,7 +141,6 @@ func TestModelPriceHelperTieredPreConsumeMaxTokensFallback(t *testing.T) {
 }
 
 func TestModelPriceHelperTieredRejectsPreConsumeOverflow(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	saved := map[string]string{}
 	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
@@ -182,7 +179,6 @@ func TestModelPriceHelperTieredRejectsPreConsumeOverflow(t *testing.T) {
 }
 
 func TestModelPriceHelperRequestBillingRatiosOnlyApplyToFixedPrice(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	savedModelPrices := ratio_setting.ModelPrice2JSONString()
 	savedModelRatios := ratio_setting.ModelRatio2JSONString()
 	t.Cleanup(func() {

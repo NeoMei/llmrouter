@@ -21,7 +21,6 @@ import (
 // edit parsing: the stream field is parsed and validated, and the request body
 // stays replayable for the upstream request.
 func TestGetAndValidOpenAIImageRequestMultipartStream(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	newContext := func(t *testing.T, streamValue string, withImage bool) (*gin.Context, string) {
 		var body bytes.Buffer
@@ -76,7 +75,6 @@ func TestGetAndValidOpenAIImageRequestMultipartStream(t *testing.T) {
 // the image generation count can never reach quota calculation with a value
 // large enough to overflow int64 into a negative charge.
 func TestGetAndValidOpenAIImageRequestNBounds(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	newJSONContext := func(t *testing.T, body string) *gin.Context {
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())

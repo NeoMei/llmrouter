@@ -190,6 +190,27 @@ func TestUpdateWithStatus_Win(t *testing.T) {
 	assert.Equal(t, "100%", reloaded.Progress)
 }
 
+func TestUpdateWithStatus_DoesNotMutateReceiver(t *testing.T) {
+	truncateTables(t)
+
+	task := &Task{
+		CreatedAt: 7,
+		UpdatedAt: 7,
+		TaskID:    "task_cas_receiver",
+		Status:    TaskStatusInProgress,
+		Progress:  "50%",
+		Data:      json.RawMessage(`{}`),
+	}
+	require.NoError(t, DB.Create(task).Error)
+
+	task.Progress = "60%"
+	before := *task
+	won, err := task.UpdateWithStatus(TaskStatusInProgress)
+	require.NoError(t, err)
+	require.True(t, won)
+	assert.Equal(t, before, *task)
+}
+
 func TestUpdateWithStatus_Lose(t *testing.T) {
 	truncateTables(t)
 

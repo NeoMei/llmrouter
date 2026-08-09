@@ -61,9 +61,6 @@
       "name": "Realtime"
     },
     {
-      "name": "未实现"
-    },
-    {
       "name": "Fine-tuning"
     },
     {
@@ -541,6 +538,46 @@
             "BearerAuth": []
           }
         ]
+      }
+    },
+    "/v1/images/variations": {
+      "post": {
+        "summary": "创建图像变体",
+        "deprecated": false,
+        "description": "将单个 PNG、JPEG 或 WebP 图像以 multipart/form-data 转发到具备 image.variation 能力的上游。",
+        "operationId": "createImageVariation",
+        "tags": ["图片生成(OpenAI格式)"],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["image"],
+                "properties": {
+                  "image": {"type": "string", "format": "binary"},
+                  "model": {"type": "string", "default": "dall-e-2"},
+                  "n": {"type": "integer", "minimum": 1, "maximum": 128, "default": 1},
+                  "size": {"type": "string"},
+                  "response_format": {"type": "string", "enum": ["url", "b64_json"]},
+                  "user": {"type": "string"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "图像变体结果",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ImageResponse"}}}
+          },
+          "400": {
+            "description": "无效图像或参数",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}
+          }
+        },
+        "security": [{"BearerAuth": []}]
       }
     },
     "/v1/videos": {

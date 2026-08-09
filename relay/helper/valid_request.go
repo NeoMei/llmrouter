@@ -3,12 +3,17 @@ package helper
 import (
 	"errors"
 	"fmt"
+	"io"
 	"math"
+	"mime/multipart"
+	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -161,7 +166,7 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 	imageRequest := &dto.ImageRequest{}
 
 	switch relayMode {
-	case relayconstant.RelayModeImagesEdits:
+	case relayconstant.RelayModeImagesEdits, relayconstant.RelayModeImagesVariations:
 		if strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
 			form, err := common.ParseMultipartFormReusable(c)
 			if err != nil {
@@ -174,13 +179,14 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 			imageRequest.Model = formData.Get("model")
 			if nValue := strings.TrimSpace(formData.Get("n")); nValue != "" {
 				n, err := strconv.Atoi(nValue)
-				if err != nil || n < 0 || n > dto.MaxImageN {
+				if err != nil || n < 1 || n > dto.MaxImageN {
 					return nil, fmt.Errorf("n must be an integer between 1 and %d", dto.MaxImageN)
 				}
 				imageRequest.N = common.GetPointer(uint(n))
 			}
 			imageRequest.Quality = formData.Get("quality")
 			imageRequest.Size = formData.Get("size")
+			imageRequest.ResponseFormat = formData.Get("response_format")
 			if streamValue := strings.TrimSpace(formData.Get("stream")); streamValue != "" {
 				stream, err := strconv.ParseBool(streamValue)
 				if err != nil {
@@ -199,6 +205,18 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 			}
 			if imageRequest.N == nil || *imageRequest.N == 0 {
 				imageRequest.N = common.GetPointer(uint(1))
+			}
+			if relayMode == relayconstant.RelayModeImagesVariations {
+				if imageRequest.Model == "" {
+					imageRequest.Model = "dall-e-2"
+				}
+				files := form.File["image"]
+				if len(files) != 1 {
+					return nil, errors.New("exactly one image file is required")
+				}
+				if err := validateImageVariationFile(files[0]); err != nil {
+					return nil, err
+				}
 			}
 
 			hasWatermark := formData.Has("watermark")
@@ -262,6 +280,47 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 	}
 
 	return imageRequest, nil
+}
+
+func validateImageVariationFile(file *multipart.FileHeader) error {
+	if file == nil || file.Size <= 0 {
+		return errors.New("image file is empty")
+	}
+	limit := int64(constant.MaxFileDownloadMB) << 20
+	if limit <= 0 {
+		limit = 32 << 20
+	}
+	if file.Size > limit {
+		return fmt.Errorf("image file exceeds %d MiB", limit>>20)
+	}
+	extension := strings.ToLower(filepath.Ext(file.Filename))
+	if extension != ".png" && extension != ".jpg" && extension != ".jpeg" && extension != ".webp" {
+		return errors.New("image must be PNG, JPEG, or WebP")
+	}
+	body, err := file.Open()
+	if err != nil {
+		return errors.New("failed to open image file")
+	}
+	defer body.Close()
+	header := make([]byte, 512)
+	read, err := body.Read(header)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return errors.New("failed to inspect image file")
+	}
+	mediaType := http.DetectContentType(header[:read])
+	expectedMediaType := ""
+	switch extension {
+	case ".png":
+		expectedMediaType = "image/png"
+	case ".jpg", ".jpeg":
+		expectedMediaType = "image/jpeg"
+	case ".webp":
+		expectedMediaType = "image/webp"
+	}
+	if mediaType != expectedMediaType {
+		return errors.New("image content does not match an allowed image type")
+	}
+	return nil
 }
 
 func GetAndValidateClaudeRequest(c *gin.Context) (textRequest *dto.ClaudeRequest, err error) {

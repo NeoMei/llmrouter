@@ -653,30 +653,30 @@ git commit -m "feat: implement fine-tuning and model deletion APIs"
 - Consumes: shared upload validator and capability registry.
 - Produces: executable `POST /v1/images/variations` and no supported registry entry backed by placeholder behavior.
 
-- [ ] **Step 1: Add image variation contract and placeholder reachability tests**
+- [x] **Step 1: Add image variation contract and placeholder reachability tests**
 
 ```go
 func TestImageVariationMultipartContract(t *testing.T) { /* image + optional mask/n/size/response_format */ }
 func TestSupportedCapabilitiesDoNotReturnNotImplemented(t *testing.T) { /* generated adapter fixtures */ }
 ```
 
-- [ ] **Step 2: Run and confirm placeholder failures**
+- [x] **Step 2: Run and confirm placeholder failures**
 
 Run: `go test ./relay/... ./router -run 'Variation|SupportedCapabilities'`
 
 Expected: FAIL on the 501 route or supported placeholder adapters.
 
-- [ ] **Step 3: Implement variation and align declarations**
+- [x] **Step 3: Implement variation and align declarations**
 
 Reuse the upload validator, normalize the OpenAI multipart request, and dispatch only to provider adapters with declared image-variation support. For each supported declaration, implement conversion/error/timeout/retry/billing fixtures; for upstream-impossible combinations, declare unsupported so dispatch is unreachable. Remove public `RelayNotImplemented` registration and production `errors.New("not implemented")` behavior.
 
-- [ ] **Step 4: Verify the entire relay surface**
+- [x] **Step 4: Verify the entire relay surface**
 
 Run: `go test -race ./relay/... ./router ./controller && ! rg -n 'RelayNotImplemented' router/relay-router.go`
 
 Expected: PASS and no public route references the placeholder handler.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add controller relay router

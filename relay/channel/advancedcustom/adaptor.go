@@ -275,7 +275,7 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 
 	if info.RelayMode == relayconstant.RelayModeAudioTranscription ||
 		info.RelayMode == relayconstant.RelayModeAudioTranslation ||
-		(info.RelayMode == relayconstant.RelayModeImagesEdits && !isJSONRequest(c)) {
+		((info.RelayMode == relayconstant.RelayModeImagesEdits || info.RelayMode == relayconstant.RelayModeImagesVariations) && !isJSONRequest(c)) {
 		return channel.DoFormRequest(a, c, info, requestBody)
 	}
 	if info.RelayMode == relayconstant.RelayModeRealtime {

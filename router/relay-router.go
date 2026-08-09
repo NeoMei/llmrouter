@@ -155,7 +155,9 @@ func SetRelayRouter(router *gin.Engine) {
 		})
 
 		// managed resources
-		httpRouter.POST("/images/variations", controller.RelayNotImplemented)
+		httpRouter.POST("/images/variations", func(c *gin.Context) {
+			controller.Relay(c, types.RelayFormatOpenAIImage)
+		})
 		httpRouter.GET("/files", controller.ListFiles)
 		httpRouter.POST("/files", controller.UploadFile)
 		httpRouter.DELETE("/files/:id", controller.DeleteFile)

@@ -1,6 +1,8 @@
 package capability
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -106,4 +108,27 @@ func (r *StaticRegistry) Ready() error {
 		}
 	}
 	return nil
+}
+
+func SnapshotVersion(registry Registry) string {
+	snapshot := registry.Snapshot()
+	keys := make([]Key, 0, len(snapshot))
+	for key := range snapshot {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].ChannelType != keys[j].ChannelType {
+			return keys[i].ChannelType < keys[j].ChannelType
+		}
+		if keys[i].Protocol != keys[j].Protocol {
+			return keys[i].Protocol < keys[j].Protocol
+		}
+		return keys[i].Operation < keys[j].Operation
+	})
+	hash := sha256.New()
+	for _, key := range keys {
+		decision := snapshot[key]
+		_, _ = fmt.Fprintf(hash, "%d\x00%s\x00%s\x00%t\x00%s\n", key.ChannelType, key.Protocol, key.Operation, decision.Supported, decision.Reason)
+	}
+	return hex.EncodeToString(hash.Sum(nil))
 }

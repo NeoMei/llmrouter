@@ -95,14 +95,32 @@ func ProtocolForOperation(operation Operation) Protocol {
 }
 
 type routeSpec struct {
-	method    string
-	pattern   *regexp.Regexp
-	protocol  Protocol
-	operation Operation
+	method     string
+	rawPattern string
+	pattern    *regexp.Regexp
+	protocol   Protocol
+	operation  Operation
 }
 
 func route(method, pattern string, operation Operation) routeSpec {
-	return routeSpec{method: method, pattern: regexp.MustCompile(pattern), protocol: ProtocolForOperation(operation), operation: operation}
+	return routeSpec{method: method, rawPattern: pattern, pattern: regexp.MustCompile(pattern), protocol: ProtocolForOperation(operation), operation: operation}
+}
+
+type RouteManifestEntry struct {
+	Method    string    `json:"method"`
+	Pattern   string    `json:"pattern"`
+	Protocol  Protocol  `json:"protocol"`
+	Operation Operation `json:"operation"`
+}
+
+func PublicRouteManifest() []RouteManifestEntry {
+	manifest := make([]RouteManifestEntry, 0, len(publicRoutes))
+	for _, spec := range publicRoutes {
+		manifest = append(manifest, RouteManifestEntry{
+			Method: spec.method, Pattern: spec.rawPattern, Protocol: spec.protocol, Operation: spec.operation,
+		})
+	}
+	return manifest
 }
 
 var publicRoutes = []routeSpec{

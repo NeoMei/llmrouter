@@ -59,6 +59,49 @@
     }
   ],
   "paths": {
+    "/api/capabilities": {
+      "get": {
+        "summary": "获取渠道协议能力矩阵",
+        "description": "🔒 用户鉴权。仅返回渠道类型、协议、操作和支持状态，不返回密钥、凭据或上游地址。",
+        "tags": ["系统"],
+        "responses": {
+          "200": {
+            "description": "稳定版本的能力矩阵",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {"type": "boolean"},
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "version": {"type": "string", "minLength": 64, "maxLength": 64},
+                        "capabilities": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": ["channel_type", "channel_name", "protocol", "operation", "supported"],
+                            "properties": {
+                              "channel_type": {"type": "integer"},
+                              "channel_name": {"type": "string"},
+                              "protocol": {"type": "string"},
+                              "operation": {"type": "string"},
+                              "supported": {"type": "boolean"},
+                              "reason": {"type": "string"}
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/setup": {
       "get": {
         "summary": "获取初始化状态",

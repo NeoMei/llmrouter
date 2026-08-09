@@ -328,7 +328,7 @@ git commit -m "build: make releases immutable and operationally reversible"
 **Interfaces:**
 - Produces: the `capability.Registry` interface defined above and `capability.DefaultRegistry()`.
 
-- [ ] **Step 1: Add table-driven path and registry tests**
+- [x] **Step 1: Add table-driven path and registry tests**
 
 ```go
 func TestResolveRequest(t *testing.T) {
@@ -342,23 +342,23 @@ func TestResolveRequest(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests and verify missing package failure**
+- [x] **Step 2: Run tests and verify missing package failure**
 
 Run: `go test ./relay/capability`
 
 Expected: FAIL because the package is absent.
 
-- [ ] **Step 3: Implement enums, path resolution, defaults, and readiness**
+- [x] **Step 3: Implement enums, path resolution, defaults, and readiness**
 
 Declare every registered public relay route as an operation. Reject duplicate keys during registry construction. Populate defaults for every channel type; unsupported entries are explicit `Decision{Supported:false, Reason:"upstream does not expose ..."}` rather than absent. `Ready` fails on duplicates, missing known channel types, or missing public operations.
 
-- [ ] **Step 4: Run registry tests**
+- [x] **Step 4: Run registry tests**
 
 Run: `go test ./relay/capability -count=1`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add relay/capability constant/channel.go
@@ -379,7 +379,7 @@ git commit -m "feat: add provider capability registry"
 - Consumes: `capability.ResolveRequest`, `Registry.Supports`.
 - Produces: `service.RetryParam.Operation capability.Operation` and `middleware.RequireCapability(registry capability.Registry)`.
 
-- [ ] **Step 1: Add ordering tests with spies**
+- [x] **Step 1: Add ordering tests with spies**
 
 ```go
 func TestUnsupportedOperationStopsBeforeSelectionAndBilling(t *testing.T) {
@@ -390,23 +390,23 @@ func TestUnsupportedOperationStopsBeforeSelectionAndBilling(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
 Run: `go test ./middleware ./service -run 'Capability|UnsupportedOperation'`
 
 Expected: FAIL because capability is not part of selection.
 
-- [ ] **Step 3: Filter explicit and random channels by operation**
+- [x] **Step 3: Filter explicit and random channels by operation**
 
 Resolve protocol/operation immediately after authentication and request normalization. A token-pinned unsupported channel returns 400. Random selection receives `RetryParam.Operation` and excludes incapable channels before affinity/health mutations. If the operation exists but no eligible channel remains, return 503 `no_capable_channel`. Store the resolved operation in Gin context for billing, metrics, and handlers.
 
-- [ ] **Step 4: Run middleware/service and full tests**
+- [x] **Step 4: Run middleware/service and full tests**
 
 Run: `go test ./middleware ./service ./router ./...`
 
 Expected: PASS; capability ordering spy remains false on rejection.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add middleware service router types
@@ -426,7 +426,7 @@ git commit -m "feat: enforce capabilities before channel side effects"
 **Interfaces:**
 - Produces: authenticated `GET /api/capabilities` returning registry version and per-channel-type operations.
 
-- [ ] **Step 1: Add response and consistency tests**
+- [x] **Step 1: Add response and consistency tests**
 
 ```go
 func TestCapabilitySnapshotDoesNotExposeSecrets(t *testing.T) { /* no keys/base URLs */ }
@@ -434,23 +434,23 @@ func TestEveryRelayRouteHasCapabilityOperation(t *testing.T) { /* compare router
 func TestEverySupportedCapabilityHasContractFixture(t *testing.T) { /* fixture key match */ }
 ```
 
-- [ ] **Step 2: Run and observe missing route/manifest failures**
+- [x] **Step 2: Run and observe missing route/manifest failures**
 
 Run: `go test ./controller ./relay/capability`
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement the API and consistency manifest**
+- [x] **Step 3: Implement the API and consistency manifest**
 
 Return only public channel type/name/protocol/operation/reason fields. Generate the route manifest from the same operation definitions used by `ResolveRequest`; compare registry supported entries to adapter contract fixtures. Update OpenAPI with the capability endpoint and stable error schemas.
 
-- [ ] **Step 4: Verify contracts**
+- [x] **Step 4: Verify contracts**
 
 Run: `go test ./controller ./relay/capability && git diff --exit-code -- docs/openapi`
 
 Expected: PASS and generated documents clean after the documented generation command.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add controller router relay/capability docs/openapi

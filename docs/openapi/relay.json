@@ -2331,6 +2331,15 @@
               "code": {
                 "type": "string",
                 "description": "错误代码",
+                "enum": [
+                  "unsupported_operation",
+                  "resource_not_found",
+                  "invalid_resource_state",
+                  "file_too_large",
+                  "invalid_file",
+                  "upstream_error",
+                  "no_capable_channel"
+                ],
                 "nullable": true
               }
             }

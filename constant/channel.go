@@ -1,5 +1,7 @@
 package constant
 
+import "sort"
+
 const (
 	ChannelTypeUnknown        = 0
 	ChannelTypeOpenAI         = 1
@@ -188,6 +190,17 @@ func GetChannelTypeName(channelType int) string {
 		return name
 	}
 	return "Unknown"
+}
+
+func AllChannelTypes() []int {
+	types := make([]int, 0, len(ChannelTypeNames)-1)
+	for channelType := range ChannelTypeNames {
+		if channelType != ChannelTypeUnknown {
+			types = append(types, channelType)
+		}
+	}
+	sort.Ints(types)
+	return types
 }
 
 type ChannelSpecialBase struct {

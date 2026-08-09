@@ -745,7 +745,7 @@ git commit -m "fix: enforce iframe and configured HTML security policies"
 - Consumes: `GET /api/capabilities` and the completed resource APIs.
 - Produces: capability-hidden actions, full file lifecycle UI, and fine-tuning job lifecycle UI.
 
-- [ ] **Step 1: Add component tests**
+- [x] **Step 1: Add component tests**
 
 ```tsx
 it('hides create when no capable channel exists', async () => { /* mock capability response; query absent */ })
@@ -753,23 +753,23 @@ it('uploads and deletes an owned file', async () => { /* assert API sequence */ 
 it('renders ordered fine-tuning events and cancellation state', async () => { /* assert stable UI */ })
 ```
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
 Run: `cd web && npm test -- --test-name-pattern='capability|files|fine-tuning'`
 
 Expected: FAIL because features/routes do not exist.
 
-- [ ] **Step 3: Implement typed queries and workflows**
+- [x] **Step 3: Implement typed queries and workflows**
 
 Use the repository request client/query conventions. Cache the capability snapshot by registry version. File UI supports purpose, validation errors, progress, list, download, and delete. Fine-tuning UI supports owned training/validation file selection, capable model/channel display, create/list/detail/events/cancel/result model, and stable error-code copy. Admin views expose provider declaration/certification state without secrets.
 
-- [ ] **Step 4: Run tests/type/build**
+- [x] **Step 4: Run tests/type/build**
 
 Run: `cd web && npm test && npm run build:check && npm run build`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src

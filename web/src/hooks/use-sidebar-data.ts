@@ -21,6 +21,7 @@ import {
   Box,
   CreditCard,
   FileText,
+  Files,
   FlaskConical,
   Key,
   LayoutDashboard,
@@ -36,7 +37,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-import { type SidebarData } from '@/components/layout/types'
+import type { SidebarData } from '@/components/layout/types'
 import { ROLE } from '@/lib/roles'
 
 /**
@@ -84,6 +85,16 @@ export function useSidebarData(): SidebarData {
             title: t('API Keys'),
             url: '/keys',
             icon: Key,
+          },
+          {
+            title: t('Files'),
+            url: '/files',
+            icon: Files,
+          },
+          {
+            title: t('Fine-tuning'),
+            url: '/fine-tuning',
+            icon: FlaskConical,
           },
           {
             title: t('Usage Logs'),

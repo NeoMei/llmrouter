@@ -43,6 +43,7 @@ type FineTuningJob struct {
 	UpdatedAt        int64  `json:"updated_at" gorm:"autoUpdateTime"`
 	FinishedAt       int64  `json:"finished_at,omitempty"`
 	CancelledAt      int64  `json:"cancelled_at,omitempty"`
+	ModelDeletedAt   int64  `json:"-" gorm:"index"`
 }
 
 type FineTuningEvent struct {
@@ -95,6 +96,22 @@ func ListFineTuningJobs(tenantID string, userID int, after string, limit int) ([
 	}
 	var jobs []FineTuningJob
 	return jobs, query.Order("id DESC").Limit(limit).Find(&jobs).Error
+}
+
+func GetOwnedCompletedFineTuningJobByModel(tenantID string, userID int, modelID string) (*FineTuningJob, error) {
+	var job FineTuningJob
+	err := DB.Where("tenant_id = ? AND user_id = ? AND result_model = ? AND status = ? AND model_deleted_at = 0",
+		tenantID, userID, modelID, FineTuningStatusSucceeded).Order("id DESC").First(&job).Error
+	if err != nil {
+		return nil, err
+	}
+	return &job, nil
+}
+
+func MarkFineTunedModelDeleted(id string) (bool, error) {
+	result := DB.Model(&FineTuningJob{}).Where("id = ? AND status = ? AND model_deleted_at = 0", id, FineTuningStatusSucceeded).
+		Updates(map[string]any{"model_deleted_at": common.GetTimestamp(), "updated_at": common.GetTimestamp()})
+	return result.RowsAffected == 1, result.Error
 }
 
 func TransitionFineTuningJob(id string, from []string, to string, updates map[string]any) (bool, error) {

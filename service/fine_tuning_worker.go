@@ -15,10 +15,11 @@ const (
 )
 
 type FineTuningWorker struct {
-	ProviderFor func(providerType int) (FineTuningProvider, error)
-	Settle      func(context.Context, *model.FineTuningJob, FineTuningPollResult) error
-	BatchSize   int
-	Now         func() time.Time
+	ProviderFor    func(providerType int) (FineTuningProvider, error)
+	ProviderForJob func(job *model.FineTuningJob) (FineTuningProvider, error)
+	Settle         func(context.Context, *model.FineTuningJob, FineTuningPollResult) error
+	BatchSize      int
+	Now            func() time.Time
 }
 
 type FineTuningWorkerResult struct {
@@ -29,7 +30,7 @@ type FineTuningWorkerResult struct {
 }
 
 func NewFineTuningWorker() *FineTuningWorker {
-	return &FineTuningWorker{ProviderFor: FineTuningProviderFor, BatchSize: 20, Now: time.Now}
+	return &FineTuningWorker{ProviderForJob: FineTuningProviderForJob, BatchSize: 20, Now: time.Now}
 }
 
 func (worker *FineTuningWorker) RunOnce(ctx context.Context, runnerID string) FineTuningWorkerResult {
@@ -66,11 +67,17 @@ func (worker *FineTuningWorker) RunOnce(ctx context.Context, runnerID string) Fi
 			result.Failed++
 			continue
 		}
-		providerFor := worker.ProviderFor
-		if providerFor == nil {
-			providerFor = FineTuningProviderFor
+		var provider FineTuningProvider
+		providerForJob := worker.ProviderForJob
+		if providerForJob != nil {
+			provider, err = providerForJob(claimedJob)
+		} else {
+			providerFor := worker.ProviderFor
+			if providerFor == nil {
+				providerFor = FineTuningProviderFor
+			}
+			provider, err = providerFor(claimedJob.ProviderType)
 		}
-		provider, err := providerFor(claimedJob.ProviderType)
 		if err != nil {
 			_ = model.FailFineTuningPoll(claimedJob.ID, runnerID, nextFineTuningPoll(now, claimedJob.PollAttempts))
 			result.Failed++

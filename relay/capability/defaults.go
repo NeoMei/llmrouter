@@ -118,6 +118,11 @@ func defaultDeclarations() []Declaration {
 		OperationAudioTranscription, OperationAudioTranslation, OperationAudioSpeech,
 		OperationImageGeneration, OperationImageEdit, OperationImageVariation,
 		OperationFileList, OperationFileCreate, OperationFileRetrieve, OperationFileContent, OperationFileDelete,
+	)
+
+	// Azure fine-tuning uses a deployment/api-version-specific control plane
+	// rather than the OpenAI-compatible /v1/fine_tuning/jobs contract.
+	support([]int{constant.ChannelTypeOpenAI, constant.ChannelTypeAdvancedCustom, constant.ChannelTypeGateway},
 		OperationFineTuningCreate, OperationFineTuningList, OperationFineTuningRetrieve,
 		OperationFineTuningCancel, OperationFineTuningEventsList, OperationModelDelete,
 	)

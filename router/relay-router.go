@@ -161,12 +161,12 @@ func SetRelayRouter(router *gin.Engine) {
 		httpRouter.DELETE("/files/:id", controller.DeleteFile)
 		httpRouter.GET("/files/:id", controller.GetFile)
 		httpRouter.GET("/files/:id/content", controller.GetFileContent)
-		httpRouter.POST("/fine-tunes", controller.RelayNotImplemented)
-		httpRouter.GET("/fine-tunes", controller.RelayNotImplemented)
-		httpRouter.GET("/fine-tunes/:id", controller.RelayNotImplemented)
-		httpRouter.POST("/fine-tunes/:id/cancel", controller.RelayNotImplemented)
-		httpRouter.GET("/fine-tunes/:id/events", controller.RelayNotImplemented)
-		httpRouter.DELETE("/models/:model", controller.RelayNotImplemented)
+		httpRouter.POST("/fine-tunes", controller.CreateFineTuningJob)
+		httpRouter.GET("/fine-tunes", controller.ListFineTuningJobs)
+		httpRouter.GET("/fine-tunes/:id", controller.GetFineTuningJob)
+		httpRouter.POST("/fine-tunes/:id/cancel", controller.CancelFineTuningJob)
+		httpRouter.GET("/fine-tunes/:id/events", controller.ListFineTuningEvents)
+		httpRouter.DELETE("/models/:model", controller.DeleteFineTunedModel)
 	}
 
 	relayMjRouter := router.Group("/mj")

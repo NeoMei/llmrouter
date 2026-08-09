@@ -608,7 +608,7 @@ git commit -m "feat: add durable fine-tuning jobs and polling"
 **Interfaces:**
 - Produces: create/list/retrieve/cancel/events routes and `DELETE /v1/models/:model`.
 
-- [ ] **Step 1: Add lifecycle and authorization E2E tests**
+- [x] **Step 1: Add lifecycle and authorization E2E tests**
 
 ```go
 func TestFineTuningLifecycle(t *testing.T) { /* create/list/retrieve/events/cancel */ }
@@ -616,23 +616,23 @@ func TestFineTuningRejectsInvalidState(t *testing.T) { /* terminal cancel -> 409
 func TestDeleteModelRequiresOwnedCompletedJob(t *testing.T) { /* otherwise 404 */ }
 ```
 
-- [ ] **Step 2: Run tests against placeholders**
+- [x] **Step 2: Run tests against placeholders**
 
 Run: `go test ./controller -run 'FineTuning|DeleteModel'`
 
 Expected: FAIL with 501/missing handlers.
 
-- [ ] **Step 3: Implement handlers and provider dispatch**
+- [x] **Step 3: Implement handlers and provider dispatch**
 
 Create validates owned training/validation files and a capable channel before billing; local job creation and upstream ID persistence are transactional around compensating failure state. Retrieve/list/events use local ownership first. Cancel uses CAS and capability check. Model deletion resolves the completed owned job/result model before invoking a provider declaring `model.delete`. Replace every Fine-tuning and model-delete placeholder route.
 
-- [ ] **Step 4: Run handler, route, and race tests**
+- [x] **Step 4: Run handler, route, and race tests**
 
 Run: `go test -race ./controller ./service ./model -run 'FineTuning|DeleteModel'`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add dto controller router docs/openapi/relay.json

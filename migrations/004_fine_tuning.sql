@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS fine_tuning_jobs (
     created_at BIGINT NOT NULL,
     updated_at BIGINT NOT NULL,
     finished_at BIGINT NOT NULL DEFAULT 0,
-    cancelled_at BIGINT NOT NULL DEFAULT 0
+    cancelled_at BIGINT NOT NULL DEFAULT 0,
+    model_deleted_at BIGINT NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_fine_tuning_owner ON fine_tuning_jobs (tenant_id, user_id, id);

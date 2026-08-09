@@ -60,6 +60,9 @@ func ValidateProductionConfig() error {
 		if err := requireProductionEnv(name); err != nil {
 			return err
 		}
+		if isInsecureSecret(os.Getenv(name)) {
+			return fmt.Errorf("%s contains a placeholder value", name)
+		}
 	}
 	endpoint, err := url.Parse(strings.TrimSpace(os.Getenv("OBJECT_STORE_ENDPOINT")))
 	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" {
@@ -102,6 +105,9 @@ func requireProductionEnv(name string) error {
 
 func isInsecureSecret(value string) bool {
 	lower := strings.ToLower(strings.TrimSpace(value))
+	if strings.Contains(lower, "replace-with") {
+		return true
+	}
 	_, insecure := insecureProductionValues[lower]
 	return insecure
 }

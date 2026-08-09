@@ -122,7 +122,7 @@ type FineTuningProvider interface {
 **Interfaces:**
 - Produces: `npm test` in `web/` and `cli/`, and shell entrypoints used unchanged by CI.
 
-- [ ] **Step 1: Write the failing script contract test**
+- [x] **Step 1: Write the failing script contract test**
 
 ```bash
 #!/usr/bin/env bash
@@ -134,23 +134,23 @@ test -x scripts/verify-web.sh
 test -x scripts/verify-cli.sh
 ```
 
-- [ ] **Step 2: Run the test and verify it fails**
+- [x] **Step 2: Run the test and verify it fails**
 
 Run: `bash scripts/release_scripts_test.sh`
 
 Expected: non-zero because the committed scripts/test commands do not yet exist.
 
-- [ ] **Step 3: Add deterministic verification commands**
+- [x] **Step 3: Add deterministic verification commands**
 
 `verify-backend.sh` runs `gofmt -l`, `go test ./...`, `go vet ./...`, `go test -race ./...`, and `go build -trimpath ./...`. `verify-web.sh` runs `npm run format:check`, `npm run copyright:check`, `npm run lint`, `npm run build:check`, `npm test`, `npm run build`, and `npm run knip`. `verify-cli.sh` runs `npm test` and `npm run build`. Add `"test": "tsx --test 'src/**/*.test.ts'"` to both packages, adding `tsx` as a pinned dev dependency where absent.
 
-- [ ] **Step 4: Run the contract and package tests**
+- [x] **Step 4: Run the contract and package tests**
 
 Run: `bash scripts/release_scripts_test.sh && (cd web && npm test) && (cd cli && npm test)`
 
 Expected: PASS, including the existing 80 web tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts web/package.json web/package-lock.json cli/package.json cli/package-lock.json
@@ -174,7 +174,7 @@ git commit -m "build: add deterministic verification commands"
 **Interfaces:**
 - Produces: `logger.rotateIfNeeded()`, `(*Task).Snapshot() Task`, and no value-copy API for `CustomEvent`.
 
-- [ ] **Step 1: Add race-focused tests**
+- [x] **Step 1: Add race-focused tests**
 
 ```go
 func TestConcurrentLoggingDoesNotRace(t *testing.T) {
@@ -195,23 +195,23 @@ func TestTaskSnapshotIsIndependent(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Reproduce the failures**
+- [x] **Step 2: Reproduce the failures**
 
 Run: `go vet ./... && go test -race ./logger ./model ./service ./relay/channel`
 
 Expected: vet reports unreachable code/value-copy/IPv6 issues or race reports logger/task/Gin global state.
 
-- [ ] **Step 3: Implement synchronization and snapshot isolation**
+- [x] **Step 3: Implement synchronization and snapshot isolation**
 
 Guard logger rotation state with one package-level mutex; keep log emission outside the lock. Change `CustomEvent` helpers to accept pointers. Replace `fmt.Sprintf("%s:%d", host, port)` with `net.JoinHostPort`. Set Gin mode once from `TestMain`. Make polling workers pass `task.Snapshot()` into goroutines and update rows with `map[string]any`/ID-scoped GORM statements so no update mutates a shared task struct. Delete statements after unconditional returns in the twelve adapters.
 
-- [ ] **Step 4: Prove vet and race cleanliness**
+- [x] **Step 4: Prove vet and race cleanliness**
 
 Run: `go vet ./... && go test -race ./...`
 
 Expected: exit 0 with no race report.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add logger common model service relay
@@ -234,7 +234,7 @@ git commit -m "fix: eliminate backend vet and race failures"
 **Interfaces:**
 - Produces: `readiness.Checker.Check(context.Context) error` and `common.ValidateProductionConfig() error`.
 
-- [ ] **Step 1: Add failing liveness/readiness/config tests**
+- [x] **Step 1: Add failing liveness/readiness/config tests**
 
 ```go
 func TestHealthzIgnoresDependencyLoss(t *testing.T) { /* db probe fails; expect 200 */ }
@@ -242,23 +242,23 @@ func TestReadyzFailsWhenObjectStoreFails(t *testing.T) { /* expect 503 object_st
 func TestProductionConfigRequiresStableSecrets(t *testing.T) { /* unset SESSION_SECRET; expect named error */ }
 ```
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
 Run: `go test ./pkg/health ./pkg/readiness ./common ./middleware`
 
 Expected: FAIL because readiness/config APIs do not exist and health currently probes dependencies.
 
-- [ ] **Step 3: Implement the probes and production startup validation**
+- [x] **Step 3: Implement the probes and production startup validation**
 
 Make `/healthz` return process liveness only. Make `/readyz` probe DB, configured Redis, object store, migration version, and capability registry with a two-second aggregate timeout and stable component status. If `RUN_MODE=production`, require non-default `SESSION_SECRET`, `GATEWAY_AES_KEY`, DB credentials, Redis credentials when configured, object-store credentials for S3, exact trusted origins, secure cookies, and trusted proxy ranges. Attach `RateLimitMiddleware` automatically to authenticated relay groups when Redis/multi-instance mode is enabled.
 
-- [ ] **Step 4: Run focused and full backend checks**
+- [x] **Step 4: Run focused and full backend checks**
 
 Run: `go test ./pkg/health ./pkg/readiness ./common ./middleware && go test ./...`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pkg common router middleware
@@ -283,7 +283,7 @@ git commit -m "feat: separate liveness from production readiness"
 **Interfaces:**
 - Produces: `APP_IMAGE`, `APP_IMAGE_DIGEST`, and operator commands with `--check` dry-run mode.
 
-- [ ] **Step 1: Write static release configuration tests**
+- [x] **Step 1: Write static release configuration tests**
 
 ```bash
 grep -q 'github.com/QuantumNous/new-api/common.Version' .github/workflows/release.yml
@@ -291,23 +291,23 @@ grep -q 'github.com/QuantumNous/new-api/common.Version' .github/workflows/releas
 grep -q '${APP_IMAGE:?APP_IMAGE is required}@${APP_IMAGE_DIGEST:?APP_IMAGE_DIGEST is required}' docker-compose.yml
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 Run: `bash scripts/release_config_test.sh`
 
 Expected: FAIL on the wrong linker symbol/current `latest` compose image.
 
-- [ ] **Step 3: Implement reproducible release/deployment files**
+- [x] **Step 3: Implement reproducible release/deployment files**
 
 Set `VERSION` to the next release candidate, inject `-X github.com/QuantumNous/new-api/common.Version=${VERSION}`, build the current revision, publish digest-pinned images, checksums, SBOM/provenance/signatures, and make Compose require image/digest plus all production secrets. Preflight verifies required values, connectivity, migration status, backup destination, and rollback image. Backup/restore/rollback support SQLite, MySQL, and PostgreSQL with explicit DB-type branches and refuse destructive restore without `--confirm`.
 
-- [ ] **Step 4: Validate static configuration and local image marker**
+- [x] **Step 4: Validate static configuration and local image marker**
 
 Run: `bash scripts/release_config_test.sh && bash scripts/release-preflight.sh --check && go build -ldflags "-X github.com/QuantumNous/new-api/common.Version=$(cat VERSION)" -o /tmp/codex-gateway . && strings /tmp/codex-gateway | grep -F "$(cat VERSION)"`
 
 Expected: all commands exit 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add .github docker-compose.yml docker-compose.test.yml .env.production.example scripts VERSION

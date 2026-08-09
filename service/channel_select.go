@@ -7,6 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relay/capability"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/gin-gonic/gin"
 )
@@ -16,6 +17,8 @@ type RetryParam struct {
 	TokenGroup   string
 	ModelName    string
 	RequestPath  string
+	Protocol     capability.Protocol
+	Operation    capability.Operation
 	Retry        *int
 	resetNextTry bool
 }
@@ -116,7 +119,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, _ = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry, param.RequestPath)
+			channel, _ = model.GetRandomSatisfiedChannelWithPredicate(autoGroup, param.ModelName, priorityRetry, param.RequestPath, param.channelPredicate())
 			if channel == nil {
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
@@ -154,10 +157,19 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			break
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry(), param.RequestPath)
+		channel, err = model.GetRandomSatisfiedChannelWithPredicate(param.TokenGroup, param.ModelName, param.GetRetry(), param.RequestPath, param.channelPredicate())
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}
 	}
 	return channel, selectGroup, nil
+}
+
+func (p *RetryParam) channelPredicate() model.ChannelPredicate {
+	if p == nil || p.Operation == "" {
+		return nil
+	}
+	return func(channel *model.Channel) bool {
+		return channel != nil && capability.DefaultRegistry().Supports(channel.Type, p.Protocol, p.Operation)
+	}
 }

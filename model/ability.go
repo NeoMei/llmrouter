@@ -106,6 +106,10 @@ func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
 }
 
 func GetChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+	return GetChannelWithPredicate(group, model, retry, requestPath, nil)
+}
+
+func GetChannelWithPredicate(group string, model string, retry int, requestPath string, predicate ChannelPredicate) (*Channel, error) {
 	var abilities []Ability
 
 	var err error = nil
@@ -122,6 +126,29 @@ func GetChannel(group string, model string, retry int, requestPath string) (*Cha
 		return nil, err
 	}
 	abilities = filterAbilitiesByRequestPathAndModel(abilities, requestPath, model)
+	if predicate != nil {
+		channelIDs := make([]int, 0, len(abilities))
+		for _, ability := range abilities {
+			channelIDs = append(channelIDs, ability.ChannelId)
+		}
+		var candidateChannels []Channel
+		if len(channelIDs) > 0 {
+			if err := DB.Where("id IN ?", channelIDs).Find(&candidateChannels).Error; err != nil {
+				return nil, err
+			}
+		}
+		allowed := make(map[int]bool, len(candidateChannels))
+		for i := range candidateChannels {
+			allowed[candidateChannels[i].Id] = predicate(&candidateChannels[i])
+		}
+		filtered := abilities[:0]
+		for _, ability := range abilities {
+			if allowed[ability.ChannelId] {
+				filtered = append(filtered, ability)
+			}
+		}
+		abilities = filtered
+	}
 	channel := Channel{}
 	if len(abilities) > 0 {
 		// Randomly choose one

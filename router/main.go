@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/health"
 	"github.com/QuantumNous/new-api/pkg/observability"
+	"github.com/QuantumNous/new-api/relay/capability"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -29,7 +30,10 @@ func SetRouter(router *gin.Engine, assets WebAssets) {
 		}
 		return sqlDB.PingContext(ctx)
 	}
-	checker := health.NewChecker(common.RDB, dbPing)
+	checker := health.NewCheckerWithProbes(common.RDB, dbPing, health.NamedProbe{
+		Name:  "capability_registry",
+		Check: func(context.Context) error { return capability.DefaultRegistry().Ready() },
+	})
 	router.GET("/healthz", checker.HealthzHandler)
 	router.GET("/readyz", checker.ReadyzHandler)
 	router.GET("/metrics", gin.WrapH(promhttp.Handler()))

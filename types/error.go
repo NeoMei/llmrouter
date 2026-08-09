@@ -39,6 +39,13 @@ type ErrorCode string
 
 const (
 	ErrorCodeInvalidRequest         ErrorCode = "invalid_request"
+	ErrorCodeUnsupportedOperation   ErrorCode = "unsupported_operation"
+	ErrorCodeResourceNotFound       ErrorCode = "resource_not_found"
+	ErrorCodeInvalidResourceState   ErrorCode = "invalid_resource_state"
+	ErrorCodeFileTooLarge           ErrorCode = "file_too_large"
+	ErrorCodeInvalidFile            ErrorCode = "invalid_file"
+	ErrorCodeUpstream               ErrorCode = "upstream_error"
+	ErrorCodeNoCapableChannel       ErrorCode = "no_capable_channel"
 	ErrorCodeSensitiveWordsDetected ErrorCode = "sensitive_words_detected"
 	ErrorCodeViolationFeeGrokCSAM   ErrorCode = "violation_fee.grok.csam"
 

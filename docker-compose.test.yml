@@ -62,6 +62,16 @@ services:
         mc alias set test http://minio:9000 test-access-key test-secret-key-that-is-long-enough &&
         mc mb --ignore-existing test/gateway-files
 
+  upstream:
+    image: hashicorp/http-echo:1.0.0
+    command: ['-listen=:8080', '-text={"status":"ok"}']
+    ports: ['58080:8080']
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '-', 'http://127.0.0.1:8080/']
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
   gateway-a:
     build: .
     environment: &gateway-environment
@@ -87,6 +97,8 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+      upstream:
+        condition: service_healthy
     healthcheck:
       test: ['CMD-SHELL', "wget -q -O - http://127.0.0.1:3000/readyz | grep -q '\"status\":\"ok\"'"]
       interval: 3s

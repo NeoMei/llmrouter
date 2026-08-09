@@ -37,6 +37,11 @@ export TEST_S3_ACCESS_KEY_ID='test-access-key'
 export TEST_S3_SECRET_ACCESS_KEY='test-secret-key-that-is-long-enough'
 export TEST_GATEWAY_A_URL='http://127.0.0.1:53001'
 export TEST_GATEWAY_B_URL='http://127.0.0.1:53002'
+export TEST_UPSTREAM_URL='http://127.0.0.1:58080'
+export INTEGRATION_COMPOSE_FILE="$compose_file"
+export INTEGRATION_ROOT_DIR="$root_dir"
+export ARTIFACT_DIR="${ARTIFACT_DIR:-$root_dir/artifacts/nightly}"
+mkdir -p "$ARTIFACT_DIR"
 
 cd "$root_dir"
 go test -count=1 ./tests/contracts/...
@@ -47,5 +52,6 @@ go test -count=1 ./middleware -run 'Test.*(RateLimit|Capability)'
 go test -count=1 ./controller -run 'Test.*(File|FineTuning|Variation|Model)'
 
 if [[ "$nightly" == true ]]; then
+  go test -count=1 ./service -run 'Test.*(Billing|Quota|Refund|Recalculate)'
   go test -count=1 -tags=integration ./tests/fault/... ./tests/performance/...
 fi

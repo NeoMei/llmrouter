@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path"
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -159,9 +161,35 @@ func rateLimitFactory(maxRequestNum int, duration int64, mark string) func(c *gi
 
 func GlobalWebRateLimit() func(c *gin.Context) {
 	if common.GlobalWebRateLimitEnable {
-		return rateLimitFactory(common.GlobalWebRateLimitNum, common.GlobalWebRateLimitDuration, "GW")
+		limit := rateLimitFactory(common.GlobalWebRateLimitNum, common.GlobalWebRateLimitDuration, "GW")
+		return func(c *gin.Context) {
+			if exemptFromGlobalWebRateLimit(c.Request.URL.Path) {
+				c.Next()
+				return
+			}
+			limit(c)
+		}
 	}
 	return defNext
+}
+
+func exemptFromGlobalWebRateLimit(requestPath string) bool {
+	for _, prefix := range []string{"/api/", "/v1/", "/static/", "/assets/"} {
+		if strings.HasPrefix(requestPath, prefix) {
+			return true
+		}
+	}
+	for _, servicePath := range []string{"/healthz", "/readyz", "/metrics"} {
+		if requestPath == servicePath {
+			return true
+		}
+	}
+	switch strings.ToLower(path.Ext(requestPath)) {
+	case ".avif", ".css", ".eot", ".gif", ".ico", ".jpeg", ".jpg", ".js", ".map", ".otf", ".png", ".svg", ".ttf", ".wasm", ".webp", ".woff", ".woff2":
+		return true
+	default:
+		return false
+	}
 }
 
 func GlobalAPIRateLimit() func(c *gin.Context) {

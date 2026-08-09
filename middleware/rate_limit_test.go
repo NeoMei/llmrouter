@@ -45,6 +45,27 @@ func performRateLimitRequest(router http.Handler, path string, remoteAddr string
 	return recorder
 }
 
+func TestGlobalWebRateLimitExemptsStaticAndServiceRoutes(t *testing.T) {
+	tests := map[string]bool{
+		"/":                              false,
+		"/files":                         false,
+		"/static/js/index.abc123.js":     true,
+		"/static/font/public-sans.woff2": true,
+		"/favicon.ico":                   true,
+		"/logo.png":                      true,
+		"/api/status":                    true,
+		"/v1/models":                     true,
+		"/healthz":                       true,
+		"/readyz":                        true,
+		"/metrics":                       true,
+	}
+	for requestPath, wantExempt := range tests {
+		t.Run(requestPath, func(t *testing.T) {
+			assert.Equal(t, wantExempt, exemptFromGlobalWebRateLimit(requestPath))
+		})
+	}
+}
+
 func TestRedisIPRateLimiterThresholdTTLAndNamespace(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	redisServer, _ := useRateLimitMiniRedis(t)

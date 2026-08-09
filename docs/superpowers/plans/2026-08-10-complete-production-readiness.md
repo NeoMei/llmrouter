@@ -924,20 +924,20 @@ git commit -m "test: add production dependency and provider matrices"
 **Interfaces:**
 - Produces: `npm run e2e`, fault/soak commands, and validated operator runbooks.
 
-- [ ] **Step 1: Add browser and failover acceptance tests**
+- [x] **Step 1: Add browser and failover acceptance tests**
 
 ```ts
 test('file and fine-tuning journey', async ({ page }) => { /* upload, create, event, cancel */ })
 test('unsupported capability never issues upstream request', async ({ page }) => { /* assert counter zero */ })
 ```
 
-- [ ] **Step 2: Run acceptance tests and verify missing coverage**
+- [x] **Step 2: Run acceptance tests and verify missing coverage**
 
 Run: `cd web && npm run e2e`
 
 Expected: FAIL before E2E configuration/specs exist.
 
-- [ ] **Step 3: Implement nightly suites and executable runbooks**
+- [x] **Step 3: Implement nightly suites and executable runbooks**
 
 Cover authentication, capability-hidden UI, Files/Fine-tuning, iframe policy, and admin state in browsers. Fault tests remove DB/Redis/MinIO/upstream independently and assert liveness/readiness, no double billing, recovery, and worker failover. Performance tests define pass thresholds for relay latency/error rate, streaming first-token time, upload throughput/memory, and worker lag. Runbooks embed commands verified in an ephemeral test deployment for alerts, capacity, backup/restore, credential revocation/rotation, incident response, and rollback.
 
@@ -947,7 +947,7 @@ Run: `bash scripts/run-integration-matrix.sh --nightly && cd web && npm run e2e`
 
 Expected: PASS; fault recovery and performance thresholds are recorded as machine-readable artifacts.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/e2e web/package.json tests/fault tests/performance .github/workflows/nightly.yml docs/operations

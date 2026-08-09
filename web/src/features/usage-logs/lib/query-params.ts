@@ -16,22 +16,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-'use client'
+export function buildQueryParams(
+  params: Record<string, unknown>
+): URLSearchParams {
+  const queryParams = new URLSearchParams()
 
-import { Controls as ControlsPrimitive } from '@xyflow/react'
-import type { ComponentProps } from 'react'
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== '') {
+      queryParams.append(key, String(value))
+    }
+  }
 
-import { cn } from '@/lib/utils'
-
-export type ControlsProps = ComponentProps<typeof ControlsPrimitive>
-
-export const Controls = ({ className, ...props }: ControlsProps) => (
-  <ControlsPrimitive
-    className={cn(
-      'bg-card gap-px overflow-hidden rounded-md border p-1 shadow-none!',
-      '[&>button]:hover:bg-secondary! [&>button]:rounded-md [&>button]:border-none! [&>button]:bg-transparent!',
-      className
-    )}
-    {...props}
-  />
-)
+  return queryParams
+}

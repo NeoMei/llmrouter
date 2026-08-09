@@ -18,9 +18,9 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import React, { useState } from 'react'
 
-import useDialogState from '@/hooks/use-dialog'
+import { useDialogState } from '@/hooks/use-dialog'
 
-import { type User, type UsersDialogType } from '../types'
+import type { User, UsersDialogType } from '../types'
 
 type UsersContextType = {
   open: UsersDialogType | null

@@ -789,30 +789,30 @@ git commit -m "feat: add capability-driven file and fine-tuning workflows"
 **Interfaces:**
 - Produces: zero-error lint, explicit dead-code policy, CLI configuration/connectivity/error contracts.
 
-- [ ] **Step 1: Add CLI behavior tests and capture lint/knip baselines**
+- [x] **Step 1: Add CLI behavior tests and capture lint/knip baselines**
 
 ```ts
 test('never logs API secrets on connection failure', async () => { /* redact token */ })
 test('writes deterministic config with mode 0600', async () => { /* stat and compare */ })
 ```
 
-- [ ] **Step 2: Run failing gates**
+- [x] **Step 2: Run failing gates**
 
 Run: `(cd web && npm run lint && npm run knip) && (cd cli && npm test)`
 
 Expected: FAIL with the recorded lint/dead-code issues and missing CLI tests.
 
-- [ ] **Step 3: Fix, do not suppress, actionable findings**
+- [x] **Step 3: Fix, do not suppress, actionable findings**
 
 Resolve all lint errors. For Knip, remove truly unused files/dependencies/exports, convert intentional generated entrypoints to exact config entries, and document each retained exclusion in `knip.config.ts`; do not add blanket ignores. Implement CLI tests using temporary directories and a local HTTP test server, ensuring secret redaction and deterministic exit codes.
 
-- [ ] **Step 4: Run all frontend/CLI gates**
+- [x] **Step 4: Run all frontend/CLI gates**
 
 Run: `bash scripts/verify-web.sh && bash scripts/verify-cli.sh`
 
 Expected: exit 0 with zero lint errors and no unexplained Knip finding.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web cli

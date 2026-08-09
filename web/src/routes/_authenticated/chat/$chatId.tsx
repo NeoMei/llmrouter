@@ -80,10 +80,14 @@ function ChatRouteComponent() {
 
   const iframePolicy = useMemo(
     () =>
-      resolveIframePolicy(iframeSrc, { allowScripts: true }, {
-        production: import.meta.env.PROD,
-        trustedPreviewOrigin: import.meta.env.VITE_TRUSTED_PREVIEW_ORIGIN,
-      }),
+      resolveIframePolicy(
+        iframeSrc,
+        { allowScripts: true },
+        {
+          production: import.meta.env.PROD,
+          trustedPreviewOrigin: import.meta.env.VITE_TRUSTED_PREVIEW_ORIGIN,
+        }
+      ),
     [iframeSrc]
   )
 
@@ -152,7 +156,10 @@ function ChatRouteComponent() {
     )
   }
 
-  if ((!requiresActiveKey && !iframeSrc) || (iframeSrc && !iframePolicy.allowed)) {
+  if (
+    (!requiresActiveKey && !iframeSrc) ||
+    (iframeSrc && !iframePolicy.allowed)
+  ) {
     return (
       <div className='flex h-full flex-col items-center justify-center p-6'>
         <Alert variant='destructive' className='max-w-xl'>

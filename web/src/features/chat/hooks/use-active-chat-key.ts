@@ -24,11 +24,11 @@ import { api } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth-store'
 
 export async function fetchActiveChatKey() {
-	if (import.meta.env.VITE_ALLOW_LEGACY_CHAT_KEY !== 'true') {
-		throw new Error(
-			'Legacy long-lived chat key interpolation is disabled. Ask an administrator to enable the compatibility flag only for trusted desktop clients.'
-		)
-	}
+  if (import.meta.env.VITE_ALLOW_LEGACY_CHAT_KEY !== 'true') {
+    throw new Error(
+      'Legacy long-lived chat key interpolation is disabled. Ask an administrator to enable the compatibility flag only for trusted desktop clients.'
+    )
+  }
   const result = await getApiKeys({ p: 1, size: 50 })
   if (!result.success) {
     throw new Error(result.message || 'Failed to load API keys')
@@ -49,19 +49,19 @@ export async function fetchActiveChatKey() {
 }
 
 export async function fetchChatCredential(presetId: string, url: string) {
-	const response = await api.post('/api/user/chat-credential', {
-		preset_id: presetId,
-		url,
-	})
-	const result = response.data as {
-		success: boolean
-		message?: string
-		data?: { credential?: string; expires_at?: number }
-	}
-	if (!result.success || !result.data?.credential) {
-		throw new Error(result.message || 'Failed to create chat credential')
-	}
-	return result.data.credential
+  const response = await api.post('/api/user/chat-credential', {
+    preset_id: presetId,
+    url,
+  })
+  const result = response.data as {
+    success: boolean
+    message?: string
+    data?: { credential?: string; expires_at?: number }
+  }
+  if (!result.success || !result.data?.credential) {
+    throw new Error(result.message || 'Failed to create chat credential')
+  }
+  return result.data.credential
 }
 
 /**
@@ -80,16 +80,16 @@ export function useActiveChatKey(enabled: boolean) {
 }
 
 export function useChatCredential(
-	enabled: boolean,
-	presetId: string,
-	url: string
+  enabled: boolean,
+  presetId: string,
+  url: string
 ) {
-	const userId = useAuthStore((state) => state.auth.user?.id)
-	return useQuery({
-		queryKey: ['chat-credential', userId, presetId, url],
-		queryFn: () => fetchChatCredential(presetId, url),
-		enabled: enabled && Boolean(userId) && Boolean(url),
-		staleTime: 4 * 60 * 1000,
-		gcTime: 5 * 60 * 1000,
-	})
+  const userId = useAuthStore((state) => state.auth.user?.id)
+  return useQuery({
+    queryKey: ['chat-credential', userId, presetId, url],
+    queryFn: () => fetchChatCredential(presetId, url),
+    enabled: enabled && Boolean(userId) && Boolean(url),
+    staleTime: 4 * 60 * 1000,
+    gcTime: 5 * 60 * 1000,
+  })
 }

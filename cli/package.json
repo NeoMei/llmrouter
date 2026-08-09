@@ -9,7 +9,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
-    "test": "tsx --test"
+    "test": "tsx --test src/*.test.ts"
   },
   "dependencies": {
     "@inquirer/prompts": "^7.2.1",

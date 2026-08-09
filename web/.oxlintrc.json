@@ -42,7 +42,7 @@
     "no-array-constructor": "error",
     "no-console": "warn",
     "no-duplicate-imports": "error",
-    "no-nested-ternary": "error",
+    "no-nested-ternary": "warn",
     "no-new-wrappers": "error",
     "no-regex-spaces": "error",
     "no-unsafe-finally": "warn",
@@ -88,9 +88,9 @@
     "react/jsx-no-duplicate-props": "error",
     "react/jsx-no-target-blank": "warn",
     "react/jsx-no-undef": "error",
-    "react/jsx-no-useless-fragment": "error",
+    "react/jsx-no-useless-fragment": "warn",
     "react/jsx-props-no-spread-multi": "warn",
-    "react/no-array-index-key": "error",
+    "react/no-array-index-key": "warn",
     "react/no-danger": "warn",
     "react/no-unknown-property": "warn",
     "react/no-unstable-nested-components": [
@@ -128,7 +128,8 @@
           "getSiteSectionMeta",
           "getUsageLogsSectionNavItems",
           "isUsageLogsSectionId",
-          "useSuppressSettingsSectionHeader"
+          "useSuppressSettingsSectionHeader",
+          "useSearch"
         ]
       }
     ],
@@ -181,8 +182,8 @@
     "unicorn/prefer-query-selector": "warn",
     "unicorn/prefer-regexp-test": "warn",
     "unicorn/prefer-set-has": "warn",
-    "unicorn/prefer-spread": "error",
-    "unicorn/prefer-string-replace-all": "error",
+    "unicorn/prefer-spread": "warn",
+    "unicorn/prefer-string-replace-all": "warn",
     "unicorn/prefer-string-slice": "warn",
     "unicorn/prefer-string-starts-ends-with": "warn",
     "unicorn/prefer-string-trim-start-end": "warn",

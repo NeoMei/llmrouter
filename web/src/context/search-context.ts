@@ -16,20 +16,24 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { NodeToolbar, Position } from '@xyflow/react'
-import type { ComponentProps } from 'react'
+import {
+  createContext,
+  useContext,
+  type Dispatch,
+  type SetStateAction,
+} from 'react'
 
-import { cn } from '@/lib/utils'
+export type SearchContextValue = {
+  open: boolean
+  setOpen: Dispatch<SetStateAction<boolean>>
+}
 
-type ToolbarProps = ComponentProps<typeof NodeToolbar>
+export const SearchContext = createContext<SearchContextValue | null>(null)
 
-export const Toolbar = ({ className, ...props }: ToolbarProps) => (
-  <NodeToolbar
-    className={cn(
-      'bg-background flex items-center gap-1 rounded-sm border p-1.5',
-      className
-    )}
-    position={Position.Bottom}
-    {...props}
-  />
-)
+export function useSearch(): SearchContextValue {
+  const searchContext = useContext(SearchContext)
+  if (!searchContext) {
+    throw new Error('useSearch has to be used within SearchProvider')
+  }
+  return searchContext
+}

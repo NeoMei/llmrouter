@@ -2,12 +2,13 @@ import { Command } from 'commander';
 import { input, password, select } from '@inquirer/prompts';
 import { writeCodexConfig } from './codex.js';
 import { writeClaudeConfig } from './claude.js';
-import { verifyConnection } from './api.js';
+import { normalizeServerUrl, verifyConnection } from './api.js';
+import { connectionFailureMessage } from './errors.js';
 
 export const initCommand = new Command('init')
   .description('Interactive setup for Codex CLI / Claude Code')
   .action(async () => {
-    const serverUrl = await input({
+    const serverInput = await input({
       message: 'Server URL:',
       default: 'http://localhost:3000',
     });
@@ -23,10 +24,20 @@ export const initCommand = new Command('init')
       ],
     });
 
+    let serverUrl: string;
+    try {
+      serverUrl = normalizeServerUrl(serverInput);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : 'Invalid server URL.');
+      process.exitCode = 1;
+      return;
+    }
+
     const ok = await verifyConnection(serverUrl, apiToken);
     if (!ok) {
-      console.error('Connection failed. Check URL and token.');
-      process.exit(1);
+      console.error(connectionFailureMessage(serverUrl, apiToken));
+      process.exitCode = 1;
+      return;
     }
 
     if (client === 'codex' || client === 'both') {
@@ -34,7 +45,7 @@ export const initCommand = new Command('init')
       console.log('Codex CLI configured.');
     }
     if (client === 'claude' || client === 'both') {
-      writeClaudeConfig(serverUrl, apiToken);
+      await writeClaudeConfig(serverUrl, apiToken);
       console.log('Claude Code configured.');
     }
 

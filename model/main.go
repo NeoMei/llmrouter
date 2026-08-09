@@ -307,6 +307,8 @@ func migrateDB() error {
 		&UserProviderKey{},
 		&ProviderKeyPool{},
 		&APIFile{},
+		&FineTuningJob{},
+		&FineTuningEvent{},
 	)
 	if err != nil {
 		return err
@@ -376,6 +378,8 @@ func migrateDBFast() error {
 		{&UserProviderKey{}, "UserProviderKey"},
 		{&ProviderKeyPool{}, "ProviderKeyPool"},
 		{&APIFile{}, "APIFile"},
+		{&FineTuningJob{}, "FineTuningJob"},
+		{&FineTuningEvent{}, "FineTuningEvent"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))

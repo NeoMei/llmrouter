@@ -565,7 +565,7 @@ git commit -m "feat: implement the OpenAI-compatible Files lifecycle"
 - Consumes: `service.SystemTaskHandler` and the `FineTuningProvider` interface.
 - Produces: CAS state transitions and ordered event pagination.
 
-- [ ] **Step 1: Add transition, ownership, ordering, and duplicate-poll tests**
+- [x] **Step 1: Add transition, ownership, ordering, and duplicate-poll tests**
 
 ```go
 func TestFineTuningTransitionCAS(t *testing.T) { /* queued->running succeeds; stale transition fails */ }
@@ -573,23 +573,23 @@ func TestFineTuningEventsAreStableBySequence(t *testing.T) { /* sequence then ID
 func TestFineTuningWorkerClaimsOnceAcrossInstances(t *testing.T) { /* one provider poll */ }
 ```
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
 Run: `go test ./model ./service -run FineTuning`
 
 Expected: FAIL because resources/worker are absent.
 
-- [ ] **Step 3: Implement resources and scheduled polling**
+- [x] **Step 3: Implement resources and scheduled polling**
 
 Persist owner, file IDs, provider/channel, model, upstream ID, normalized state, billing snapshot, timestamps, result model, and failure JSON. Events use monotonically increasing per-job sequence plus unique `(job_id, upstream_event_id)`. Register a distinct `fine_tuning_poll` `SystemTaskHandler`; claim jobs with DB CAS, load an isolated value snapshot, append new events idempotently, settle terminal billing once, and reschedule nonterminal jobs with bounded backoff.
 
-- [ ] **Step 4: Verify repository and worker behavior**
+- [x] **Step 4: Verify repository and worker behavior**
 
 Run: `go test -race ./model ./service -run FineTuning`
 
 Expected: PASS without duplicate poll/event/settlement.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add model service migrations

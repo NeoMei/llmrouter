@@ -7,9 +7,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	miniredis "github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
-	miniredis "github.com/alicebob/miniredis/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -34,14 +34,14 @@ func TestHealthz_HealthyWithoutRedis(t *testing.T) {
 	assert.Contains(t, w.Body.String(), `"status":"ok"`)
 }
 
-func TestHealthz_DatabaseDown(t *testing.T) {
+func TestHealthz_IgnoresDatabaseDown(t *testing.T) {
 	c := NewChecker(nil, func(context.Context) error { return errors.New("conn refused") })
 	w := call(t, c.HealthzHandler)
-	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-	assert.Contains(t, w.Body.String(), `"status":"db_error"`)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"status":"ok"`)
 }
 
-func TestHealthz_RedisDown(t *testing.T) {
+func TestHealthz_IgnoresRedisDown(t *testing.T) {
 	mr, err := miniredis.Run()
 	require.NoError(t, err)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
@@ -52,8 +52,8 @@ func TestHealthz_RedisDown(t *testing.T) {
 
 	c := NewChecker(rdb, func(context.Context) error { return nil })
 	w := call(t, c.HealthzHandler)
-	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-	assert.Contains(t, w.Body.String(), `"redis_error"`)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"status":"ok"`)
 }
 
 func TestHealthz_RedisHealthy(t *testing.T) {
@@ -70,9 +70,21 @@ func TestHealthz_RedisHealthy(t *testing.T) {
 	assert.Contains(t, w.Body.String(), `"status":"ok"`)
 }
 
-func TestReadyz_MirrorsHealthz(t *testing.T) {
-	c := NewChecker(nil, func(context.Context) error { return nil })
+func TestReadyz_DatabaseDown(t *testing.T) {
+	c := NewChecker(nil, func(context.Context) error { return errors.New("conn refused") })
 	w := call(t, c.ReadyzHandler)
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), `"status":"ok"`)
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Contains(t, w.Body.String(), `"database":"error"`)
+}
+
+func TestReadyz_ObjectStoreDown(t *testing.T) {
+	c := NewCheckerWithProbes(nil, func(context.Context) error { return nil }, NamedProbe{
+		Name: "object_store",
+		Check: func(context.Context) error {
+			return errors.New("bucket unavailable")
+		},
+	})
+	w := call(t, c.ReadyzHandler)
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Contains(t, w.Body.String(), `"object_store":"error"`)
 }

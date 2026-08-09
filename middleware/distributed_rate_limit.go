@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
 )
@@ -62,6 +63,12 @@ func DefaultRateLimitConfig() RateLimitConfig {
 		ProviderCapacity:   200,
 		ProviderRefillRate: 20,
 	}
+}
+
+// DistributedRateLimit applies the repository-wide Redis-backed defaults.
+// When Redis is disabled, RateLimitMiddleware deliberately fails open.
+func DistributedRateLimit() gin.HandlerFunc {
+	return RateLimitMiddleware(common.RDB, DefaultRateLimitConfig())
 }
 
 // RateLimitMiddleware applies a 4-layer distributed token-bucket rate limiter:

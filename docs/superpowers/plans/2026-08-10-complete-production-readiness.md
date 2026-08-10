@@ -1002,6 +1002,28 @@ git add scripts .github/workflows/release.yml docs/operations/provider-certifica
 git commit -m "release: enforce complete production certification"
 ```
 
+### Task 20: Security remediation and signed release enforcement
+
+- [x] **Step 1: Run an independent standard security scan**
+
+Snapshot `680e859` was reviewed across authentication, authorization, credentials, outbound I/O, Electron, operations, restore, and release surfaces. The sealed report contains 17 validated findings (7 high, 8 medium, 2 low) with partial architecture-led coverage.
+
+- [x] **Step 2: Close code-level runtime and tenant boundaries**
+
+Fixed desktop loopback binding and exact-origin navigation, refresh-token predecessor replay, Midjourney media ownership, HTTP/pprof/management exposure, subscription target-role enforcement, video response-header/MIME/size/rate controls, and restore checksum confusion. Every behavior has a regression test that failed before the change and passed afterward.
+
+- [x] **Step 3: Bind release evidence to trusted inputs and exact candidate bytes**
+
+Provider certification now requires an externally injected public-key trust anchor. The aggregate gate recomputes backend and Electron package checksums from the downloaded candidate tree and rejects modified bytes. macOS signing/notarization and Windows Authenticode are mandatory and verified before their evidence can report success.
+
+- [ ] **Step 4: Complete external trust and credential architecture**
+
+Remaining release blockers require external/product inputs that must not be guessed or simulated: migrate legacy channel/PAT/secret-option plaintext storage to versioned encrypted or hashed persistence; move provider certification into independently pinned trusted tooling with short-lived credentials/non-exportable signing; define and certify a proxy/worker SSRF contract that validates every redirect and actual dial peer; provision Apple/Windows signing identities and provider-certification credentials.
+
+- [x] **Step 5: Re-run all locally available gates**
+
+The latest aggregate run passed backend, web, CLI, route/provider contracts, and 8/8 browser acceptance tests. It remains correctly blocked only by six external evidence bundles plus unavailable Docker/Compose certification.
+
 ## Execution Order and Checkpoints
 
 Execute Tasks 1–4, then run `bash scripts/verify-backend.sh` and commit the batch. Execute Tasks 5–7 and run capability/route/OpenAPI consistency. Execute Tasks 8–12 and run all resource/provider contracts. Execute Tasks 13–16 and run web/CLI/Electron gates. Execute Tasks 17–19 and run the aggregate release gate.

@@ -30,6 +30,7 @@ const (
 
 // ClientModel is the immutable public identity exposed to a client.
 type ClientModel struct {
+	Id                       int            `json:"-"`
 	PublicID                 string         `json:"id"`
 	DisplayName              string         `json:"display_name"`
 	Client                   string         `json:"client,omitempty"`
@@ -58,6 +59,7 @@ type ResolvedModel struct {
 	UpstreamModel  string
 	BillingModel   string
 	ChannelID      int
+	RouteID        int
 	TargetID       int
 	Priority       int
 	Weight         int
@@ -136,7 +138,7 @@ func NewCatalog(routes []model.ClientModelRoute, targets []model.ClientModelTarg
 			return nil, fmt.Errorf("route %q metadata: %w", publicID, err)
 		}
 		entries[i] = routeEntry{enabled: route.Enabled, model: ClientModel{
-			PublicID: publicID, DisplayName: display, Client: client,
+			Id: route.Id, PublicID: publicID, DisplayName: display, Client: client,
 			Aliases: append([]string(nil), aliases...), Metadata: route.Metadata,
 			ContextWindow: capabilities.ContextWindow, ReasoningEfforts: append([]string(nil), capabilities.ReasoningEfforts...),
 			SupportsReasoningSummary: capabilities.SupportsReasoningSummary, SupportsTools: capabilities.SupportsTools,
@@ -319,7 +321,7 @@ func (c *Catalog) resolveAuthorized(snapshot AuthorizedRuntimeSnapshot, requeste
 		return &ResolvedModel{
 			RequestedModel: requestedModel, PublicID: entry.model.PublicID,
 			UpstreamModel: target.UpstreamModel, BillingModel: target.BillingModel,
-			ChannelID: target.ChannelId, TargetID: target.Id, Priority: target.Priority, Weight: target.Weight,
+			ChannelID: target.ChannelId, RouteID: entry.model.Id, TargetID: target.Id, Priority: target.Priority, Weight: target.Weight,
 			Client:         entry.model.Client,
 			PreferredWires: append([]WireProtocol(nil), wires...),
 		}, nil

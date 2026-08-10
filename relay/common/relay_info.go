@@ -102,7 +102,12 @@ type RelayInfo struct {
 	IsPlayground           bool
 	UsePrice               bool
 	RelayMode              int
-	OriginModelName        string
+	OriginModelName        string // 客户端请求中使用的原始模型别名
+	PublicModelName        string // 解析后的公开模型 ID
+	ResolvedModelName      string // 解析后的上游模型名称
+	BillingModelName       string // 用于计费的规范模型名称
+	ModelRouteId           int    // 命中的公开模型路由目标 ID
+	SelectedWire           string // 经 capability/probe 选择的 wire protocol
 	RequestURLPath         string
 	RequestHeaders         map[string]string
 	ShouldIncludeUsage     bool
@@ -242,7 +247,7 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	// reset some fields based on channel meta
 	// 重置某些字段，例如模型名称等
 	if info.Request != nil {
-		info.Request.SetModelName(info.OriginModelName)
+		info.Request.SetModelName(info.ResolvedModelNameOrOrigin())
 	}
 }
 
@@ -259,7 +264,8 @@ func (info *RelayInfo) ToString() string {
 	fmt.Fprintf(b, "IsStream: %t, ", info.IsStream)
 	fmt.Fprintf(b, "IsPlayground: %t, ", info.IsPlayground)
 	fmt.Fprintf(b, "RequestURLPath: %q, ", info.RequestURLPath)
-	fmt.Fprintf(b, "OriginModelName: %q, ", info.OriginModelName)
+	fmt.Fprintf(b, "OriginModelName: %q, PublicModelName: %q, ResolvedModelName: %q, BillingModelName: %q, ModelRouteId: %d, SelectedWire: %q, ",
+		info.OriginModelName, info.PublicModelName, info.ResolvedModelName, info.BillingModelName, info.ModelRouteId, info.SelectedWire)
 	fmt.Fprintf(b, "EstimatePromptTokens: %d, ", info.estimatePromptTokens)
 	fmt.Fprintf(b, "ShouldIncludeUsage: %t, ", info.ShouldIncludeUsage)
 	fmt.Fprintf(b, "DisablePing: %t, ", info.DisablePing)
@@ -519,6 +525,29 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	return info
 }
 
+// ResolvedModelNameOrOrigin returns the resolved upstream model name if
+// resolution produced one, otherwise falls back to the original requested name.
+func (info *RelayInfo) ResolvedModelNameOrOrigin() string {
+	if info == nil || info.ResolvedModelName == "" {
+		if info == nil {
+			return ""
+		}
+		return info.OriginModelName
+	}
+	return info.ResolvedModelName
+}
+
+// BillingModelNameOrOrigin returns the canonical billing model name if
+// resolution produced one, otherwise falls back to the original requested name.
+func (info *RelayInfo) BillingModelNameOrOrigin() string {
+	if info == nil || info.BillingModelName == "" {
+		if info == nil {
+			return ""
+		}
+		return info.OriginModelName
+	}
+	return info.BillingModelName
+}
 func cloneRequestHeaders(c *gin.Context) map[string]string {
 	if c == nil || c.Request == nil {
 		return nil

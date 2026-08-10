@@ -20,7 +20,9 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
+	relayprotocol "github.com/QuantumNous/new-api/relay/protocol"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/modelcatalog"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -150,6 +152,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	relayInfo.SetEstimatePromptTokens(tokens)
 
+	// Resolve public client model routes before price lookup so billing uses the
+	// canonical billing model while audit logs retain the requested alias.
+	if err := resolveClientModelRoute(c, relayInfo); err != nil {
+		common.SysLog("client model route resolution failed: " + err.Error())
+	}
+
 	priceData, err := helper.ModelPriceHelper(c, relayInfo, tokens, meta)
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest))
@@ -181,7 +189,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	retryParam := &service.RetryParam{
 		Ctx:         c,
 		TokenGroup:  relayInfo.TokenGroup,
-		ModelName:   relayInfo.OriginModelName,
+		ModelName:   relayInfo.ResolvedModelNameOrOrigin(),
 		RequestPath: c.Request.URL.Path,
 		Retry:       common.GetPointer(0),
 	}
@@ -309,13 +317,13 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
 
 	if err != nil {
-		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, info.OriginModelName, err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, info.ResolvedModelNameOrOrigin(), err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 	if channel == nil {
-		return nil, types.NewError(fmt.Errorf("分组 %s 下模型 %s 的可用渠道不存在（retry）", selectGroup, info.OriginModelName), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		return nil, types.NewError(fmt.Errorf("分组 %s 下模型 %s 的可用渠道不存在（retry）", selectGroup, info.ResolvedModelNameOrOrigin()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 
-	newAPIError := middleware.SetupContextForSelectedChannel(c, channel, info.OriginModelName)
+	newAPIError := middleware.SetupContextForSelectedChannel(c, channel, info.ResolvedModelNameOrOrigin())
 	if newAPIError != nil {
 		return nil, newAPIError
 	}
@@ -498,7 +506,7 @@ func RelayTask(c *gin.Context) {
 	retryParam := &service.RetryParam{
 		Ctx:         c,
 		TokenGroup:  relayInfo.TokenGroup,
-		ModelName:   relayInfo.OriginModelName,
+		ModelName:   relayInfo.ResolvedModelNameOrOrigin(),
 		RequestPath: c.Request.URL.Path,
 		Retry:       common.GetPointer(0),
 	}
@@ -641,4 +649,104 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError,
 		return false
 	}
 	return true
+}
+
+// resolveClientModelRoute attempts to resolve the requested OriginModelName
+// into a public client model route before billing and channel selection. When no
+// route matches, it leaves RelayInfo unchanged and the request continues with
+// the legacy model name.
+func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo) error {
+	if relayInfo == nil || strings.TrimSpace(relayInfo.OriginModelName) == "" {
+		return nil
+	}
+	if model.DB == nil || !model.DB.Migrator().HasTable(&model.ClientModelRoute{}) || !model.DB.Migrator().HasTable(&model.ClientModelTarget{}) {
+		return nil
+	}
+
+	groups, err := getModelListGroups(c)
+	if err != nil {
+		return err
+	}
+
+	client := clientForRequest(c, relayInfo)
+	var routes []model.ClientModelRoute
+	var targets []model.ClientModelTarget
+	if err := model.DB.Where("enabled = ?", true).Find(&routes).Error; err != nil {
+		return err
+	}
+	if err := model.DB.Where("enabled = ?", true).Find(&targets).Error; err != nil {
+		return err
+	}
+
+	catalog, err := modelcatalog.AssembleRuntimeCatalog(c.Request.Context(), modelcatalog.RuntimeContext{
+		UserID: c.GetInt("id"),
+		Groups: groups.ownerGroups,
+		Client: client,
+	}, routes, targets, modelcatalog.NewGormRuntimeSources(model.DB), requestCatalogAuthorizer{})
+	if err != nil {
+		return err
+	}
+
+	resolved, err := catalog.Resolve(c.Request.Context(), c.GetInt("id"), groups.ownerGroups, relayInfo.OriginModelName, client)
+	if err != nil {
+		// No matching public route is a normal fallback, not a hard error.
+		return nil
+	}
+
+	relayInfo.PublicModelName = resolved.PublicID
+	relayInfo.ResolvedModelName = resolved.UpstreamModel
+	relayInfo.BillingModelName = resolved.BillingModel
+	relayInfo.ModelRouteId = resolved.RouteID
+
+	if decision, err := selectWireForRequest(relayInfo, resolved); err == nil {
+		relayInfo.SelectedWire = string(decision.Wire)
+	}
+	return nil
+}
+
+func clientForRequest(c *gin.Context, relayInfo *relaycommon.RelayInfo) string {
+	if client := strings.TrimSpace(c.Query("client")); client != "" {
+		return client
+	}
+	path := c.Request.URL.Path
+	if strings.Contains(path, "/v1/messages") {
+		return "claude"
+	}
+	if strings.Contains(path, "/v1beta/models") || (strings.Contains(path, "/v1/models/") && strings.Contains(path, ":")) {
+		return "gemini"
+	}
+	return "codex"
+}
+
+func selectWireForRequest(relayInfo *relaycommon.RelayInfo, resolved *modelcatalog.ResolvedModel) (relayprotocol.Decision, error) {
+	expectedWire := expectedWireForFormat(relayInfo.RelayFormat)
+	if expectedWire == "" {
+		return relayprotocol.Decision{}, errors.New("no wire for request format")
+	}
+	declared := map[modelcatalog.WireProtocol]bool{}
+	for _, wire := range resolved.PreferredWires {
+		if wire == expectedWire {
+			declared[wire] = true
+		}
+	}
+	if len(declared) == 0 {
+		return relayprotocol.Decision{}, errors.New("resolved route does not declare expected wire")
+	}
+	return relayprotocol.Resolve(relayprotocol.ResolveInput{
+		Requested: resolved.PreferredWires,
+		Declared:  declared,
+		Observed:  map[modelcatalog.WireProtocol]relayprotocol.Observation{},
+	})
+}
+
+func expectedWireForFormat(format types.RelayFormat) modelcatalog.WireProtocol {
+	switch format {
+	case types.RelayFormatOpenAIResponses:
+		return modelcatalog.WireResponses
+	case types.RelayFormatClaude:
+		return modelcatalog.WireAnthropic
+	case types.RelayFormatOpenAI, types.RelayFormatOpenAIAudio, types.RelayFormatOpenAIImage, types.RelayFormatEmbedding, types.RelayFormatRerank:
+		return modelcatalog.WireOpenAIChat
+	}
+	return ""
 }

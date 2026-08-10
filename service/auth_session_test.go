@@ -344,8 +344,8 @@ func TestLoginSessionCreateRefreshAndRevoke(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEqual(t, bundle.RefreshToken, refreshed.RefreshToken)
 	recovered, _, err := RefreshLoginSession(bundle.RefreshToken, bundle.Session.SID, "127.0.0.2", "test-agent-2")
-	require.NoError(t, err)
-	assert.Equal(t, refreshed.RefreshToken, recovered.RefreshToken, "a concurrent refresh must recover the winner's rotated token")
+	assert.ErrorIs(t, err, ErrRefreshRace)
+	assert.Nil(t, recovered, "a replayed predecessor must never reveal the winner's rotated token")
 
 	_, _, err = RefreshLoginSession(refreshed.RefreshToken, "different-session", "127.0.0.2", "test-agent-2")
 	assert.ErrorIs(t, err, ErrLoginSessionMismatch)

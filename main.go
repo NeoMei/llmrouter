@@ -35,8 +35,6 @@ import (
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
-
-	_ "net/http/pprof"
 )
 
 //go:embed web/dist
@@ -152,8 +150,9 @@ func main() {
 	}
 
 	if os.Getenv("ENABLE_PPROF") == "true" {
+		pprofServer := newPprofHTTPServer()
 		gopool.Go(func() {
-			log.Println(http.ListenAndServe("0.0.0.0:8005", nil))
+			log.Println(pprofServer.ListenAndServe())
 		})
 		go common.Monitor()
 		common.SysLog("pprof enabled")
@@ -198,9 +197,10 @@ func main() {
 		port = strconv.Itoa(*common.Port)
 	}
 
-	srv := &http.Server{
-		Addr:    ":" + port,
-		Handler: server,
+	srv, err := newPublicHTTPServer(server, port)
+	if err != nil {
+		common.FatalLog("invalid HTTP server configuration: " + err.Error())
+		return
 	}
 
 	go func() {

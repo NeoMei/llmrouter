@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"strings"
@@ -28,6 +29,61 @@ func videoProxyError(c *gin.Context, status int, errType, message string) {
 			"type":    errType,
 		},
 	})
+}
+
+var videoResponseHeaderAllowlist = [...]string{
+	"Content-Disposition",
+	"Etag",
+	"Last-Modified",
+	"Accept-Ranges",
+	"Content-Range",
+}
+
+func safeVideoContentType(value string) (string, bool) {
+	mediaType, parameters, err := mime.ParseMediaType(strings.TrimSpace(value))
+	if err != nil {
+		return "application/octet-stream", false
+	}
+	mediaType = strings.ToLower(mediaType)
+	if !strings.HasPrefix(mediaType, "video/") && mediaType != "application/octet-stream" {
+		return "application/octet-stream", false
+	}
+	return mime.FormatMediaType(mediaType, parameters), true
+}
+
+func copyVideoResponseHeaders(destination, source http.Header) {
+	for _, key := range videoResponseHeaderAllowlist {
+		for _, value := range source.Values(key) {
+			destination.Add(key, value)
+		}
+	}
+	contentType, _ := safeVideoContentType(source.Get("Content-Type"))
+	destination.Set("Content-Type", contentType)
+	destination.Set("X-Content-Type-Options", "nosniff")
+}
+
+func videoContentLimitBytes() int64 {
+	limitMB := constant.MaxFileDownloadMB
+	if limitMB <= 0 {
+		limitMB = 64
+	}
+	return int64(limitMB) << 20
+}
+
+func copyVideoContent(destination io.Writer, source io.Reader) error {
+	limit := videoContentLimitBytes()
+	if _, err := io.Copy(destination, io.LimitReader(source, limit)); err != nil {
+		return err
+	}
+	var probe [1]byte
+	read, err := source.Read(probe[:])
+	if read > 0 {
+		return fmt.Errorf("video content exceeds maximum allowed size")
+	}
+	if err != nil && err != io.EOF {
+		return err
+	}
+	return nil
 }
 
 func VideoProxy(c *gin.Context) {
@@ -168,16 +224,16 @@ func VideoProxy(c *gin.Context) {
 			fmt.Sprintf("Upstream service returned status %d", resp.StatusCode))
 		return
 	}
-
-	for key, values := range resp.Header {
-		for _, value := range values {
-			c.Writer.Header().Add(key, value)
-		}
+	if resp.ContentLength > videoContentLimitBytes() {
+		videoProxyError(c, http.StatusBadGateway, "server_error", "Video content exceeds maximum allowed size")
+		return
 	}
+
+	copyVideoResponseHeaders(c.Writer.Header(), resp.Header)
 
 	c.Writer.Header().Set("Cache-Control", "public, max-age=86400")
 	c.Writer.WriteHeader(resp.StatusCode)
-	if _, err = io.Copy(c.Writer, resp.Body); err != nil {
+	if err = copyVideoContent(c.Writer, resp.Body); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to stream video content: %s", err.Error()))
 	}
 }
@@ -199,6 +255,13 @@ func writeVideoDataURL(c *gin.Context, dataURL string) error {
 	if mimeType == "" {
 		mimeType = "video/mp4"
 	}
+	if int64(len(payload)) > int64(base64.StdEncoding.EncodedLen(int(videoContentLimitBytes()))) {
+		return fmt.Errorf("video content exceeds maximum allowed size")
+	}
+	contentType, safe := safeVideoContentType(mimeType)
+	if !safe {
+		return fmt.Errorf("unsupported video content type")
+	}
 
 	videoBytes, err := base64.StdEncoding.DecodeString(payload)
 	if err != nil {
@@ -207,8 +270,12 @@ func writeVideoDataURL(c *gin.Context, dataURL string) error {
 			return err
 		}
 	}
+	if int64(len(videoBytes)) > videoContentLimitBytes() {
+		return fmt.Errorf("video content exceeds maximum allowed size")
+	}
 
-	c.Writer.Header().Set("Content-Type", mimeType)
+	c.Writer.Header().Set("Content-Type", contentType)
+	c.Writer.Header().Set("X-Content-Type-Options", "nosniff")
 	c.Writer.Header().Set("Cache-Control", "public, max-age=86400")
 	c.Writer.WriteHeader(http.StatusOK)
 	_, err = c.Writer.Write(videoBytes)

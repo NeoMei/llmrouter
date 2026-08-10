@@ -11,6 +11,7 @@ func setValidProductionEnvironment(t *testing.T) {
 	t.Setenv("RUN_MODE", "production")
 	t.Setenv("SESSION_SECRET", "session-secret-that-is-at-least-32-bytes")
 	t.Setenv("GATEWAY_AES_KEY", "gateway-key-that-is-at-least-32-bytes")
+	t.Setenv("MANAGEMENT_TOKEN", "management-token-that-is-at-least-32-bytes")
 	t.Setenv("SQL_DSN", "gateway:strong-db-password@tcp(db:3306)/gateway")
 	t.Setenv("REDIS_CONN_STRING", "redis://default:strong-redis-password@redis:6379/0")
 	t.Setenv("OBJECT_STORE_TYPE", "s3")
@@ -32,6 +33,10 @@ func TestValidateProductionConfigRequiresStableSecrets(t *testing.T) {
 	setValidProductionEnvironment(t)
 	t.Setenv("GATEWAY_AES_KEY", "123456")
 	require.ErrorContains(t, ValidateProductionConfig(), "GATEWAY_AES_KEY")
+
+	setValidProductionEnvironment(t)
+	t.Setenv("MANAGEMENT_TOKEN", "")
+	require.ErrorContains(t, ValidateProductionConfig(), "MANAGEMENT_TOKEN")
 }
 
 func TestValidateProductionConfigRequiresDependenciesAndSecurity(t *testing.T) {

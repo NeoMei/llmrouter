@@ -395,10 +395,18 @@ jobs:
             --slurpfile windows collected/desktop-windows.json \
             '{commit:$commit,platforms:{linux:$linux[0],macos:$macos[0],windows:$windows[0]}}' \
             > artifacts/release/desktop.json
+      - name: Materialize trusted certification public key
+        env:
+          PUBLIC_KEY_B64: ${{ secrets.PROVIDER_CERTIFICATION_PUBLIC_KEY_B64 }}
+        run: |
+          test -n "$PUBLIC_KEY_B64"
+          umask 077
+          printf '%s' "$PUBLIC_KEY_B64" | base64 --decode > "$RUNNER_TEMP/provider-certification-trusted.pub"
       - name: Enforce aggregate release gate
         env:
           RELEASE_GATE_FAST: '1'
           RELEASE_COMMIT: ${{ github.sha }}
+          PROVIDER_CERTIFICATION_PUBLIC_KEY: ${{ runner.temp }}/provider-certification-trusted.pub
         run: bash scripts/release-gate.sh
       - name: Publish certified release
         if: startsWith(github.ref, 'refs/tags/')

@@ -47,9 +47,11 @@ if require_json "$provider_manifest" "provider certification manifest"; then
     add_blocker "provider certification contains $failed_provider_count failed, missing-credential, or public 501 result(s)"
   fi
   signature="$evidence_dir/provider-certification.sig"
-  public_key="$evidence_dir/provider-certification.pub"
-  if [[ ! -s "$signature" || ! -s "$public_key" ]]; then
-    add_blocker "provider certification signature or public key is missing"
+  public_key=${PROVIDER_CERTIFICATION_PUBLIC_KEY:-}
+  if [[ -z "$public_key" || ! -s "$public_key" ]]; then
+    add_blocker "provider certification trusted public key is missing"
+  elif [[ ! -s "$signature" ]]; then
+    add_blocker "provider certification signature is missing"
   elif ! openssl pkeyutl -verify -pubin -inkey "$public_key" -rawin -in "$provider_manifest" -sigfile "$signature" >/dev/null 2>&1; then
     add_blocker "provider certification signature verification failed"
   fi

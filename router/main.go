@@ -48,8 +48,10 @@ func SetRouter(router *gin.Engine, assets WebAssets) {
 		},
 	)
 	router.GET("/healthz", checker.HealthzHandler)
-	router.GET("/readyz", checker.ReadyzHandler)
-	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
+	management := router.Group("")
+	management.Use(middleware.ManagementAuth())
+	management.GET("/readyz", checker.ReadyzHandler)
+	management.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	SetApiRouter(router)
 	SetDashboardRouter(router)

@@ -2,6 +2,7 @@ const { app, BrowserWindow, dialog, Menu, shell, Tray } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { isAllowedNavigation } = require('./navigation-policy');
 const { createBackendRuntime, waitForReady } = require('./server-runtime');
 
 const PORT = Number(process.env.ELECTRON_BACKEND_PORT || 3000);
@@ -88,6 +89,7 @@ async function startBackend() {
     env: {
       ...process.env,
       PORT: String(PORT),
+      SERVER_BIND_ADDRESS: '127.0.0.1',
       SQLITE_PATH: path.join(dataDir, 'new-api.db'),
     },
     readinessUrl: READY_URL,
@@ -139,7 +141,7 @@ function createWindow() {
   });
   mainWindow.webContents.on('will-navigate', (event, url) => {
     const allowedOrigin = `http://127.0.0.1:${port}`;
-    if (!url.startsWith(allowedOrigin)) event.preventDefault();
+    if (!isAllowedNavigation(url, allowedOrigin)) event.preventDefault();
   });
   void mainWindow.loadURL(`http://127.0.0.1:${port}`);
   if (isDev) mainWindow.webContents.openDevTools();

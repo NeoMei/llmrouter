@@ -41,7 +41,7 @@ set -e
 test "$invalid_status" -ne 0
 for blocker in \
   'provider certification contains 2 failed, missing-credential, or public 501 result(s)' \
-  'provider certification signature or public key is missing' \
+  'provider certification trusted public key is missing' \
   'image evidence requires immutable digest, signature, SBOM, provenance, and container smoke pass' \
   'restore rehearsal evidence is incomplete or failed' \
   'desktop certification missing checksum or startup probe for linux' \
@@ -73,6 +73,19 @@ jq -n --arg commit "$commit" '{commit:$commit,platforms:{linux:{checksum:("c" * 
 jq -n --arg commit "$commit" '{commit:$commit,status:"pass",fault_recovery:"pass",performance:"pass",billing:"pass"}' > "$tmp_dir/nightly.json"
 jq -n --arg commit "$commit" '{commit:$commit,public_501_count:0,supported_placeholder_count:0,generated_docs_clean:true}' > "$tmp_dir/source.json"
 
-RELEASE_GATE_FAST=1 RELEASE_COMMIT="$commit" bash "$root_dir/scripts/release-gate.sh" --evidence-dir "$tmp_dir" | grep -Fq 'release gate: passed'
+openssl genpkey -algorithm ED25519 -out "$tmp_dir/provider/trusted-private.pem" >/dev/null 2>&1
+openssl pkey -in "$tmp_dir/provider/trusted-private.pem" -pubout -out "$tmp_dir/provider/trusted-public.pem" >/dev/null 2>&1
+set +e
+forged_output=$(RELEASE_GATE_FAST=1 RELEASE_COMMIT="$commit" \
+  PROVIDER_CERTIFICATION_PUBLIC_KEY="$tmp_dir/provider/trusted-public.pem" \
+  bash "$root_dir/scripts/release-gate.sh" --evidence-dir "$tmp_dir" 2>&1)
+forged_status=$?
+set -e
+test "$forged_status" -ne 0
+grep -Fq 'provider certification signature verification failed' <<<"$forged_output"
+
+RELEASE_GATE_FAST=1 RELEASE_COMMIT="$commit" \
+  PROVIDER_CERTIFICATION_PUBLIC_KEY="$tmp_dir/provider/public.pem" \
+  bash "$root_dir/scripts/release-gate.sh" --evidence-dir "$tmp_dir" | grep -Fq 'release gate: passed'
 
 echo 'release gate fixtures: ok'

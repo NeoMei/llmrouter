@@ -30,6 +30,7 @@ env \
   APP_IMAGE_DIGEST=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
   SESSION_SECRET=session-secret-that-is-at-least-32-bytes \
   GATEWAY_AES_KEY=gateway-key-that-is-at-least-32-bytes \
+  MANAGEMENT_TOKEN=management-token-that-is-at-least-32-bytes \
   SQL_DSN='gateway:strong-db-secret@tcp(db:3306)/gateway' \
   REDIS_CONN_STRING='redis://default:strong-redis-secret@redis:6379/0' \
   OBJECT_STORE_TYPE=s3 \

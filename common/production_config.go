@@ -28,6 +28,9 @@ func ValidateProductionConfig() error {
 	if err := validateSecretEnv("GATEWAY_AES_KEY", 32); err != nil {
 		return err
 	}
+	if err := validateSecretEnv("MANAGEMENT_TOKEN", 32); err != nil {
+		return err
+	}
 	if err := requireProductionEnv("SQL_DSN"); err != nil {
 		return err
 	}

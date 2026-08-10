@@ -44,6 +44,7 @@
     },
     "files": [
       "main.js",
+      "navigation-policy.js",
       "server-runtime.js",
       "preload.js",
       "icon.png",

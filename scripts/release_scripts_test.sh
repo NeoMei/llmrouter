@@ -18,9 +18,11 @@ NODE
 for script in \
   scripts/verify-backend.sh scripts/verify-web.sh scripts/verify-cli.sh \
   scripts/certify-providers.sh scripts/certify-restore.sh scripts/certify-source.sh \
-  scripts/release-gate.sh scripts/release_gate_test.sh; do
+  scripts/release-gate.sh scripts/release_gate_test.sh scripts/restore_test.sh; do
   test -x "$script" || {
     echo "$script must exist and be executable" >&2
     exit 1
   }
 done
+
+bash scripts/restore_test.sh

@@ -2,13 +2,13 @@ package modelcatalog
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"unicode"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 )
 
@@ -30,11 +30,23 @@ const (
 
 // ClientModel is the immutable public identity exposed to a client.
 type ClientModel struct {
-	PublicID    string
-	DisplayName string
-	Client      string
-	Aliases     []string
-	Metadata    string
+	PublicID                 string         `json:"id"`
+	DisplayName              string         `json:"display_name"`
+	Client                   string         `json:"client,omitempty"`
+	Aliases                  []string       `json:"aliases,omitempty"`
+	PreferredWires           []WireProtocol `json:"preferred_wires"`
+	ContextWindow            int            `json:"context_window,omitempty"`
+	ReasoningEfforts         []string       `json:"reasoning_efforts,omitempty"`
+	SupportsReasoningSummary bool           `json:"supports_reasoning_summary"`
+	SupportsTools            bool           `json:"supports_tools"`
+	Metadata                 string         `json:"-"`
+}
+
+type routeMetadata struct {
+	ContextWindow            int      `json:"context_window"`
+	ReasoningEfforts         []string `json:"reasoning_efforts"`
+	SupportsReasoningSummary bool     `json:"supports_reasoning_summary"`
+	SupportsTools            bool     `json:"supports_tools"`
 }
 
 // ResolvedModel is the result used by routing and billing. RequestedModel is
@@ -119,9 +131,15 @@ func NewCatalog(routes []model.ClientModelRoute, targets []model.ClientModelTarg
 		if display == "" {
 			display = publicID
 		}
+		capabilities, err := decodeRouteMetadata(route.Metadata)
+		if err != nil {
+			return nil, fmt.Errorf("route %q metadata: %w", publicID, err)
+		}
 		entries[i] = routeEntry{enabled: route.Enabled, model: ClientModel{
 			PublicID: publicID, DisplayName: display, Client: client,
 			Aliases: append([]string(nil), aliases...), Metadata: route.Metadata,
+			ContextWindow: capabilities.ContextWindow, ReasoningEfforts: append([]string(nil), capabilities.ReasoningEfforts...),
+			SupportsReasoningSummary: capabilities.SupportsReasoningSummary, SupportsTools: capabilities.SupportsTools,
 		}}
 		byRoute[route.Id] = i
 	}
@@ -243,7 +261,22 @@ func (c *Catalog) listAuthorized(snapshot AuthorizedRuntimeSnapshot) []ClientMod
 		if !entryVisible(entry.targets, visibleGroups) {
 			continue
 		}
-		result = append(result, cloneClientModel(entry.model))
+		clientModel := cloneClientModel(entry.model)
+		seenWires := make(map[WireProtocol]struct{}, 3)
+		for _, target := range entry.targets {
+			if !entryTargetVisible(target, visibleGroups) {
+				continue
+			}
+			wires, _ := decodeWires(target.PreferredWires)
+			for _, wire := range wires {
+				if _, exists := seenWires[wire]; exists {
+					continue
+				}
+				seenWires[wire] = struct{}{}
+				clientModel.PreferredWires = append(clientModel.PreferredWires, wire)
+			}
+		}
+		result = append(result, clientModel)
 	}
 	sort.SliceStable(result, func(i, j int) bool { return result[i].PublicID < result[j].PublicID })
 	return result
@@ -355,6 +388,8 @@ func entryTargetVisible(target model.ClientModelTarget, groups []string) bool {
 
 func cloneClientModel(m ClientModel) ClientModel {
 	m.Aliases = append([]string(nil), m.Aliases...)
+	m.PreferredWires = append([]WireProtocol(nil), m.PreferredWires...)
+	m.ReasoningEfforts = append([]string(nil), m.ReasoningEfforts...)
 	return m
 }
 
@@ -426,11 +461,39 @@ func decodeStrings(raw string) ([]string, error) {
 		return nil, nil
 	}
 	var values []string
-	if err := json.Unmarshal([]byte(raw), &values); err == nil {
+	if err := common.Unmarshal([]byte(raw), &values); err == nil {
 		return values, nil
 	}
 	values = strings.Split(raw, ",")
 	return values, nil
+}
+
+func decodeRouteMetadata(raw string) (routeMetadata, error) {
+	if strings.TrimSpace(raw) == "" {
+		return routeMetadata{}, nil
+	}
+	var metadata routeMetadata
+	if err := common.Unmarshal([]byte(raw), &metadata); err != nil {
+		return routeMetadata{}, err
+	}
+	if metadata.ContextWindow < 0 {
+		return routeMetadata{}, fmt.Errorf("context_window must not be negative")
+	}
+	seen := make(map[string]struct{}, len(metadata.ReasoningEfforts))
+	normalized := make([]string, 0, len(metadata.ReasoningEfforts))
+	for _, effort := range metadata.ReasoningEfforts {
+		effort = strings.ToLower(strings.TrimSpace(effort))
+		if effort == "" {
+			return routeMetadata{}, fmt.Errorf("reasoning_efforts must not contain blank values")
+		}
+		if _, exists := seen[effort]; exists {
+			continue
+		}
+		seen[effort] = struct{}{}
+		normalized = append(normalized, effort)
+	}
+	metadata.ReasoningEfforts = normalized
+	return metadata, nil
 }
 
 func decodeWires(raw string) ([]WireProtocol, error) {
@@ -460,6 +523,6 @@ func decodeWires(raw string) ([]WireProtocol, error) {
 }
 
 func encodeWires(values []WireProtocol) string {
-	data, _ := json.Marshal(values)
+	data, _ := common.Marshal(values)
 	return string(data)
 }

@@ -62,7 +62,7 @@ export function AnimatedOutlet() {
   // /dashboard/$section) then re-renders in place instead of remounting the
   // route component and discarding its state (such as the selected time range).
   const routeKey = useRouterState({
-    select: (s) => s.matches.at(-1)?.routeId ?? s.location.pathname,
+    select: (s) => (s.matches.at(-1)?.routeId ?? s.location.pathname) as string,
   })
 
   if (shouldReduce) {

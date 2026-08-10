@@ -23,6 +23,7 @@ import {
   FileText,
   Files,
   FlaskConical,
+  GitBranch,
   Key,
   LayoutDashboard,
   ListTodo,
@@ -139,6 +140,11 @@ export function useSidebarData(): SidebarData {
             title: t('Models'),
             url: '/models/metadata',
             icon: Box,
+          },
+          {
+            title: t('Client Model Routes'),
+            url: '/client-model-routes',
+            icon: GitBranch,
           },
           {
             title: t('Users'),

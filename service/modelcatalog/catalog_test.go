@@ -2,15 +2,15 @@ package modelcatalog
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/stretchr/testify/require"
 )
 
 func encodeStrings(values []string) string {
-	data, _ := json.Marshal(values)
+	data, _ := common.Marshal(values)
 	return string(data)
 }
 
@@ -187,6 +187,53 @@ func TestCatalogListHonorsVisibilityAndReturnsDefensiveCopies(t *testing.T) {
 	require.Equal(t, WireResponses, resolvedAgain.PreferredWires[0])
 }
 
+func TestCatalogListExposesValidatedCapabilitiesAndVisibleWires(t *testing.T) {
+	routes := []ClientModelRoute{{
+		Id: 1, PublicId: "deepseek/a", Client: "codex", Aliases: `[]`, Enabled: true,
+		Metadata: `{"context_window":131072,"reasoning_efforts":["low","high"],"supports_reasoning_summary":true,"supports_tools":true}`,
+	}}
+	targets := []ClientModelTarget{
+		{Id: 1, RouteId: 1, ChannelId: 7, UpstreamModel: "a", BillingModel: "a", PreferredWires: `["responses","openai_chat"]`, Weight: 1, Enabled: true, Groups: []string{"paid"}},
+		{Id: 2, RouteId: 1, ChannelId: 8, UpstreamModel: "a", BillingModel: "a", PreferredWires: `["anthropic","responses"]`, Weight: 1, Enabled: true, Groups: []string{"enterprise"}},
+	}
+	catalog, err := NewCatalog(routes, targets)
+	require.NoError(t, err)
+	catalog = catalog.WithAuthorizer(testAuthorizer{})
+
+	models, err := catalog.List(context.Background(), 11, []string{"paid"}, "codex")
+	require.NoError(t, err)
+	require.Len(t, models, 1)
+	require.Equal(t, []WireProtocol{WireResponses, WireOpenAIChat}, models[0].PreferredWires)
+	require.Equal(t, 131072, models[0].ContextWindow)
+	require.Equal(t, []string{"low", "high"}, models[0].ReasoningEfforts)
+	require.True(t, models[0].SupportsReasoningSummary)
+	require.True(t, models[0].SupportsTools)
+
+	models[0].PreferredWires[0] = WireAnthropic
+	models[0].ReasoningEfforts[0] = "mutated"
+	again, err := catalog.List(context.Background(), 11, []string{"paid"}, "codex")
+	require.NoError(t, err)
+	require.Equal(t, WireResponses, again[0].PreferredWires[0])
+	require.Equal(t, "low", again[0].ReasoningEfforts[0])
+}
+
+func TestCatalogRejectsInvalidCapabilityMetadata(t *testing.T) {
+	targets := []ClientModelTarget{{
+		Id: 1, RouteId: 1, ChannelId: 7, UpstreamModel: "a", BillingModel: "a",
+		PreferredWires: `["responses"]`, Weight: 1, Enabled: true,
+	}}
+	for name, metadata := range map[string]string{
+		"malformed JSON":          `{`,
+		"negative context window": `{"context_window":-1}`,
+		"blank reasoning effort":  `{"reasoning_efforts":["high",""]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := NewCatalog([]ClientModelRoute{{Id: 1, PublicId: "deepseek/a", Enabled: true, Metadata: metadata}}, targets)
+			require.ErrorContains(t, err, "metadata")
+		})
+	}
+}
+
 type testAuthorizer struct{}
 
 func (testAuthorizer) Authorize(_ context.Context, userID int, groups []string, client string) (AuthorizedRuntimeSnapshot, error) {
@@ -240,6 +287,58 @@ func TestCatalogRequiresAuthorizer(t *testing.T) {
 	resolved, err = bound.Resolve(context.Background(), 11, []string{"default"}, "deepseek/a", "codex")
 	require.ErrorIs(t, err, ErrAuthorizerRequired)
 	require.Nil(t, resolved)
+}
+
+func TestRuntimeAssemblyAppliesMappingAndFiltersUnavailableTargets(t *testing.T) {
+	routes := []ClientModelRoute{{Id: 1, PublicId: "deepseek/deepseek-v4-flash", Client: "codex", Enabled: true}}
+	targets := []ClientModelTarget{
+		{Id: 1, RouteId: 1, ChannelId: 7, UpstreamModel: "deepseek-v4-flash", BillingModel: "", PreferredWires: `["responses"]`, Weight: 1, Enabled: true},
+		{Id: 2, RouteId: 1, ChannelId: 8, UpstreamModel: "stale", BillingModel: "stale", PreferredWires: `["responses"]`, Weight: 1, Enabled: true},
+	}
+	// The first target is remapped to a priced canonical model; the second
+	// target has no enabled channel/ability and must not leak into the snapshot.
+	sources := runtimeFixtureSources{
+		channels: map[int]RuntimeChannel{
+			7: {ID: 7, Enabled: true, ModelMapping: `{"deepseek-v4-flash":"deepseek-v4-flash"}`},
+			8: {ID: 8, Enabled: false},
+		},
+		abilities: map[int][]RuntimeAbility{7: {{Group: "default", Model: "deepseek-v4-flash", Enabled: true, Priority: 9, Weight: 3}}},
+		priced:    map[string]string{"deepseek-v4-flash": "deepseek-v4-flash"},
+	}
+	catalog, err := AssembleRuntimeCatalog(context.Background(), RuntimeContext{UserID: 11, Groups: []string{"default"}, Client: "codex"}, routes, targets, sources, testAuthorizer{})
+	require.NoError(t, err)
+	resolved, err := catalog.Resolve(context.Background(), 11, []string{"default"}, "deepseek/deepseek-v4-flash", "codex")
+	require.NoError(t, err)
+	require.Equal(t, "deepseek-v4-flash", resolved.UpstreamModel)
+	require.Equal(t, "deepseek-v4-flash", resolved.BillingModel)
+	require.Equal(t, 9, resolved.Priority)
+	require.Equal(t, 3, resolved.Weight)
+}
+
+func TestRuntimeAssemblyRequiresAuthorizer(t *testing.T) {
+	sources := runtimeFixtureSources{}
+	_, err := AssembleRuntimeCatalog(context.Background(), RuntimeContext{UserID: 11}, nil, nil, sources, nil)
+	require.ErrorIs(t, err, ErrAuthorizerRequired)
+}
+
+type runtimeFixtureSources struct {
+	channels  map[int]RuntimeChannel
+	abilities map[int][]RuntimeAbility
+	priced    map[string]string
+}
+
+func (s runtimeFixtureSources) Channel(_ context.Context, id int) (RuntimeChannel, bool, error) {
+	channel, ok := s.channels[id]
+	return channel, ok, nil
+}
+
+func (s runtimeFixtureSources) Abilities(_ context.Context, channelID int, _ string) ([]RuntimeAbility, error) {
+	return s.abilities[channelID], nil
+}
+
+func (s runtimeFixtureSources) CanonicalBillingModel(_ context.Context, model string) (string, bool, error) {
+	canonical, ok := s.priced[model]
+	return canonical, ok, nil
 }
 
 func buildIndex(fixtures []routeFixture) (*Catalog, error) {

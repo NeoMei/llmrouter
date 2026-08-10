@@ -181,6 +181,54 @@ func decodeUserModelsResponse(t *testing.T, recorder *httptest.ResponseRecorder)
 	return payload.Data
 }
 
+func TestListModelsAnthropicEmptyCatalogDoesNotPanic(t *testing.T) {
+	setupModelListControllerTestDB(t)
+	withSelfUseModeEnabled(t)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	ctx.Set("id", 1001)
+
+	require.NotPanics(t, func() { ListModels(ctx, constant.ChannelTypeAnthropic) })
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.JSONEq(t, `{"data":[],"first_id":null,"has_more":false,"last_id":null}`, recorder.Body.String())
+}
+
+func TestListModelsIncludesPublicIDAndCodexAlias(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	withSelfUseModeEnabled(t)
+	require.NoError(t, db.AutoMigrate(&model.ClientModelRoute{}, &model.ClientModelTarget{}))
+	ratio_setting.InitRatioSettings()
+
+	require.NoError(t, db.Create(&model.User{
+		Id: 1001, Username: "catalog-user", Password: "password", Group: "default", Status: common.UserStatusEnabled,
+	}).Error)
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 7, Type: constant.ChannelTypeOpenAI, Name: "deepseek", Models: "deepseek-v4-flash", Status: common.ChannelStatusEnabled,
+	}).Error)
+	require.NoError(t, db.Create(&model.Ability{
+		Group: "default", Model: "deepseek-v4-flash", ChannelId: 7, Enabled: true, Weight: 1,
+	}).Error)
+	require.NoError(t, db.Create(&model.ClientModelRoute{
+		Id: 1, PublicId: "deepseek/deepseek-v4-flash", Client: "codex", Aliases: `["gpt-5.6-sol"]`, Enabled: true,
+	}).Error)
+	require.NoError(t, db.Create(&model.ClientModelTarget{
+		Id: 1, RouteId: 1, ChannelId: 7, UpstreamModel: "deepseek-v4-flash", BillingModel: "gpt-4o-mini",
+		PreferredWires: `["responses","openai_chat"]`, Weight: 1, Enabled: true,
+	}).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	ctx.Set("id", 1001)
+
+	ListModels(ctx, constant.ChannelTypeOpenAI)
+
+	ids := decodeListModelsResponse(t, recorder)
+	require.Contains(t, ids, "deepseek/deepseek-v4-flash")
+	require.Contains(t, ids, "gpt-5.6-sol")
+}
+
 func TestGetUserModelsFiltersByRequestedGroup(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 	require.NoError(t, db.Create(&model.User{

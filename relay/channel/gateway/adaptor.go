@@ -47,9 +47,6 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, req dto.OpenAIResponsesRequest) (any, error) {
-	if a.Loader == nil {
-		return a.Inner.ConvertOpenAIResponsesRequest(c, info, req)
-	}
 	// Convert Responses → Chat Completions format so we can apply quirks
 	// and send to providers that only support /v1/chat/completions.
 	result, err := relayconvert.ConvertRequest(c, info, types.RelayFormatOpenAI, &req)
@@ -61,17 +58,19 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	if !ok {
 		return a.Inner.ConvertOpenAIResponsesRequest(c, info, req)
 	}
-	// Apply quirk + profile on the Chat Completions format request
-	p, pErr := a.Loader.Get(c.Request.Context(), info.UpstreamModelName)
-	quirkpkg.NeutralizeIdentity(openaiReq)
-	quirkpkg.RepairDanglingToolCalls(openaiReq)
-	quirkpkg.GuardEmptyAssistant(openaiReq)
-	if pErr == nil && p != nil {
-		profile.ApplyRules(openaiReq, p)
+	if a.Loader != nil {
+		// Apply quirk + profile on the Chat Completions format request.
+		p, pErr := a.Loader.Get(c.Request.Context(), info.UpstreamModelName)
+		quirkpkg.NeutralizeIdentity(openaiReq)
+		quirkpkg.RepairDanglingToolCalls(openaiReq)
+		quirkpkg.GuardEmptyAssistant(openaiReq)
+		if pErr == nil && p != nil {
+			profile.ApplyRules(openaiReq, p)
+		}
 	}
 	// Mark that response needs Chat→Responses conversion
 	c.Set("gateway_responses_via_chat", true)
-	return openaiReq, nil
+	return a.Inner.ConvertOpenAIRequest(c, info, openaiReq)
 }
 
 func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, req *dto.ClaudeRequest) (any, error) {

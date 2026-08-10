@@ -84,6 +84,7 @@ func defaultDeclarations() []Declaration {
 		OperationRealtimeConnect,
 		OperationModerationCreate,
 	)
+	support([]int{constant.ChannelTypeAnthropic}, OperationChatCreate)
 
 	claudeCompatible := []int{
 		constant.ChannelTypeAnthropic,

@@ -74,6 +74,16 @@ func TestDefaultRegistryCoversEveryChannelAndOperation(t *testing.T) {
 	}
 }
 
+func TestDefaultRegistrySupportsOpenAIChatThroughAnthropicAdaptor(t *testing.T) {
+	decision := DefaultRegistry().Resolve(
+		constant.ChannelTypeAnthropic,
+		ProtocolOpenAI,
+		OperationChatCreate,
+	)
+
+	require.True(t, decision.Supported, decision.Reason)
+}
+
 func TestSnapshotIsDefensiveCopy(t *testing.T) {
 	registry := DefaultRegistry()
 	key := Key{ChannelType: constant.ChannelTypeOpenAI, Protocol: ProtocolOpenAI, Operation: OperationChatCreate}

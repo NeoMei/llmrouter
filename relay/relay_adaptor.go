@@ -113,7 +113,7 @@ func GetAdaptor(apiType int) channel.Adaptor {
 	case constant.APITypeJimeng:
 		return &jimeng.Adaptor{}
 	case constant.APITypeMoonshot:
-		return &moonshot.Adaptor{} // Moonshot uses Claude API
+		return &gateway.Adaptor{Inner: &moonshot.Adaptor{}} // Moonshot uses Claude API
 	case constant.APITypeSubmodel:
 		return &submodel.Adaptor{}
 	case constant.APITypeMiniMax:

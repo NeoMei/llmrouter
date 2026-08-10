@@ -157,6 +157,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	if err := resolveClientModelRoute(c, relayInfo); err != nil {
 		common.SysLog("client model route resolution failed: " + err.Error())
 	}
+	StartRouteDecision(GetRequestId(c), relayInfo)
 
 	priceData, err := helper.ModelPriceHelper(c, relayInfo, tokens, meta)
 	if err != nil {
@@ -198,6 +199,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		relayInfo.RetryIndex = retryParam.GetRetry()
+		attemptStart := time.Now()
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())
@@ -229,7 +231,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = relayHandler(c, relayInfo)
 		}
 
+		AppendRouteAttempt(GetRequestId(c), modelcatalog.NewAttempt(channel.Id, relayInfo.SelectedWire, 0, "", attemptStart))
+		if newAPIError != nil {
+			UpdateLastAttempt(GetRequestId(c), newAPIError.StatusCode, string(newAPIError.GetErrorCode()))
+		}
+
 		if newAPIError == nil {
+			relayInfo.RouteDecisionTrace, _ = GetRouteDecisionTrace(GetRequestId(c))
 			relayInfo.LastError = nil
 			return
 		}
@@ -243,6 +251,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 	}
+
+	relayInfo.RouteDecisionTrace, _ = GetRouteDecisionTrace(GetRequestId(c))
 
 	useChannel := c.GetStringSlice("use_channel")
 	if len(useChannel) > 1 {

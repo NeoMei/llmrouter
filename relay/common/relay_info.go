@@ -102,12 +102,13 @@ type RelayInfo struct {
 	IsPlayground           bool
 	UsePrice               bool
 	RelayMode              int
-	OriginModelName        string // 客户端请求中使用的原始模型别名
-	PublicModelName        string // 解析后的公开模型 ID
-	ResolvedModelName      string // 解析后的上游模型名称
-	BillingModelName       string // 用于计费的规范模型名称
-	ModelRouteId           int    // 命中的公开模型路由目标 ID
-	SelectedWire           string // 经 capability/probe 选择的 wire protocol
+	OriginModelName        string          // 客户端请求中使用的原始模型别名
+	PublicModelName        string          // 解析后的公开模型 ID
+	ResolvedModelName      string          // 解析后的上游模型名称
+	BillingModelName       string          // 用于计费的规范模型名称
+	ModelRouteId           int             // 命中的公开模型路由目标 ID
+	SelectedWire           string          // 经 capability/probe 选择的 wire protocol
+	RouteDecisionTrace     json.RawMessage // 序列化的路由决策 trace
 	RequestURLPath         string
 	RequestHeaders         map[string]string
 	ShouldIncludeUsage     bool
@@ -264,8 +265,9 @@ func (info *RelayInfo) ToString() string {
 	fmt.Fprintf(b, "IsStream: %t, ", info.IsStream)
 	fmt.Fprintf(b, "IsPlayground: %t, ", info.IsPlayground)
 	fmt.Fprintf(b, "RequestURLPath: %q, ", info.RequestURLPath)
-	fmt.Fprintf(b, "OriginModelName: %q, PublicModelName: %q, ResolvedModelName: %q, BillingModelName: %q, ModelRouteId: %d, SelectedWire: %q, ",
-		info.OriginModelName, info.PublicModelName, info.ResolvedModelName, info.BillingModelName, info.ModelRouteId, info.SelectedWire)
+	hasTrace := len(info.RouteDecisionTrace) > 0
+	fmt.Fprintf(b, "OriginModelName: %q, PublicModelName: %q, ResolvedModelName: %q, BillingModelName: %q, ModelRouteId: %d, SelectedWire: %q, HasTrace: %t, ",
+		info.OriginModelName, info.PublicModelName, info.ResolvedModelName, info.BillingModelName, info.ModelRouteId, info.SelectedWire, hasTrace)
 	fmt.Fprintf(b, "EstimatePromptTokens: %d, ", info.estimatePromptTokens)
 	fmt.Fprintf(b, "ShouldIncludeUsage: %t, ", info.ShouldIncludeUsage)
 	fmt.Fprintf(b, "DisablePing: %t, ", info.DisablePing)

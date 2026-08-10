@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -82,9 +83,9 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	if relayInfo.ReasoningEffort != "" {
 		other["reasoning_effort"] = relayInfo.ReasoningEffort
 	}
-	if relayInfo.IsModelMapped {
+	if relayInfo.ChannelMeta != nil && relayInfo.ChannelMeta.IsModelMapped {
 		other["is_model_mapped"] = true
-		other["upstream_model_name"] = relayInfo.UpstreamModelName
+		other["upstream_model_name"] = relayInfo.ChannelMeta.UpstreamModelName
 	}
 
 	isSystemPromptOverwritten := common.GetContextKeyBool(ctx, constant.ContextKeySystemPromptOverride)
@@ -111,6 +112,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	appendRequestPath(ctx, relayInfo, other)
 	appendRequestConversionChain(relayInfo, other)
 	appendFinalRequestFormat(relayInfo, other)
+	appendRouteDecisionTrace(relayInfo, adminInfo)
 	appendBillingInfo(relayInfo, other)
 	appendParamOverrideInfo(relayInfo, other)
 	appendStreamStatus(relayInfo, other)
@@ -242,6 +244,20 @@ func appendFinalRequestFormat(relayInfo *relaycommon.RelayInfo, other map[string
 		// Frontend log rendering uses this to keep the original Claude input display.
 		other["claude"] = true
 	}
+}
+
+// appendRouteDecisionTrace adds the bounded route-decision trace to admin_info.
+// The trace is intentionally free of secrets (keys, headers, tokens).
+func appendRouteDecisionTrace(relayInfo *relaycommon.RelayInfo, adminInfo map[string]interface{}) {
+	if relayInfo == nil || adminInfo == nil || len(relayInfo.RouteDecisionTrace) == 0 {
+		return
+	}
+	var trace interface{}
+	if err := json.Unmarshal(relayInfo.RouteDecisionTrace, &trace); err != nil {
+		adminInfo["route_decision_parse_error"] = err.Error()
+		return
+	}
+	adminInfo["route_decision"] = trace
 }
 
 func GenerateWssOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage, modelRatio, groupRatio, completionRatio, audioRatio, audioCompletionRatio, modelPrice, userGroupRatio float64) map[string]interface{} {

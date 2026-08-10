@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import { input, password, select } from '@inquirer/prompts';
-import { writeCodexConfig } from './codex.js';
-import { writeClaudeConfig } from './claude.js';
+
+import { configureClaude, configureCodex } from './client-state.js';
 import { normalizeServerUrl, verifyConnection } from './api.js';
 import { connectionFailureMessage } from './errors.js';
 
@@ -41,11 +41,15 @@ export const initCommand = new Command('init')
     }
 
     if (client === 'codex' || client === 'both') {
-      await writeCodexConfig(serverUrl, apiToken);
+      const model = await input({
+        message: 'Codex model:',
+        default: 'deepseek/deepseek-v4-flash',
+      });
+      await configureCodex({ home: process.env.HOME ?? '', serverUrl, apiToken, model });
       console.log('Codex CLI configured.');
     }
     if (client === 'claude' || client === 'both') {
-      await writeClaudeConfig(serverUrl, apiToken);
+      await configureClaude({ home: process.env.HOME ?? '', serverUrl, apiToken });
       console.log('Claude Code configured.');
     }
 

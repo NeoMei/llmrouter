@@ -113,7 +113,7 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
 	if info.RelayMode != relayconstant.RelayModeResponses && info.RelayMode != relayconstant.RelayModeResponsesCompact {
-		return nil, types.NewError(errors.New("unsupported operation"), types.ErrorCodeUnsupportedOperation)
+		return nil, channel.ErrUnsupportedOperation
 	}
 
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact {

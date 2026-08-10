@@ -163,7 +163,7 @@ func (a *Adaptor) getRequestUrl(info *relaycommon.RelayInfo, modelName, suffix s
 			), nil
 		}
 	}
-	return "", errors.New("unsupported request mode")
+	return "", channel.ErrUnsupportedOperation
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
@@ -208,7 +208,7 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	} else if a.RequestMode == RequestModeOpenSource {
 		return a.getRequestUrl(info, "", "")
 	}
-	return "", errors.New("unsupported request mode")
+	return "", channel.ErrUnsupportedOperation
 }
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
@@ -314,7 +314,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	} else if a.RequestMode == RequestModeOpenSource {
 		return request, nil
 	}
-	return nil, errors.New("unsupported request mode")
+	return nil, channel.ErrUnsupportedOperation
 }
 
 func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, request dto.RerankRequest) (any, error) {

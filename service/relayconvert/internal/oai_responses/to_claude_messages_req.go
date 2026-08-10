@@ -7,6 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/compat"
 	relaymedia "github.com/QuantumNous/new-api/service/relayconvert/internal/media"
 	sharedclaude "github.com/QuantumNous/new-api/service/relayconvert/internal/shared/claude"
 	"github.com/QuantumNous/new-api/setting/model_setting"
@@ -45,6 +46,13 @@ func OpenAIResponsesRequestToClaudeMessages(c *gin.Context, req *dto.OpenAIRespo
 		defaultMaxTokens := uint(model_setting.GetClaudeSettings().GetDefaultMaxTokens(req.Model))
 		claudeRequest.MaxTokens = &defaultMaxTokens
 	}
+
+	normalized, err := compat.NormalizeResponsesTools(req.Input, req.Tools)
+	if err != nil {
+		return nil, err
+	}
+	req.Input = normalized.Input
+	req.Tools = normalized.Tools
 
 	functions, err := RequestFunctionDeclarations(req.Tools)
 	if err != nil {

@@ -59,15 +59,9 @@ func TestConvertOpenAIResponsesRequestPromotesAdditionalTools(t *testing.T) {
 	var tools []map[string]any
 	require.NoError(t, json.Unmarshal(responsesRequest.Tools, &tools))
 	require.Len(t, tools, 1)
-	assert.Equal(t, "namespace", tools[0]["type"])
-	assert.Equal(t, "functions", tools[0]["name"])
-	innerTools, ok := tools[0]["tools"].([]any)
-	require.True(t, ok)
-	require.Len(t, innerTools, 1)
-	innerTool, ok := innerTools[0].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "function", innerTool["type"])
-	parameters, ok := innerTool["parameters"].(map[string]any)
+	assert.Equal(t, "function", tools[0]["type"])
+	assert.Equal(t, "functions.exec", tools[0]["name"])
+	parameters, ok := tools[0]["parameters"].(map[string]any)
 	require.True(t, ok)
 	properties, ok := parameters["properties"].(map[string]any)
 	require.True(t, ok)
@@ -95,7 +89,7 @@ func TestRewriteDeepSeekResponsesSSEConvertsCustomToolCall(t *testing.T) {
 	}, "\n")
 
 	rewritten := rewriteDeepSeekResponsesSSE(io.NopCloser(strings.NewReader(upstream)), map[string]struct{}{
-		customToolKey("functions", "exec"): {},
+		"functions.exec": {},
 	})
 	result, err := io.ReadAll(rewritten)
 	require.NoError(t, err)

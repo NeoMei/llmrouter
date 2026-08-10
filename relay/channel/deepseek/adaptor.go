@@ -3,7 +3,6 @@ package deepseek
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/claude"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/compat"
 	"github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/reasoning"
 	"github.com/QuantumNous/new-api/types"
@@ -172,120 +172,32 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	customTools, err := promoteResponsesAdditionalTools(&request)
+	normalized, err := compat.NormalizeResponsesTools(request.Input, request.Tools)
 	if err != nil {
 		return nil, err
 	}
-	if c != nil && len(customTools) > 0 {
-		c.Set(responsesCustomToolsContextKey, customTools)
+	request.Input = normalized.Input
+	request.Tools = normalized.Tools
+	if c != nil && len(normalized.CustomWireNames) > 0 {
+		c.Set(responsesCustomToolsContextKey, normalized.CustomWireNames)
 	}
 	adaptor := openai.Adaptor{}
 	return adaptor.ConvertOpenAIResponsesRequest(c, info, request)
 }
 
-func promoteResponsesAdditionalTools(request *dto.OpenAIResponsesRequest) (map[string]struct{}, error) {
-	customTools := make(map[string]struct{})
-	if request == nil || common.GetJsonType(request.Input) != "array" {
-		return customTools, nil
+func rewriteDeepSeekResponsesItem(item map[string]any, customTools map[string]struct{}) bool {
+	if common.Interface2String(item["type"]) != "function_call" {
+		return false
 	}
-
-	var inputItems []json.RawMessage
-	if err := common.Unmarshal(request.Input, &inputItems); err != nil {
-		return nil, fmt.Errorf("invalid Responses input: %w", err)
+	flatName := common.Interface2String(item["namespace"]) + "." + common.Interface2String(item["name"])
+	if !compat.IsCustomWireName(customTools, flatName) {
+		return false
 	}
-	filteredInput := make([]json.RawMessage, 0, len(inputItems))
-	promotedTools := make([]json.RawMessage, 0)
-	for _, item := range inputItems {
-		var envelope struct {
-			Type  string            `json:"type"`
-			Tools []json.RawMessage `json:"tools"`
-		}
-		if err := common.Unmarshal(item, &envelope); err != nil || envelope.Type != "additional_tools" {
-			filteredInput = append(filteredInput, item)
-			continue
-		}
-		for _, tool := range envelope.Tools {
-			normalized, convertedCustomTools, err := normalizeDeepSeekResponsesTool(tool)
-			if err != nil {
-				return nil, err
-			}
-			for _, key := range convertedCustomTools {
-				customTools[key] = struct{}{}
-			}
-			promotedTools = append(promotedTools, normalized)
-		}
-	}
-	if len(promotedTools) == 0 {
-		return customTools, nil
-	}
-
-	tools := make([]json.RawMessage, 0, len(promotedTools))
-	if len(request.Tools) > 0 && common.GetJsonType(request.Tools) != "null" {
-		if common.GetJsonType(request.Tools) != "array" {
-			return nil, errors.New("invalid Responses tools: expected array")
-		}
-		if err := common.Unmarshal(request.Tools, &tools); err != nil {
-			return nil, fmt.Errorf("invalid Responses tools: %w", err)
-		}
-	}
-	tools = append(tools, promotedTools...)
-
-	encodedTools, err := common.Marshal(tools)
-	if err != nil {
-		return nil, fmt.Errorf("encode promoted Responses tools: %w", err)
-	}
-	encodedInput, err := common.Marshal(filteredInput)
-	if err != nil {
-		return nil, fmt.Errorf("encode filtered Responses input: %w", err)
-	}
-	request.Tools = encodedTools
-	request.Input = encodedInput
-	return customTools, nil
-}
-
-func normalizeDeepSeekResponsesTool(raw json.RawMessage) (json.RawMessage, []string, error) {
-	var tool map[string]any
-	if err := common.Unmarshal(raw, &tool); err != nil {
-		return nil, nil, fmt.Errorf("invalid Responses tool: %w", err)
-	}
-	if common.Interface2String(tool["type"]) != "namespace" {
-		return raw, nil, nil
-	}
-	namespace := common.Interface2String(tool["name"])
-	innerTools, ok := tool["tools"].([]any)
-	if !ok {
-		return raw, nil, nil
-	}
-	customTools := make([]string, 0)
-	for _, value := range innerTools {
-		inner, ok := value.(map[string]any)
-		if !ok || common.Interface2String(inner["type"]) != "custom" {
-			continue
-		}
-		customTools = append(customTools, customToolKey(namespace, common.Interface2String(inner["name"])))
-		inner["type"] = "function"
-		delete(inner, "format")
-		inner["parameters"] = map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"input": map[string]any{
-					"type":        "string",
-					"description": "Raw input for the client-executed tool.",
-				},
-			},
-			"required":             []string{"input"},
-			"additionalProperties": false,
-		}
-	}
-	encoded, err := common.Marshal(tool)
-	if err != nil {
-		return nil, nil, fmt.Errorf("encode normalized Responses tool: %w", err)
-	}
-	return encoded, customTools, nil
-}
-
-func customToolKey(namespace, name string) string {
-	return namespace + "\x00" + name
+	item["type"] = "custom_tool_call"
+	item["input"] = customToolInput(item["arguments"])
+	delete(item, "arguments")
+	delete(item, "namespace")
+	return true
 }
 
 func customToolInput(arguments any) string {
@@ -300,21 +212,6 @@ func customToolInput(arguments any) string {
 		}
 	}
 	return text
-}
-
-func rewriteDeepSeekResponsesItem(item map[string]any, customTools map[string]struct{}) bool {
-	if common.Interface2String(item["type"]) != "function_call" {
-		return false
-	}
-	key := customToolKey(common.Interface2String(item["namespace"]), common.Interface2String(item["name"]))
-	if _, ok := customTools[key]; !ok {
-		return false
-	}
-	item["type"] = "custom_tool_call"
-	item["input"] = customToolInput(item["arguments"])
-	delete(item, "arguments")
-	delete(item, "namespace")
-	return true
 }
 
 func rewriteDeepSeekResponsesPayload(payload map[string]any, customTools map[string]struct{}, trackedItems map[string]struct{}) (bool, error) {

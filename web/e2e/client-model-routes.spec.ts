@@ -171,9 +171,7 @@ test('admin can create, edit, and delete a client model route', async ({
   await page.getByLabel('Aliases (comma separated)').fill('gpt-5.6-sol')
   await page.getByLabel('Channel').selectOption('7')
   await expect(page.getByLabel('Upstream model')).toHaveValue('deepseek-chat')
-  await expect(
-    page.getByRole('checkbox', { name: 'Responses' })
-  ).toBeChecked()
+  await expect(page.getByRole('checkbox', { name: 'Responses' })).toBeChecked()
   await expect(
     page.getByRole('checkbox', { name: 'OpenAI Chat' })
   ).toBeChecked()

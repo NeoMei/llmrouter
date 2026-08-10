@@ -22,7 +22,7 @@ type AttemptResult struct {
 }
 
 // Policy selects the next target for a resolved route, bounded by the plan
-// constraints: at most two alternates, only on retryable failures, and only
+// constraints: ordered fallback, only on retryable failures, and only
 // when affinity is not pinned.
 type Policy struct {
 	targets []Target

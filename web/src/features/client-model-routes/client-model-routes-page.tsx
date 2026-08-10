@@ -264,13 +264,17 @@ export function ClientModelRoutesPage() {
                       >
                         {t('Edit')}
                       </Button>
-                     <Button
-                       size='sm'
-                       variant='destructive'
-                      onClick={() => { (window as any).__dbg_delete_clicked = route.public_id; setDeletingRoute(route) }}
-                     >
-                       {t('Delete')}
-                     </Button>
+                      <Button
+                        size='sm'
+                        variant='destructive'
+                        onClick={() => {
+                          ;(window as any).__dbg_delete_clicked =
+                            route.public_id
+                          setDeletingRoute(route)
+                        }}
+                      >
+                        {t('Delete')}
+                      </Button>
                     </div>
                   </div>
                 ))}
@@ -528,7 +532,7 @@ export function ClientModelRoutesPage() {
       </SectionPageLayout.Content>
 
       <ConfirmDialog
-        open={((window as any).__dbg_dialog_open = deletingRoute !== null, deletingRoute !== null)}
+        open={deletingRoute !== null}
         onOpenChange={(open) => {
           if (!open && !deleting) setDeletingRoute(null)
         }}

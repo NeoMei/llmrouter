@@ -187,6 +187,13 @@ func main() {
 	InjectUmamiAnalytics()
 	InjectGoogleAnalytics()
 
+	// Validate CORS configuration before registering routes so production cannot
+	// start with wildcard credentialed origins or missing trusted origins.
+	if err := middleware.ValidateCORSConfig(); err != nil {
+		common.FatalLog("invalid CORS configuration: " + err.Error())
+		return
+	}
+
 	// 设置路由
 	router.SetRouter(server, router.WebAssets{
 		BuildFS:   buildFS,

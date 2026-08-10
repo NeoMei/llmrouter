@@ -901,6 +901,8 @@ Run: `bash scripts/run-integration-matrix.sh`
 
 Expected: all database, Redis, MinIO, provider-contract, and API-E2E suites pass; containers are removed by trap.
 
+Verification note (2026-08-10): attempted locally; blocked before startup because this host has no Docker/Compose runtime. The command exits with the explicit infrastructure blocker `integration matrix requires Docker with the Compose plugin`.
+
 - [x] **Step 5: Commit**
 
 ```bash
@@ -947,6 +949,8 @@ Run: `bash scripts/run-integration-matrix.sh --nightly && cd web && npm run e2e`
 
 Expected: PASS; fault recovery and performance thresholds are recorded as machine-readable artifacts.
 
+Verification note (2026-08-10): browser acceptance passed independently (8/8 desktop and mobile projects); the nightly matrix remains blocked by the same unavailable Docker/Compose runtime.
+
 - [x] **Step 5: Commit**
 
 ```bash
@@ -988,6 +992,8 @@ Generate live test cases from production-certified registry entries. Redact cred
 Run: `bash scripts/release-gate.sh`
 
 Expected: exit 0 only when every completion criterion is satisfied; otherwise it prints an exact external credential/infrastructure blocker list and exits non-zero.
+
+Verification note (2026-08-10): all local gates executed by the aggregate command passed; it correctly stopped on seven external evidence blockers (live provider manifest, signed image, restore rehearsal, Linux/macOS/Windows desktop evidence, nightly/source evidence) plus Docker/Compose certification.
 
 - [x] **Step 5: Commit**
 

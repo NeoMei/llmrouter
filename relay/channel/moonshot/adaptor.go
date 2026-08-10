@@ -1,7 +1,6 @@
 package moonshot
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -33,7 +32,7 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 }
 
 func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
-	return nil, errors.New("not supported")
+	return nil, channel.ErrUnsupportedOperation
 }
 
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {

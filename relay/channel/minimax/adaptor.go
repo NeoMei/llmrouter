@@ -34,7 +34,7 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 
 func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
 	if info.RelayMode != constant.RelayModeAudioSpeech {
-		return nil, errors.New("unsupported audio relay mode")
+		return nil, channel.ErrUnsupportedOperation
 	}
 
 	voiceID := request.Voice

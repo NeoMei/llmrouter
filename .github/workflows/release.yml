@@ -77,7 +77,7 @@ jobs:
           curl --fail --silent http://127.0.0.1:31991/healthz
           checksum=$(sha256sum electron-SHA256SUMS-linux.txt | awk '{print $1}')
           backend_checksum=$(sha256sum new-api-$VERSION | awk '{print $1}')
-          jq -n --arg commit "$GITHUB_SHA" --arg checksum "$checksum" --arg backend_checksum "$backend_checksum" '{commit:$commit,platform:"linux",checksum:$checksum,backend_checksum:$backend_checksum,startup_probe:"pass"}' > desktop-linux.json
+          jq -n --arg commit "$GITHUB_SHA" --arg checksum "$checksum" --arg backend_checksum "$backend_checksum" --arg backend_artifact "new-api-$VERSION" '{commit:$commit,platform:"linux",checksum:$checksum,backend_checksum:$backend_checksum,backend_artifact:$backend_artifact,electron_checksum_file:"electron-SHA256SUMS-linux.txt",startup_probe:"pass"}' > desktop-linux.json
       - name: Upload Linux release candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -147,7 +147,7 @@ jobs:
           curl --fail --silent http://127.0.0.1:31992/healthz
           checksum=$(shasum -a 256 electron-SHA256SUMS-macos.txt | awk '{print $1}')
           backend_checksum=$(shasum -a 256 new-api-macos-$VERSION | awk '{print $1}')
-          jq -n --arg commit "$GITHUB_SHA" --arg checksum "$checksum" --arg backend_checksum "$backend_checksum" '{commit:$commit,platform:"macos",checksum:$checksum,backend_checksum:$backend_checksum,startup_probe:"pass"}' > desktop-macos.json
+          jq -n --arg commit "$GITHUB_SHA" --arg checksum "$checksum" --arg backend_checksum "$backend_checksum" --arg backend_artifact "new-api-macos-$VERSION" '{commit:$commit,platform:"macos",checksum:$checksum,backend_checksum:$backend_checksum,backend_artifact:$backend_artifact,electron_checksum_file:"electron-SHA256SUMS-macos.txt",startup_probe:"pass"}' > desktop-macos.json
       - name: Upload macOS release candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -218,7 +218,7 @@ jobs:
           curl --fail --silent http://127.0.0.1:31993/healthz
           checksum=$(sha256sum electron-SHA256SUMS-windows.txt | awk '{print $1}')
           backend_checksum=$(sha256sum new-api-$VERSION.exe | awk '{print $1}')
-          jq -n --arg commit "$GITHUB_SHA" --arg checksum "$checksum" --arg backend_checksum "$backend_checksum" '{commit:$commit,platform:"windows",checksum:$checksum,backend_checksum:$backend_checksum,startup_probe:"pass"}' > desktop-windows.json
+          jq -n --arg commit "$GITHUB_SHA" --arg checksum "$checksum" --arg backend_checksum "$backend_checksum" --arg backend_artifact "new-api-$VERSION.exe" '{commit:$commit,platform:"windows",checksum:$checksum,backend_checksum:$backend_checksum,backend_artifact:$backend_artifact,electron_checksum_file:"electron-SHA256SUMS-windows.txt",startup_probe:"pass"}' > desktop-windows.json
       - name: Upload Windows release candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -407,6 +407,7 @@ jobs:
           RELEASE_GATE_FAST: '1'
           RELEASE_COMMIT: ${{ github.sha }}
           PROVIDER_CERTIFICATION_PUBLIC_KEY: ${{ runner.temp }}/provider-certification-trusted.pub
+          RELEASE_CANDIDATE_DIR: collected
         run: bash scripts/release-gate.sh
       - name: Publish certified release
         if: startsWith(github.ref, 'refs/tags/')

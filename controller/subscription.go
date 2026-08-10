@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -25,6 +26,36 @@ type BillingPreferenceRequest struct {
 
 type SubscriptionBalancePayRequest struct {
 	PlanId int `json:"plan_id"`
+}
+
+func requireManageableSubscriptionUser(c *gin.Context, userID int) bool {
+	user, err := model.GetUserById(userID, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return false
+	}
+	if !canManageTargetRole(c.GetInt("role"), user.Role) {
+		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionSameLevel)
+		return false
+	}
+	return true
+}
+
+func requireManageableUserSubscription(c *gin.Context, subscriptionID int) bool {
+	var subscription model.UserSubscription
+	if err := model.DB.Select("user_id").First(&subscription, subscriptionID).Error; err != nil {
+		common.ApiError(c, err)
+		return false
+	}
+	return requireManageableSubscriptionUser(c, subscription.UserId)
+}
+
+func requireRootSubscriptionAdmin(c *gin.Context) bool {
+	if c.GetInt("role") != common.RoleRootUser {
+		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionSameLevel)
+		return false
+	}
+	return true
 }
 
 // ---- User APIs ----
@@ -363,6 +394,9 @@ func AdminBindSubscription(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
+	if !requireManageableSubscriptionUser(c, req.UserId) {
+		return
+	}
 	msg, err := model.AdminBindSubscription(req.UserId, req.PlanId, "")
 	if err != nil {
 		common.ApiError(c, err)
@@ -381,6 +415,9 @@ func AdminListUserSubscriptions(c *gin.Context) {
 	userId, _ := strconv.Atoi(c.Param("id"))
 	if userId <= 0 {
 		common.ApiErrorMsg(c, "无效的用户ID")
+		return
+	}
+	if !requireManageableSubscriptionUser(c, userId) {
 		return
 	}
 	subs, err := model.GetAllUserSubscriptions(userId)
@@ -428,6 +465,9 @@ func AdminCreateUserSubscription(c *gin.Context) {
 		common.ApiErrorMsg(c, "无效的用户ID")
 		return
 	}
+	if !requireManageableSubscriptionUser(c, userId) {
+		return
+	}
 	var req AdminCreateUserSubscriptionRequest
 	if err := c.ShouldBindJSON(&req); err != nil || req.PlanId <= 0 {
 		common.ApiErrorMsg(c, "参数错误")
@@ -449,6 +489,9 @@ func AdminResetUserSubscriptionsByPlan(c *gin.Context) {
 	userId, _ := strconv.Atoi(c.Param("id"))
 	if userId <= 0 {
 		common.ApiErrorMsg(c, "无效的用户ID")
+		return
+	}
+	if !requireManageableSubscriptionUser(c, userId) {
 		return
 	}
 	var req AdminResetSubscriptionRequest
@@ -479,6 +522,9 @@ func AdminResetUserSubscriptionsByPlan(c *gin.Context) {
 }
 
 func AdminResetPlanSubscriptions(c *gin.Context) {
+	if !requireRootSubscriptionAdmin(c) {
+		return
+	}
 	planId, _ := strconv.Atoi(c.Param("id"))
 	if planId <= 0 {
 		common.ApiErrorMsg(c, "无效的ID")
@@ -515,6 +561,9 @@ func AdminInvalidateUserSubscription(c *gin.Context) {
 		common.ApiErrorMsg(c, "无效的订阅ID")
 		return
 	}
+	if !requireManageableUserSubscription(c, subId) {
+		return
+	}
 	msg, err := model.AdminInvalidateUserSubscription(subId)
 	if err != nil {
 		common.ApiError(c, err)
@@ -532,6 +581,9 @@ func AdminDeleteUserSubscription(c *gin.Context) {
 	subId, _ := strconv.Atoi(c.Param("id"))
 	if subId <= 0 {
 		common.ApiErrorMsg(c, "无效的订阅ID")
+		return
+	}
+	if !requireManageableUserSubscription(c, subId) {
 		return
 	}
 	msg, err := model.AdminDeleteUserSubscription(subId)

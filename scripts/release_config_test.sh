@@ -11,6 +11,8 @@ if grep -Fq -- "-X 'new-api/common.Version" .github/workflows/release.yml; then
 fi
 
 grep -Fq '${APP_IMAGE:?APP_IMAGE is required}@${APP_IMAGE_DIGEST:?APP_IMAGE_DIGEST is required}' docker-compose.yml
+grep -Fq 'MANAGEMENT_TOKEN: ${MANAGEMENT_TOKEN:?MANAGEMENT_TOKEN is required}' docker-compose.yml
+grep -Fq 'Authorization: Bearer $${MANAGEMENT_TOKEN}' docker-compose.yml
 if grep -Eq '(^|[^[:alnum:]])latest([^[:alnum:]]|$)|123456' docker-compose.yml; then
   echo "production compose contains a mutable tag or example password" >&2
   exit 1

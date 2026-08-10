@@ -18,8 +18,8 @@ bash scripts/release-preflight.sh
 
 ```bash
 curl --fail --silent --show-error "${CANARY_URL}/healthz"
-curl --fail --silent --show-error "${CANARY_URL}/readyz"
-curl --fail --silent --show-error "${CANARY_URL}/metrics" > /tmp/codex-gateway-metrics.txt
+curl --fail --silent --show-error -H "Authorization: Bearer ${MANAGEMENT_TOKEN}" "${CANARY_URL}/readyz"
+curl --fail --silent --show-error -H "Authorization: Bearer ${MANAGEMENT_TOKEN}" "${CANARY_URL}/metrics" > /tmp/codex-gateway-metrics.txt
 ```
 
 5. Run authenticated smoke requests for `/v1/models`, one non-streaming request, one streaming request, Files, and any enabled Fine-tuning provider. Save request IDs with the release evidence.
@@ -36,8 +36,8 @@ Capacity action is mandatory at 70% sustained CPU, 70% DB connections, 70% Redis
 
 ```bash
 curl --fail --silent "${BASE_URL}/healthz"
-curl --fail --silent "${BASE_URL}/readyz"
-curl --fail --silent "${BASE_URL}/metrics" | grep -E 'http|relay|worker|object|redis|database'
+curl --fail --silent -H "Authorization: Bearer ${MANAGEMENT_TOKEN}" "${BASE_URL}/readyz"
+curl --fail --silent -H "Authorization: Bearer ${MANAGEMENT_TOKEN}" "${BASE_URL}/metrics" | grep -E 'http|relay|worker|object|redis|database'
 ```
 
 Run `bash scripts/run-integration-matrix.sh --nightly` in the scheduled CI environment. The local command intentionally fails if Docker Compose is unavailable. Review `artifacts/nightly/fault-recovery.json`, `performance.json`, and Playwright traces.

@@ -69,7 +69,25 @@ cp "$tmp_dir/provider/public.pem" "$tmp_dir/provider-certification.pub"
 
 jq -n --arg commit "$commit" '{commit:$commit,digest:("sha256:" + ("a" * 64)),signed:true,sbom:true,provenance:true,container_smoke:true}' > "$tmp_dir/image.json"
 jq -n --arg commit "$commit" '{commit:$commit,status:"pass",tested_at:"2026-08-10T00:00:00Z",backup_checksum:("b" * 64),rto_seconds:120}' > "$tmp_dir/restore-rehearsal.json"
-jq -n --arg commit "$commit" '{commit:$commit,platforms:{linux:{checksum:("c" * 64),startup_probe:"pass"},macos:{checksum:("d" * 64),startup_probe:"pass"},windows:{checksum:("e" * 64),startup_probe:"pass"}}}' > "$tmp_dir/desktop.json"
+candidate_dir="$tmp_dir/candidates"
+mkdir -p "$candidate_dir/electron/dist"
+for platform in linux macos windows; do
+  printf 'backend-%s\n' "$platform" > "$candidate_dir/new-api-$platform"
+  printf 'electron-%s\n' "$platform" > "$candidate_dir/electron/dist/app-$platform.zip"
+  (cd "$candidate_dir/electron/dist" && shasum -a 256 "app-$platform.zip") > "$candidate_dir/electron-SHA256SUMS-$platform.txt"
+done
+jq -n --arg commit "$commit" \
+  --arg linux_backend "$(shasum -a 256 "$candidate_dir/new-api-linux" | awk '{print $1}')" \
+  --arg macos_backend "$(shasum -a 256 "$candidate_dir/new-api-macos" | awk '{print $1}')" \
+  --arg windows_backend "$(shasum -a 256 "$candidate_dir/new-api-windows" | awk '{print $1}')" \
+  --arg linux_manifest "$(shasum -a 256 "$candidate_dir/electron-SHA256SUMS-linux.txt" | awk '{print $1}')" \
+  --arg macos_manifest "$(shasum -a 256 "$candidate_dir/electron-SHA256SUMS-macos.txt" | awk '{print $1}')" \
+  --arg windows_manifest "$(shasum -a 256 "$candidate_dir/electron-SHA256SUMS-windows.txt" | awk '{print $1}')" \
+  '{commit:$commit,platforms:{
+    linux:{checksum:$linux_manifest,backend_checksum:$linux_backend,backend_artifact:"new-api-linux",electron_checksum_file:"electron-SHA256SUMS-linux.txt",startup_probe:"pass"},
+    macos:{checksum:$macos_manifest,backend_checksum:$macos_backend,backend_artifact:"new-api-macos",electron_checksum_file:"electron-SHA256SUMS-macos.txt",startup_probe:"pass"},
+    windows:{checksum:$windows_manifest,backend_checksum:$windows_backend,backend_artifact:"new-api-windows",electron_checksum_file:"electron-SHA256SUMS-windows.txt",startup_probe:"pass"}
+  }}' > "$tmp_dir/desktop.json"
 jq -n --arg commit "$commit" '{commit:$commit,status:"pass",fault_recovery:"pass",performance:"pass",billing:"pass"}' > "$tmp_dir/nightly.json"
 jq -n --arg commit "$commit" '{commit:$commit,public_501_count:0,supported_placeholder_count:0,generated_docs_clean:true}' > "$tmp_dir/source.json"
 
@@ -78,14 +96,28 @@ openssl pkey -in "$tmp_dir/provider/trusted-private.pem" -pubout -out "$tmp_dir/
 set +e
 forged_output=$(RELEASE_GATE_FAST=1 RELEASE_COMMIT="$commit" \
   PROVIDER_CERTIFICATION_PUBLIC_KEY="$tmp_dir/provider/trusted-public.pem" \
+  RELEASE_CANDIDATE_DIR="$candidate_dir" \
   bash "$root_dir/scripts/release-gate.sh" --evidence-dir "$tmp_dir" 2>&1)
 forged_status=$?
 set -e
 test "$forged_status" -ne 0
 grep -Fq 'provider certification signature verification failed' <<<"$forged_output"
 
+printf 'modified\n' >> "$candidate_dir/new-api-linux"
+set +e
+modified_output=$(RELEASE_GATE_FAST=1 RELEASE_COMMIT="$commit" \
+  PROVIDER_CERTIFICATION_PUBLIC_KEY="$tmp_dir/provider/public.pem" \
+  RELEASE_CANDIDATE_DIR="$candidate_dir" \
+  bash "$root_dir/scripts/release-gate.sh" --evidence-dir "$tmp_dir" 2>&1)
+modified_status=$?
+set -e
+test "$modified_status" -ne 0
+grep -Fq 'desktop backend checksum mismatch for linux' <<<"$modified_output"
+printf 'backend-linux\n' > "$candidate_dir/new-api-linux"
+
 RELEASE_GATE_FAST=1 RELEASE_COMMIT="$commit" \
   PROVIDER_CERTIFICATION_PUBLIC_KEY="$tmp_dir/provider/public.pem" \
+  RELEASE_CANDIDATE_DIR="$candidate_dir" \
   bash "$root_dir/scripts/release-gate.sh" --evidence-dir "$tmp_dir" | grep -Fq 'release gate: passed'
 
 echo 'release gate fixtures: ok'

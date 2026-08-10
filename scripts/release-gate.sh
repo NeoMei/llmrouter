@@ -77,9 +77,48 @@ fi
 desktop_evidence="$evidence_dir/desktop.json"
 if require_json "$desktop_evidence" "desktop certification evidence"; then
   check_commit "$desktop_evidence" "desktop certification"
+  candidate_dir=${RELEASE_CANDIDATE_DIR:-}
   for platform in linux macos windows; do
     if ! jq -e --arg platform "$platform" '.platforms[$platform].startup_probe == "pass" and (.platforms[$platform].checksum | test("^[0-9a-f]{64}$"))' "$desktop_evidence" >/dev/null; then
       add_blocker "desktop certification missing checksum or startup probe for $platform"
+      continue
+    fi
+    if [[ -z "$candidate_dir" || ! -d "$candidate_dir" ]]; then
+      add_blocker "release candidate directory is missing for desktop artifact verification"
+      break
+    fi
+
+    backend_artifact=$(jq -r --arg platform "$platform" '.platforms[$platform].backend_artifact // empty' "$desktop_evidence")
+    backend_checksum=$(jq -r --arg platform "$platform" '.platforms[$platform].backend_checksum // empty' "$desktop_evidence")
+    checksum_file=$(jq -r --arg platform "$platform" '.platforms[$platform].electron_checksum_file // empty' "$desktop_evidence")
+    checksum_digest=$(jq -r --arg platform "$platform" '.platforms[$platform].checksum // empty' "$desktop_evidence")
+    if [[ -z "$backend_artifact" || "$backend_artifact" == */* || ! "$backend_checksum" =~ ^[0-9a-f]{64}$ || ! -f "$candidate_dir/$backend_artifact" ]]; then
+      add_blocker "desktop backend artifact evidence is invalid for $platform"
+    elif [[ "$(shasum -a 256 "$candidate_dir/$backend_artifact" | awk '{print $1}')" != "$backend_checksum" ]]; then
+      add_blocker "desktop backend checksum mismatch for $platform"
+    fi
+    if [[ -z "$checksum_file" || "$checksum_file" == */* || ! -f "$candidate_dir/$checksum_file" ]]; then
+      add_blocker "desktop package checksum manifest is missing for $platform"
+      continue
+    fi
+    if [[ "$(shasum -a 256 "$candidate_dir/$checksum_file" | awk '{print $1}')" != "$checksum_digest" ]]; then
+      add_blocker "desktop package checksum manifest mismatch for $platform"
+      continue
+    fi
+    manifest_entries=0
+    while read -r artifact_digest artifact_name extra; do
+      artifact_name=${artifact_name#\*}
+      if [[ ! "$artifact_digest" =~ ^[0-9a-f]{64}$ || -n "${extra:-}" || -z "$artifact_name" || "$artifact_name" == */* || ! -f "$candidate_dir/electron/dist/$artifact_name" ]]; then
+        add_blocker "desktop package checksum entry is invalid for $platform"
+        continue
+      fi
+      manifest_entries=$((manifest_entries + 1))
+      if [[ "$(shasum -a 256 "$candidate_dir/electron/dist/$artifact_name" | awk '{print $1}')" != "$artifact_digest" ]]; then
+        add_blocker "desktop package checksum mismatch for $platform: $artifact_name"
+      fi
+    done < "$candidate_dir/$checksum_file"
+    if ((manifest_entries == 0)); then
+      add_blocker "desktop package checksum manifest is empty for $platform"
     fi
   done
 fi

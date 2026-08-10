@@ -12,6 +12,7 @@ services:
       REDIS_CONN_STRING: redis://default:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@redis:6379/0
       SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
       GATEWAY_AES_KEY: ${GATEWAY_AES_KEY:?GATEWAY_AES_KEY is required}
+      MANAGEMENT_TOKEN: ${MANAGEMENT_TOKEN:?MANAGEMENT_TOKEN is required}
       SESSION_COOKIE_SECURE: "true"
       SESSION_COOKIE_TRUSTED_URL: ${SESSION_COOKIE_TRUSTED_URL:?SESSION_COOKIE_TRUSTED_URL is required}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:?TRUSTED_PROXIES is required}
@@ -32,7 +33,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/readyz | grep -q '\"status\":\"ok\"'"]
+      test: ["CMD-SHELL", "wget -q --header='Authorization: Bearer $${MANAGEMENT_TOKEN}' -O - http://127.0.0.1:3000/readyz | grep -q '\"status\":\"ok\"'"]
       interval: 15s
       timeout: 3s
       retries: 10

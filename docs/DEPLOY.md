@@ -12,6 +12,7 @@
 ```bash
 # 必需
 GATEWAY_AES_KEY=<32字节密钥，hex编码或原始ASCII>
+MANAGEMENT_TOKEN=<至少32字节的随机管理端点令牌>
 SQL_DSN=postgres://user:pass@localhost:5432/newapi?sslmode=disable
 REDIS_CONN_STRING=redis://localhost:6379
 
@@ -52,6 +53,8 @@ npm link --prefix cli
 ```bash
 curl http://localhost:3000/healthz
 # {"status":"ok"}
+
+curl -H "Authorization: Bearer $MANAGEMENT_TOKEN" http://localhost:3000/readyz
 ```
 
 ## 5. 管理员配置

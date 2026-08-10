@@ -54,4 +54,8 @@ go test -count=1 ./controller -run 'Test.*(File|FineTuning|Variation|Model)'
 if [[ "$nightly" == true ]]; then
   go test -count=1 ./service -run 'Test.*(Billing|Quota|Refund|Recalculate)'
   go test -count=1 -tags=integration ./tests/fault/... ./tests/performance/...
+  bash scripts/certify-restore.sh
+  jq -n --arg commit "$(git rev-parse HEAD)" \
+    '{commit:$commit,status:"pass",fault_recovery:"pass",performance:"pass",billing:"pass"}' \
+    > "$ARTIFACT_DIR/nightly.json"
 fi

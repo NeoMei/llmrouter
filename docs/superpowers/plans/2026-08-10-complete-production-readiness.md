@@ -966,20 +966,20 @@ git commit -m "test: add browser failover performance and operations gates"
 **Interfaces:**
 - Produces: signed certification manifest bound to commit, registry version, provider/channel, test result, and timestamp.
 
-- [ ] **Step 1: Add release-gate fixture tests**
+- [x] **Step 1: Add release-gate fixture tests**
 
 ```bash
 # Fails for missing credential result, public 501, placeholder adapter, dirty generated docs,
 # unsigned image, failed restore rehearsal, or missing desktop platform checksum.
 ```
 
-- [ ] **Step 2: Run gate against incomplete fixture**
+- [x] **Step 2: Run gate against incomplete fixture**
 
 Run: `bash scripts/release_gate_test.sh`
 
 Expected: fixture failures enumerate every missing certification item with a non-zero exit.
 
-- [ ] **Step 3: Implement credential-gated live certification and aggregate gate**
+- [x] **Step 3: Implement credential-gated live certification and aggregate gate**
 
 Generate live test cases from production-certified registry entries. Redact credentials and store only result metadata. `release-gate.sh` runs all PR/merge/nightly gates, scans route registrations and supported adapter paths for placeholders, verifies migration/backup/restore/rollback rehearsal, image digest/signature/SBOM/provenance, container smoke, and Windows/macOS/Linux package checksums/startup probes. A missing live credential is a hard incomplete result, not a skip.
 
@@ -989,7 +989,7 @@ Run: `bash scripts/release-gate.sh`
 
 Expected: exit 0 only when every completion criterion is satisfied; otherwise it prints an exact external credential/infrastructure blocker list and exits non-zero.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts .github/workflows/release.yml docs/operations/provider-certification.md

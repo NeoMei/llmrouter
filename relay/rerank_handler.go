@@ -53,6 +53,12 @@ func RerankHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
+		// An adapter may legitimately return nil with no error to mean
+		// "pass through the original request unchanged". Fall back so we
+		// never marshal a literal JSON null upstream.
+		if convertedRequest == nil {
+			convertedRequest = request
+		}
 		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
 		jsonData, err := common.Marshal(convertedRequest)
 		if err != nil {

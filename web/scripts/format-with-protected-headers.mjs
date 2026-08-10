@@ -37,6 +37,7 @@ const excludedDirs = new Set([
   'coverage',
   'dist',
   'node_modules',
+  'test-results',
 ])
 const headerExtensions = new Set([
   '.cjs',

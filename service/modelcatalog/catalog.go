@@ -1,0 +1,465 @@
+package modelcatalog
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"unicode"
+
+	"github.com/QuantumNous/new-api/model"
+)
+
+var ErrAuthorizerRequired = errors.New("model catalog authorizer is required")
+
+// Re-export the durable records from model so catalog callers only need one
+// package when loading and resolving public routes.
+type ClientModelRoute = model.ClientModelRoute
+type ClientModelTarget = model.ClientModelTarget
+
+// WireProtocol identifies the wire shape a client request may use.
+type WireProtocol string
+
+const (
+	WireResponses  WireProtocol = "responses"
+	WireOpenAIChat WireProtocol = "openai_chat"
+	WireAnthropic  WireProtocol = "anthropic"
+)
+
+// ClientModel is the immutable public identity exposed to a client.
+type ClientModel struct {
+	PublicID    string
+	DisplayName string
+	Client      string
+	Aliases     []string
+	Metadata    string
+}
+
+// ResolvedModel is the result used by routing and billing. RequestedModel is
+// retained for telemetry, while BillingModel is always the canonical upstream
+// price key; callers must use this value before charging a request.
+type ResolvedModel struct {
+	RequestedModel string
+	PublicID       string
+	UpstreamModel  string
+	BillingModel   string
+	ChannelID      int
+	TargetID       int
+	Priority       int
+	Weight         int
+	Client         string
+	PreferredWires []WireProtocol
+}
+
+// AuthorizedRuntimeSnapshot is the immutable authorization result consumed by
+// catalog operations. Callers should obtain it from a VisibilityAuthorizer;
+// the convenience methods below defensively clone every slice before use.
+type AuthorizedRuntimeSnapshot struct {
+	UserID int
+	Groups []string
+	Client string
+}
+
+func NewAuthorizedRuntimeSnapshot(userID int, groups []string, client string) AuthorizedRuntimeSnapshot {
+	return AuthorizedRuntimeSnapshot{UserID: userID, Groups: append([]string(nil), normalizeIDs(groups)...), Client: strings.ToLower(strings.TrimSpace(client))}
+}
+
+// VisibilityAuthorizer binds a request to a tenant and its already-authorized
+// groups. Catalog construction deliberately does not perform live DB lookups.
+type VisibilityAuthorizer interface {
+	Authorize(context.Context, int, []string, string) (AuthorizedRuntimeSnapshot, error)
+}
+
+type routeEntry struct {
+	model   ClientModel
+	targets []model.ClientModelTarget
+	enabled bool
+}
+
+// Catalog is an immutable in-memory snapshot. Build a new snapshot after a
+// route mutation and atomically replace it in the caller; methods never expose
+// internal slices or maps.
+type Catalog struct {
+	entries    []routeEntry
+	byKey      map[string]string
+	byPublic   map[string]int
+	authorizer VisibilityAuthorizer
+}
+
+// NewCatalog validates durable route and target records and builds a snapshot.
+func NewCatalog(routes []model.ClientModelRoute, targets []model.ClientModelTarget) (*Catalog, error) {
+	byRoute := make(map[int]int, len(routes))
+	entries := make([]routeEntry, len(routes))
+	for i, route := range routes {
+		if route.Id <= 0 {
+			return nil, fmt.Errorf("route id %d is invalid; route id must be positive", route.Id)
+		}
+		if _, exists := byRoute[route.Id]; exists {
+			return nil, fmt.Errorf("route id %d is duplicated", route.Id)
+		}
+		publicID := strings.TrimSpace(route.PublicId)
+		if err := validateID(publicID, "public model id"); err != nil {
+			return nil, err
+		}
+		client := strings.ToLower(strings.TrimSpace(route.Client))
+		if client == "" {
+			client = "all"
+		}
+		aliases, err := decodeStrings(route.Aliases)
+		if err != nil {
+			return nil, fmt.Errorf("route %q aliases: %w", publicID, err)
+		}
+		aliases, err = normalizeAliases(aliases)
+		if err != nil {
+			return nil, fmt.Errorf("route %q: %w", publicID, err)
+		}
+		display := strings.TrimSpace(route.DisplayName)
+		if display == "" {
+			display = publicID
+		}
+		entries[i] = routeEntry{enabled: route.Enabled, model: ClientModel{
+			PublicID: publicID, DisplayName: display, Client: client,
+			Aliases: append([]string(nil), aliases...), Metadata: route.Metadata,
+		}}
+		byRoute[route.Id] = i
+	}
+
+	for _, target := range targets {
+		i, ok := byRoute[target.RouteId]
+		if !ok {
+			return nil, fmt.Errorf("target %d references nonexistent route %d", target.Id, target.RouteId)
+		}
+		if !target.Enabled {
+			return nil, fmt.Errorf("target %d is disabled", target.Id)
+		}
+		if target.ChannelId <= 0 {
+			return nil, fmt.Errorf("target %d references nonexistent channel %d", target.Id, target.ChannelId)
+		}
+		if err := validateID(strings.TrimSpace(target.UpstreamModel), "upstream model"); err != nil {
+			return nil, fmt.Errorf("target %d: %w", target.Id, err)
+		}
+		if err := validateID(strings.TrimSpace(target.BillingModel), "billing model"); err != nil {
+			return nil, fmt.Errorf("target %d has no billing configuration: %w", target.Id, err)
+		}
+		wires, err := decodeWires(target.PreferredWires)
+		if err != nil {
+			return nil, fmt.Errorf("target %d: %w", target.Id, err)
+		}
+		if target.Weight <= 0 {
+			return nil, fmt.Errorf("target %d has weight below one", target.Id)
+		}
+		target.UpstreamModel = strings.TrimSpace(target.UpstreamModel)
+		target.BillingModel = strings.TrimSpace(target.BillingModel)
+		target.Groups = normalizeIDs(target.Groups)
+		target.PreferredWires = encodeWires(wires)
+		entries[i].targets = append(entries[i].targets, target)
+	}
+
+	for i := range entries {
+		if !entries[i].modelEnabled() {
+			continue
+		}
+		if len(entries[i].targets) == 0 {
+			return nil, fmt.Errorf("public model %q has no enabled targets", entries[i].model.PublicID)
+		}
+		sort.SliceStable(entries[i].targets, func(a, b int) bool {
+			if entries[i].targets[a].Priority != entries[i].targets[b].Priority {
+				return entries[i].targets[a].Priority > entries[i].targets[b].Priority
+			}
+			return entries[i].targets[a].Id < entries[i].targets[b].Id
+		})
+	}
+
+	byKey := make(map[string]string, len(entries)*2)
+	byPublic := make(map[string]int, len(entries))
+	for i, entry := range entries {
+		if !entry.modelEnabled() {
+			continue
+		}
+		if err := addLookup(byKey, strings.ToLower(entry.model.PublicID), entry.model.PublicID, false); err != nil {
+			return nil, err
+		}
+		byPublic[entry.model.PublicID] = i
+		for _, alias := range entry.model.Aliases {
+			if err := addLookup(byKey, strings.ToLower(alias), entry.model.PublicID, true); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return &Catalog{entries: entries, byKey: byKey, byPublic: byPublic}, nil
+}
+
+// NewCatalogFromRecords is a named alias for callers loading GORM records.
+func NewCatalogFromRecords(routes []model.ClientModelRoute, targets []model.ClientModelTarget) (*Catalog, error) {
+	return NewCatalog(routes, targets)
+}
+
+// WithAuthorizer returns a catalog view that requires every operation to pass
+// through the supplied tenant/group authorizer. The route index remains shared
+// and immutable.
+func (c *Catalog) WithAuthorizer(authorizer VisibilityAuthorizer) *Catalog {
+	if c == nil {
+		return nil
+	}
+	copy := *c
+	copy.authorizer = authorizer
+	return &copy
+}
+
+func (e routeEntry) modelEnabled() bool { return e.enabled }
+
+func addLookup(index map[string]string, key, publicID string, alias bool) error {
+	if previous, ok := index[key]; ok {
+		if alias {
+			return fmt.Errorf("alias %q is assigned to multiple public models (%s and %s)", key, previous, publicID)
+		}
+		return fmt.Errorf("public model id %q is assigned more than once", key)
+	}
+	index[key] = publicID
+	return nil
+}
+
+// List resolves an authorization snapshot before returning visible models. In
+// production the catalog must be wrapped with WithAuthorizer; the fallback is
+// only for already-authorized internal callers and never persists user data.
+func (c *Catalog) List(ctx context.Context, userID int, groups []string, client string) ([]ClientModel, error) {
+	snapshot, err := c.authorize(ctx, userID, groups, client)
+	if err != nil {
+		return nil, err
+	}
+	return c.listAuthorized(snapshot), nil
+}
+
+func (c *Catalog) listAuthorized(snapshot AuthorizedRuntimeSnapshot) []ClientModel {
+	client := snapshot.Client
+	visibleGroups := snapshot.Groups
+	result := make([]ClientModel, 0, len(c.entries))
+	for _, entry := range c.entries {
+		if client != "" && entry.model.Client != "all" && entry.model.Client != client {
+			continue
+		}
+		if !entryVisible(entry.targets, visibleGroups) {
+			continue
+		}
+		result = append(result, cloneClientModel(entry.model))
+	}
+	sort.SliceStable(result, func(i, j int) bool { return result[i].PublicID < result[j].PublicID })
+	return result
+}
+
+func (c *Catalog) Resolve(ctx context.Context, userID int, groups []string, requestedModel, client string) (*ResolvedModel, error) {
+	snapshot, err := c.authorize(ctx, userID, groups, client)
+	if err != nil {
+		return nil, err
+	}
+	return c.resolveAuthorized(snapshot, requestedModel)
+}
+
+func (c *Catalog) resolveAuthorized(snapshot AuthorizedRuntimeSnapshot, requestedModel string) (*ResolvedModel, error) {
+	requested := strings.TrimSpace(requestedModel)
+	if requested == "" {
+		return nil, fmt.Errorf("model is required")
+	}
+	publicID, ok := c.byKey[strings.ToLower(requested)]
+	if !ok {
+		return nil, fmt.Errorf("model %q is not available", requestedModel)
+	}
+	i := c.byPublic[publicID]
+	entry := c.entries[i]
+	client := snapshot.Client
+	if client != "" && entry.model.Client != "all" && entry.model.Client != client {
+		return nil, fmt.Errorf("model %q is not available for client %q", requestedModel, client)
+	}
+	// Targets are ordered by priority/ID at snapshot build time. This core does
+	// not perform weighted selection; it returns the first authorized target and
+	// preserves its validated weight for a later selector/runtime layer.
+	for _, target := range entry.targets {
+		if !entryTargetVisible(target, snapshot.Groups) {
+			continue
+		}
+		wires, err := decodeWires(target.PreferredWires)
+		if err != nil {
+			return nil, err
+		}
+		return &ResolvedModel{
+			RequestedModel: requestedModel, PublicID: entry.model.PublicID,
+			UpstreamModel: target.UpstreamModel, BillingModel: target.BillingModel,
+			ChannelID: target.ChannelId, TargetID: target.Id, Priority: target.Priority, Weight: target.Weight,
+			Client:         entry.model.Client,
+			PreferredWires: append([]WireProtocol(nil), wires...),
+		}, nil
+	}
+	return nil, fmt.Errorf("model %q is not visible for the requested groups", requestedModel)
+}
+
+func (c *Catalog) authorize(ctx context.Context, userID int, groups []string, client string) (AuthorizedRuntimeSnapshot, error) {
+	if err := contextErr(ctx); err != nil {
+		return AuthorizedRuntimeSnapshot{}, err
+	}
+	var snapshot AuthorizedRuntimeSnapshot
+	var err error
+	if c.authorizer != nil {
+		snapshot, err = c.authorizer.Authorize(ctx, userID, groups, client)
+		if err != nil {
+			return AuthorizedRuntimeSnapshot{}, err
+		}
+	} else {
+		return AuthorizedRuntimeSnapshot{}, ErrAuthorizerRequired
+	}
+	if snapshot.UserID != userID {
+		return AuthorizedRuntimeSnapshot{}, fmt.Errorf("authorization snapshot belongs to user %d, not %d", snapshot.UserID, userID)
+	}
+	requestedClient := strings.ToLower(strings.TrimSpace(client))
+	boundClient := strings.ToLower(strings.TrimSpace(snapshot.Client))
+	if boundClient != "" && requestedClient != "" && boundClient != requestedClient {
+		return AuthorizedRuntimeSnapshot{}, fmt.Errorf("authorization snapshot is for client %q, not %q", boundClient, requestedClient)
+	}
+	snapshot.Groups = append([]string(nil), normalizeIDs(snapshot.Groups)...)
+	if boundClient != "" {
+		snapshot.Client = boundClient
+	} else {
+		snapshot.Client = requestedClient
+	}
+	return snapshot, nil
+}
+
+func entryVisible(targets []model.ClientModelTarget, groups []string) bool {
+	for _, target := range targets {
+		if entryTargetVisible(target, groups) {
+			return true
+		}
+	}
+	return false
+}
+
+func entryTargetVisible(target model.ClientModelTarget, groups []string) bool {
+	if len(target.Groups) == 0 {
+		return true
+	}
+	if len(groups) == 0 {
+		return false
+	}
+	allowed := make(map[string]struct{}, len(groups))
+	for _, group := range groups {
+		allowed[group] = struct{}{}
+	}
+	for _, group := range target.Groups {
+		if _, ok := allowed[strings.ToLower(group)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func cloneClientModel(m ClientModel) ClientModel {
+	m.Aliases = append([]string(nil), m.Aliases...)
+	return m
+}
+
+func contextErr(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
+	}
+}
+
+func validateID(value, label string) error {
+	if value == "" {
+		return fmt.Errorf("%s is required", label)
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("%s contains control characters", label)
+		}
+	}
+	return nil
+}
+
+func normalizeIDs(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func normalizeAliases(values []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return nil, fmt.Errorf("alias is required")
+		}
+		if err := validateID(value, "alias"); err != nil {
+			return nil, err
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			return nil, fmt.Errorf("alias %q is duplicated", value)
+		}
+		seen[key] = struct{}{}
+		result = append(result, value)
+	}
+	return result, nil
+}
+
+func decodeStrings(raw string) ([]string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err == nil {
+		return values, nil
+	}
+	values = strings.Split(raw, ",")
+	return values, nil
+}
+
+func decodeWires(raw string) ([]WireProtocol, error) {
+	values, err := decodeStrings(raw)
+	if err != nil {
+		return nil, err
+	}
+	if len(values) == 0 {
+		return nil, fmt.Errorf("preferred wires are required")
+	}
+	result := make([]WireProtocol, 0, len(values))
+	seen := make(map[WireProtocol]struct{}, len(values))
+	for _, value := range values {
+		wire := WireProtocol(strings.ToLower(strings.TrimSpace(value)))
+		switch wire {
+		case WireResponses, WireOpenAIChat, WireAnthropic:
+		default:
+			return nil, fmt.Errorf("unknown wire protocol %q", value)
+		}
+		if _, ok := seen[wire]; ok {
+			continue
+		}
+		seen[wire] = struct{}{}
+		result = append(result, wire)
+	}
+	return result, nil
+}
+
+func encodeWires(values []WireProtocol) string {
+	data, _ := json.Marshal(values)
+	return string(data)
+}

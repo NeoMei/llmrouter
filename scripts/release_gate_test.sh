@@ -47,6 +47,8 @@ for blocker in \
   'desktop certification missing checksum or startup probe for linux' \
   'desktop certification missing checksum or startup probe for macos' \
   'desktop certification missing checksum or startup probe for windows' \
+  'desktop certification missing verified code signature or notarization for macos' \
+  'desktop certification missing verified code signature for windows' \
   'nightly evidence requires fault recovery, performance, and billing passes' \
   'source certification found a public 501, supported placeholder adapter, or dirty generated docs'; do
   grep -Fq "$blocker" <<<"$invalid_output"
@@ -85,8 +87,8 @@ jq -n --arg commit "$commit" \
   --arg windows_manifest "$(shasum -a 256 "$candidate_dir/electron-SHA256SUMS-windows.txt" | awk '{print $1}')" \
   '{commit:$commit,platforms:{
     linux:{checksum:$linux_manifest,backend_checksum:$linux_backend,backend_artifact:"new-api-linux",electron_checksum_file:"electron-SHA256SUMS-linux.txt",startup_probe:"pass"},
-    macos:{checksum:$macos_manifest,backend_checksum:$macos_backend,backend_artifact:"new-api-macos",electron_checksum_file:"electron-SHA256SUMS-macos.txt",startup_probe:"pass"},
-    windows:{checksum:$windows_manifest,backend_checksum:$windows_backend,backend_artifact:"new-api-windows",electron_checksum_file:"electron-SHA256SUMS-windows.txt",startup_probe:"pass"}
+    macos:{checksum:$macos_manifest,backend_checksum:$macos_backend,backend_artifact:"new-api-macos",electron_checksum_file:"electron-SHA256SUMS-macos.txt",startup_probe:"pass",signature_verified:true,notarized:true},
+    windows:{checksum:$windows_manifest,backend_checksum:$windows_backend,backend_artifact:"new-api-windows",electron_checksum_file:"electron-SHA256SUMS-windows.txt",startup_probe:"pass",signature_verified:true}
   }}' > "$tmp_dir/desktop.json"
 jq -n --arg commit "$commit" '{commit:$commit,status:"pass",fault_recovery:"pass",performance:"pass",billing:"pass"}' > "$tmp_dir/nightly.json"
 jq -n --arg commit "$commit" '{commit:$commit,public_501_count:0,supported_placeholder_count:0,generated_docs_clean:true}' > "$tmp_dir/source.json"

@@ -13,6 +13,21 @@ fi
 grep -Fq '${APP_IMAGE:?APP_IMAGE is required}@${APP_IMAGE_DIGEST:?APP_IMAGE_DIGEST is required}' docker-compose.yml
 grep -Fq 'MANAGEMENT_TOKEN: ${MANAGEMENT_TOKEN:?MANAGEMENT_TOKEN is required}' docker-compose.yml
 grep -Fq 'Authorization: Bearer $${MANAGEMENT_TOKEN}' docker-compose.yml
+grep -Fq 'MACOS_CERTIFICATE_BASE64' .github/workflows/release.yml
+grep -Fq 'codesign --verify --deep --strict' .github/workflows/release.yml
+grep -Fq 'Get-AuthenticodeSignature' .github/workflows/release.yml
+grep -Fq 'signature_verified:true,notarized:true' .github/workflows/release.yml
+grep -Fq 'signature_verified:true' .github/workflows/release.yml
+ruby <<'RUBY'
+require 'yaml'
+workflow = YAML.load_file('.github/workflows/release.yml')
+linux_build = workflow.fetch('jobs').fetch('linux').fetch('steps').find { |step| step['name'] == 'Build and probe Electron candidate' }
+macos_build = workflow.fetch('jobs').fetch('macos').fetch('steps').find { |step| step['name'] == 'Build and probe Electron candidate' }
+windows_build = workflow.fetch('jobs').fetch('windows').fetch('steps').find { |step| step['name'] == 'Build and probe Electron candidate' }
+raise 'Linux build must not receive macOS signing credentials' if linux_build.key?('env')
+raise 'macOS signing credentials are missing' unless macos_build.fetch('env').key?('CSC_LINK')
+raise 'Windows signing credentials are missing' unless windows_build.fetch('env').key?('WIN_CSC_LINK')
+RUBY
 if grep -Eq '(^|[^[:alnum:]])latest([^[:alnum:]]|$)|123456' docker-compose.yml; then
   echo "production compose contains a mutable tag or example password" >&2
   exit 1

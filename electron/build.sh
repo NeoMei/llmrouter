@@ -45,5 +45,9 @@ cd "$script_dir"
 env -u npm_config_allow_scripts -u NPM_CONFIG_ALLOW_SCRIPTS \
   npm --userconfig=/dev/null ci
 npm test
-CSC_IDENTITY_AUTO_DISCOVERY=false npm run "$package_script" -- \
-  --config.extraMetadata.version="$package_version"
+if [[ -n "${CSC_LINK:-}${WIN_CSC_LINK:-}${CSC_NAME:-}" ]]; then
+  npm run "$package_script" -- --config.extraMetadata.version="$package_version"
+else
+  CSC_IDENTITY_AUTO_DISCOVERY=false npm run "$package_script" -- \
+    --config.extraMetadata.version="$package_version"
+fi

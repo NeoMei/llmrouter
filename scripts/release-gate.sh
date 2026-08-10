@@ -79,6 +79,11 @@ if require_json "$desktop_evidence" "desktop certification evidence"; then
   check_commit "$desktop_evidence" "desktop certification"
   candidate_dir=${RELEASE_CANDIDATE_DIR:-}
   for platform in linux macos windows; do
+    if [[ "$platform" == macos ]] && ! jq -e '.platforms.macos.signature_verified == true and .platforms.macos.notarized == true' "$desktop_evidence" >/dev/null; then
+      add_blocker "desktop certification missing verified code signature or notarization for macos"
+    elif [[ "$platform" == windows ]] && ! jq -e '.platforms.windows.signature_verified == true' "$desktop_evidence" >/dev/null; then
+      add_blocker "desktop certification missing verified code signature for windows"
+    fi
     if ! jq -e --arg platform "$platform" '.platforms[$platform].startup_probe == "pass" and (.platforms[$platform].checksum | test("^[0-9a-f]{64}$"))' "$desktop_evidence" >/dev/null; then
       add_blocker "desktop certification missing checksum or startup probe for $platform"
       continue

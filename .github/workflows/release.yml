@@ -130,12 +130,25 @@ jobs:
           go mod download
           go build -trimpath -ldflags "-X 'github.com/QuantumNous/new-api/common.Version=$VERSION'" -o new-api-macos-$VERSION
       - name: Build and probe Electron candidate
+        env:
+          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           cd electron
           npm ci
           VERSION="$VERSION" npm run build:all
           npm run probe -- dist --write-checksums
           cp dist/SHA256SUMS ../electron-SHA256SUMS-macos.txt
+      - name: Verify macOS signature and notarization
+        run: |
+          app_path=$(find electron/dist -type d -name '*.app' -print -quit)
+          test -n "$app_path"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          spctl --assess --type execute --verbose=2 "$app_path"
+          xcrun stapler validate "$app_path"
       - name: Generate checksums
         run: shasum -a 256 new-api-macos-* > checksums-macos.txt
       - name: Probe native binary and record evidence
@@ -147,7 +160,7 @@ jobs:
           curl --fail --silent http://127.0.0.1:31992/healthz
           checksum=$(shasum -a 256 electron-SHA256SUMS-macos.txt | awk '{print $1}')
           backend_checksum=$(shasum -a 256 new-api-macos-$VERSION | awk '{print $1}')
-          jq -n --arg commit "$GITHUB_SHA" --arg checksum "$checksum" --arg backend_checksum "$backend_checksum" --arg backend_artifact "new-api-macos-$VERSION" '{commit:$commit,platform:"macos",checksum:$checksum,backend_checksum:$backend_checksum,backend_artifact:$backend_artifact,electron_checksum_file:"electron-SHA256SUMS-macos.txt",startup_probe:"pass"}' > desktop-macos.json
+          jq -n --arg commit "$GITHUB_SHA" --arg checksum "$checksum" --arg backend_checksum "$backend_checksum" --arg backend_artifact "new-api-macos-$VERSION" '{commit:$commit,platform:"macos",checksum:$checksum,backend_checksum:$backend_checksum,backend_artifact:$backend_artifact,electron_checksum_file:"electron-SHA256SUMS-macos.txt",startup_probe:"pass",signature_verified:true,notarized:true}' > desktop-macos.json
       - name: Upload macOS release candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -201,12 +214,18 @@ jobs:
           go mod download
           go build -trimpath -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$VERSION'" -o new-api-$VERSION.exe
       - name: Build and probe Electron candidate
+        env:
+          WIN_CSC_LINK: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
           cd electron
           npm ci
           VERSION="$VERSION" npm run build:all
           npm run probe -- dist --write-checksums
           cp dist/SHA256SUMS ../electron-SHA256SUMS-windows.txt
+      - name: Verify Windows Authenticode signatures
+        run: |
+          pwsh -NoProfile -Command '$files = Get-ChildItem -Path "electron/dist" -Filter "*.exe"; if ($files.Count -eq 0) { throw "no Windows executables found" }; foreach ($file in $files) { $signature = Get-AuthenticodeSignature $file.FullName; if ($signature.Status -ne "Valid") { throw "invalid Authenticode signature: $($file.Name) status=$($signature.Status)" } }'
       - name: Generate checksums
         run: sha256sum new-api-*.exe > checksums-windows.txt
       - name: Probe native binary and record evidence
@@ -218,7 +237,7 @@ jobs:
           curl --fail --silent http://127.0.0.1:31993/healthz
           checksum=$(sha256sum electron-SHA256SUMS-windows.txt | awk '{print $1}')
           backend_checksum=$(sha256sum new-api-$VERSION.exe | awk '{print $1}')
-          jq -n --arg commit "$GITHUB_SHA" --arg checksum "$checksum" --arg backend_checksum "$backend_checksum" --arg backend_artifact "new-api-$VERSION.exe" '{commit:$commit,platform:"windows",checksum:$checksum,backend_checksum:$backend_checksum,backend_artifact:$backend_artifact,electron_checksum_file:"electron-SHA256SUMS-windows.txt",startup_probe:"pass"}' > desktop-windows.json
+          jq -n --arg commit "$GITHUB_SHA" --arg checksum "$checksum" --arg backend_checksum "$backend_checksum" --arg backend_artifact "new-api-$VERSION.exe" '{commit:$commit,platform:"windows",checksum:$checksum,backend_checksum:$backend_checksum,backend_artifact:$backend_artifact,electron_checksum_file:"electron-SHA256SUMS-windows.txt",startup_probe:"pass",signature_verified:true}' > desktop-windows.json
       - name: Upload Windows release candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

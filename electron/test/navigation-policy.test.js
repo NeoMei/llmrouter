@@ -29,3 +29,13 @@ test('desktop launcher binds the backend to loopback', () => {
 
   assert.match(mainSource, /SERVER_BIND_ADDRESS:\s*'127\.0\.0\.1'/);
 });
+
+test('production package configuration requires hardened signed macOS output', () => {
+  const packageJson = JSON.parse(
+    fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')
+  );
+
+  assert.equal(packageJson.build.mac.hardenedRuntime, true);
+  assert.equal(packageJson.build.mac.notarize, true);
+  assert.notEqual(packageJson.build.mac.identity, null);
+});

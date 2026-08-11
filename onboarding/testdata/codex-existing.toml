@@ -1,0 +1,6 @@
+model = "native-model"
+
+[model_providers.native]
+name = "Native"
+base_url = "https://native.example/v1"
+wire_api = "responses"

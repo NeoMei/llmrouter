@@ -2,9 +2,11 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/QuantumNous/new-api/internal/onboarding"
@@ -38,16 +40,43 @@ func run(args []string) int {
 		if err != nil {
 			return report(err)
 		}
-		_ = options
-		return report(fmt.Errorf("%w: no client adapters are registered", onboarding.ErrUnavailable))
-	case "doctor":
-		if len(args) != 1 {
-			return report(fmt.Errorf("%w: doctor accepts no options", onboarding.ErrUsage))
-		}
-		if _, err := onboarding.BeginTransaction(home); err != nil {
+		result, err := onboarding.ConfigureClients(context.Background(), onboarding.ConfigureRequest{
+			Home: home, Platform: onboarding.Platform{OS: runtime.GOOS, Arch: runtime.GOARCH},
+			ServerURL: options.ServerURL, Token: options.Token, Model: options.Model,
+		}, options.Clients)
+		if err != nil {
 			return report(err)
 		}
-		fmt.Fprintln(os.Stdout, "onboarding state is safe")
+		for _, instruction := range result.Instructions {
+			fmt.Fprintln(os.Stdout, instruction)
+		}
+		if result.Receipt.ID != "" {
+			fmt.Fprintf(os.Stdout, "configuration receipt: %s\n", result.Receipt.ID)
+		} else {
+			fmt.Fprintln(os.Stdout, "manual configuration instructions generated")
+		}
+		return 0
+	case "doctor":
+		env := environment()
+		options, err := onboarding.ResolveOptions(onboarding.Inputs{Args: args[1:], Env: env, PageOrigin: env["LLMAPI_PAGE_ORIGIN"], Prompt: terminalPrompter{}})
+		if err != nil {
+			return report(err)
+		}
+		diagnostic := onboarding.RunDoctor(context.Background(), onboarding.DoctorOptions{
+			Home: home, ServerURL: options.ServerURL, Token: options.Token,
+			Clients: options.Clients, Model: options.Model, Smoke: options.Smoke,
+		})
+		for _, check := range diagnostic.Checks {
+			if check.Message == "" {
+				fmt.Fprintf(os.Stdout, "[%s] %s\n", check.Status, check.Name)
+			} else {
+				fmt.Fprintf(os.Stdout, "[%s] %s: %s\n", check.Status, check.Name, check.Message)
+			}
+		}
+		fmt.Fprintf(os.Stdout, "%d passed, %d failed, %d skipped\n", diagnostic.Passed, diagnostic.Failed, diagnostic.Skipped)
+		if diagnostic.Failed != 0 {
+			return 1
+		}
 		return 0
 	case "restore", "uninstall":
 		id, err := receiptID(home, args[1:])

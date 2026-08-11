@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -40,9 +41,22 @@ func run(args []string) int {
 		if err != nil {
 			return report(err)
 		}
+		platform := onboarding.Platform{OS: runtime.GOOS, Arch: runtime.GOARCH}
+		bridgePath := ""
+		for _, client := range options.Clients {
+			if client != onboarding.ClientClaudeDesktop {
+				continue
+			}
+			executable, executableErr := os.Executable()
+			if executableErr != nil {
+				return report(fmt.Errorf("%w: onboarding executable path is unavailable", onboarding.ErrUnavailable))
+			}
+			bridgePath = claudeDesktopBridgePath(executable, platform)
+			break
+		}
 		result, err := onboarding.ConfigureClients(context.Background(), onboarding.ConfigureRequest{
-			Home: home, Platform: onboarding.Platform{OS: runtime.GOOS, Arch: runtime.GOARCH},
-			ServerURL: options.ServerURL, Token: options.Token, Model: options.Model,
+			Home: home, Platform: platform, ServerURL: options.ServerURL, Token: options.Token, Model: options.Model,
+			BridgePath: bridgePath,
 		}, options.Clients)
 		if err != nil {
 			return report(err)
@@ -108,6 +122,19 @@ func run(args []string) int {
 	default:
 		return report(fmt.Errorf("%w: unknown command", onboarding.ErrUsage))
 	}
+}
+
+func claudeDesktopBridgePath(executable string, platform onboarding.Platform) string {
+	directory := filepath.Dir(executable)
+	extension := ""
+	if platform.OS == "windows" {
+		extension = ".exe"
+	}
+	releaseOnboard := "llmapi-onboard-" + platform.OS + "-" + platform.Arch + extension
+	if strings.EqualFold(filepath.Base(executable), releaseOnboard) {
+		return filepath.Join(directory, "llmapi-mcp-bridge-"+platform.OS+"-"+platform.Arch+extension)
+	}
+	return filepath.Join(directory, "llmapi-mcp-bridge"+extension)
 }
 
 func extractHome(args []string) (string, []string, error) {

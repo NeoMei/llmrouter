@@ -66,7 +66,12 @@ func RunDoctor(ctx context.Context, options DoctorOptions) DoctorReport {
 		for _, check := range checks {
 			add(check)
 		}
-		add(checkManagedPermissions(string(id)+"-permissions", adapter.Discover(platform, options.Home).Paths))
+		discovery := adapter.Discover(platform, options.Home)
+		if !discovery.Automatic && len(discovery.Paths) == 0 {
+			add(Check{Name: string(id) + "-permissions", Status: "SKIP", Message: discovery.Reason})
+		} else {
+			add(checkManagedPermissions(string(id)+"-permissions", discovery.Paths))
+		}
 	}
 
 	var catalog []ModelInfo
@@ -121,9 +126,6 @@ func RunDoctor(ctx context.Context, options DoctorOptions) DoctorReport {
 	sort.Strings(protocols)
 	for _, name := range protocols {
 		protocol := probeProtocol(name)
-		if protocol == probeMCP {
-			continue
-		}
 		check := Check{Name: "model-protocol-" + name}
 		if selectedModel == nil {
 			check.Status, check.Message = "SKIP", "selected model capability metadata is unavailable"
@@ -142,10 +144,6 @@ func RunDoctor(ctx context.Context, options DoctorOptions) DoctorReport {
 			add(Check{Name: "inference-" + name, Status: "SKIP", Message: "inference smoke test is opt-in"})
 			continue
 		}
-		if protocol == probeMCP {
-			add(Check{Name: "inference-" + name, Status: "SKIP", Message: "Claude Desktop MCP probe is not available in this task"})
-			continue
-		}
 		if options.ServerURL == nil || options.Model == "" {
 			add(Check{Name: "inference-" + name, Status: "FAIL", Message: "server URL and model are required for smoke testing"})
 			continue
@@ -158,6 +156,8 @@ func RunDoctor(ctx context.Context, options DoctorOptions) DoctorReport {
 		case probeMessages:
 			err = client.ProbeMessages(ctx, options.Model)
 		case probeChat:
+			err = client.ProbeChatCompletions(ctx, options.Model)
+		case probeMCP:
 			err = client.ProbeChatCompletions(ctx, options.Model)
 		}
 		if err != nil {
@@ -264,6 +264,7 @@ func modelSupportsProtocol(model ModelInfo, protocol probeProtocol) bool {
 		probeResponses: "openai-response",
 		probeMessages:  "anthropic",
 		probeChat:      "openai",
+		probeMCP:       "openai",
 	}[protocol]
 	for _, endpoint := range model.SupportedEndpointTypes {
 		if endpoint == required {

@@ -63,12 +63,13 @@ type ConfigureResult struct {
 }
 
 var adapters = map[ClientID]ClientAdapter{
-	ClientCodexCLI:     codexAdapter{id: ClientCodexCLI},
-	ClientCodexDesktop: codexAdapter{id: ClientCodexDesktop},
-	ClientClaudeCode:   claudeCodeAdapter{},
-	ClientOpenCode:     openCodeAdapter{},
-	ClientContinue:     continueAdapter{},
-	ClientAider:        aiderAdapter{},
+	ClientCodexCLI:      codexAdapter{id: ClientCodexCLI},
+	ClientCodexDesktop:  codexAdapter{id: ClientCodexDesktop},
+	ClientClaudeCode:    claudeCodeAdapter{},
+	ClientClaudeDesktop: claudeDesktopAdapter{},
+	ClientOpenCode:      openCodeAdapter{},
+	ClientContinue:      continueAdapter{},
+	ClientAider:         aiderAdapter{},
 }
 
 func AdapterFor(id ClientID) (ClientAdapter, bool) {

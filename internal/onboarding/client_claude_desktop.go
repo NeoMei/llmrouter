@@ -1,0 +1,163 @@
+package onboarding
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/internal/onboarding/mcpbridge"
+)
+
+const claudeDesktopBridgeTimeoutSeconds = 30
+
+type claudeDesktopAdapter struct{}
+
+func (claudeDesktopAdapter) ID() ClientID { return ClientClaudeDesktop }
+
+func (claudeDesktopAdapter) Discover(platform Platform, home string) Discovery {
+	if platform.OS != "darwin" && platform.OS != "windows" {
+		return Discovery{Automatic: false, Reason: "official Claude Desktop is unsupported on Linux"}
+	}
+	paths := []string{claudeDesktopConfigPath(platform, home), claudeDesktopCredentialPath(home)}
+	return Discovery{Installed: fileExists(paths[0]), Paths: paths, Automatic: true}
+}
+
+func (claudeDesktopAdapter) Plan(_ context.Context, request ConfigureRequest) (ConfigPlan, error) {
+	if request.Platform.OS != "darwin" && request.Platform.OS != "windows" {
+		return ConfigPlan{}, fmt.Errorf("%w: official Claude Desktop is supported only on macOS and Windows", ErrUnavailable)
+	}
+	if err := validateConfigureRequest(request); err != nil {
+		return ConfigPlan{}, err
+	}
+	if request.Model == "" {
+		return ConfigPlan{}, fmt.Errorf("%w: Claude Desktop requires a selected model allow-list", ErrUsage)
+	}
+	bridgePath, err := validateClaudeDesktopBridge(request.BridgePath, request.Platform)
+	if err != nil {
+		return ConfigPlan{}, err
+	}
+	configPath := claudeDesktopConfigPath(request.Platform, request.Home)
+	credentialPath := claudeDesktopCredentialPath(request.Home)
+	existing, _, err := readPlannedFile(request.Home, configPath)
+	if err != nil {
+		return ConfigPlan{}, err
+	}
+	entry := map[string]any{"command": bridgePath, "args": []string{"--config", credentialPath}}
+	configured, err := MergeJSONObject(existing, []string{"mcpServers", "llmapi"}, entry)
+	if err != nil {
+		return ConfigPlan{}, err
+	}
+	credential := mcpbridge.Config{
+		Origin: serverOrigin(request.ServerURL), Token: request.Token.Reveal(), Models: []string{request.Model}, TimeoutSeconds: claudeDesktopBridgeTimeoutSeconds,
+	}
+	if err := credential.Validate(); err != nil {
+		return ConfigPlan{}, fmt.Errorf("%w: invalid Claude Desktop bridge credential", ErrUsage)
+	}
+	credentialData, err := common.Marshal(credential)
+	if err != nil {
+		return ConfigPlan{}, fmt.Errorf("%w: encode Claude Desktop bridge credential", ErrUnsafe)
+	}
+	return ConfigPlan{
+		Client: ClientClaudeDesktop,
+		Writes: []PlannedWrite{
+			{Path: configPath, Data: configured, Mode: privateFileMode},
+			{Path: credentialPath, Data: credentialData, Mode: privateFileMode},
+		},
+		Instructions:    []string{"Claude Desktop gains bounded MCP tool access only; this does not replace Claude Desktop's built-in Claude model. Restart Claude Desktop."},
+		RestartRequired: true,
+	}, nil
+}
+
+func (claudeDesktopAdapter) Check(_ context.Context, request CheckRequest) []Check {
+	if request.Platform.OS != "darwin" && request.Platform.OS != "windows" {
+		return []Check{{Name: "claude-desktop-config", Status: "SKIP", Message: "official Claude Desktop is unsupported on Linux"}}
+	}
+	err := checkClaudeDesktopConfig(request)
+	return []Check{semanticConfigCheck("claude-desktop-config", err)}
+}
+
+func checkClaudeDesktopConfig(request CheckRequest) error {
+	if request.ServerURL == nil || request.Token.Reveal() == "" || request.Model == "" {
+		return fmt.Errorf("expected Claude Desktop settings are incomplete")
+	}
+	configPath := claudeDesktopConfigPath(request.Platform, request.Home)
+	credentialPath := claudeDesktopCredentialPath(request.Home)
+	data, err := loadManagedConfig(request.Home, configPath)
+	if err != nil {
+		return err
+	}
+	var root map[string]any
+	if err := common.UnmarshalUseNumber(data, &root); err != nil || root == nil {
+		return fmt.Errorf("invalid Claude Desktop configuration")
+	}
+	servers, ok := root["mcpServers"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("Claude Desktop MCP servers are unavailable")
+	}
+	entry, ok := servers["llmapi"].(map[string]any)
+	if !ok || len(entry) != 2 {
+		return fmt.Errorf("Claude Desktop LLMAPI server is invalid")
+	}
+	command, ok := entry["command"].(string)
+	if !ok {
+		return fmt.Errorf("Claude Desktop bridge command is invalid")
+	}
+	if _, err := validateClaudeDesktopBridge(command, request.Platform); err != nil {
+		return err
+	}
+	args, ok := entry["args"].([]any)
+	if !ok || len(args) != 2 || args[0] != "--config" || args[1] != credentialPath {
+		return fmt.Errorf("Claude Desktop bridge arguments are invalid")
+	}
+	credential, err := mcpbridge.LoadConfig(credentialPath)
+	if err != nil {
+		return err
+	}
+	if credential.Origin != serverOrigin(request.ServerURL) || credential.Token != request.Token.Reveal() || credential.TimeoutSeconds != claudeDesktopBridgeTimeoutSeconds || len(credential.Models) != 1 || credential.Models[0] != request.Model {
+		return fmt.Errorf("Claude Desktop bridge credential mismatch")
+	}
+	return nil
+}
+
+func claudeDesktopConfigPath(platform Platform, home string) string {
+	if platform.OS == "windows" {
+		appData := os.Getenv("APPDATA")
+		if appData == "" {
+			appData = filepath.Join(home, "AppData", "Roaming")
+		}
+		return filepath.Join(appData, "Claude", "claude_desktop_config.json")
+	}
+	return filepath.Join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json")
+}
+
+func claudeDesktopCredentialPath(home string) string {
+	return filepath.Join(home, ".llmapi", "credentials", "claude-desktop.json")
+}
+
+func validateClaudeDesktopBridge(path string, platform Platform) (string, error) {
+	if path == "" || hasControl(path) || !filepath.IsAbs(path) {
+		return "", fmt.Errorf("%w: installed Claude Desktop bridge path is required", ErrUnavailable)
+	}
+	path = filepath.Clean(path)
+	name := strings.ToLower(filepath.Base(path))
+	installedName := "llmapi-mcp-bridge"
+	artifactName := installedName + "-" + platform.OS + "-" + platform.Arch
+	if platform.OS == "windows" {
+		installedName += ".exe"
+		artifactName += ".exe"
+	}
+	validName := name == installedName || name == artifactName
+	info, err := os.Lstat(path)
+	if !validName || err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("%w: installed Claude Desktop bridge is unavailable", ErrUnavailable)
+	}
+	if platform.OS != "windows" && info.Mode().Perm()&0o111 == 0 {
+		return "", fmt.Errorf("%w: installed Claude Desktop bridge is not executable", ErrUnavailable)
+	}
+	return path, nil
+}
+
+var _ ClientAdapter = claudeDesktopAdapter{}

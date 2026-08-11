@@ -347,8 +347,14 @@ func isAllowedManagedDestination(home, path string) bool {
 	}
 	rel, _ := filepath.Rel(home, path)
 	parts := strings.Split(rel, string(filepath.Separator))
-	if len(parts) == 0 || parts[0] == ".llmapi" || parts[0] == ".ssh" {
+	if len(parts) == 0 || parts[0] == ".ssh" {
 		return false
+	}
+	if parts[0] == ".llmapi" {
+		return len(parts) == 3 && parts[1] == "credentials" && parts[2] == "claude-desktop.json"
+	}
+	if len(parts) >= 3 && parts[len(parts)-2] == "Claude" && parts[len(parts)-1] == "claude_desktop_config.json" {
+		return true
 	}
 	if len(parts) == 1 {
 		return strings.HasPrefix(parts[0], ".")

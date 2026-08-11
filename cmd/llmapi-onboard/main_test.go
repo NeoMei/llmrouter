@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/QuantumNous/new-api/internal/onboarding"
 	"github.com/stretchr/testify/require"
 )
 
@@ -18,6 +19,23 @@ func TestInstallConfiguresRegisteredAdapter(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(home, ".aider.conf.yml"))
 	require.NoError(t, err)
 	require.Contains(t, string(data), "LLMAPI:BEGIN")
+}
+
+func TestClaudeDesktopBridgePathMatchesSiblingReleaseArtifact(t *testing.T) {
+	platform := onboarding.Platform{OS: "darwin", Arch: "arm64"}
+	require.Equal(t,
+		filepath.Join("/opt/llmapi", "llmapi-mcp-bridge-darwin-arm64"),
+		claudeDesktopBridgePath(filepath.Join("/opt/llmapi", "llmapi-onboard-darwin-arm64"), platform),
+	)
+	require.Equal(t,
+		filepath.Join("/opt/llmapi", "llmapi-mcp-bridge"),
+		claudeDesktopBridgePath(filepath.Join("/opt/llmapi", "llmapi-onboard"), platform),
+	)
+	windows := onboarding.Platform{OS: "windows", Arch: "amd64"}
+	require.Equal(t,
+		filepath.Join("C:/llmapi", "llmapi-mcp-bridge-windows-amd64.exe"),
+		claudeDesktopBridgePath(filepath.Join("C:/llmapi", "llmapi-onboard-windows-amd64.exe"), windows),
+	)
 }
 
 func TestInstallUsesPageOriginOnlyWhenServerURLIsAbsent(t *testing.T) {

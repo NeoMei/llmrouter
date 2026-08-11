@@ -156,7 +156,7 @@ func ConfigureClients(ctx context.Context, request ConfigureRequest, clients []C
 			return ConfigureResult{}, err
 		}
 	}
-	receipt, err := tx.Commit(ReceiptMeta{Clients: append([]ClientID(nil), clients...), Model: request.Model, BridgeSHA256: request.BridgeSHA256})
+	receipt, err := tx.Commit(ReceiptMeta{Clients: append([]ClientID(nil), clients...), Model: request.Model, BridgeSHA256: request.BridgeSHA256, ServerURL: serverOrigin(request.ServerURL)})
 	if err != nil {
 		return ConfigureResult{}, err
 	}

@@ -142,6 +142,7 @@ case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; *
 case "$HOME" in /*) ;; *) fail 'HOME must be absolute' ;; esac
 require_private_directory "$HOME/.llmapi"
 require_private_directory "$HOME/.llmapi/bin"
+require_private_directory "$HOME/.llmapi/checksums"
 temporary_directory=$(mktemp -d "$HOME/.llmapi/bin/.install.XXXXXXXX") || fail 'cannot create private temporary directory'
 transaction_committed=0
 onboard_had_original=0
@@ -160,6 +161,7 @@ onboard_artifact="llmapi-onboard-$os-$arch"
 bridge_artifact="llmapi-mcp-bridge-$os-$arch"
 onboard_target="$HOME/.llmapi/bin/llmapi-onboard"
 bridge_target="$HOME/.llmapi/bin/llmapi-mcp-bridge"
+checksum_target="$HOME/.llmapi/checksums/llmapi-onboard.sha256"
 backup_directory="$temporary_directory/backups"
 
 download /install/checksums.txt "$checksums"
@@ -170,6 +172,11 @@ bridge_checksum=$(checksum_for "$bridge_artifact") || fail 'checksum file is inv
 [ "$(sha256_file "$temporary_directory/$onboard_artifact")" = "$onboard_checksum" ] || fail 'onboarding helper checksum mismatch'
 [ "$(sha256_file "$temporary_directory/$bridge_artifact")" = "$bridge_checksum" ] || fail 'MCP helper checksum mismatch'
 replace_helper_pair || fail 'cannot transactionally install both helpers'
+printf '%s\n' "$onboard_checksum" > "$temporary_directory/llmapi-onboard.sha256" || fail 'cannot stage helper checksum'
+chmod 600 "$temporary_directory/llmapi-onboard.sha256" || fail 'cannot secure helper checksum'
+mv "$temporary_directory/llmapi-onboard.sha256" "$checksum_target" || fail 'cannot install helper checksum'
+require_private_file "$checksum_target"
+chmod 600 "$checksum_target" || fail 'cannot secure helper checksum'
 
 rm -rf "$temporary_directory" || fail 'cannot clean temporary downloads'
 temporary_directory=

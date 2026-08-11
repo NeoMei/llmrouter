@@ -27,6 +27,7 @@ type ReceiptMeta struct {
 	Clients      []ClientID `json:"clients,omitempty"`
 	Model        string     `json:"model,omitempty"`
 	BridgeSHA256 string     `json:"bridge_sha256,omitempty"`
+	ServerURL    string     `json:"server_url,omitempty"`
 }
 
 type ReceiptFile struct {

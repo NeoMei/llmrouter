@@ -3,8 +3,10 @@ package onboarding
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 )
@@ -29,8 +31,7 @@ func (claudeCodeAdapter) Plan(_ context.Context, request ConfigureRequest) (Conf
 		return ConfigPlan{}, err
 	}
 	environment := map[string]any{
-		"ANTHROPIC_BASE_URL":   serverOrigin(request.ServerURL),
-		"ANTHROPIC_AUTH_TOKEN": request.Token.Reveal(),
+		"ANTHROPIC_BASE_URL": serverOrigin(request.ServerURL),
 	}
 	if request.Model != "" {
 		environment["ANTHROPIC_MODEL"] = request.Model
@@ -42,12 +43,30 @@ func (claudeCodeAdapter) Plan(_ context.Context, request ConfigureRequest) (Conf
 	if err != nil {
 		return ConfigPlan{}, err
 	}
-	return ConfigPlan{Client: ClientClaudeCode, Writes: []PlannedWrite{{Path: path, Data: configured, Mode: privateFileMode}}, RestartRequired: true}, nil
+	profile := filepath.Join(request.Home, ".zshrc")
+	if shell := os.Getenv("SHELL"); strings.Contains(shell, "bash") {
+		profile = filepath.Join(request.Home, ".bashrc")
+	}
+	existingProfile, _, err := readPlannedFile(request.Home, profile)
+	if err != nil {
+		return ConfigPlan{}, err
+	}
+	managedProfile, err := ApplyManagedBlock(string(existingProfile), "claude-code-env", `export ANTHROPIC_AUTH_TOKEN="${LLMAPI_TOKEN}"`)
+	if err != nil {
+		return ConfigPlan{}, err
+	}
+	return ConfigPlan{Client: ClientClaudeCode, Writes: []PlannedWrite{{Path: path, Data: configured, Mode: privateFileMode}, {Path: profile, Data: []byte(managedProfile), Mode: privateFileMode}}, Instructions: []string{"Set LLMAPI_TOKEN before launching Claude Code."}, RestartRequired: true}, nil
 }
 
 func (claudeCodeAdapter) Check(_ context.Context, request CheckRequest) []Check {
 	path := filepath.Join(request.Home, ".claude", "settings.json")
-	return []Check{semanticConfigCheck("claude-code-config", checkClaudeCodeConfig(request, path))}
+	checks := []Check{semanticConfigCheck("claude-code-config", checkClaudeCodeConfig(request, path))}
+	if os.Getenv("LLMAPI_TOKEN") == request.Token.Reveal() && request.Token.Reveal() != "" {
+		checks = append(checks, Check{Name: "claude-code-credential", Status: "PASS", Message: "LLMAPI_TOKEN is visible"})
+	} else {
+		checks = append(checks, Check{Name: "claude-code-credential", Status: "FAIL", Message: "LLMAPI_TOKEN is not visible"})
+	}
+	return checks
 }
 
 func checkClaudeCodeConfig(request CheckRequest, path string) error {
@@ -63,7 +82,7 @@ func checkClaudeCodeConfig(request CheckRequest, path string) error {
 		return fmt.Errorf("invalid Claude Code settings")
 	}
 	environment, ok := root["env"].(map[string]any)
-	if !ok || environment["ANTHROPIC_BASE_URL"] != serverOrigin(request.ServerURL) || environment["ANTHROPIC_AUTH_TOKEN"] != request.Token.Reveal() {
+	if !ok || environment["ANTHROPIC_BASE_URL"] != serverOrigin(request.ServerURL) {
 		return fmt.Errorf("Claude Code gateway mismatch")
 	}
 	if request.Model != "" {

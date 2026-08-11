@@ -26,6 +26,7 @@ function Set-PrivateAcl([string]$Path) {
   if ($null -eq $currentSid) { Fail 'current user SID is unavailable' }
   $acl = Get-Acl -LiteralPath $Path
   $acl.SetAccessRuleProtection($true, $false)
+  $acl.SetOwner($currentSid)
   foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRuleAll($rule) }
   $inheritance = if ((Get-Item -LiteralPath $Path -Force).PSIsContainer) { [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit' } else { [Security.AccessControl.InheritanceFlags]::None }
   $rule = [Security.AccessControl.FileSystemAccessRule]::new($currentSid, [Security.AccessControl.FileSystemRights]::FullControl, $inheritance, [Security.AccessControl.PropagationFlags]::None, [Security.AccessControl.AccessControlType]::Allow)
@@ -33,12 +34,13 @@ function Set-PrivateAcl([string]$Path) {
   Set-Acl -LiteralPath $Path -AclObject $acl
 
   $verified = Get-Acl -LiteralPath $Path
+  $ownerSid = $verified.Owner.Translate([Security.Principal.SecurityIdentifier])
   $allowed = @($verified.Access | Where-Object {
     $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
     $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq $currentSid.Value -and
     ($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -eq [Security.AccessControl.FileSystemRights]::FullControl
   })
-  if ($allowed.Count -ne 1 -or @($verified.Access).Count -ne 1) { Fail "current-user ACL could not be enforced: $Path" }
+  if ($ownerSid.Value -ne $currentSid.Value -or $allowed.Count -ne 1 -or @($verified.Access).Count -ne 1) { Fail "current-user owner and ACL could not be enforced: $Path" }
 }
 
 function Ensure-PrivateDirectory([string]$Path) {
@@ -66,18 +68,66 @@ function Get-ExpectedChecksum([string]$ChecksumsPath, [string]$Artifact) {
   return $selectedDigests[0]
 }
 
-function Download-InstallAsset([string]$Origin, [string]$Name, [string]$Destination) {
-  Invoke-WebRequest -Uri "$Origin/install/$Name" -OutFile $Destination -MaximumRedirection 0
+function Download-InstallAsset([string]$Origin, [string]$Path, [string]$Destination) {
+  try {
+    $response = Invoke-WebRequest -Uri "$Origin$Path" -OutFile $Destination -PassThru -MaximumRedirection 0 -ErrorAction Stop
+  } catch {
+    Fail "download failed or redirect was rejected: $Path"
+  }
+  if ($null -eq $response -or $response.StatusCode -lt 200 -or $response.StatusCode -ge 300) { Fail "download returned an invalid status: $Path" }
 }
 
-function Install-PrivateHelper([string]$Source, [string]$Destination) {
-  if (Test-Path -LiteralPath $Destination) {
-    $existing = Get-Item -LiteralPath $Destination -Force
-    if ($existing.PSIsContainer -or ($existing.Attributes -band [IO.FileAttributes]::ReparsePoint)) { Fail "unsafe helper: $Destination" }
-  }
-  Set-PrivateAcl $Source
+function Move-PrivateItem([string]$Source, [string]$Destination) {
   Move-Item -LiteralPath $Source -Destination $Destination -Force
-  Set-PrivateAcl $Destination
+}
+
+function Assert-SafeExistingHelper([string]$Path) {
+  if (Test-Path -LiteralPath $Path) {
+    $existing = Get-Item -LiteralPath $Path -Force
+    if ($existing.PSIsContainer -or ($existing.Attributes -band [IO.FileAttributes]::ReparsePoint)) { Fail "unsafe helper: $Path" }
+    Set-PrivateAcl $Path
+  }
+}
+
+function Assert-HelperDigest([string]$Path, [string]$Expected) {
+  if ((Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Expected) { Fail "helper checksum mismatch: $Path" }
+}
+
+function Install-PrivateHelperPair([string]$TemporaryDirectory, [string]$OnboardPath, [string]$BridgePath, [string]$OnboardTarget, [string]$BridgeTarget, [string]$OnboardChecksum, [string]$BridgeChecksum) {
+  $backupDirectory = Join-Path $TemporaryDirectory 'backups'
+  $onboardOriginal = Test-Path -LiteralPath $OnboardTarget
+  $bridgeOriginal = Test-Path -LiteralPath $BridgeTarget
+  $onboardReplaced = $false
+  $bridgeReplaced = $false
+  $committed = $false
+  try {
+    Assert-SafeExistingHelper $OnboardTarget
+    Assert-SafeExistingHelper $BridgeTarget
+    Set-PrivateAcl $OnboardPath
+    Set-PrivateAcl $BridgePath
+    New-Item -ItemType Directory -LiteralPath $backupDirectory | Out-Null
+    Set-PrivateAcl $backupDirectory
+    if ($onboardOriginal) { Move-PrivateItem $OnboardTarget (Join-Path $backupDirectory 'llmapi-onboard.exe') }
+    if ($bridgeOriginal) { Move-PrivateItem $BridgeTarget (Join-Path $backupDirectory 'llmapi-mcp-bridge.exe') }
+    Move-PrivateItem $OnboardPath $OnboardTarget
+    $onboardReplaced = $true
+    Set-PrivateAcl $OnboardTarget
+    Move-PrivateItem $BridgePath $BridgeTarget
+    $bridgeReplaced = $true
+    Set-PrivateAcl $BridgeTarget
+    Assert-HelperDigest $OnboardTarget $OnboardChecksum
+    Assert-HelperDigest $BridgeTarget $BridgeChecksum
+    $committed = $true
+  } finally {
+    if (-not $committed) {
+      if ($onboardReplaced) { Remove-Item -LiteralPath $OnboardTarget -Force -ErrorAction SilentlyContinue }
+      if ($bridgeReplaced) { Remove-Item -LiteralPath $BridgeTarget -Force -ErrorAction SilentlyContinue }
+      if ($onboardOriginal -and (Test-Path -LiteralPath (Join-Path $backupDirectory 'llmapi-onboard.exe'))) { Move-PrivateItem (Join-Path $backupDirectory 'llmapi-onboard.exe') $OnboardTarget }
+      if ($bridgeOriginal -and (Test-Path -LiteralPath (Join-Path $backupDirectory 'llmapi-mcp-bridge.exe'))) { Move-PrivateItem (Join-Path $backupDirectory 'llmapi-mcp-bridge.exe') $BridgeTarget }
+    }
+    if (Test-Path -LiteralPath $backupDirectory) { Remove-Item -LiteralPath $backupDirectory -Recurse -Force }
+  }
+  if (-not $committed) { Fail 'could not transactionally install both helpers' }
 }
 
 $origin = Get-ServerOrigin
@@ -106,19 +156,20 @@ try {
   $checksumsPath = Join-Path $temporaryDirectory 'checksums.txt'
   $onboardPath = Join-Path $temporaryDirectory $onboardArtifact
   $bridgePath = Join-Path $temporaryDirectory $bridgeArtifact
-  Download-InstallAsset $origin 'checksums.txt' $checksumsPath
-  Download-InstallAsset $origin $onboardArtifact $onboardPath
-  Download-InstallAsset $origin $bridgeArtifact $bridgePath
+  Download-InstallAsset $origin '/install/checksums.txt' $checksumsPath
+  Download-InstallAsset $origin "/install/bin/$onboardArtifact" $onboardPath
+  Download-InstallAsset $origin "/install/bin/$bridgeArtifact" $bridgePath
 
   $onboardChecksum = Get-ExpectedChecksum $checksumsPath $onboardArtifact
   $bridgeChecksum = Get-ExpectedChecksum $checksumsPath $bridgeArtifact
-  if ((Get-FileHash -LiteralPath $onboardPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $onboardChecksum) { Fail 'onboarding helper checksum mismatch' }
-  if ((Get-FileHash -LiteralPath $bridgePath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $bridgeChecksum) { Fail 'MCP helper checksum mismatch' }
+  Assert-HelperDigest $onboardPath $onboardChecksum
+  Assert-HelperDigest $bridgePath $bridgeChecksum
 
   $onboardTarget = Join-Path $binDirectory 'llmapi-onboard.exe'
   $bridgeTarget = Join-Path $binDirectory 'llmapi-mcp-bridge.exe'
-  Install-PrivateHelper $onboardPath $onboardTarget
-  Install-PrivateHelper $bridgePath $bridgeTarget
+  Install-PrivateHelperPair $temporaryDirectory $onboardPath $bridgePath $onboardTarget $bridgeTarget $onboardChecksum $bridgeChecksum
+  Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force
+  $temporaryDirectory = $null
   & $onboardTarget install
   if ($LASTEXITCODE -ne 0) { Fail 'onboarding helper failed' }
 } finally {

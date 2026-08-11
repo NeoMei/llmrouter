@@ -7,13 +7,13 @@ The installer is served from the same LLMAPI origin as its checksums and helper 
 On macOS or Linux, open the install page in a browser and copy its command. It sets `LLMAPI_SERVER_URL` from the page origin:
 
 ```sh
-curl -fsSL "https://stage.example/install/install.sh" | LLMAPI_SERVER_URL="https://stage.example" bash
+tmp="$(mktemp)"; http_status="$(curl -fsS --max-redirs 0 --write-out '%{http_code}' -o "$tmp" "https://stage.example/install/install.sh")"; status=$?; if [ "$status" -eq 0 ]; then case "$http_status" in 2??) LLMAPI_SERVER_URL="https://stage.example" bash "$tmp"; status=$? ;; *) status=1 ;; esac; fi; rm -f "$tmp"; [ "$status" -eq 0 ]
 ```
 
 On Windows PowerShell:
 
 ```powershell
-$env:LLMAPI_SERVER_URL='https://stage.example'; irm "$env:LLMAPI_SERVER_URL/install/install.ps1" | iex
+$installer = Join-Path ([IO.Path]::GetTempPath()) ('llmapi-install-' + [guid]::NewGuid() + '.ps1'); try { $response = Invoke-WebRequest -Uri 'https://stage.example/install/install.ps1' -OutFile $installer -PassThru -MaximumRedirection 0 -ErrorAction Stop; if ($response.StatusCode -lt 200 -or $response.StatusCode -ge 300) { throw 'installer download failed' }; $env:LLMAPI_SERVER_URL='https://stage.example'; & $installer } finally { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue }
 ```
 
 The bootstrap intentionally does not take a credential command-line argument. It asks for one through the CLI's hidden prompt, unless `LLMAPI_TOKEN` is already set in the terminal environment:

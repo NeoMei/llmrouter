@@ -1,8 +1,15 @@
 import json
+import hashlib
+import http.server
+import os
 import pathlib
+import platform
+import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from copy import deepcopy
 
@@ -17,6 +24,71 @@ REQUIRED = {
 
 
 class OnboardingAssetsTest(unittest.TestCase):
+    def platform_artifacts(self):
+        operating_system = {"Darwin": "darwin", "Linux": "linux"}[platform.system()]
+        architecture = {"x86_64": "amd64", "AMD64": "amd64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
+        return operating_system, architecture
+
+    def bootstrap_site(self, root, onboarding_body=None, operating_system=None):
+        detected_operating_system, architecture = self.platform_artifacts()
+        operating_system = operating_system or detected_operating_system
+        install = root / "install"
+        binary_directory = install / "bin"
+        binary_directory.mkdir(parents=True)
+        onboard = f"llmapi-onboard-{operating_system}-{architecture}"
+        bridge = f"llmapi-mcp-bridge-{operating_system}-{architecture}"
+        (binary_directory / onboard).write_text(onboarding_body or "#!/usr/bin/env bash\nprintf invoked > \"$HOME/onboard-ran\"\n")
+        (binary_directory / bridge).write_text("#!/usr/bin/env bash\nexit 0\n")
+        for artifact in (onboard, bridge):
+            (binary_directory / artifact).chmod(0o700)
+        checksums = []
+        for artifact in (onboard, bridge):
+            digest = hashlib.sha256((binary_directory / artifact).read_bytes()).hexdigest()
+            checksums.append(f"{digest}  {artifact}")
+        (install / "checksums.txt").write_text("\n".join(checksums) + "\n")
+        return onboard, bridge
+
+    def serve(self, root, redirect_checksums=False):
+        paths = []
+
+        class Handler(http.server.SimpleHTTPRequestHandler):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, directory=str(root), **kwargs)
+
+            def do_GET(self):
+                paths.append(self.path)
+                if redirect_checksums and self.path == "/install/checksums.txt":
+                    self.send_response(302)
+                    self.send_header("Location", "/redirected")
+                    self.end_headers()
+                    return
+                super().do_GET()
+
+            def log_message(self, *_):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(thread.join, 1)
+        self.addCleanup(server.shutdown)
+        return f"http://127.0.0.1:{server.server_port}", paths
+
+    def run_bash_bootstrap(self, home, origin, extra_environment=None):
+        environment = os.environ.copy()
+        environment.update({"HOME": str(home), "LLMAPI_SERVER_URL": origin})
+        if extra_environment:
+            environment.update(extra_environment)
+        return subprocess.run(
+            ["bash", str(INSTALL / "install.sh")],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            env=environment,
+            check=False,
+        )
+
     def load_manifest(self):
         return json.loads((INSTALL / "manifest.json").read_text())
 
@@ -96,6 +168,10 @@ class OnboardingAssetsTest(unittest.TestCase):
         self.assertIn("LLMAPI_SERVER_URL", bootstrap)
         self.assertNotRegex(bootstrap, r"--(api-)?token")
         self.assertIn("checksums.txt", bootstrap)
+        self.assertIn("/install/bin/$onboard_artifact", sh)
+        self.assertIn("/install/bin/$bridge_artifact", sh)
+        self.assertIn("/install/bin/$onboardArtifact", ps)
+        self.assertIn("/install/bin/$bridgeArtifact", ps)
         self.assertIn("llmapi-onboard", bootstrap)
         self.assertIn("llmapi-mcp-bridge", bootstrap)
         self.assertIn("sha256sum", sh)
@@ -103,7 +179,7 @@ class OnboardingAssetsTest(unittest.TestCase):
         self.assertIn("mktemp -d", sh)
         self.assertIn("chmod 700", sh)
         self.assertIn("trap", sh)
-        self.assertIn('rm -f "$checksums"', sh)
+        self.assertIn('rm -rf "$temporary_directory"', sh)
         self.assertIn("$HOME/.llmapi/bin", sh)
         self.assertIn("Move-Item", ps)
         self.assertRegex(ps, r"Get-FileHash.+SHA256")
@@ -120,9 +196,125 @@ class OnboardingAssetsTest(unittest.TestCase):
         self.assertIn("fallback", html.lower())
         self.assertIn("navigator.clipboard.writeText", html)
         self.assertIn("aria-live", html)
+        self.assertIn("mktemp", html)
+        self.assertIn("MaximumRedirection 0", html)
+        self.assertNotIn(" | iex", html)
+        self.assertNotIn(" | LLMAPI_SERVER_URL", html)
         self.assertNotRegex(html, r"type=[\"']password")
         self.assertNotRegex(html, r"(?:local|session)Storage")
         self.assertNotRegex(html, r"--(api-)?token")
+
+    def test_page_renders_every_manifest_client_and_disables_unsupported_platforms(self):
+        html = (INSTALL / "index.html").read_text()
+        self.assertIn("for (const client of manifest.clients)", html)
+        self.assertIn("choice.disabled = !isSupported", html)
+        self.assertIn("Unsupported on this platform", html)
+        self.assertNotIn("manifest.clients.filter", html)
+
+    def test_bash_bootstrap_downloads_bin_artifacts_cleans_before_invocation_and_keeps_noninteractive_stdin(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary) / "site"
+            home = pathlib.Path(temporary) / "home"
+            home.mkdir()
+            onboard, bridge = self.bootstrap_site(
+                root,
+                "#!/usr/bin/env bash\n"
+                "test -z \"$(find \"$HOME/.llmapi/bin\" -maxdepth 1 -name '.install.*' -print)\" || exit 77\n"
+                "test -t 0 && printf tty > \"$HOME/input-mode\" || printf noninteractive > \"$HOME/input-mode\"\n"
+                "printf invoked > \"$HOME/onboard-ran\"\n",
+            )
+            origin, paths = self.serve(root)
+            result = self.run_bash_bootstrap(home, origin)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("/install/checksums.txt", paths)
+            self.assertIn(f"/install/bin/{onboard}", paths)
+            self.assertIn(f"/install/bin/{bridge}", paths)
+            self.assertEqual((home / "onboard-ran").read_text(), "invoked")
+            self.assertEqual((home / "input-mode").read_text(), "noninteractive")
+            self.assertFalse(any((home / ".llmapi" / "bin").glob(".install.*")))
+
+    def test_bash_bootstrap_rejects_checksum_redirect_before_installing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary) / "site"
+            home = pathlib.Path(temporary) / "home"
+            home.mkdir()
+            self.bootstrap_site(root)
+            origin, paths = self.serve(root, redirect_checksums=True)
+            result = self.run_bash_bootstrap(home, origin)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(paths, ["/install/checksums.txt"])
+            self.assertFalse((home / ".llmapi" / "bin" / "llmapi-onboard").exists())
+
+    @unittest.skipUnless(shutil.which("script"), "script is required for a pseudo-terminal fixture")
+    def test_bash_bootstrap_routes_interactive_prompts_through_the_controlling_tty(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary) / "site"
+            home = pathlib.Path(temporary) / "home"
+            home.mkdir()
+            self.bootstrap_site(root, "#!/usr/bin/env bash\ntest -t 0 && printf tty > \"$HOME/input-mode\" || exit 78\n")
+            origin, _ = self.serve(root)
+            command = f"HOME={shlex.quote(str(home))} LLMAPI_SERVER_URL={shlex.quote(origin)} bash {shlex.quote(str(INSTALL / 'install.sh'))}"
+            result = subprocess.run(["script", "-q", "/dev/null", "bash", "-c", command], capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((home / "input-mode").read_text(), "tty")
+
+    def test_bash_bootstrap_rolls_back_both_helpers_when_second_replacement_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary) / "site"
+            home = pathlib.Path(temporary) / "home"
+            binary_directory = home / ".llmapi" / "bin"
+            binary_directory.mkdir(parents=True)
+            for name, content in (("llmapi-onboard", b"old-onboard"), ("llmapi-mcp-bridge", b"old-bridge")):
+                path = binary_directory / name
+                path.write_bytes(content)
+                path.chmod(0o700)
+            _, bridge = self.bootstrap_site(root)
+            origin, _ = self.serve(root)
+            wrapper_directory = pathlib.Path(temporary) / "wrappers"
+            wrapper_directory.mkdir()
+            (wrapper_directory / "mv").write_text(
+                "#!/usr/bin/env bash\n"
+                f"if [ \"$(basename \"$1\")\" = \"{bridge}\" ] && [ \"$(basename \"$2\")\" = \"llmapi-mcp-bridge\" ]; then exit 75; fi\n"
+                "exec /bin/mv \"$@\"\n"
+            )
+            (wrapper_directory / "mv").chmod(0o755)
+            result = self.run_bash_bootstrap(home, origin, {"PATH": f"{wrapper_directory}:{os.environ['PATH']}"})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual((binary_directory / "llmapi-onboard").read_bytes(), b"old-onboard")
+            self.assertEqual((binary_directory / "llmapi-mcp-bridge").read_bytes(), b"old-bridge")
+
+    def test_bash_bootstrap_rejects_destination_symlink_and_linux_acl_it_cannot_remove(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary) / "site"
+            home = pathlib.Path(temporary) / "home"
+            binary_directory = home / ".llmapi" / "bin"
+            binary_directory.mkdir(parents=True)
+            target = pathlib.Path(temporary) / "elsewhere"
+            target.write_text("not a helper")
+            (binary_directory / "llmapi-onboard").symlink_to(target)
+            self.bootstrap_site(root)
+            origin, _ = self.serve(root)
+            result = self.run_bash_bootstrap(home, origin)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue((binary_directory / "llmapi-onboard").is_symlink())
+
+    def test_bash_bootstrap_fails_closed_when_linux_acl_cannot_be_removed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary) / "site"
+            home = pathlib.Path(temporary) / "home"
+            home.mkdir()
+            self.bootstrap_site(root, operating_system="linux")
+            origin, paths = self.serve(root)
+            wrappers = pathlib.Path(temporary) / "wrappers"
+            wrappers.mkdir()
+            (wrappers / "uname").write_text("#!/usr/bin/env bash\nif [ \"$1\" = -s ]; then printf Linux; else exec /usr/bin/uname \"$@\"; fi\n")
+            (wrappers / "getfacl").write_text("#!/usr/bin/env bash\nprintf 'user::rwx\\nuser:attacker:rwx\\ngroup::---\\nother::---\\n'\n")
+            (wrappers / "setfacl").write_text("#!/usr/bin/env bash\nexit 1\n")
+            for wrapper in wrappers.iterdir():
+                wrapper.chmod(0o755)
+            result = self.run_bash_bootstrap(home, origin, {"PATH": f"{wrappers}:{os.environ['PATH']}"})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(paths, [])
 
 
 if __name__ == "__main__":

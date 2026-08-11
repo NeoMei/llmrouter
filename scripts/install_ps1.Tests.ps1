@@ -10,6 +10,19 @@ Describe 'LLMAPI PowerShell bootstrap' {
     $script | Should -Match 'Set-Acl'
     $script | Should -Match 'Move-Item'
   }
+  It 'uses bin artifact URLs and rejects redirects before downloading helpers' {
+    $script | Should -Match '/install/bin/\$onboardArtifact'
+    $script | Should -Match '/install/bin/\$bridgeArtifact'
+    $script | Should -Match 'MaximumRedirection 0'
+    $script | Should -Match 'StatusCode -lt 200'
+  }
+  It 'sets and verifies the current user as owner' {
+    $script | Should -Match 'SetOwner\(\$currentSid\)'
+    $script | Should -Match 'ownerSid.Value -ne \$currentSid.Value'
+  }
+  It 'removes temporary downloads before launching onboarding' {
+    $script.IndexOf('Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force') | Should -BeLessThan $script.IndexOf('& $onboardTarget install')
+  }
   It 'reads the exact two-space checksum entry for each helper' {
     $functionSource = $script.Substring(0, $script.IndexOf('$origin = Get-ServerOrigin'))
     Invoke-Expression $functionSource
@@ -17,6 +30,32 @@ Describe 'LLMAPI PowerShell bootstrap' {
     $digest = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
     Set-Content -LiteralPath $path -Value "$digest  llmapi-mcp-bridge-windows-amd64.exe"
     Get-ExpectedChecksum $path 'llmapi-mcp-bridge-windows-amd64.exe' | Should -Be $digest
+  }
+  It 'rolls back both original helpers when the second replacement fails' {
+    $functionSource = $script.Substring(0, $script.IndexOf('$origin = Get-ServerOrigin'))
+    Invoke-Expression $functionSource
+    $bin = Join-Path $TestDrive 'bin'
+    $temp = Join-Path $bin '.install-test'
+    New-Item -ItemType Directory -Path $temp -Force | Out-Null
+    $onboardTarget = Join-Path $bin 'llmapi-onboard.exe'
+    $bridgeTarget = Join-Path $bin 'llmapi-mcp-bridge.exe'
+    Set-Content -LiteralPath $onboardTarget -Value 'old-onboard' -NoNewline
+    Set-Content -LiteralPath $bridgeTarget -Value 'old-bridge' -NoNewline
+    $onboardSource = Join-Path $temp 'new-onboard.exe'
+    $bridgeSource = Join-Path $temp 'new-bridge.exe'
+    Set-Content -LiteralPath $onboardSource -Value 'new-onboard' -NoNewline
+    Set-Content -LiteralPath $bridgeSource -Value 'new-bridge' -NoNewline
+    Mock Set-PrivateAcl {}
+    Mock Assert-SafeExistingHelper {}
+    Mock Assert-HelperDigest {}
+    Mock Move-PrivateItem {
+      param($Source, $Destination)
+      if ($Source -eq $bridgeSource -and $Destination -eq $bridgeTarget) { throw 'second replacement failed' }
+      Microsoft.PowerShell.Management\Move-Item -LiteralPath $Source -Destination $Destination -Force
+    }
+    { Install-PrivateHelperPair $temp $onboardSource $bridgeSource $onboardTarget $bridgeTarget ('a' * 64) ('b' * 64) } | Should -Throw 'second replacement failed'
+    (Get-Content -LiteralPath $onboardTarget -Raw) | Should -Be 'old-onboard'
+    (Get-Content -LiteralPath $bridgeTarget -Raw) | Should -Be 'old-bridge'
   }
   It 'parses as valid PowerShell' {
     $tokens = $null

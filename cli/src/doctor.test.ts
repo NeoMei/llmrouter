@@ -55,9 +55,9 @@ describe('doctor', () => {
       serverUrl: 'http://localhost:3000',
       files: [{ path: managedPath, originalHash: null, configuredHash: sha256(content), backupPath: '' }],
       shellProfile: null,
-      envVars: {},
+      envVars: [],
     };
-    const receiptDir = path.join(home, '.codex-gateway', 'receipts');
+    const receiptDir = path.join(home, '.llmapi', 'receipts');
     fs.mkdirSync(receiptDir, { recursive: true, mode: 0o700 });
     fs.writeFileSync(path.join(receiptDir, 'receipt-1.json'), JSON.stringify(receipt), { mode: 0o600 });
 

@@ -25,11 +25,11 @@ export type DoctorResult = {
 };
 
 function receiptDir(home: string): string {
-  return path.join(home, '.codex-gateway', 'receipts');
+  return path.join(home, '.llmapi', 'receipts');
 }
 
 function backupDir(home: string): string {
-  return path.join(home, '.codex-gateway', 'backups');
+  return path.join(home, '.llmapi', 'backups');
 }
 
 export async function runDoctor(context: DoctorContext): Promise<DoctorResult> {
@@ -301,14 +301,13 @@ import { Command } from 'commander';
 import { input, password } from '@inquirer/prompts';
 
 export const doctorCommand = new Command('doctor')
-  .description('Run end-to-end diagnostics against Codex Gateway')
+  .description('Run end-to-end diagnostics against LLMAPI')
   .option('-s, --server <url>', 'Gateway URL', 'http://localhost:3000')
-  .option('-t, --token <token>', 'API token')
   .option('-m, --model <model>', 'Public model id', 'deepseek/deepseek-v4-flash')
   .option('--home <home>', 'Home directory', process.env.HOME ?? '')
   .action(async (options) => {
     const serverUrl = options.server as string;
-    const apiToken = (options.token as string | undefined) ?? await password({ message: 'API Token:' });
+    const apiToken = process.env.LLMAPI_TOKEN ?? await password({ message: 'LLMAPI token:' });
     const result = await runDoctor({
       home: options.home as string,
       serverUrl,

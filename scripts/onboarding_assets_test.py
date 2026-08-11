@@ -89,6 +89,41 @@ class OnboardingAssetsTest(unittest.TestCase):
                 break
         self.assert_validator_fails(data, "Claude Desktop must not be configured as direct access")
 
+    def test_bootstraps_verify_and_durably_install_both_helpers(self):
+        sh = (INSTALL / "install.sh").read_text()
+        ps = (INSTALL / "install.ps1").read_text()
+        bootstrap = sh + ps
+        self.assertIn("LLMAPI_SERVER_URL", bootstrap)
+        self.assertNotRegex(bootstrap, r"--(api-)?token")
+        self.assertIn("checksums.txt", bootstrap)
+        self.assertIn("llmapi-onboard", bootstrap)
+        self.assertIn("llmapi-mcp-bridge", bootstrap)
+        self.assertIn("sha256sum", sh)
+        self.assertIn("shasum -a 256", sh)
+        self.assertIn("mktemp -d", sh)
+        self.assertIn("chmod 700", sh)
+        self.assertIn("trap", sh)
+        self.assertIn('rm -f "$checksums"', sh)
+        self.assertIn("$HOME/.llmapi/bin", sh)
+        self.assertIn("Move-Item", ps)
+        self.assertRegex(ps, r"Get-FileHash.+SHA256")
+        self.assertIn("New-TemporaryFile", ps)
+        self.assertIn("finally", ps)
+        self.assertIn("Set-Acl", ps)
+
+    def test_page_is_token_free_and_explains_all_client_modes(self):
+        html = (INSTALL / "index.html").read_text()
+        self.assertIn("window.location.origin", html)
+        self.assertIn("MCP tool access", html)
+        self.assertIn("does not replace Claude Desktop", html)
+        self.assertIn("/v1/models", html)
+        self.assertIn("fallback", html.lower())
+        self.assertIn("navigator.clipboard.writeText", html)
+        self.assertIn("aria-live", html)
+        self.assertNotRegex(html, r"type=[\"']password")
+        self.assertNotRegex(html, r"(?:local|session)Storage")
+        self.assertNotRegex(html, r"--(api-)?token")
+
 
 if __name__ == "__main__":
     unittest.main()

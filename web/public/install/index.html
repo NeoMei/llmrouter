@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LLMAPI client setup</title>
+    <style>
+      :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+      body { margin: 0; background: #f6f7fb; color: #172033; }
+      main { max-width: 70rem; margin: auto; padding: 2rem 1rem 4rem; }
+      h1 { margin-bottom: .4rem; } .lede { max-width: 60ch; color: #526078; }
+      section { background: #fff; border: 1px solid #dce1ea; border-radius: .8rem; margin-top: 1.25rem; padding: 1.25rem; }
+      label, select, button { font: inherit; } select, button { padding: .55rem .7rem; border-radius: .45rem; border: 1px solid #aeb8ca; }
+      button { cursor: pointer; background: #173a78; color: #fff; border-color: #173a78; }
+      pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 1rem; background: #101828; color: #f8fafc; border-radius: .5rem; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: .8rem; }
+      .card { border: 1px solid #dce1ea; border-radius: .6rem; padding: .9rem; }
+      .badge { display: inline-block; border-radius: 999px; padding: .15rem .5rem; background: #e9efff; color: #173a78; font-size: .85rem; }
+      .muted, #model-status { color: #526078; } .notice { border-left: .3rem solid #c08211; padding-left: .75rem; }
+      @media (prefers-color-scheme: dark) { body { background: #101828; color: #eef2ff; } section, .card { background: #172033; border-color: #364152; } .lede, .muted, #model-status { color: #b5c0d4; } select { background: #172033; color: inherit; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Connect an LLMAPI client</h1>
+        <p class="lede">Choose a platform to preview supported clients. The installer obtains credentials privately through its terminal flow; this page never handles them.</p>
+      </header>
+      <noscript><p class="notice">JavaScript is optional. Follow the <a href="guide.md">command-line setup guide</a>.</p></noscript>
+
+      <section aria-labelledby="platform-heading">
+        <h2 id="platform-heading">Platform and model</h2>
+        <label for="platform">Platform</label>
+        <select id="platform"><option value="linux">Linux</option><option value="darwin">macOS</option><option value="windows">Windows</option></select>
+        <label for="model" style="margin-left: 1rem">Suggested model</label>
+        <select id="model" aria-describedby="model-status"></select>
+        <p id="model-status" role="status">Loading public model metadata…</p>
+      </section>
+
+      <section aria-labelledby="clients-heading">
+        <h2 id="clients-heading">Choose a client</h2>
+        <p class="muted">Select a card to preview it. The installer asks for the final client selection interactively, or you can use <code>LLMAPI_CLIENTS</code> as documented in the guide.</p>
+        <div id="client-cards" class="grid" aria-live="polite"></div>
+      </section>
+
+      <section aria-labelledby="install-heading">
+        <h2 id="install-heading">Install</h2>
+        <p id="install-description" class="muted"></p>
+        <pre><code id="install-command"></code></pre>
+        <button id="copy-command" type="button">Copy install command</button>
+        <p id="copy-status" aria-live="polite" role="status"></p>
+      </section>
+
+      <section aria-labelledby="claude-heading">
+        <h2 id="claude-heading">Claude Desktop</h2>
+        <p>Claude Desktop receives MCP tool access. It does not replace Claude Desktop’s built-in model.</p>
+        <p class="muted">Restart Claude Desktop after setup so it loads the private local MCP bridge.</p>
+      </section>
+      <p><a href="guide.md">Read the no-JavaScript setup guide</a></p>
+    </main>
+    <script>
+      (() => {
+        const origin = window.location.origin;
+        const platform = document.querySelector('#platform');
+        const model = document.querySelector('#model');
+        const modelStatus = document.querySelector('#model-status');
+        const clientCards = document.querySelector('#client-cards');
+        const command = document.querySelector('#install-command');
+        const description = document.querySelector('#install-description');
+        const copyStatus = document.querySelector('#copy-status');
+        const copyButton = document.querySelector('#copy-command');
+        let manifest;
+
+        function detectedPlatform() {
+          const value = (navigator.userAgentData?.platform || navigator.platform || navigator.userAgent).toLowerCase();
+          if (value.includes('win')) return 'windows';
+          if (value.includes('mac')) return 'darwin';
+          return 'linux';
+        }
+        function integrationLabel(integration) { return integration === 'mcp-tool' ? 'MCP tool access' : 'Direct API access'; }
+        function renderClients() {
+          clientCards.replaceChildren();
+          const supported = manifest.clients.filter((client) => client.platforms.includes(platform.value));
+          for (const client of supported) {
+            const card = document.createElement('label'); card.className = 'card';
+            const choice = document.createElement('input'); choice.type = 'radio'; choice.name = 'client-preview'; choice.value = client.id;
+            const title = document.createElement('strong'); title.textContent = ` ${client.displayName}`;
+            const mode = document.createElement('p'); mode.className = 'badge'; mode.textContent = integrationLabel(client.integration);
+            const detail = document.createElement('p'); detail.className = 'muted'; detail.textContent = client.delivery === 'automatic' ? 'Private automatic configuration' : 'Generated configuration instructions';
+            card.append(choice, title, mode, detail); clientCards.append(card);
+          }
+          description.textContent = `${supported.length} supported client${supported.length === 1 ? '' : 's'} for ${platform.options[platform.selectedIndex].text}.`;
+        }
+        function renderCommand() {
+          command.textContent = platform.value === 'windows'
+            ? `$env:LLMAPI_SERVER_URL='${origin}'; irm "$env:LLMAPI_SERVER_URL/install/install.ps1" | iex`
+            : `curl -fsSL "${origin}/install/install.sh" | LLMAPI_SERVER_URL="${origin}" bash`;
+        }
+        function showModels(models, source) {
+          model.replaceChildren();
+          for (const name of models) { const option = document.createElement('option'); option.value = name; option.textContent = name; model.append(option); }
+          modelStatus.textContent = source;
+        }
+        async function loadModels() {
+          const fallback = manifest.fallbackModels || [];
+          try {
+            const response = await fetch(`${origin}/v1/models`, { headers: { Accept: 'application/json' } });
+            if (!response.ok) throw new Error(`model metadata unavailable (${response.status})`);
+            const payload = await response.json();
+            const models = Array.isArray(payload.data) ? payload.data.map((item) => item.id).filter((id) => typeof id === 'string' && id) : [];
+            if (!models.length) throw new Error('model metadata was empty');
+            showModels(models, 'Public model metadata loaded. Availability can depend on your account.');
+          } catch (_) { showModels(fallback, 'Public model metadata requires authentication or is unavailable; showing manifest fallback models.'); }
+        }
+        copyButton.addEventListener('click', async () => {
+          try { await navigator.clipboard.writeText(command.textContent); copyStatus.textContent = 'Install command copied.'; }
+          catch (_) { copyStatus.textContent = 'Copy unavailable. Select and copy the command manually.'; }
+        });
+        clientCards.addEventListener('change', (event) => {
+          const client = manifest.clients.find((item) => item.id === event.target.value);
+          if (client) description.textContent = `${client.displayName} selected for preview. The installer will ask for the final client selection.`;
+        });
+        platform.addEventListener('change', () => { renderClients(); renderCommand(); });
+        platform.value = detectedPlatform();
+        fetch(`${origin}/install/manifest.json`)
+          .then((response) => response.ok ? response.json() : Promise.reject(new Error('manifest unavailable')))
+          .then((loadedManifest) => { manifest = loadedManifest; renderClients(); renderCommand(); return loadModels(); })
+          .catch(() => { description.textContent = 'Installer manifest is unavailable. Use the guide or try again later.'; });
+      })();
+    </script>
+  </body>
+</html>

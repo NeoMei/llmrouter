@@ -27,3 +27,5 @@ test-results
 *.sln
 *.sw?
 .tanstack/*
+public/install/bin/*
+!public/install/bin/.gitkeep

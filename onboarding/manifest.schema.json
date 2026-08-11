@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://llmapi.local/schemas/onboarding/manifest.schema.json",
+  "title": "LLMAPI onboarding manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "installerMinVersion",
+    "fallbackModels",
+    "clients",
+    "artifacts"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "installerMinVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "fallbackModels": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "clients": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "displayName",
+          "platforms",
+          "integration",
+          "delivery",
+          "configFamily",
+          "probe"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": [
+              "codex-cli",
+              "codex-desktop",
+              "claude-code",
+              "claude-desktop",
+              "opencode",
+              "continue",
+              "aider",
+              "cursor",
+              "cline",
+              "roo-code",
+              "openai-sdk",
+              "langchain"
+            ]
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "platforms": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "linux",
+                "darwin",
+                "windows"
+              ]
+            }
+          },
+          "integration": {
+            "type": "string",
+            "enum": [
+              "direct-responses",
+              "direct-anthropic",
+              "direct-openai",
+              "mcp-tool"
+            ]
+          },
+          "delivery": {
+            "type": "string",
+            "enum": [
+              "automatic",
+              "generated"
+            ]
+          },
+          "configFamily": {
+            "type": "string",
+            "minLength": 1
+          },
+          "probe": {
+            "type": "string",
+            "enum": [
+              "responses",
+              "messages",
+              "chat-completions",
+              "mcp"
+            ]
+          }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "basePath",
+        "checksumPath"
+      ],
+      "properties": {
+        "basePath": {
+          "type": "string",
+          "const": "/install/bin"
+        },
+        "checksumPath": {
+          "type": "string",
+          "const": "/install/checksums.txt"
+        }
+      }
+    }
+  }
+}

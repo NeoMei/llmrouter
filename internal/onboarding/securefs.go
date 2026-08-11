@@ -50,6 +50,7 @@ func (tx *Transaction) Allow(paths ...string) error {
 	if tx == nil || tx.committed {
 		return fmt.Errorf("%w: transaction is closed", ErrConflict)
 	}
+	pending := make([]string, 0, len(paths))
 	for _, path := range paths {
 		rawPath, err := filepath.Abs(path)
 		if err != nil {
@@ -69,7 +70,10 @@ func (tx *Transaction) Allow(paths ...string) error {
 		if err := validateWithinHome(tx.home, absolute); err != nil || !isAllowedManagedDestination(tx.home, absolute) {
 			return fmt.Errorf("%w: destination is not eligible for onboarding", ErrUnsafe)
 		}
-		tx.allowed[absolute] = struct{}{}
+		pending = append(pending, absolute)
+	}
+	for _, path := range pending {
+		tx.allowed[path] = struct{}{}
 	}
 	return nil
 }

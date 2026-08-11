@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -29,8 +30,9 @@ func validateSecureOwner(info os.FileInfo) error {
 
 // secureParent is an open, no-follow parent directory held through the operation.
 type secureParent struct {
-	fd   int
-	name string
+	fd      int
+	name    string
+	dirPath string
 }
 
 func (parent *secureParent) close() { _ = unix.Close(parent.fd) }
@@ -83,7 +85,7 @@ func openSecureParent(home, path string, create bool) (*secureParent, error) {
 		secureFSTestHook()
 	}
 	closeFD = false
-	return &secureParent{fd: fd, name: filepath.Base(path)}, nil
+	return &secureParent{fd: fd, name: filepath.Base(path), dirPath: filepath.Dir(path)}, nil
 }
 
 func verifyDirectoryFD(fd int) error {
@@ -263,39 +265,88 @@ func openPrivateDirectoryAt(parent int, name string) (int, error) {
 	return fd, nil
 }
 
-// createReceiptKeyExclusive creates a key once; concurrent creators securely read
-// the winning key instead of overwriting it.
-func createReceiptKeyExclusive(home, path string, key []byte) (bool, error) {
+var receiptKeyPublishTestHook func() error
+
+func setReceiptKeyPublishTestHook(hook func() error) { receiptKeyPublishTestHook = hook }
+
+// publishReceiptKey prepares a complete private temp inode, then links it into the
+// final name. linkat fails when another creator has already published the key.
+func publishReceiptKey(home, path string, key []byte) (bool, error) {
 	parent, err := openSecureParent(home, path, false)
 	if err != nil {
 		return false, err
 	}
 	defer parent.close()
-	fd, err := unix.Openat(parent.fd, parent.name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, privateFileMode)
-	if errors.Is(err, unix.EEXIST) {
-		return false, nil
+	if err := cleanupStaleReceiptKeyTemps(parent); err != nil {
+		return false, err
 	}
+	bytes := make([]byte, 12)
+	if _, err := rand.Read(bytes); err != nil {
+		return false, fmt.Errorf("%w: random receipt key temporary name", ErrUnsafe)
+	}
+	tempName := fmt.Sprintf("%s%x.tmp", receiptKeyTempPrefix, bytes)
+	fd, err := unix.Openat(parent.fd, tempName, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, privateFileMode)
 	if err != nil {
-		return false, fmt.Errorf("%w: create receipt key", ErrUnsafe)
+		return false, fmt.Errorf("%w: create receipt key temporary file", ErrUnsafe)
 	}
-	file := os.NewFile(uintptr(fd), parent.name)
+	defer unix.Unlinkat(parent.fd, tempName, 0)
+	file := os.NewFile(uintptr(fd), tempName)
 	if err := unix.Fchmod(fd, privateFileMode); err != nil {
 		file.Close()
-		return false, fmt.Errorf("%w: protect receipt key", ErrUnsafe)
+		return false, fmt.Errorf("%w: protect receipt key temporary file", ErrUnsafe)
 	}
-	if _, err := file.Write(key); err != nil {
+	written, err := file.Write(key)
+	if err != nil || written != len(key) {
 		file.Close()
-		return false, fmt.Errorf("%w: write receipt key", ErrUnsafe)
+		return false, fmt.Errorf("%w: write receipt key temporary file", ErrUnsafe)
 	}
 	if err := file.Sync(); err != nil {
 		file.Close()
-		return false, fmt.Errorf("%w: sync receipt key", ErrUnsafe)
+		return false, fmt.Errorf("%w: sync receipt key temporary file", ErrUnsafe)
 	}
 	if err := file.Close(); err != nil {
-		return false, fmt.Errorf("%w: close receipt key", ErrUnsafe)
+		return false, fmt.Errorf("%w: close receipt key temporary file", ErrUnsafe)
+	}
+	if receiptKeyPublishTestHook != nil {
+		if err := receiptKeyPublishTestHook(); err != nil {
+			return false, err
+		}
+	}
+	if err := unix.Linkat(parent.fd, tempName, parent.fd, parent.name, 0); errors.Is(err, unix.EEXIST) {
+		return false, nil
+	} else if err != nil {
+		return false, fmt.Errorf("%w: publish receipt key", ErrUnsafe)
 	}
 	if err := unix.Fsync(parent.fd); err != nil {
 		return false, fmt.Errorf("%w: sync receipt key directory", ErrUnsafe)
 	}
 	return true, nil
+}
+
+func cleanupStaleReceiptKeyTemps(parent *secureParent) error {
+	copyFD, err := unix.Dup(parent.fd)
+	if err != nil {
+		return fmt.Errorf("%w: inspect receipt key temporary files", ErrUnsafe)
+	}
+	dir := os.NewFile(uintptr(copyFD), parent.dirPath)
+	entries, err := dir.ReadDir(-1)
+	if err != nil {
+		_ = dir.Close()
+		return fmt.Errorf("%w: inspect receipt key temporary files", ErrUnsafe)
+	}
+	defer dir.Close()
+	cutoff := time.Now().Add(-time.Hour)
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), receiptKeyTempPrefix) || !strings.HasSuffix(entry.Name(), ".tmp") || entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || !info.Mode().IsRegular() || info.ModTime().After(cutoff) || validateSecureOwner(info) != nil {
+			continue
+		}
+		if err := unix.Unlinkat(parent.fd, entry.Name(), 0); err != nil && !errors.Is(err, unix.ENOENT) {
+			return fmt.Errorf("%w: remove stale receipt key temporary file", ErrUnsafe)
+		}
+	}
+	return nil
 }

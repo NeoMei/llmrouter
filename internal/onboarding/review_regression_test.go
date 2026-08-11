@@ -2,10 +2,12 @@ package onboarding
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/stretchr/testify/require"
@@ -235,4 +237,64 @@ func TestTransactionPolicyRejectsSSHAndArbitraryHomePaths(t *testing.T) {
 	require.NoError(t, err)
 	require.ErrorContains(t, tx.Allow(filepath.Join(home, ".ssh", "authorized_keys")), "eligible")
 	require.ErrorContains(t, tx.Allow(filepath.Join(home, "notes.txt")), "eligible")
+}
+
+var errSimulatedCrash = errors.New("simulated crash")
+
+func TestReceiptKeyCrashBeforePublicationLeavesNoFinalKey(t *testing.T) {
+	home := t.TempDir()
+	require.NoError(t, ensureStateRoots(home))
+	setReceiptKeyPublishTestHook(func() error { return errSimulatedCrash })
+	t.Cleanup(func() { setReceiptKeyPublishTestHook(nil) })
+	_, err := receiptKey(home, true)
+	require.ErrorIs(t, err, errSimulatedCrash)
+	_, err = os.Stat(filepath.Join(home, ".llmapi", "credentials", "receipt.key"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	setReceiptKeyPublishTestHook(nil)
+	key, err := receiptKey(home, true)
+	require.NoError(t, err)
+	require.Len(t, key, 32)
+}
+
+func TestStaleReceiptKeyTempDoesNotBlockBootstrap(t *testing.T) {
+	home := t.TempDir()
+	require.NoError(t, ensureStateRoots(home))
+	stale := filepath.Join(home, ".llmapi", "credentials", receiptKeyTempPrefix+"stale.tmp")
+	require.NoError(t, os.WriteFile(stale, []byte("partial"), 0o600))
+	require.NoError(t, os.Chtimes(stale, time.Now().Add(-2*time.Hour), time.Now().Add(-2*time.Hour)))
+	key, err := receiptKey(home, true)
+	require.NoError(t, err)
+	require.Len(t, key, 32)
+	_, err = os.Stat(stale)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestAllowIsAllOrNothing(t *testing.T) {
+	home := t.TempDir()
+	valid := filepath.Join(home, ".zshrc")
+	invalid := filepath.Join(home, "notes.txt")
+	tx, err := BeginTransaction(home)
+	require.NoError(t, err)
+	require.Error(t, tx.Allow(valid, invalid))
+	require.ErrorContains(t, tx.Write(valid, []byte("configured")), "not allowlisted")
+}
+
+func TestRestoringReceiptResumesMixedTwoFileState(t *testing.T) {
+	home := t.TempDir()
+	first, second := filepath.Join(home, ".zshrc"), filepath.Join(home, ".profile")
+	require.NoError(t, os.WriteFile(first, []byte("first-original"), 0o600))
+	require.NoError(t, os.WriteFile(second, []byte("second-original"), 0o600))
+	tx, err := BeginTransaction(home)
+	require.NoError(t, err)
+	require.NoError(t, tx.Allow(first, second))
+	require.NoError(t, tx.Write(first, []byte("first-configured")))
+	require.NoError(t, tx.Write(second, []byte("second-configured")))
+	receipt, err := tx.Commit(ReceiptMeta{})
+	require.NoError(t, err)
+	receipt.Status, receipt.RecoveryAction = receiptStatusRestoring, receiptStatusRestored
+	require.NoError(t, persistReceipt(&receipt))
+	require.NoError(t, os.WriteFile(first, []byte("first-original"), 0o600))
+	require.NoError(t, Restore(home, receipt.ID))
+	require.Equal(t, "first-original", string(mustRead(t, first)))
+	require.Equal(t, "second-original", string(mustRead(t, second)))
 }

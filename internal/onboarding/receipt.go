@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -17,6 +16,7 @@ import (
 )
 
 const (
+	receiptKeyTempPrefix     = ".receipt-key-"
 	receiptStatusActive      = "active"
 	receiptStatusRestoring   = "restoring"
 	receiptStatusRestored    = "restored"
@@ -407,47 +407,31 @@ func receiptMAC(key []byte, receipt Receipt) string {
 func receiptKey(home string, create bool) ([]byte, error) {
 	path := filepath.Join(home, ".llmapi", "credentials", "receipt.key")
 	key, err := secureReadFile(home, path)
-	if err == nil && len(key) == 32 {
+	if err == nil {
+		if len(key) != 32 {
+			return nil, fmt.Errorf("%w: receipt key is invalid", ErrUnsafe)
+		}
 		return key, nil
 	}
-	if err == nil && !create {
-		return nil, fmt.Errorf("%w: receipt key is invalid", ErrUnsafe)
-	}
-	if err != nil && !create {
-		return nil, fmt.Errorf("%w: receipt key is unavailable", ErrUnsafe)
-	}
-	if err == nil {
-		return readReceiptKeyWinner(home, path)
-	}
-	if !os.IsNotExist(err) {
+	if !create || !os.IsNotExist(err) {
 		return nil, fmt.Errorf("%w: receipt key is unavailable", ErrUnsafe)
 	}
 	key = make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
 		return nil, fmt.Errorf("%w: create receipt key", ErrUnsafe)
 	}
-	created, err := createReceiptKeyExclusive(home, path, key)
+	published, err := publishReceiptKey(home, path, key)
 	if err != nil {
 		return nil, err
 	}
-	if created {
+	if published {
 		return key, nil
 	}
-	return readReceiptKeyWinner(home, path)
-}
-
-func readReceiptKeyWinner(home, path string) ([]byte, error) {
-	for attempt := 0; attempt < 1024; attempt++ {
-		key, err := secureReadFile(home, path)
-		if err == nil && len(key) == 32 {
-			return key, nil
-		}
-		if err != nil && !os.IsNotExist(err) {
-			return nil, fmt.Errorf("%w: receipt key is unavailable", ErrUnsafe)
-		}
-		runtime.Gosched()
+	winner, err := secureReadFile(home, path)
+	if err != nil || len(winner) != 32 {
+		return nil, fmt.Errorf("%w: receipt key is unavailable", ErrUnsafe)
 	}
-	return nil, fmt.Errorf("%w: receipt key is unavailable", ErrUnsafe)
+	return winner, nil
 }
 
 func newReceiptID() (string, error) {

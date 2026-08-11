@@ -1029,3 +1029,10 @@ The latest aggregate run passed backend, web, CLI, route/provider contracts, and
 Execute Tasks 1–4, then run `bash scripts/verify-backend.sh` and commit the batch. Execute Tasks 5–7 and run capability/route/OpenAPI consistency. Execute Tasks 8–12 and run all resource/provider contracts. Execute Tasks 13–16 and run web/CLI/Electron gates. Execute Tasks 17–19 and run the aggregate release gate.
 
 At each checkpoint, update this plan’s checkboxes only after the exact verification command has passed. Never mark a credential-gated certification complete from simulated fixtures.
+
+## 2026-08-11 Remaining Blocker Note
+
+- Task 17, Step 4 (full merge matrix) is **blocked** because the local/remote host lacks an isolated Docker/Compose runtime for the multi-DB/Redis/MinIO matrix.
+- Task 18, Step 4 (nightly acceptance) is **blocked** by the same Docker/Compose runtime limitation.
+- Task 19, Step 4 (complete release gate) and Task 20, Step 4 (external trust/credential architecture) are **blocked** by external signing infrastructure (Apple/Windows identities), live provider credentials, and a trusted public-key anchor for provider certification. These must be provisioned outside the agent session; do not simulate.
+- All other steps in Tasks 1–20 are complete and local gates pass.

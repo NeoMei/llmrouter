@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
+import * as fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 import { doctorCommand } from './doctor.js';
 import { initCommand } from './init.js';
@@ -23,7 +25,12 @@ export function createProgram(): Command {
 }
 
 export function isMainModule(moduleUrl: string, entryPath = process.argv[1]): boolean {
-  return Boolean(entryPath) && moduleUrl === pathToFileURL(entryPath).href;
+  if (!entryPath) return false;
+  try {
+    return fs.realpathSync(fileURLToPath(moduleUrl)) === fs.realpathSync(entryPath);
+  } catch {
+    return moduleUrl === pathToFileURL(entryPath).href;
+  }
 }
 
 if (isMainModule(import.meta.url)) {

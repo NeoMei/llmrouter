@@ -12,7 +12,10 @@ export function normalizeServerUrl(input: string): string {
   if (parsed.username || parsed.password || parsed.search || parsed.hash) {
     throw new Error('Gateway URL must not contain credentials, query parameters, or fragments.');
   }
-  parsed.pathname = parsed.pathname.replace(/\/v1\/?$/, '').replace(/\/$/, '');
+  if (!['', '/', '/v1', '/v1/'].includes(parsed.pathname)) {
+    throw new Error('Gateway URL path must be an origin or /v1.');
+  }
+  parsed.pathname = '';
   return parsed.toString().replace(/\/$/, '');
 }
 

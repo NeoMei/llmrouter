@@ -257,6 +257,9 @@ func mergeContinueYAML(input []byte, model map[string]any) ([]byte, error) {
 	if len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
 		return nil, fmt.Errorf("%w: Continue YAML root is not an object", ErrConflict)
 	}
+	if err := validateYAMLMappingKeys(&document); err != nil {
+		return nil, fmt.Errorf("%w: duplicate Continue YAML mapping key", ErrUnavailable)
+	}
 	stripContinueMarkerComments(&document)
 	root := document.Content[0]
 	name := yamlMappingValue(root, "name")
@@ -285,11 +288,15 @@ func mergeContinueYAML(input []byte, model map[string]any) ([]byte, error) {
 		managedIndex = index
 	}
 	managed := continueModelNode(model)
-	managed.HeadComment = "LLMAPI:BEGIN continue"
-	managed.FootComment = "LLMAPI:END continue"
 	if managedIndex >= 0 {
+		existing := models.Content[managedIndex]
+		managed.HeadComment = appendYAMLComment("LLMAPI:BEGIN continue", existing.HeadComment)
+		managed.LineComment = existing.LineComment
+		managed.FootComment = appendYAMLComment(existing.FootComment, "LLMAPI:END continue")
 		models.Content[managedIndex] = managed
 	} else {
+		managed.HeadComment = "LLMAPI:BEGIN continue"
+		managed.FootComment = "LLMAPI:END continue"
 		models.Content = append(models.Content, managed)
 	}
 	configured, err := yaml.Marshal(&document)
@@ -300,7 +307,36 @@ func mergeContinueYAML(input []byte, model map[string]any) ([]byte, error) {
 	if err := yaml.Unmarshal(configured, &validated); err != nil {
 		return nil, fmt.Errorf("%w: generated Continue YAML is invalid", ErrConflict)
 	}
+	if err := validateYAMLMappingKeys(&validated); err != nil {
+		return nil, fmt.Errorf("%w: generated Continue YAML contains duplicate keys", ErrConflict)
+	}
 	return configured, nil
+}
+
+func validateYAMLMappingKeys(node *yaml.Node) error {
+	if node == nil {
+		return nil
+	}
+	if node.Kind == yaml.MappingNode {
+		seen := make(map[string]struct{}, len(node.Content)/2)
+		for index := 0; index+1 < len(node.Content); index += 2 {
+			key := node.Content[index]
+			if key.Kind != yaml.ScalarNode {
+				return fmt.Errorf("mapping key is not a scalar")
+			}
+			identity := key.Tag + "\x00" + key.Value
+			if _, exists := seen[identity]; exists {
+				return fmt.Errorf("duplicate mapping key %q", key.Value)
+			}
+			seen[identity] = struct{}{}
+		}
+	}
+	for _, child := range node.Content {
+		if err := validateYAMLMappingKeys(child); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func yamlMappingValue(mapping *yaml.Node, key string) *yaml.Node {
@@ -340,15 +376,12 @@ func stripContinueMarkerComments(node *yaml.Node) {
 
 func withoutContinueMarkerComment(comment string) string {
 	lines := strings.Split(comment, "\n")
-	kept := lines[:0]
+	kept := make([]string, 0, len(lines))
 	for _, line := range lines {
-		trimmed := strings.TrimSpace(strings.TrimPrefix(line, "#"))
-		if trimmed == "LLMAPI:BEGIN continue" || trimmed == "LLMAPI:END continue" {
+		if line == "LLMAPI:BEGIN continue" || line == "LLMAPI:END continue" || line == "# LLMAPI:BEGIN continue" || line == "# LLMAPI:END continue" {
 			continue
 		}
-		if line != "" {
-			kept = append(kept, line)
-		}
+		kept = append(kept, line)
 	}
 	return strings.Join(kept, "\n")
 }

@@ -6,10 +6,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+	"github.com/pelletier/go-toml/v2/unstable"
 )
 
 type codexAdapter struct{ id ClientID }
@@ -44,7 +46,10 @@ func (adapter codexAdapter) Plan(_ context.Context, request ConfigureRequest) (C
 			return ConfigPlan{}, fmt.Errorf("%w: invalid Codex TOML", ErrUsage)
 		}
 	}
-	configured := mergeCodexText(string(existing), request)
+	configured, err := mergeCodexText(string(existing), request)
+	if err != nil {
+		return ConfigPlan{}, fmt.Errorf("%w: inspect Codex TOML expressions", ErrConflict)
+	}
 	if err := validateConfigSyntax(path, []byte(configured)); err != nil {
 		return ConfigPlan{}, fmt.Errorf("%w: Codex configuration conflicts with the managed provider", ErrConflict)
 	}
@@ -55,54 +60,50 @@ func (adapter codexAdapter) Plan(_ context.Context, request ConfigureRequest) (C
 	return ConfigPlan{Client: adapter.id, Writes: []PlannedWrite{{Path: path, Data: []byte(configured), Mode: privateFileMode}}, Instructions: instructions, RestartRequired: adapter.id == ClientCodexDesktop}, nil
 }
 
-func mergeCodexText(input string, request ConfigureRequest) string {
-	lines := strings.SplitAfter(input, "\n")
-	rootLines := make([]string, 0, len(lines))
-	tableLines := make([]string, 0, len(lines))
-	inTables := false
-	inManagedProvider := false
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(strings.TrimSuffix(line, "\n"))
-		if trimmed == "# LLMAPI:BEGIN codex" || trimmed == "# LLMAPI:END codex" || trimmed == "# Managed keys: model, model_provider, model_providers.llmapi" {
-			continue
-		}
-		table := codexTableName(trimmed)
-		if inManagedProvider {
-			if table == "" {
-				continue
+func mergeCodexText(input string, request ConfigureRequest) (string, error) {
+	expressions, err := parseCodexExpressions([]byte(input))
+	if err != nil {
+		return "", err
+	}
+	rootInsertion := len(input)
+	inRoot := true
+	removals := make([]codexRange, 0, 6)
+	for index, expression := range expressions {
+		if expression.kind == unstable.Table || expression.kind == unstable.ArrayTable {
+			if rootInsertion == len(input) {
+				rootInsertion = expression.start
 			}
-			inManagedProvider = false
+			inRoot = false
 		}
-		if table == "model_providers.llmapi" {
-			inManagedProvider = true
-			inTables = true
-			continue
+		if inRoot && expression.kind == unstable.KeyValue && len(expression.keys) == 1 && (expression.keys[0] == "model" || expression.keys[0] == "model_provider") {
+			removals = append(removals, codexRange{start: expression.start, end: expression.end})
 		}
-		if table != "" {
-			inTables = true
+		if expression.kind == unstable.Comment && isCodexMarker(expression.comment) {
+			removals = append(removals, codexRange{start: expression.start, end: expression.end})
 		}
-		if !inTables && isCodexSelectionLine(trimmed) {
-			continue
-		}
-		if inTables {
-			tableLines = append(tableLines, line)
-		} else {
-			rootLines = append(rootLines, line)
+		if expression.kind == unstable.Table && equalCodexKey(expression.keys, "model_providers", "llmapi") {
+			removals = append(removals, codexRange{start: expression.start, end: expression.end})
+			for next := index + 1; next < len(expressions); next++ {
+				if expressions[next].kind == unstable.Table || expressions[next].kind == unstable.ArrayTable {
+					break
+				}
+				if expressions[next].kind == unstable.KeyValue {
+					removals = append(removals, codexRange{start: expressions[next].start, end: expressions[next].end})
+				}
+			}
 		}
 	}
+	prefix := removeCodexRanges(input[:rootInsertion], clipCodexRanges(removals, 0, rootInsertion))
+	suffix := removeCodexRanges(input[rootInsertion:], clipCodexRanges(removals, rootInsertion, len(input)))
 	var output strings.Builder
-	output.WriteString(strings.Join(rootLines, ""))
-	if output.Len() != 0 && !strings.HasSuffix(output.String(), "\n") {
-		output.WriteByte('\n')
-	}
+	output.WriteString(prefix)
+	ensureCodexNewline(&output)
 	output.WriteString("# LLMAPI:BEGIN codex\n")
 	output.WriteString("model = " + strconv.Quote(request.Model) + "\n")
 	output.WriteString("model_provider = \"llmapi\"\n")
 	output.WriteString("# LLMAPI:END codex\n")
-	output.WriteString(strings.Join(tableLines, ""))
-	if output.Len() != 0 && !strings.HasSuffix(output.String(), "\n") {
-		output.WriteByte('\n')
-	}
+	output.WriteString(suffix)
+	ensureCodexNewline(&output)
 	if !strings.HasSuffix(output.String(), "\n\n") {
 		output.WriteByte('\n')
 	}
@@ -111,26 +112,143 @@ func mergeCodexText(input string, request ConfigureRequest) string {
 	output.WriteString("base_url = " + strconv.Quote(endpointV1(request.ServerURL)) + "\n")
 	output.WriteString("wire_api = \"responses\"\n")
 	output.WriteString("env_key = \"LLMAPI_TOKEN\"\n")
+	return output.String(), nil
+}
+
+type codexExpression struct {
+	kind       unstable.Kind
+	keys       []string
+	comment    string
+	start, end int
+}
+
+type codexRange struct{ start, end int }
+
+func parseCodexExpressions(data []byte) ([]codexExpression, error) {
+	var parser unstable.Parser
+	parser.KeepComments = true
+	parser.Reset(data)
+	expressions := make([]codexExpression, 0)
+	for parser.NextExpression() {
+		node := parser.Expression()
+		start, end := codexNodeRange(node)
+		if start < 0 {
+			continue
+		}
+		for start > 0 && data[start-1] != '\n' {
+			start--
+		}
+		for end < len(data) && data[end] != '\n' {
+			end++
+		}
+		if end < len(data) {
+			end++
+		}
+		expression := codexExpression{kind: node.Kind, start: start, end: end}
+		if node.Kind == unstable.KeyValue || node.Kind == unstable.Table || node.Kind == unstable.ArrayTable {
+			iterator := node.Key()
+			for iterator.Next() {
+				key := iterator.Node()
+				if key.Kind != unstable.Key {
+					break
+				}
+				expression.keys = append(expression.keys, string(key.Data))
+			}
+		}
+		if node.Kind == unstable.Comment {
+			expression.comment = string(node.Data)
+		}
+		expressions = append(expressions, expression)
+	}
+	if err := parser.Error(); err != nil {
+		return nil, err
+	}
+	return expressions, nil
+}
+
+func codexNodeRange(node *unstable.Node) (int, int) {
+	start, end := -1, -1
+	var visit func(*unstable.Node)
+	visit = func(current *unstable.Node) {
+		for current != nil {
+			if current.Raw.Length != 0 {
+				nodeStart := int(current.Raw.Offset)
+				nodeEnd := nodeStart + int(current.Raw.Length)
+				if start < 0 || nodeStart < start {
+					start = nodeStart
+				}
+				if nodeEnd > end {
+					end = nodeEnd
+				}
+			}
+			visit(current.Child())
+			current = current.Next()
+		}
+	}
+	visit(node)
+	return start, end
+}
+
+func clipCodexRanges(ranges []codexRange, start, end int) []codexRange {
+	clipped := make([]codexRange, 0, len(ranges))
+	for _, item := range ranges {
+		left, right := item.start, item.end
+		if left < start {
+			left = start
+		}
+		if right > end {
+			right = end
+		}
+		if left < right {
+			clipped = append(clipped, codexRange{start: left - start, end: right - start})
+		}
+	}
+	return clipped
+}
+
+func removeCodexRanges(input string, ranges []codexRange) string {
+	sort.Slice(ranges, func(i, j int) bool { return ranges[i].start < ranges[j].start })
+	var output strings.Builder
+	position := 0
+	for _, item := range ranges {
+		if item.start < position {
+			if item.end > position {
+				position = item.end
+			}
+			continue
+		}
+		output.WriteString(input[position:item.start])
+		position = item.end
+	}
+	output.WriteString(input[position:])
 	return output.String()
 }
 
-func codexTableName(line string) string {
-	code, _, _ := strings.Cut(line, "#")
-	code = strings.TrimSpace(code)
-	if len(code) < 3 || !strings.HasPrefix(code, "[") || !strings.HasSuffix(code, "]") || strings.HasPrefix(code, "[[") {
-		return ""
+func ensureCodexNewline(output *strings.Builder) {
+	if output.Len() != 0 && !strings.HasSuffix(output.String(), "\n") {
+		output.WriteByte('\n')
 	}
-	return strings.ReplaceAll(strings.TrimSpace(code[1:len(code)-1]), " ", "")
 }
 
-func isCodexSelectionLine(line string) bool {
-	code, _, _ := strings.Cut(line, "#")
-	key, _, ok := strings.Cut(code, "=")
-	if !ok {
+func equalCodexKey(keys []string, expected ...string) bool {
+	if len(keys) != len(expected) {
 		return false
 	}
-	key = strings.TrimSpace(key)
-	return key == "model" || key == "model_provider"
+	for index := range keys {
+		if keys[index] != expected[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func isCodexMarker(comment string) bool {
+	switch strings.TrimSpace(comment) {
+	case "# LLMAPI:BEGIN codex", "# LLMAPI:END codex", "# Managed keys: model, model_provider, model_providers.llmapi":
+		return true
+	default:
+		return false
+	}
 }
 
 func (adapter codexAdapter) Check(_ context.Context, request CheckRequest) []Check {

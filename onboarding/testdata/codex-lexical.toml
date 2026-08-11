@@ -1,0 +1,23 @@
+# preserve lexical TOML bytes
+"model" = "native-model" # replace the quoted root key
+"model_provider" = "native" # replace this too
+instructions = """
+model = "text inside multiline string"
+[model_providers.llmapi]
+"""
+quoted = "value # inside quotes"
+
+[[hooks]] # keep array table
+name = "keep-hook"
+script = "echo # keep"
+
+["model_providers"."llmapi"] # replace quoted managed table
+name = "Old LLMAPI"
+base_url = "https://old.example/v1"
+# preserve standalone comment after managed keys
+
+[[hooks]]
+name = "second-hook"
+
+["quoted#table"] # keep quoted table with hash
+"quoted#key" = "keep#value"

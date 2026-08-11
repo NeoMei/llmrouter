@@ -260,6 +260,45 @@ func TestCodexSelectsProviderAndModelWithoutDuplicateKeys(t *testing.T) {
 	require.Equal(t, 1, strings.Count(string(repeated.Writes[0].Data), "LLMAPI:BEGIN"))
 }
 
+func TestCodexLexicalEditPreservesMultilineStringsArrayTablesAndQuotedNames(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".codex", "config.toml")
+	input := mustRead(t, filepath.Join("..", "..", "onboarding", "testdata", "codex-lexical.toml"))
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, input, 0o600))
+	adapter, ok := AdapterFor(ClientCodexCLI)
+	require.True(t, ok)
+	request := ConfigureRequest{Home: home, Platform: Platform{OS: runtime.GOOS, Arch: runtime.GOARCH}, ServerURL: mustServerURL(t), Token: NewSecret("secret"), Model: "model-a"}
+	plan, err := adapter.Plan(t.Context(), request)
+	require.NoError(t, err)
+	require.Len(t, plan.Writes, 1)
+	output := string(plan.Writes[0].Data)
+	for _, preserved := range []string{
+		"# preserve lexical TOML bytes",
+		"model = \"text inside multiline string\"",
+		"[model_providers.llmapi]\n\"\"\"",
+		"quoted = \"value # inside quotes\"",
+		"[[hooks]] # keep array table",
+		"script = \"echo # keep\"",
+		"# preserve standalone comment after managed keys",
+		"[[hooks]]\nname = \"second-hook\"",
+		"[\"quoted#table\"] # keep quoted table with hash",
+		"\"quoted#key\" = \"keep#value\"",
+	} {
+		require.Contains(t, output, preserved)
+	}
+	require.NotContains(t, output, "Old LLMAPI")
+	var root map[string]any
+	require.NoError(t, toml.Unmarshal(plan.Writes[0].Data, &root))
+	require.Equal(t, "model-a", root["model"])
+	require.Equal(t, "llmapi", root["model_provider"])
+	require.Len(t, root["hooks"], 2)
+	require.NoError(t, os.WriteFile(path, plan.Writes[0].Data, 0o600))
+	repeated, err := adapter.Plan(t.Context(), request)
+	require.NoError(t, err)
+	require.Equal(t, plan.Writes[0].Data, repeated.Writes[0].Data)
+}
+
 func TestAiderSelectsOpenAIModelAndPreservesYAML(t *testing.T) {
 	configured := configureFixture(t, ClientAider, "aider-existing.yml")
 	var root map[string]any
@@ -270,6 +309,90 @@ func TestAiderSelectsOpenAIModelAndPreservesYAML(t *testing.T) {
 	require.Contains(t, configured, "# keep aider comment and anchors")
 	require.Contains(t, configured, "&shared-settings")
 	require.Contains(t, configured, "*shared-settings")
+}
+
+func TestAiderNodeEditReplacesCompleteManagedValuesAndPreservesStructure(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".aider.conf.yml")
+	require.NoError(t, os.WriteFile(path, mustRead(t, filepath.Join("..", "..", "onboarding", "testdata", "aider-node-existing.yml")), 0o600))
+	adapter, ok := AdapterFor(ClientAider)
+	require.True(t, ok)
+	request := ConfigureRequest{Home: home, Platform: Platform{OS: runtime.GOOS, Arch: runtime.GOARCH}, ServerURL: mustServerURL(t), Token: NewSecret("secret"), Model: "model-a"}
+	plan, err := adapter.Plan(t.Context(), request)
+	require.NoError(t, err)
+	require.Len(t, plan.Writes, 2)
+	configured := string(plan.Writes[0].Data)
+	for _, preserved := range []string{
+		"# preserve aider document comment",
+		"&defaults",
+		"*defaults",
+		"# preserve nested inline comment",
+		"copied-env: *aider-env",
+		"message: | # preserve unrelated multiline scalar",
+		"env-file: fake",
+		"model: fake",
+	} {
+		require.Contains(t, configured, preserved)
+	}
+	require.NotContains(t, configured, "must-not-survive")
+	require.NotContains(t, configured, "/old/env")
+	var root map[string]any
+	require.NoError(t, yaml.Unmarshal([]byte(configured), &root))
+	require.Equal(t, "openai/model-a", root["model"])
+	require.NotEmpty(t, root["env-file"])
+	require.Equal(t, root["env-file"], root["copied-env"])
+	require.NoError(t, os.WriteFile(path, plan.Writes[0].Data, 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Dir(plan.Writes[1].Path), 0o700))
+	require.NoError(t, os.WriteFile(plan.Writes[1].Path, plan.Writes[1].Data, 0o600))
+	repeated, err := adapter.Plan(t.Context(), request)
+	require.NoError(t, err)
+	require.Equal(t, plan.Writes, repeated.Writes)
+}
+
+func TestContinueYAMLRejectsDuplicateMappingKeysWithoutWrites(t *testing.T) {
+	tests := []struct {
+		name, input string
+	}{
+		{name: "duplicate-schema", input: "name: Existing\nversion: 1.0.0\nschema: v1\nschema: v1\nmodels: []\n"},
+		{name: "duplicate-models", input: "name: Existing\nversion: 1.0.0\nschema: v1\nmodels: []\nmodels: []\n"},
+		{name: "duplicate-model-field", input: "name: Existing\nversion: 1.0.0\nschema: v1\nmodels:\n  - name: Native\n    provider: openai\n    provider: openai\n    model: native\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			path := filepath.Join(home, ".continue", "config.yaml")
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+			require.NoError(t, os.WriteFile(path, []byte(tc.input), 0o600))
+			adapter, ok := AdapterFor(ClientContinue)
+			require.True(t, ok)
+			require.False(t, adapter.Discover(Platform{OS: runtime.GOOS, Arch: runtime.GOARCH}, home).Automatic)
+			plan, err := adapter.Plan(t.Context(), ConfigureRequest{Home: home, Platform: Platform{OS: runtime.GOOS, Arch: runtime.GOARCH}, ServerURL: mustServerURL(t), Token: NewSecret("secret"), Model: "model-a"})
+			require.NoError(t, err)
+			require.Empty(t, plan.Writes)
+			require.NotEmpty(t, plan.Instructions)
+			require.NotContains(t, strings.Join(plan.Instructions, "\n"), "secret")
+			require.Equal(t, tc.input, string(mustRead(t, path)))
+		})
+	}
+}
+
+func TestContinueMarkerRemovalPreservesUnrelatedBlankCommentLines(t *testing.T) {
+	input := "# paragraph one\n#\n# LLMAPI:BEGIN continue\n#\n# paragraph two\n#  LLMAPI:END continue"
+	require.Equal(t, "# paragraph one\n#\n#\n# paragraph two\n#  LLMAPI:END continue", withoutContinueMarkerComment(input))
+	model := map[string]any{
+		"name": "LLMAPI", "provider": "openai", "model": "model-a", "apiBase": "https://stage.example/v1", "apiKey": "${LLMAPI_TOKEN}",
+	}
+	configured, err := mergeContinueYAML([]byte("# paragraph one\n#\n# paragraph two\nname: Existing\nversion: 1.0.0\nschema: v1\nmodels:\n  # LLMAPI:BEGIN continue\n  # managed paragraph one\n  #\n  # managed paragraph two\n  - name: LLMAPI\n    provider: openai\n    model: old\n    apiBase: https://old.example/v1\n    apiKey: ${LLMAPI_TOKEN}\n  # LLMAPI:END continue\n  # trailing one\n  #\n  # trailing two\n"), model)
+	require.NoError(t, err)
+	output := string(configured)
+	require.Contains(t, output, "# paragraph one\n#\n# paragraph two")
+	require.Contains(t, output, "# managed paragraph one\n    #\n    # managed paragraph two")
+	require.Contains(t, output, "# trailing one\n#\n# trailing two")
+	require.Equal(t, 1, strings.Count(output, "LLMAPI:BEGIN continue"))
+	require.Equal(t, 1, strings.Count(output, "LLMAPI:END continue"))
+	repeated, err := mergeContinueYAML(configured, model)
+	require.NoError(t, err)
+	require.Equal(t, configured, repeated)
 }
 
 func TestOpenCodeAndContinueChecksRequireVisibleCredential(t *testing.T) {

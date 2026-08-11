@@ -35,29 +35,35 @@ func (aiderAdapter) Plan(_ context.Context, request ConfigureRequest) (ConfigPla
 	if err != nil {
 		return ConfigPlan{}, err
 	}
-	withoutManaged, err := RemoveManagedBlock(string(config), "aider")
-	if err != nil {
-		return ConfigPlan{}, err
-	}
 	var document yaml.Node
-	if strings.TrimSpace(withoutManaged) != "" {
-		if err := yaml.Unmarshal([]byte(withoutManaged), &document); err != nil || len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
+	if strings.TrimSpace(string(config)) != "" {
+		if err := yaml.Unmarshal(config, &document); err != nil || len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
 			return ConfigPlan{}, fmt.Errorf("%w: invalid Aider YAML", ErrUsage)
 		}
+	} else {
+		document = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}}
 	}
-	lines := strings.SplitAfter(withoutManaged, "\n")
-	filtered := make([]string, 0, len(lines))
-	for _, line := range lines {
-		if isAiderManagedKeyLine(line) {
-			continue
-		}
-		filtered = append(filtered, line)
-	}
-	configured, err := ApplyManagedBlock(strings.Join(filtered, ""), "aider", "env-file: "+strconv.Quote(environmentPath)+"\nmodel: "+strconv.Quote("openai/"+request.Model))
+	stripAiderMarkerComments(&document)
+	root := document.Content[0]
+	environmentIndex, err := setAiderScalar(root, "env-file", environmentPath)
 	if err != nil {
-		return ConfigPlan{}, err
+		return ConfigPlan{}, fmt.Errorf("%w: invalid Aider managed keys", ErrConflict)
 	}
-	if err := validateConfigSyntax(configPath, []byte(configured)); err != nil {
+	modelIndex, err := setAiderScalar(root, "model", "openai/"+request.Model)
+	if err != nil {
+		return ConfigPlan{}, fmt.Errorf("%w: invalid Aider managed keys", ErrConflict)
+	}
+	first, last := environmentIndex, modelIndex
+	if first > last {
+		first, last = last, first
+	}
+	root.Content[first].HeadComment = appendYAMLComment(root.Content[first].HeadComment, "LLMAPI:BEGIN aider")
+	root.Content[last+1].FootComment = appendYAMLComment(root.Content[last+1].FootComment, "LLMAPI:END aider")
+	configured, err := yaml.Marshal(&document)
+	if err != nil {
+		return ConfigPlan{}, fmt.Errorf("%w: encode Aider YAML", ErrConflict)
+	}
+	if err := validateAiderGeneratedConfig(configured, environmentPath, request.Model); err != nil {
 		return ConfigPlan{}, fmt.Errorf("%w: generated Aider YAML is invalid", ErrConflict)
 	}
 	environment, _, err := readPlannedFile(request.Home, environmentPath)
@@ -73,22 +79,84 @@ func (aiderAdapter) Plan(_ context.Context, request ConfigureRequest) (ConfigPla
 		return ConfigPlan{}, err
 	}
 	return ConfigPlan{Client: ClientAider, Writes: []PlannedWrite{
-		{Path: configPath, Data: []byte(configured), Mode: privateFileMode},
+		{Path: configPath, Data: configured, Mode: privateFileMode},
 		{Path: environmentPath, Data: []byte(configuredEnvironment), Mode: privateFileMode},
 	}, RestartRequired: true}, nil
 }
 
-func isAiderManagedKeyLine(line string) bool {
-	if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
-		return false
+func setAiderScalar(mapping *yaml.Node, key, value string) (int, error) {
+	index := -1
+	for current := 0; current+1 < len(mapping.Content); current += 2 {
+		if mapping.Content[current].Kind != yaml.ScalarNode || mapping.Content[current].Value != key {
+			continue
+		}
+		if index >= 0 {
+			return -1, fmt.Errorf("duplicate %s", key)
+		}
+		index = current
 	}
-	code, _, _ := strings.Cut(line, "#")
-	key, _, ok := strings.Cut(code, ":")
-	if !ok {
-		return false
+	if index < 0 {
+		mapping.Content = append(mapping.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value},
+		)
+		return len(mapping.Content) - 2, nil
 	}
-	key = strings.TrimSpace(key)
-	return key == "env-file" || key == "model"
+	existing := mapping.Content[index+1]
+	mapping.Content[index+1] = &yaml.Node{
+		Kind: yaml.ScalarNode, Tag: "!!str", Value: value,
+		Style: existing.Style, Anchor: existing.Anchor,
+		HeadComment: existing.HeadComment, LineComment: existing.LineComment, FootComment: existing.FootComment,
+	}
+	return index, nil
+}
+
+func stripAiderMarkerComments(node *yaml.Node) {
+	if node == nil {
+		return
+	}
+	node.HeadComment = withoutExactYAMLCommentLines(node.HeadComment, "LLMAPI:BEGIN aider", "LLMAPI:END aider")
+	node.LineComment = withoutExactYAMLCommentLines(node.LineComment, "LLMAPI:BEGIN aider", "LLMAPI:END aider")
+	node.FootComment = withoutExactYAMLCommentLines(node.FootComment, "LLMAPI:BEGIN aider", "LLMAPI:END aider")
+	for _, child := range node.Content {
+		stripAiderMarkerComments(child)
+	}
+}
+
+func withoutExactYAMLCommentLines(comment string, markers ...string) string {
+	lines := strings.Split(comment, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		remove := false
+		for _, marker := range markers {
+			if line == marker || line == "# "+marker {
+				remove = true
+				break
+			}
+		}
+		if !remove {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
+func appendYAMLComment(comment, line string) string {
+	if comment == "" {
+		return line
+	}
+	return comment + "\n" + line
+}
+
+func validateAiderGeneratedConfig(data []byte, environmentPath, model string) error {
+	var root map[string]any
+	if err := yaml.Unmarshal(data, &root); err != nil || root == nil {
+		return fmt.Errorf("invalid YAML")
+	}
+	if root["env-file"] != environmentPath || root["model"] != "openai/"+model {
+		return fmt.Errorf("managed values mismatch")
+	}
+	return nil
 }
 
 func (aiderAdapter) Check(_ context.Context, request CheckRequest) []Check {

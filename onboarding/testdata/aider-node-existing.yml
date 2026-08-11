@@ -1,0 +1,14 @@
+# preserve aider document comment
+defaults: &defaults
+  edit-format: diff # preserve nested inline comment
+copy: *defaults
+model: | # replace the complete multiline node
+  openai/old-model
+  must-not-survive
+env-file: &aider-env >- # preserve managed-value anchor
+  /old/env
+  file
+copied-env: *aider-env
+message: | # preserve unrelated multiline scalar
+  env-file: fake
+  model: fake

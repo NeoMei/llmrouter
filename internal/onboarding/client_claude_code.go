@@ -24,7 +24,7 @@ func (claudeCodeAdapter) Plan(_ context.Context, request ConfigureRequest) (Conf
 		return ConfigPlan{}, err
 	}
 	path := filepath.Join(request.Home, ".claude", "settings.json")
-	existing, _, err := readPlannedFile(path)
+	existing, _, err := readPlannedFile(request.Home, path)
 	if err != nil {
 		return ConfigPlan{}, err
 	}
@@ -47,7 +47,33 @@ func (claudeCodeAdapter) Plan(_ context.Context, request ConfigureRequest) (Conf
 
 func (claudeCodeAdapter) Check(_ context.Context, request CheckRequest) []Check {
 	path := filepath.Join(request.Home, ".claude", "settings.json")
-	return []Check{checkManagedConfig("claude-code-config", path, []string{`"ANTHROPIC_BASE_URL"`, `"ANTHROPIC_AUTH_TOKEN"`})}
+	return []Check{semanticConfigCheck("claude-code-config", checkClaudeCodeConfig(request, path))}
+}
+
+func checkClaudeCodeConfig(request CheckRequest, path string) error {
+	if request.ServerURL == nil || request.Token.Reveal() == "" {
+		return fmt.Errorf("expected Claude Code settings are incomplete")
+	}
+	data, err := loadManagedConfig(request.Home, path)
+	if err != nil {
+		return err
+	}
+	var root map[string]any
+	if err := common.UnmarshalUseNumber(data, &root); err != nil || root == nil {
+		return fmt.Errorf("invalid Claude Code settings")
+	}
+	environment, ok := root["env"].(map[string]any)
+	if !ok || environment["ANTHROPIC_BASE_URL"] != serverOrigin(request.ServerURL) || environment["ANTHROPIC_AUTH_TOKEN"] != request.Token.Reveal() {
+		return fmt.Errorf("Claude Code gateway mismatch")
+	}
+	if request.Model != "" {
+		for _, key := range []string{"ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL"} {
+			if environment[key] != request.Model {
+				return fmt.Errorf("Claude Code model mismatch")
+			}
+		}
+	}
+	return nil
 }
 
 func mergeJSONMap(input []byte, keys []string, additions map[string]any) ([]byte, error) {

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 type aiderAdapter struct{}
@@ -24,28 +26,39 @@ func (aiderAdapter) Plan(_ context.Context, request ConfigureRequest) (ConfigPla
 	if err := validateConfigureRequest(request); err != nil {
 		return ConfigPlan{}, err
 	}
+	if request.Model == "" {
+		return ConfigPlan{}, fmt.Errorf("%w: Aider requires a selected model", ErrUsage)
+	}
 	configPath := filepath.Join(request.Home, ".aider.conf.yml")
 	environmentPath := filepath.Join(request.Home, ".config", "llmapi", "aider.env")
-	config, _, err := readPlannedFile(configPath)
+	config, _, err := readPlannedFile(request.Home, configPath)
 	if err != nil {
 		return ConfigPlan{}, err
 	}
-	if len(config) != 0 {
-		if err := validateConfigSyntax(configPath, config); err != nil {
+	withoutManaged, err := RemoveManagedBlock(string(config), "aider")
+	if err != nil {
+		return ConfigPlan{}, err
+	}
+	root := make(map[string]any)
+	if strings.TrimSpace(withoutManaged) != "" {
+		if err := yaml.Unmarshal([]byte(withoutManaged), &root); err != nil || root == nil {
 			return ConfigPlan{}, fmt.Errorf("%w: invalid Aider YAML", ErrUsage)
 		}
 	}
-	if hasUnmanagedYAMLKey(string(config), "env-file") {
-		return ConfigPlan{}, fmt.Errorf("%w: Aider env-file is already configured outside the LLMAPI block", ErrConflict)
+	root["env-file"] = environmentPath
+	root["model"] = "openai/" + request.Model
+	encoded, err := yaml.Marshal(root)
+	if err != nil {
+		return ConfigPlan{}, fmt.Errorf("%w: encode Aider YAML", ErrUsage)
 	}
-	configured, err := ApplyManagedBlock(string(config), "aider", "env-file: "+strconv.Quote(environmentPath))
+	configured, err := ApplyManagedBlock(string(encoded), "aider", "# Managed keys: env-file, model")
 	if err != nil {
 		return ConfigPlan{}, err
 	}
 	if err := validateConfigSyntax(configPath, []byte(configured)); err != nil {
 		return ConfigPlan{}, fmt.Errorf("%w: generated Aider YAML is invalid", ErrConflict)
 	}
-	environment, _, err := readPlannedFile(environmentPath)
+	environment, _, err := readPlannedFile(request.Home, environmentPath)
 	if err != nil {
 		return ConfigPlan{}, err
 	}
@@ -67,23 +80,57 @@ func (aiderAdapter) Check(_ context.Context, request CheckRequest) []Check {
 	config := filepath.Join(request.Home, ".aider.conf.yml")
 	environment := filepath.Join(request.Home, ".config", "llmapi", "aider.env")
 	return []Check{
-		checkManagedConfig("aider-config", config, []string{"LLMAPI:BEGIN aider", "env-file:"}),
-		checkManagedConfig("aider-environment", environment, []string{"OPENAI_API_BASE", "OPENAI_API_KEY"}),
+		semanticConfigCheck("aider-config", checkAiderConfig(request, config, environment)),
+		semanticConfigCheck("aider-environment", checkAiderEnvironment(request, environment)),
 	}
 }
 
-func hasUnmanagedYAMLKey(input, key string) bool {
-	without, err := RemoveManagedBlock(input, "aider")
+func checkAiderConfig(request CheckRequest, configPath, environmentPath string) error {
+	if request.Model == "" {
+		return fmt.Errorf("expected Aider model is missing")
+	}
+	data, err := loadManagedConfig(request.Home, configPath)
 	if err != nil {
-		return true
+		return err
 	}
-	for _, line := range strings.Split(without, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, key+":") {
-			return true
+	var root map[string]any
+	if err := yaml.Unmarshal(data, &root); err != nil || root == nil {
+		return fmt.Errorf("invalid Aider YAML")
+	}
+	if root["env-file"] != environmentPath || root["model"] != "openai/"+request.Model {
+		return fmt.Errorf("Aider model or environment mismatch")
+	}
+	return nil
+}
+
+func checkAiderEnvironment(request CheckRequest, environmentPath string) error {
+	if request.ServerURL == nil || request.Token.Reveal() == "" {
+		return fmt.Errorf("expected Aider environment is incomplete")
+	}
+	data, err := loadManagedConfig(request.Home, environmentPath)
+	if err != nil {
+		return err
+	}
+	values := make(map[string]string)
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
 		}
+		key, raw, ok := strings.Cut(line, "=")
+		if !ok || key == "" {
+			return fmt.Errorf("invalid Aider environment")
+		}
+		value, err := strconv.Unquote(raw)
+		if err != nil {
+			return fmt.Errorf("invalid Aider environment value")
+		}
+		values[key] = value
 	}
-	return false
+	if values["OPENAI_API_BASE"] != endpointV1(request.ServerURL) || values["OPENAI_API_KEY"] != request.Token.Reveal() {
+		return fmt.Errorf("Aider environment mismatch")
+	}
+	return nil
 }
 
 var _ ClientAdapter = aiderAdapter{}

@@ -69,7 +69,8 @@ func RunDoctor(ctx context.Context, options DoctorOptions) DoctorReport {
 		add(checkManagedPermissions(string(id)+"-permissions", adapter.Discover(platform, options.Home).Paths))
 	}
 
-	var models []string
+	var catalog []ModelInfo
+	var selectedModel *ModelInfo
 	modelsAvailable := false
 	if options.ServerURL != nil {
 		client := NewAPIClient(options.ServerURL, options.Token, nil)
@@ -78,12 +79,12 @@ func RunDoctor(ctx context.Context, options DoctorOptions) DoctorReport {
 		} else {
 			add(Check{Name: "health", Status: "PASS", Message: "gateway health endpoint is reachable"})
 		}
-		listed, err := client.ListModels(ctx)
+		listed, err := client.ListModelCatalog(ctx)
 		if err != nil {
 			add(Check{Name: "authentication", Status: "FAIL", Message: safeNetworkMessage(err)})
 		} else {
-			models, modelsAvailable = listed, true
-			add(Check{Name: "authentication", Status: "PASS", Message: fmt.Sprintf("authenticated model catalog contains %d models", len(models))})
+			catalog, modelsAvailable = listed, true
+			add(Check{Name: "authentication", Status: "PASS", Message: fmt.Sprintf("authenticated model catalog contains %d models", len(catalog))})
 		}
 	} else {
 		add(Check{Name: "health", Status: "FAIL", Message: "server URL is unavailable"})
@@ -93,10 +94,18 @@ func RunDoctor(ctx context.Context, options DoctorOptions) DoctorReport {
 		add(Check{Name: "model", Status: "SKIP", Message: "no model was selected"})
 	} else if !modelsAvailable {
 		add(Check{Name: "model", Status: "SKIP", Message: "model catalog is unavailable"})
-	} else if containsModel(models, options.Model) {
-		add(Check{Name: "model", Status: "PASS", Message: "selected model is visible"})
 	} else {
-		add(Check{Name: "model", Status: "FAIL", Message: "selected model is not visible"})
+		for index := range catalog {
+			if catalog[index].ID == options.Model {
+				selectedModel = &catalog[index]
+				break
+			}
+		}
+		if selectedModel != nil {
+			add(Check{Name: "model", Status: "PASS", Message: "selected model is visible"})
+		} else {
+			add(Check{Name: "model", Status: "FAIL", Message: "selected model is not visible"})
+		}
 	}
 
 	protocolSet := make(map[probeProtocol]struct{})
@@ -110,6 +119,23 @@ func RunDoctor(ctx context.Context, options DoctorOptions) DoctorReport {
 		protocols = append(protocols, string(protocol))
 	}
 	sort.Strings(protocols)
+	for _, name := range protocols {
+		protocol := probeProtocol(name)
+		if protocol == probeMCP {
+			continue
+		}
+		check := Check{Name: "model-protocol-" + name}
+		if selectedModel == nil {
+			check.Status, check.Message = "SKIP", "selected model capability metadata is unavailable"
+		} else if len(selectedModel.SupportedEndpointTypes) == 0 {
+			check.Status, check.Message = "SKIP", "model catalog does not declare endpoint capabilities"
+		} else if modelSupportsProtocol(*selectedModel, protocol) {
+			check.Status, check.Message = "PASS", "selected model supports the client protocol"
+		} else {
+			check.Status, check.Message = "FAIL", "selected model does not support the client protocol"
+		}
+		add(check)
+	}
 	for _, name := range protocols {
 		protocol := probeProtocol(name)
 		if !options.Smoke {
@@ -170,27 +196,22 @@ func checkManagedPermissions(name string, paths []string) Check {
 	return Check{Name: name, Status: "PASS", Message: "managed configuration permissions are private"}
 }
 
-func checkManagedConfig(name, path string, required []string) Check {
-	info, err := os.Lstat(path)
-	if err != nil || info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return Check{Name: name, Status: "FAIL", Message: "managed configuration file is unavailable or unsafe"}
-	}
-	if err := validateSecureOwner(info); err != nil || info.Mode().Perm()&0o077 != 0 {
-		return Check{Name: name, Status: "FAIL", Message: "managed configuration permissions are not private"}
-	}
-	data, err := os.ReadFile(path)
+func semanticConfigCheck(name string, err error) Check {
 	if err != nil {
-		return Check{Name: name, Status: "FAIL", Message: "managed configuration cannot be read"}
+		return Check{Name: name, Status: "FAIL", Message: "managed configuration does not match the selected LLMAPI settings"}
 	}
-	for _, expected := range required {
-		if !strings.Contains(string(data), expected) {
-			return Check{Name: name, Status: "FAIL", Message: "managed LLMAPI settings are missing"}
-		}
+	return Check{Name: name, Status: "PASS", Message: "managed configuration matches the selected LLMAPI settings"}
+}
+
+func loadManagedConfig(home, path string) ([]byte, error) {
+	data, exists, err := readPlannedFile(home, path)
+	if err != nil {
+		return nil, err
 	}
-	if err := validateConfigSyntax(path, data); err != nil {
-		return Check{Name: name, Status: "FAIL", Message: "managed configuration syntax is invalid"}
+	if !exists {
+		return nil, fmt.Errorf("managed configuration is unavailable")
 	}
-	return Check{Name: name, Status: "PASS", Message: "managed configuration and permissions are valid"}
+	return data, nil
 }
 
 func validateConfigSyntax(path string, data []byte) error {
@@ -230,9 +251,14 @@ func sanitizeCheck(check Check) Check {
 	return check
 }
 
-func containsModel(models []string, selected string) bool {
-	for _, model := range models {
-		if model == selected {
+func modelSupportsProtocol(model ModelInfo, protocol probeProtocol) bool {
+	required := map[probeProtocol]string{
+		probeResponses: "openai-response",
+		probeMessages:  "anthropic",
+		probeChat:      "openai",
+	}[protocol]
+	for _, endpoint := range model.SupportedEndpointTypes {
+		if endpoint == required {
 			return true
 		}
 	}

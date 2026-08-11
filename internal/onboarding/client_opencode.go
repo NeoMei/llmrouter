@@ -2,8 +2,11 @@ package onboarding
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/QuantumNous/new-api/common"
 )
 
 type openCodeAdapter struct{}
@@ -21,7 +24,7 @@ func (openCodeAdapter) Plan(_ context.Context, request ConfigureRequest) (Config
 		return ConfigPlan{}, err
 	}
 	path := filepath.Join(request.Home, ".config", "opencode", "opencode.json")
-	existing, _, err := readPlannedFile(path)
+	existing, _, err := readPlannedFile(request.Home, path)
 	if err != nil {
 		return ConfigPlan{}, err
 	}
@@ -49,7 +52,44 @@ func (openCodeAdapter) Plan(_ context.Context, request ConfigureRequest) (Config
 
 func (openCodeAdapter) Check(_ context.Context, request CheckRequest) []Check {
 	path := filepath.Join(request.Home, ".config", "opencode", "opencode.json")
-	return []Check{checkManagedConfig("opencode-config", path, []string{`"llmapi"`, `"@ai-sdk/openai-compatible"`, `"{env:LLMAPI_TOKEN}"`})}
+	return []Check{semanticConfigCheck("opencode-config", checkOpenCodeConfig(request, path))}
+}
+
+func checkOpenCodeConfig(request CheckRequest, path string) error {
+	if request.ServerURL == nil {
+		return fmt.Errorf("expected OpenCode settings are incomplete")
+	}
+	data, err := loadManagedConfig(request.Home, path)
+	if err != nil {
+		return err
+	}
+	var root map[string]any
+	if err := common.UnmarshalUseNumber(data, &root); err != nil || root == nil {
+		return fmt.Errorf("invalid OpenCode settings")
+	}
+	providers, ok := root["provider"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("OpenCode providers missing")
+	}
+	provider, ok := providers["llmapi"].(map[string]any)
+	if !ok || provider["npm"] != "@ai-sdk/openai-compatible" || provider["name"] != "LLMAPI" {
+		return fmt.Errorf("OpenCode provider mismatch")
+	}
+	options, ok := provider["options"].(map[string]any)
+	if !ok || options["baseURL"] != endpointV1(request.ServerURL) || options["apiKey"] != "{env:LLMAPI_TOKEN}" {
+		return fmt.Errorf("OpenCode options mismatch")
+	}
+	if request.Model != "" {
+		models, ok := provider["models"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("OpenCode models missing")
+		}
+		model, ok := models[request.Model].(map[string]any)
+		if !ok || model["name"] != request.Model {
+			return fmt.Errorf("OpenCode model mismatch")
+		}
+	}
+	return nil
 }
 
 var _ ClientAdapter = openCodeAdapter{}

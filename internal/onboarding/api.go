@@ -25,6 +25,11 @@ type APIClient struct {
 	http   *http.Client
 }
 
+type ModelInfo struct {
+	ID                     string   `json:"id"`
+	SupportedEndpointTypes []string `json:"supported_endpoint_types"`
+}
+
 func NewAPIClient(origin *url.URL, token Secret, client *http.Client) *APIClient {
 	if client == nil {
 		client = http.DefaultClient
@@ -37,25 +42,55 @@ func (client *APIClient) Health(ctx context.Context) error {
 }
 
 func (client *APIClient) ListModels(ctx context.Context) ([]string, error) {
+	catalog, err := client.ListModelCatalog(ctx)
+	if err != nil {
+		return nil, err
+	}
+	models := make([]string, len(catalog))
+	for index, model := range catalog {
+		models[index] = model.ID
+	}
+	return models, nil
+}
+
+func (client *APIClient) ListModelCatalog(ctx context.Context) ([]ModelInfo, error) {
 	var response struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
+		Success *bool       `json:"success,omitempty"`
+		Data    []ModelInfo `json:"data"`
 	}
 	if err := client.do(ctx, http.MethodGet, "/v1/models", nil, true, &response); err != nil {
 		return nil, err
 	}
-	models := make([]string, 0, len(response.Data))
+	if response.Success != nil && !*response.Success {
+		return nil, fmt.Errorf("%w: model catalog reported failure", ErrNetwork)
+	}
+	if len(response.Data) == 0 {
+		return nil, fmt.Errorf("%w: model catalog is empty", ErrNetwork)
+	}
+	models := make([]ModelInfo, 0, len(response.Data))
 	seen := make(map[string]struct{}, len(response.Data))
 	for _, item := range response.Data {
 		if item.ID == "" || hasControl(item.ID) {
-			continue
+			return nil, fmt.Errorf("%w: model catalog contains an invalid model", ErrNetwork)
 		}
 		if _, exists := seen[item.ID]; exists {
 			continue
 		}
 		seen[item.ID] = struct{}{}
-		models = append(models, item.ID)
+		endpoints := make([]string, 0, len(item.SupportedEndpointTypes))
+		endpointSeen := make(map[string]struct{}, len(item.SupportedEndpointTypes))
+		for _, endpoint := range item.SupportedEndpointTypes {
+			if endpoint == "" || hasControl(endpoint) {
+				return nil, fmt.Errorf("%w: model catalog contains invalid capability metadata", ErrNetwork)
+			}
+			if _, exists := endpointSeen[endpoint]; exists {
+				continue
+			}
+			endpointSeen[endpoint] = struct{}{}
+			endpoints = append(endpoints, endpoint)
+		}
+		item.SupportedEndpointTypes = endpoints
+		models = append(models, item)
 	}
 	return models, nil
 }
@@ -156,12 +191,15 @@ func (client *APIClient) doWithHeaders(ctx context.Context, method, path string,
 }
 
 func cleanRequestID(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" || hasControl(value) {
+	if value == "" || value != strings.TrimSpace(value) || len(value) > 64 {
 		return ""
 	}
-	if len(value) > 128 {
-		return value[:128]
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || strings.ContainsRune("._:-", rune(character)) {
+			continue
+		}
+		return ""
 	}
 	return value
 }

@@ -177,18 +177,37 @@ func validateConfigureRequest(request ConfigureRequest) error {
 	return nil
 }
 
-func readPlannedFile(path string) ([]byte, bool, error) {
-	info, err := os.Lstat(path)
+func readPlannedFile(home, path string) ([]byte, bool, error) {
+	inputHome, err := filepath.Abs(home)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: resolve planning home", ErrUnsafe)
+	}
+	canonical, err := canonicalHome(inputHome)
+	if err != nil {
+		return nil, false, err
+	}
+	rawPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: resolve planned configuration", ErrUnsafe)
+	}
+	rawPath = filepath.Clean(rawPath)
+	if err := validateWithinHome(filepath.Clean(inputHome), rawPath); err != nil {
+		return nil, false, err
+	}
+	if err := rejectSymlinksBelow(filepath.Clean(inputHome), rawPath); err != nil {
+		return nil, false, err
+	}
+	resolved, err := canonicalPath(rawPath)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := validateWithinHome(canonical, resolved); err != nil {
+		return nil, false, err
+	}
+	data, err := secureReadFile(canonical, resolved)
 	if os.IsNotExist(err) {
 		return nil, false, nil
 	}
-	if err != nil {
-		return nil, false, fmt.Errorf("%w: inspect client configuration", ErrUnsafe)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || info.IsDir() {
-		return nil, false, fmt.Errorf("%w: client configuration is not a regular file", ErrUnsafe)
-	}
-	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, false, fmt.Errorf("%w: read client configuration", ErrUnsafe)
 	}

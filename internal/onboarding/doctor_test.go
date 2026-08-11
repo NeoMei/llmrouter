@@ -12,6 +12,7 @@ import (
 )
 
 func TestDoctorSkipsInferenceByDefaultAndRunsSelectedSmokeProtocols(t *testing.T) {
+	t.Setenv("LLMAPI_TOKEN", "doctor-secret")
 	var mu sync.Mutex
 	seen := make(map[string]int)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -23,7 +24,7 @@ func TestDoctorSkipsInferenceByDefaultAndRunsSelectedSmokeProtocols(t *testing.T
 		case "/healthz":
 			_, _ = io.WriteString(w, `ok`)
 		case "/v1/models":
-			_, _ = io.WriteString(w, `{"data":[{"id":"model-a"}]}`)
+			_, _ = io.WriteString(w, `{"data":[{"id":"model-a","supported_endpoint_types":["openai","openai-response","anthropic"]}]}`)
 		default:
 			_, _ = io.WriteString(w, `{}`)
 		}
@@ -72,5 +73,48 @@ func TestDoctorReportsMissingModelWithoutLeakingResponse(t *testing.T) {
 	defer srv.Close()
 	report := RunDoctor(t.Context(), DoctorOptions{Home: t.TempDir(), ServerURL: mustLoopbackURL(t, srv.URL), Token: NewSecret("doctor-secret"), Clients: []ClientID{ClientCodexCLI}, Model: "missing"})
 	require.Greater(t, report.Failed, 0)
+	requireCheck(t, report, "authentication", "FAIL")
 	requireNoSensitiveDoctorText(t, report, "doctor-secret")
+}
+
+func TestDoctorDetectsSelectedModelProtocolMismatchWithoutSmoke(t *testing.T) {
+	t.Setenv("LLMAPI_TOKEN", "doctor-secret")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			_, _ = io.WriteString(w, `{"data":[{"id":"chat-only","supported_endpoint_types":["openai"]}]}`)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	home := t.TempDir()
+	u := mustLoopbackURL(t, srv.URL)
+	clients := []ClientID{ClientCodexCLI, ClientClaudeCode, ClientOpenCode}
+	_, err := ConfigureClients(t.Context(), ConfigureRequest{Home: home, Platform: Platform{OS: runtime.GOOS, Arch: runtime.GOARCH}, ServerURL: u, Token: NewSecret("doctor-secret"), Model: "chat-only"}, clients)
+	require.NoError(t, err)
+	report := RunDoctor(t.Context(), DoctorOptions{Home: home, ServerURL: u, Token: NewSecret("doctor-secret"), Clients: clients, Model: "chat-only"})
+	requireCheck(t, report, "model-protocol-chat-completions", "PASS")
+	requireCheck(t, report, "model-protocol-responses", "FAIL")
+	requireCheck(t, report, "model-protocol-messages", "FAIL")
+}
+
+func TestDoctorNeverReportsPromptShapedRequestID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Request-Id", "Reply with OK.")
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer srv.Close()
+	report := RunDoctor(t.Context(), DoctorOptions{Home: t.TempDir(), ServerURL: mustLoopbackURL(t, srv.URL), Token: NewSecret("secret"), Model: "model-a"})
+	requireNoSensitiveDoctorText(t, report, "Reply with OK.")
+}
+
+func requireCheck(t *testing.T, report DoctorReport, name, status string) {
+	t.Helper()
+	for _, check := range report.Checks {
+		if check.Name == name {
+			require.Equal(t, status, check.Status)
+			return
+		}
+	}
+	t.Fatalf("missing doctor check %s", name)
 }

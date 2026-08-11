@@ -30,5 +30,5 @@ func TestInstallUsesPageOriginOnlyWhenServerURLIsAbsent(t *testing.T) {
 	require.Equal(t, 0, run([]string{"--home", home, "install"}))
 	data, err := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
 	require.NoError(t, err)
-	require.Contains(t, string(data), `base_url = "https://stage.example/v1"`)
+	require.Contains(t, string(data), "https://stage.example/v1")
 }

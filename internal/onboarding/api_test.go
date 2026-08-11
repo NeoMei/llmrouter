@@ -71,6 +71,41 @@ func TestAPIErrorRejectsCredentialShapedRequestID(t *testing.T) {
 	require.NotContains(t, err.Error(), token)
 }
 
+func TestAPIErrorRejectsPromptTextRequestID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Request-Id", "Reply with OK.")
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer srv.Close()
+	client := NewAPIClient(mustLoopbackURL(t, srv.URL), NewSecret("token"), srv.Client())
+	err := client.ProbeResponses(t.Context(), "model-a")
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "Reply with OK.")
+}
+
+func TestModelCatalogRequiresNonEmptyListAndPreservesCapabilities(t *testing.T) {
+	responses := []string{
+		`{}`,
+		`{"data":{}}`,
+		`{"data":[]}`,
+	}
+	for _, response := range responses {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, response) }))
+		client := NewAPIClient(mustLoopbackURL(t, srv.URL), NewSecret("token"), srv.Client())
+		_, err := client.ListModelCatalog(t.Context())
+		require.Error(t, err)
+		srv.Close()
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"data":[{"id":"model-a","supported_endpoint_types":["openai","openai-response","anthropic"]}]}`)
+	}))
+	defer srv.Close()
+	client := NewAPIClient(mustLoopbackURL(t, srv.URL), NewSecret("token"), srv.Client())
+	catalog, err := client.ListModelCatalog(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []string{"openai", "openai-response", "anthropic"}, catalog[0].SupportedEndpointTypes)
+}
+
 func mustLoopbackURL(t *testing.T, raw string) *url.URL {
 	t.Helper()
 	u, err := NormalizeServerURL(raw)

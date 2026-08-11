@@ -2,6 +2,7 @@ package onboarding
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -25,6 +26,7 @@ func TestRestorePreloadsAllBackupsBeforeMutation(t *testing.T) {
 	require.NoError(t, os.WriteFile(second, []byte("second-original"), 0o600))
 	tx, err := BeginTransaction(home)
 	require.NoError(t, err)
+	require.NoError(t, tx.Allow(first, second))
 	require.NoError(t, tx.Write(first, []byte("first-configured")))
 	require.NoError(t, tx.Write(second, []byte("second-configured")))
 	receipt, err := tx.Commit(ReceiptMeta{})
@@ -41,6 +43,7 @@ func TestRestoreAndUninstallAreIdempotent(t *testing.T) {
 	require.NoError(t, os.WriteFile(target, []byte("original"), 0o600))
 	tx, err := BeginTransaction(home)
 	require.NoError(t, err)
+	require.NoError(t, tx.Allow(target))
 	require.NoError(t, tx.Write(target, []byte("configured")))
 	receipt, err := tx.Commit(ReceiptMeta{})
 	require.NoError(t, err)
@@ -49,6 +52,7 @@ func TestRestoreAndUninstallAreIdempotent(t *testing.T) {
 
 	tx, err = BeginTransaction(home)
 	require.NoError(t, err)
+	require.NoError(t, tx.Allow(target))
 	require.NoError(t, tx.Write(target, []byte("configured-again")))
 	receipt, err = tx.Commit(ReceiptMeta{})
 	require.NoError(t, err)
@@ -60,7 +64,7 @@ func TestTransactionRejectsStateRootDestination(t *testing.T) {
 	home := t.TempDir()
 	tx, err := BeginTransaction(home)
 	require.NoError(t, err)
-	require.ErrorContains(t, tx.Write(filepath.Join(home, ".llmapi", "credentials", "receipt.key"), []byte("x")), "managed destination")
+	require.ErrorContains(t, tx.Allow(filepath.Join(home, ".llmapi", "credentials", "receipt.key")), "eligible")
 }
 
 func TestLoadReceiptRejectsTamperedReceiptAndNonCanonicalBackup(t *testing.T) {
@@ -69,6 +73,7 @@ func TestLoadReceiptRejectsTamperedReceiptAndNonCanonicalBackup(t *testing.T) {
 	require.NoError(t, os.WriteFile(target, []byte("original"), 0o600))
 	tx, err := BeginTransaction(home)
 	require.NoError(t, err)
+	require.NoError(t, tx.Allow(target))
 	require.NoError(t, tx.Write(target, []byte("configured")))
 	receipt, err := tx.Commit(ReceiptMeta{})
 	require.NoError(t, err)
@@ -124,6 +129,7 @@ func TestLoadReceiptRejectsDuplicateTargets(t *testing.T) {
 	require.NoError(t, os.WriteFile(target, []byte("original"), 0o600))
 	tx, err := BeginTransaction(home)
 	require.NoError(t, err)
+	require.NoError(t, tx.Allow(target))
 	require.NoError(t, tx.Write(target, []byte("configured")))
 	receipt, err := tx.Commit(ReceiptMeta{})
 	require.NoError(t, err)
@@ -139,4 +145,94 @@ func TestLoadReceiptRejectsDuplicateTargets(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(receipt.Path, raw, 0o600))
 	require.ErrorContains(t, Restore(home, receipt.ID), "duplicate targets")
+}
+
+func TestTransactionRequiresExplicitDestination(t *testing.T) {
+	home := t.TempDir()
+	target := filepath.Join(home, ".zshrc")
+	tx, err := BeginTransaction(home)
+	require.NoError(t, err)
+	require.ErrorContains(t, tx.Write(target, []byte("configured")), "not allowlisted")
+}
+
+func TestStateRootSetupRejectsSymlinkSwap(t *testing.T) {
+	home := t.TempDir()
+	state := filepath.Join(home, ".llmapi")
+	moved := filepath.Join(home, ".llmapi-held")
+	alternate := filepath.Join(home, "alternate")
+	require.NoError(t, os.Mkdir(state, 0o700))
+	require.NoError(t, os.Mkdir(alternate, 0o700))
+	setStateRootTestHook(func() {
+		require.NoError(t, os.Rename(state, moved))
+		require.NoError(t, os.Symlink(alternate, state))
+	})
+	t.Cleanup(func() { setStateRootTestHook(nil) })
+	_, err := BeginTransaction(home)
+	require.ErrorContains(t, err, "state root")
+	_, err = os.Stat(filepath.Join(alternate, "credentials"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestConcurrentFirstCommitUsesOneVerifiableReceiptKey(t *testing.T) {
+	home := t.TempDir()
+	const commits = 12
+	start := make(chan struct{})
+	errs := make(chan error, commits)
+	for index := 0; index < commits; index++ {
+		go func(index int) {
+			<-start
+			tx, err := BeginTransaction(home)
+			if err == nil {
+				target := filepath.Join(home, fmt.Sprintf(".client-%d", index))
+				err = tx.Allow(target)
+				if err == nil {
+					err = tx.Write(target, []byte("configured"))
+				}
+				if err == nil {
+					_, err = tx.Commit(ReceiptMeta{})
+				}
+			}
+			errs <- err
+		}(index)
+	}
+	close(start)
+	for index := 0; index < commits; index++ {
+		require.NoError(t, <-errs)
+	}
+	receipts, err := ListReceipts(home)
+	require.NoError(t, err)
+	require.Len(t, receipts, commits)
+	for _, receipt := range receipts {
+		require.NoError(t, verifyReceiptIntegrity(receipt))
+	}
+}
+
+func TestRestoringReceiptResumesItsRecordedTerminalAction(t *testing.T) {
+	home := t.TempDir()
+	target := filepath.Join(home, ".zshrc")
+	require.NoError(t, os.WriteFile(target, []byte("original"), 0o600))
+	tx, err := BeginTransaction(home)
+	require.NoError(t, err)
+	require.NoError(t, tx.Allow(target))
+	require.NoError(t, tx.Write(target, []byte("configured")))
+	receipt, err := tx.Commit(ReceiptMeta{})
+	require.NoError(t, err)
+
+	receipt.Status = receiptStatusRestoring
+	receipt.RecoveryAction = receiptStatusUninstalled
+	require.NoError(t, persistReceipt(&receipt))
+	require.NoError(t, os.WriteFile(target, []byte("original"), 0o600))
+	require.NoError(t, Restore(home, receipt.ID))
+	resumed, err := loadReceipt(home, receipt.ID)
+	require.NoError(t, err)
+	require.Equal(t, receiptStatusUninstalled, resumed.Status)
+	require.Empty(t, resumed.RecoveryAction)
+}
+
+func TestTransactionPolicyRejectsSSHAndArbitraryHomePaths(t *testing.T) {
+	home := t.TempDir()
+	tx, err := BeginTransaction(home)
+	require.NoError(t, err)
+	require.ErrorContains(t, tx.Allow(filepath.Join(home, ".ssh", "authorized_keys")), "eligible")
+	require.ErrorContains(t, tx.Allow(filepath.Join(home, "notes.txt")), "eligible")
 }

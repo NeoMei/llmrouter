@@ -41,3 +41,9 @@ func TestJsonRawMessageToString(t *testing.T) {
 		})
 	}
 }
+
+func TestUnmarshalUseNumberRejectsTrailingJSON(t *testing.T) {
+	var value map[string]any
+	err := UnmarshalUseNumber([]byte(`{"count":9007199254740993} trailing`), &value)
+	require.Error(t, err)
+}

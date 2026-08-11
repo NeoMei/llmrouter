@@ -13,6 +13,7 @@ func TestTransactionRollbackAndConflict(t *testing.T) {
 	require.NoError(t, os.WriteFile(target, []byte("original\n"), 0o600))
 	tx, err := BeginTransaction(home)
 	require.NoError(t, err)
+	require.NoError(t, tx.Allow(target))
 	require.NoError(t, tx.Write(target, []byte("configured\n")))
 	receipt, err := tx.Commit(ReceiptMeta{Clients: []ClientID{ClientClaudeCode}})
 	require.NoError(t, err)
@@ -29,7 +30,7 @@ func TestTransactionRejectsDestinationSymlink(t *testing.T) {
 	require.NoError(t, os.Symlink(real, link))
 	tx, err := BeginTransaction(home)
 	require.NoError(t, err)
-	require.ErrorContains(t, tx.Write(link, []byte("x")), "symlink")
+	require.ErrorContains(t, tx.Allow(link), "symlink")
 }
 
 func TestTransactionRestoresOriginalAndDeletesNewFile(t *testing.T) {
@@ -39,6 +40,7 @@ func TestTransactionRestoresOriginalAndDeletesNewFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(original, []byte("original"), 0o600))
 	tx, err := BeginTransaction(home)
 	require.NoError(t, err)
+	require.NoError(t, tx.Allow(original, added))
 	require.NoError(t, tx.Write(original, []byte("configured")))
 	require.NoError(t, tx.Write(added, []byte("new")))
 	receipt, err := tx.Commit(ReceiptMeta{})
@@ -68,6 +70,7 @@ func TestRestoreRejectsBackupSymlink(t *testing.T) {
 	require.NoError(t, os.WriteFile(target, []byte("original"), 0o600))
 	tx, err := BeginTransaction(home)
 	require.NoError(t, err)
+	require.NoError(t, tx.Allow(target))
 	require.NoError(t, tx.Write(target, []byte("configured")))
 	receipt, err := tx.Commit(ReceiptMeta{})
 	require.NoError(t, err)

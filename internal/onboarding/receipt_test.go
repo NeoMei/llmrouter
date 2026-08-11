@@ -15,6 +15,7 @@ func TestReceiptContainsNoCredentialsAndUninstallRestores(t *testing.T) {
 	target := filepath.Join(home, ".config")
 	tx, err := BeginTransaction(home)
 	require.NoError(t, err)
+	require.NoError(t, tx.Allow(target))
 	require.NoError(t, tx.Write(target, []byte("configured")))
 	receipt, err := tx.Commit(ReceiptMeta{Clients: []ClientID{ClientAider}})
 	require.NoError(t, err)
@@ -27,10 +28,12 @@ func TestReceiptContainsNoCredentialsAndUninstallRestores(t *testing.T) {
 
 func TestListReceiptsNewestFirst(t *testing.T) {
 	home := t.TempDir()
-	for _, filename := range []string{"one", "two"} {
+	for _, filename := range []string{".one", ".two"} {
 		tx, err := BeginTransaction(home)
 		require.NoError(t, err)
-		require.NoError(t, tx.Write(filepath.Join(home, filename), []byte(filename)))
+		target := filepath.Join(home, filename)
+		require.NoError(t, tx.Allow(target))
+		require.NoError(t, tx.Write(target, []byte(filename)))
 		_, err = tx.Commit(ReceiptMeta{})
 		require.NoError(t, err)
 	}

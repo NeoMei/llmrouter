@@ -15,6 +15,7 @@ const privateDirMode = 0o700
 type Transaction struct {
 	home      string
 	inputHome string
+	allowed   map[string]struct{}
 	files     map[string]transactionFile
 	committed bool
 }
@@ -36,11 +37,41 @@ func BeginTransaction(home string) (*Transaction, error) {
 	if err != nil {
 		return nil, err
 	}
-	tx := &Transaction{home: absolute, inputHome: filepath.Clean(inputHome), files: make(map[string]transactionFile)}
+	tx := &Transaction{home: absolute, inputHome: filepath.Clean(inputHome), allowed: make(map[string]struct{}), files: make(map[string]transactionFile)}
 	if err := ensureStateRoots(tx.home); err != nil {
 		return nil, err
 	}
 	return tx, nil
+}
+
+// Allow registers exact client-managed destinations for this transaction.
+// Client adapters must register every configuration path before calling Write.
+func (tx *Transaction) Allow(paths ...string) error {
+	if tx == nil || tx.committed {
+		return fmt.Errorf("%w: transaction is closed", ErrConflict)
+	}
+	for _, path := range paths {
+		rawPath, err := filepath.Abs(path)
+		if err != nil {
+			return fmt.Errorf("%w: resolve destination", ErrUnsafe)
+		}
+		rawPath = filepath.Clean(rawPath)
+		if err := validateWithinHome(tx.inputHome, rawPath); err != nil {
+			return err
+		}
+		if err := rejectSymlinksBelow(tx.inputHome, rawPath); err != nil {
+			return err
+		}
+		absolute, err := canonicalPath(rawPath)
+		if err != nil {
+			return err
+		}
+		if err := validateWithinHome(tx.home, absolute); err != nil || !isAllowedManagedDestination(tx.home, absolute) {
+			return fmt.Errorf("%w: destination is not eligible for onboarding", ErrUnsafe)
+		}
+		tx.allowed[absolute] = struct{}{}
+	}
+	return nil
 }
 
 // Write stages a private, atomic replacement that is applied by Commit.
@@ -66,8 +97,8 @@ func (tx *Transaction) Write(path string, data []byte) error {
 	if err := validateWithinHome(tx.home, absolute); err != nil {
 		return err
 	}
-	if !isAllowedManagedDestination(tx.home, absolute) {
-		return fmt.Errorf("%w: destination is not a managed destination", ErrUnsafe)
+	if _, allowed := tx.allowed[absolute]; !allowed {
+		return fmt.Errorf("%w: destination is not allowlisted", ErrUnsafe)
 	}
 	if err := validateSecurePath(tx.home, absolute); err != nil {
 		return err
@@ -101,49 +132,6 @@ func (tx *Transaction) sortedFiles() []transactionFile {
 
 func digest(data []byte) string { return fmt.Sprintf("%x", sha256.Sum256(data)) }
 
-func ensureStateRoots(home string) error {
-	if err := validateHome(home); err != nil {
-		return err
-	}
-	for _, root := range []string{filepath.Join(home, ".llmapi"), filepath.Join(home, ".llmapi", "receipts"), filepath.Join(home, ".llmapi", "backups"), filepath.Join(home, ".llmapi", "credentials")} {
-		if err := ensureSecureDirectory(home, root); err != nil {
-			return err
-		}
-		if err := os.Chmod(root, privateDirMode); err != nil {
-			return fmt.Errorf("%w: protect state directory", ErrUnsafe)
-		}
-	}
-	return nil
-}
-
-func ensureSecureDirectory(home, directory string) error {
-	if err := validateWithinHome(home, directory); err != nil {
-		return err
-	}
-	rel, _ := filepath.Rel(home, directory)
-	current := home
-	for _, segment := range strings.Split(rel, string(filepath.Separator)) {
-		if segment == "." || segment == "" {
-			continue
-		}
-		current = filepath.Join(current, segment)
-		info, err := os.Lstat(current)
-		if os.IsNotExist(err) {
-			if err := os.Mkdir(current, privateDirMode); err != nil && !os.IsExist(err) {
-				return fmt.Errorf("%w: create private directory", ErrUnsafe)
-			}
-			info, err = os.Lstat(current)
-		}
-		if err != nil || !info.IsDir() {
-			return fmt.Errorf("%w: state directory is invalid", ErrUnsafe)
-		}
-		if err := validateSecureOwner(info); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func validateSecurePath(home, path string) error {
 	if err := validateHome(home); err != nil {
 		return err
@@ -151,8 +139,7 @@ func validateSecurePath(home, path string) error {
 	if err := validateWithinHome(home, path); err != nil {
 		return err
 	}
-	parent := filepath.Dir(path)
-	if err := ensureSecureDirectory(home, parent); err != nil {
+	if err := rejectSymlinksBelow(home, path); err != nil {
 		return err
 	}
 	info, err := os.Lstat(path)

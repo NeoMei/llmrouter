@@ -23,3 +23,12 @@ func removeSecureFile(string, string) error {
 }
 
 func setSecureFSTestHook(func()) {}
+
+func ensureStateRoots(string) error {
+	return fmt.Errorf("%w: Windows ACL enforcement is unavailable", ErrUnsafe)
+}
+func setStateRootTestHook(func()) {}
+
+func createReceiptKeyExclusive(string, string, []byte) (bool, error) {
+	return false, fmt.Errorf("%w: Windows ACL enforcement is unavailable", ErrUnsafe)
+}

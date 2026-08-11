@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -36,14 +37,15 @@ type ReceiptFile struct {
 }
 
 type Receipt struct {
-	ID        string        `json:"id"`
-	Path      string        `json:"path"`
-	Home      string        `json:"home"`
-	CreatedAt time.Time     `json:"created_at"`
-	Meta      ReceiptMeta   `json:"meta"`
-	Files     []ReceiptFile `json:"files"`
-	Status    string        `json:"status"`
-	Integrity string        `json:"integrity"`
+	ID             string        `json:"id"`
+	Path           string        `json:"path"`
+	Home           string        `json:"home"`
+	CreatedAt      time.Time     `json:"created_at"`
+	Meta           ReceiptMeta   `json:"meta"`
+	Files          []ReceiptFile `json:"files"`
+	Status         string        `json:"status"`
+	RecoveryAction string        `json:"recovery_action,omitempty"`
+	Integrity      string        `json:"integrity"`
 }
 
 func (tx *Transaction) Commit(meta ReceiptMeta) (Receipt, error) {
@@ -66,10 +68,6 @@ func (tx *Transaction) Commit(meta ReceiptMeta) (Receipt, error) {
 	id, err := newReceiptID()
 	if err != nil {
 		return Receipt{}, fmt.Errorf("%w: create receipt ID", ErrUnsafe)
-	}
-	backupDir := receiptBackupDir(tx.home, id)
-	if err := ensureSecureDirectory(tx.home, backupDir); err != nil {
-		return Receipt{}, err
 	}
 	receipt := Receipt{ID: id, Path: receiptPath(tx.home, id), Home: tx.home, CreatedAt: time.Now().UTC(), Meta: meta, Status: receiptStatusActive, Files: make([]ReceiptFile, 0, len(files))}
 	for index, file := range files {
@@ -154,16 +152,21 @@ type restoreFile struct {
 	original   []byte
 }
 
-func reverseReceipt(home, receiptID, terminalStatus string) error {
+func reverseReceipt(home, receiptID, requestedAction string) error {
 	receipt, err := loadReceipt(home, receiptID)
 	if err != nil {
 		return err
 	}
+	action := requestedAction
+	resuming := false
 	switch receipt.Status {
 	case receiptStatusRestored, receiptStatusUninstalled:
 		return nil
 	case receiptStatusRestoring:
-		return fmt.Errorf("%w: receipt recovery is incomplete", ErrUnsafe)
+		if receipt.RecoveryAction != receiptStatusRestored && receipt.RecoveryAction != receiptStatusUninstalled {
+			return fmt.Errorf("%w: receipt recovery action is invalid", ErrUnsafe)
+		}
+		action, resuming = receipt.RecoveryAction, true
 	case receiptStatusActive:
 	default:
 		return fmt.Errorf("%w: invalid receipt state", ErrUnsafe)
@@ -174,11 +177,8 @@ func reverseReceipt(home, receiptID, terminalStatus string) error {
 		if err := validateSecurePath(receipt.Home, file.Path); err != nil {
 			return err
 		}
-		configured, err := secureReadFile(receipt.Home, file.Path)
-		if err != nil || digest(configured) != file.ConfiguredHash {
-			return fmt.Errorf("%w: %s changed since configuration", ErrConflict, file.Path)
-		}
-		stage := restoreFile{receipt: file, configured: configured}
+		stage := restoreFile{receipt: file}
+		current, readErr := secureReadFile(receipt.Home, file.Path)
 		if file.Existed {
 			if err := validateSecurePath(receipt.Home, file.BackupPath); err != nil {
 				return err
@@ -188,15 +188,37 @@ func reverseReceipt(home, receiptID, terminalStatus string) error {
 				return fmt.Errorf("%w: backup is unavailable", ErrUnsafe)
 			}
 		}
+		switch {
+		case readErr == nil && digest(current) == file.ConfiguredHash:
+			stage.configured = current
+		case file.Existed && readErr == nil && digest(current) == file.OriginalHash:
+			if !resuming {
+				return fmt.Errorf("%w: %s changed since configuration", ErrConflict, file.Path)
+			}
+			stage.configured = nil
+		case !file.Existed && os.IsNotExist(readErr):
+			if !resuming {
+				return fmt.Errorf("%w: %s changed since configuration", ErrConflict, file.Path)
+			}
+			stage.configured = nil
+		default:
+			return fmt.Errorf("%w: %s changed since configuration", ErrConflict, file.Path)
+		}
 		staged = append(staged, stage)
 	}
 
-	receipt.Status = receiptStatusRestoring
-	if err := persistReceipt(&receipt); err != nil {
-		return err
+	if !resuming {
+		receipt.Status = receiptStatusRestoring
+		receipt.RecoveryAction = action
+		if err := persistReceipt(&receipt); err != nil {
+			return err
+		}
 	}
 	applied := make([]restoreFile, 0, len(staged))
 	for _, file := range staged {
+		if file.configured == nil {
+			continue
+		}
 		if file.receipt.Existed {
 			err = atomicWrite(receipt.Home, file.receipt.Path, file.original)
 		} else {
@@ -206,15 +228,17 @@ func reverseReceipt(home, receiptID, terminalStatus string) error {
 			if rollbackErr := rollbackRestore(receipt.Home, applied); rollbackErr != nil {
 				return fmt.Errorf("%w: restore failed and rollback failed: %v", ErrUnsafe, rollbackErr)
 			}
-			receipt.Status = receiptStatusActive
-			if stateErr := persistReceipt(&receipt); stateErr != nil {
-				return fmt.Errorf("%w: restore rollback state is incomplete: %v", ErrUnsafe, stateErr)
+			if !resuming {
+				receipt.Status, receipt.RecoveryAction = receiptStatusActive, ""
+				if stateErr := persistReceipt(&receipt); stateErr != nil {
+					return fmt.Errorf("%w: restore rollback state is incomplete: %v", ErrUnsafe, stateErr)
+				}
 			}
 			return err
 		}
 		applied = append(applied, file)
 	}
-	receipt.Status = terminalStatus
+	receipt.Status, receipt.RecoveryAction = action, ""
 	if err := persistReceipt(&receipt); err != nil {
 		return fmt.Errorf("%w: restored files are journaled for recovery", ErrUnsafe)
 	}
@@ -315,14 +339,26 @@ func validateReceipt(receipt Receipt) error {
 	return nil
 }
 
-// isAllowedManagedDestination is the explicit Task 3 extension point. Client adapters
-// may add managed roots, but the onboarding state root is never a client destination.
+// isAllowedManagedDestination is the Task 3 adapter boundary. Transactions accept
+// only exact adapter-registered files beneath these client configuration roots.
 func isAllowedManagedDestination(home, path string) bool {
 	if err := validateWithinHome(home, path); err != nil {
 		return false
 	}
-	stateRoot := filepath.Join(home, ".llmapi")
-	return path != stateRoot && !strings.HasPrefix(path, stateRoot+string(filepath.Separator))
+	rel, _ := filepath.Rel(home, path)
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) == 0 || parts[0] == ".llmapi" || parts[0] == ".ssh" {
+		return false
+	}
+	if len(parts) == 1 {
+		return strings.HasPrefix(parts[0], ".")
+	}
+	for _, root := range []string{".config", ".continue", ".claude", ".codex", ".opencode", "Library"} {
+		if parts[0] == root {
+			return true
+		}
+	}
+	return false
 }
 
 func receiptPath(home, id string) string {
@@ -371,23 +407,47 @@ func receiptMAC(key []byte, receipt Receipt) string {
 func receiptKey(home string, create bool) ([]byte, error) {
 	path := filepath.Join(home, ".llmapi", "credentials", "receipt.key")
 	key, err := secureReadFile(home, path)
-	if err == nil {
-		if len(key) != 32 {
-			return nil, fmt.Errorf("%w: receipt key is invalid", ErrUnsafe)
-		}
+	if err == nil && len(key) == 32 {
 		return key, nil
 	}
-	if !create || !os.IsNotExist(err) {
+	if err == nil && !create {
+		return nil, fmt.Errorf("%w: receipt key is invalid", ErrUnsafe)
+	}
+	if err != nil && !create {
+		return nil, fmt.Errorf("%w: receipt key is unavailable", ErrUnsafe)
+	}
+	if err == nil {
+		return readReceiptKeyWinner(home, path)
+	}
+	if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("%w: receipt key is unavailable", ErrUnsafe)
 	}
 	key = make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
 		return nil, fmt.Errorf("%w: create receipt key", ErrUnsafe)
 	}
-	if err := atomicWrite(home, path, key); err != nil {
+	created, err := createReceiptKeyExclusive(home, path, key)
+	if err != nil {
 		return nil, err
 	}
-	return key, nil
+	if created {
+		return key, nil
+	}
+	return readReceiptKeyWinner(home, path)
+}
+
+func readReceiptKeyWinner(home, path string) ([]byte, error) {
+	for attempt := 0; attempt < 1024; attempt++ {
+		key, err := secureReadFile(home, path)
+		if err == nil && len(key) == 32 {
+			return key, nil
+		}
+		if err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("%w: receipt key is unavailable", ErrUnsafe)
+		}
+		runtime.Gosched()
+	}
+	return nil, fmt.Errorf("%w: receipt key is unavailable", ErrUnsafe)
 }
 
 func newReceiptID() (string, error) {

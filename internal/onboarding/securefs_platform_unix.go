@@ -67,6 +67,9 @@ func openSecureParent(home, path string, create bool) (*secureParent, error) {
 			}
 			next, openErr = unix.Openat(fd, segment, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		}
+		if errors.Is(openErr, unix.ENOENT) {
+			return nil, os.ErrNotExist
+		}
 		if openErr != nil {
 			return nil, fmt.Errorf("%w: open parent without following links", ErrUnsafe)
 		}
@@ -201,4 +204,98 @@ func removeSecureFile(home, path string) error {
 		return fmt.Errorf("%w: sync directory", ErrUnsafe)
 	}
 	return nil
+}
+
+var stateRootTestHook func()
+
+func setStateRootTestHook(hook func()) { stateRootTestHook = hook }
+
+func ensureStateRoots(home string) error {
+	fd, err := unix.Open(home, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("%w: open home for state root", ErrUnsafe)
+	}
+	defer unix.Close(fd)
+	if err := verifyDirectoryFD(fd); err != nil {
+		return err
+	}
+	if stateRootTestHook != nil {
+		stateRootTestHook()
+	}
+	state, err := openPrivateDirectoryAt(fd, ".llmapi")
+	if err != nil {
+		return fmt.Errorf("%w: state root", ErrUnsafe)
+	}
+	defer unix.Close(state)
+	for _, name := range []string{"receipts", "backups", "credentials"} {
+		child, err := openPrivateDirectoryAt(state, name)
+		if err != nil {
+			return fmt.Errorf("%w: state root", ErrUnsafe)
+		}
+		_ = unix.Close(child)
+	}
+	if err := unix.Fsync(state); err != nil {
+		return fmt.Errorf("%w: sync state root", ErrUnsafe)
+	}
+	return unix.Fsync(fd)
+}
+
+func openPrivateDirectoryAt(parent int, name string) (int, error) {
+	if err := unix.Mkdirat(parent, name, privateDirMode); err != nil && !errors.Is(err, unix.EEXIST) {
+		return -1, err
+	}
+	fd, err := unix.Openat(parent, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return -1, err
+	}
+	if err := unix.Fchmod(fd, privateDirMode); err != nil {
+		_ = unix.Close(fd)
+		return -1, err
+	}
+	if err := verifyDirectoryFD(fd); err != nil {
+		_ = unix.Close(fd)
+		return -1, err
+	}
+	if err := unix.Fsync(fd); err != nil {
+		_ = unix.Close(fd)
+		return -1, err
+	}
+	return fd, nil
+}
+
+// createReceiptKeyExclusive creates a key once; concurrent creators securely read
+// the winning key instead of overwriting it.
+func createReceiptKeyExclusive(home, path string, key []byte) (bool, error) {
+	parent, err := openSecureParent(home, path, false)
+	if err != nil {
+		return false, err
+	}
+	defer parent.close()
+	fd, err := unix.Openat(parent.fd, parent.name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, privateFileMode)
+	if errors.Is(err, unix.EEXIST) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("%w: create receipt key", ErrUnsafe)
+	}
+	file := os.NewFile(uintptr(fd), parent.name)
+	if err := unix.Fchmod(fd, privateFileMode); err != nil {
+		file.Close()
+		return false, fmt.Errorf("%w: protect receipt key", ErrUnsafe)
+	}
+	if _, err := file.Write(key); err != nil {
+		file.Close()
+		return false, fmt.Errorf("%w: write receipt key", ErrUnsafe)
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return false, fmt.Errorf("%w: sync receipt key", ErrUnsafe)
+	}
+	if err := file.Close(); err != nil {
+		return false, fmt.Errorf("%w: close receipt key", ErrUnsafe)
+	}
+	if err := unix.Fsync(parent.fd); err != nil {
+		return false, fmt.Errorf("%w: sync receipt key directory", ErrUnsafe)
+	}
+	return true, nil
 }

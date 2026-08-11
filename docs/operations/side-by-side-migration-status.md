@@ -80,3 +80,20 @@ production traffic change:
 **Rollback / retention:** The existing `new-api` container and `postgres`/`redis`
 containers have not been modified. The staging `codex-gateway-next` container can
 be stopped or retained on instruction. No production traffic has been switched.
+
+## Update 2026-08-11: redeploy with security headers and browser acceptance
+
+- Rebuilt image from local HEAD `47d54d7`.
+- Image digest: `sha256:65f022d833a43c0b7d2089d2c28243c7074c52ee5b2b9473374114f77bcb473b`.
+- Container redeployed on `127.0.0.1:13100` with the same network/volume/env config.
+- Baseline security headers now returned on all responses:
+  - `X-Content-Type-Options: nosniff`
+  - `X-Frame-Options: SAMEORIGIN`
+  - `Referrer-Policy: strict-origin-when-cross-origin`
+- Database invariant counts (after extended parity script):
+  - users: 12, channels: 4, tokens: 17, abilities: 19, options: 76 (identical)
+  - user_subscriptions: 0, subscription_orders: 0 (identical)
+  - quota_data: 4649 vs 4621, logs: 74015 vs 72506 (drift from test traffic on staging clone)
+- Playwright browser acceptance: **14/14 passed** locally and **14/14 passed** serially against remote staging via SSH tunnel.
+- Parity matrix and updated no-go recommendation: `artifacts/migration-parity/parity-matrix.md`.
+- Updated no-go recommendation remains in effect; the staging target must not receive production traffic until provider smoke tests, a fresh clone, and release artifacts are complete.

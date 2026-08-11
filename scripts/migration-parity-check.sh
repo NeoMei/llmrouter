@@ -87,7 +87,7 @@ done
 export PGPASSWORD=Postgres9803
 for db in new-api codex_gateway_next; do
   echo "== $db invariant counts ==" >> "$EVIDENCE/parity.log"
-  for tbl in users channels tokens abilities options; do
+  for tbl in users channels tokens abilities options user_subscriptions subscription_orders quota_data logs; do
     cnt=$(docker exec -e PGPASSWORD=$PGPASSWORD postgres psql -U root -d "$db" -Atc "SELECT count(*) FROM $tbl" 2>/dev/null || echo ERR)
     echo "$tbl: $cnt" >> "$EVIDENCE/parity.log"
   done

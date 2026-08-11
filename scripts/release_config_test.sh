@@ -28,6 +28,20 @@ raise 'Linux build must not receive macOS signing credentials' if linux_build.ke
 raise 'macOS signing credentials are missing' unless macos_build.fetch('env').key?('CSC_LINK')
 raise 'Windows signing credentials are missing' unless windows_build.fetch('env').key?('WIN_CSC_LINK')
 RUBY
+ruby <<'RUBY'
+require 'yaml'
+workflow = YAML.load_file('.github/workflows/ci.yml')
+jobs = workflow.fetch('jobs')
+
+backend_steps = jobs.fetch('backend').fetch('steps')
+verify_index = backend_steps.index { |step| step['run'] == 'bash scripts/verify-backend.sh' }
+build_index = backend_steps.index { |step| step['run'] == 'bun run build' && step['working-directory'] == 'web' }
+raise 'backend CI must build web/dist before compiling the embedded Go application' unless build_index && verify_index && build_index < verify_index
+
+cli_setup = jobs.fetch('cli').fetch('steps').find { |step| step['uses']&.start_with?('actions/setup-node@') }
+expected_setup_node = 'actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e'
+raise 'CLI CI must pin the repository-validated setup-node action' unless cli_setup&.fetch('uses') == expected_setup_node
+RUBY
 if grep -Eq '(^|[^[:alnum:]])latest([^[:alnum:]]|$)|123456' docker-compose.yml; then
   echo "production compose contains a mutable tag or example password" >&2
   exit 1
@@ -58,6 +72,7 @@ env \
   OBJECT_STORE_SECRET_ACCESS_KEY=gateway-secret-key \
   SESSION_COOKIE_SECURE=true \
   SESSION_COOKIE_TRUSTED_URL=https://gateway.example.com \
+  TRUSTED_ORIGINS=https://gateway.example.com \
   TRUSTED_PROXIES=10.0.0.10/32 \
   BACKUP_DIR=/tmp/codex-gateway-backups \
   ROLLBACK_IMAGE=ghcr.io/example/codex-gateway@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \

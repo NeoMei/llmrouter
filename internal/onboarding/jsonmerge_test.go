@@ -20,3 +20,14 @@ func TestMergeJSONObjectRejectsNonObjectBoundary(t *testing.T) {
 	_, err := MergeJSONObject([]byte(`{"nested":false}`), []string{"nested", "llmapi"}, true)
 	require.ErrorContains(t, err, "not an object")
 }
+
+func TestMergeJSONObjectRejectsDuplicateKeysRecursivelyAndTrailingJSON(t *testing.T) {
+	for _, input := range []string{
+		`{"mcpServers":{},"mcpServers":{}}`,
+		`{"mcpServers":{"existing":{"command":"a","command":"b"}}}`,
+		`{"mcpServers":{}} {}`,
+	} {
+		_, err := MergeJSONObject([]byte(input), []string{"mcpServers", "llmapi"}, map[string]any{"command": "bridge"})
+		require.Error(t, err, input)
+	}
+}

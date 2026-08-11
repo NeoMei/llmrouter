@@ -27,12 +27,13 @@ type Discovery struct {
 }
 
 type ConfigureRequest struct {
-	Home       string
-	Platform   Platform
-	ServerURL  *url.URL
-	Token      Secret
-	Model      string
-	BridgePath string
+	Home         string
+	Platform     Platform
+	ServerURL    *url.URL
+	Token        Secret
+	Model        string
+	BridgePath   string
+	BridgeSHA256 string
 }
 
 type PlannedWrite struct {
@@ -155,7 +156,7 @@ func ConfigureClients(ctx context.Context, request ConfigureRequest, clients []C
 			return ConfigureResult{}, err
 		}
 	}
-	receipt, err := tx.Commit(ReceiptMeta{Clients: append([]ClientID(nil), clients...), Model: request.Model})
+	receipt, err := tx.Commit(ReceiptMeta{Clients: append([]ClientID(nil), clients...), Model: request.Model, BridgeSHA256: request.BridgeSHA256})
 	if err != nil {
 		return ConfigureResult{}, err
 	}

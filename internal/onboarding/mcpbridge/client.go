@@ -35,13 +35,17 @@ func NewHTTPClient(config Config, client *http.Client) (*HTTPClient, error) {
 	if client == nil {
 		client = http.DefaultClient
 	}
+	containedClient := *client
+	containedClient.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
 	allowed := make(map[string]struct{}, len(config.Models))
 	for _, model := range config.Models {
 		allowed[model] = struct{}{}
 	}
 	return &HTTPClient{
 		origin: origin, token: config.Token, models: append([]string(nil), config.Models...),
-		allowed: allowed, timeout: time.Duration(config.TimeoutSeconds) * time.Second, http: client,
+		allowed: allowed, timeout: time.Duration(config.TimeoutSeconds) * time.Second, http: &containedClient,
 	}, nil
 }
 

@@ -24,6 +24,7 @@ type DoctorReport struct {
 
 type DoctorOptions struct {
 	Home      string
+	Platform  Platform
 	ServerURL *url.URL
 	Token     Secret
 	Clients   []ClientID
@@ -49,7 +50,10 @@ func RunDoctor(ctx context.Context, options DoctorOptions) DoctorReport {
 		add(Check{Name: "server-url", Status: "PASS", Message: "server URL satisfies onboarding policy"})
 	}
 
-	platform := Platform{OS: runtime.GOOS, Arch: runtime.GOARCH}
+	platform := options.Platform
+	if platform.OS == "" {
+		platform = Platform{OS: runtime.GOOS, Arch: runtime.GOARCH}
+	}
 	for _, id := range options.Clients {
 		adapter, ok := AdapterFor(id)
 		if !ok {
@@ -126,6 +130,9 @@ func RunDoctor(ctx context.Context, options DoctorOptions) DoctorReport {
 	sort.Strings(protocols)
 	for _, name := range protocols {
 		protocol := probeProtocol(name)
+		if protocol == probeMCP {
+			continue
+		}
 		check := Check{Name: "model-protocol-" + name}
 		if selectedModel == nil {
 			check.Status, check.Message = "SKIP", "selected model capability metadata is unavailable"
@@ -140,6 +147,9 @@ func RunDoctor(ctx context.Context, options DoctorOptions) DoctorReport {
 	}
 	for _, name := range protocols {
 		protocol := probeProtocol(name)
+		if protocol == probeMCP {
+			continue
+		}
 		if !options.Smoke {
 			add(Check{Name: "inference-" + name, Status: "SKIP", Message: "inference smoke test is opt-in"})
 			continue
@@ -157,13 +167,33 @@ func RunDoctor(ctx context.Context, options DoctorOptions) DoctorReport {
 			err = client.ProbeMessages(ctx, options.Model)
 		case probeChat:
 			err = client.ProbeChatCompletions(ctx, options.Model)
-		case probeMCP:
-			err = client.ProbeChatCompletions(ctx, options.Model)
 		}
 		if err != nil {
 			add(Check{Name: "inference-" + name, Status: "FAIL", Message: safeNetworkMessage(err)})
 		} else {
 			add(Check{Name: "inference-" + name, Status: "PASS", Message: "bounded non-streaming probe succeeded"})
+		}
+	}
+	if _, selected := protocolSet[probeMCP]; selected {
+		if platform.OS != "darwin" && platform.OS != "windows" {
+			add(Check{Name: "mcp-lifecycle", Status: "SKIP", Message: "official Claude Desktop is unsupported on Linux"})
+			add(Check{Name: "inference-mcp", Status: "SKIP", Message: "official Claude Desktop is unsupported on Linux"})
+		} else {
+			lifecycleErr, smokeErr := probeClaudeDesktopMCP(ctx, CheckRequest{
+				Home: options.Home, Platform: platform, ServerURL: options.ServerURL, Token: options.Token, Model: options.Model,
+			}, options.Smoke)
+			if lifecycleErr != nil {
+				add(Check{Name: "mcp-lifecycle", Status: "FAIL", Message: "configured MCP bridge lifecycle check failed"})
+			} else {
+				add(Check{Name: "mcp-lifecycle", Status: "PASS", Message: "configured MCP bridge completed initialization and exposed the bounded tools"})
+			}
+			if !options.Smoke {
+				add(Check{Name: "inference-mcp", Status: "SKIP", Message: "inference smoke test is opt-in"})
+			} else if lifecycleErr != nil || smokeErr != nil {
+				add(Check{Name: "inference-mcp", Status: "FAIL", Message: "bounded MCP chat tool call failed"})
+			} else {
+				add(Check{Name: "inference-mcp", Status: "PASS", Message: "bounded MCP chat tool call succeeded"})
+			}
 		}
 	}
 
@@ -264,7 +294,6 @@ func modelSupportsProtocol(model ModelInfo, protocol probeProtocol) bool {
 		probeResponses: "openai-response",
 		probeMessages:  "anthropic",
 		probeChat:      "openai",
-		probeMCP:       "openai",
 	}[protocol]
 	for _, endpoint := range model.SupportedEndpointTypes {
 		if endpoint == required {

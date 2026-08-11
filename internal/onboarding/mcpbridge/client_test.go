@@ -1,6 +1,7 @@
 package mcpbridge
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,62 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/stretchr/testify/require"
 )
+
+func TestHTTPClientNeverFollowsSameOriginCrossOriginOrDowngradeRedirects(t *testing.T) {
+	tests := []struct {
+		name string
+		tls  bool
+	}{
+		{name: "same-origin"},
+		{name: "cross-origin"},
+		{name: "https-downgrade", tls: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			targetHits := 0
+			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				targetHits++
+				require.Empty(t, request.Header.Get("Authorization"))
+				_, _ = io.WriteString(w, `{"data":[{"id":"model-a"}]}`)
+			}))
+			defer target.Close()
+
+			var redirect *httptest.Server
+			handler := http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				location := target.URL + "/redirected"
+				if tc.name == "same-origin" {
+					location = "/redirected"
+					if request.URL.Path == "/redirected" {
+						targetHits++
+						require.Equal(t, "Bearer bridge-secret", request.Header.Get("Authorization"))
+						_, _ = io.WriteString(w, `{"data":[{"id":"model-a"}]}`)
+						return
+					}
+				}
+				http.Redirect(w, request, location, http.StatusTemporaryRedirect)
+			})
+			if tc.tls {
+				redirect = httptest.NewTLSServer(handler)
+			} else {
+				redirect = httptest.NewServer(handler)
+			}
+			defer redirect.Close()
+
+			callerRedirects := 0
+			caller := redirect.Client()
+			caller.CheckRedirect = func(*http.Request, []*http.Request) error {
+				callerRedirects++
+				return errors.New("caller redirect hook")
+			}
+			client := newTestHTTPClient(t, redirect.URL, []string{"model-a"}, caller)
+			_, err := client.ListModels(t.Context())
+			require.Error(t, err)
+			require.Zero(t, targetHits)
+			require.Zero(t, callerRedirects)
+			require.ErrorContains(t, caller.CheckRedirect(nil, nil), "caller redirect hook")
+		})
+	}
+}
 
 func TestHTTPClientListsOnlyConfiguredUpstreamModels(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
@@ -77,7 +134,7 @@ func TestHTTPClientRejectsUnknownModelsOversizedDataAndRedactsErrors(t *testing.
 
 func newTestHTTPClient(t *testing.T, origin string, models []string, transport *http.Client) *HTTPClient {
 	t.Helper()
-	client, err := NewHTTPClient(Config{Origin: origin, Token: "bridge-secret", Models: models, TimeoutSeconds: 30}, transport)
+	client, err := NewHTTPClient(Config{Origin: origin, Token: "bridge-secret", Models: models, TimeoutSeconds: 30, BridgeSHA256: testBridgeSHA256}, transport)
 	require.NoError(t, err)
 	return client
 }

@@ -24,8 +24,9 @@ const (
 )
 
 type ReceiptMeta struct {
-	Clients []ClientID `json:"clients,omitempty"`
-	Model   string     `json:"model,omitempty"`
+	Clients      []ClientID `json:"clients,omitempty"`
+	Model        string     `json:"model,omitempty"`
+	BridgeSHA256 string     `json:"bridge_sha256,omitempty"`
 }
 
 type ReceiptFile struct {
@@ -54,6 +55,9 @@ func (tx *Transaction) Commit(meta ReceiptMeta) (Receipt, error) {
 	}
 	if hasControl(meta.Model) {
 		return Receipt{}, fmt.Errorf("%w: receipt metadata contains control characters", ErrUsage)
+	}
+	if meta.BridgeSHA256 != "" && !validSHA256(meta.BridgeSHA256) {
+		return Receipt{}, fmt.Errorf("%w: receipt bridge checksum is invalid", ErrUsage)
 	}
 	files := tx.sortedFiles()
 	if len(files) == 0 {

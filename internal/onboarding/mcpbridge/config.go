@@ -1,6 +1,7 @@
 package mcpbridge
 
 import (
+	"encoding/hex"
 	json "encoding/json"
 	"fmt"
 	"io"
@@ -19,6 +20,7 @@ type Config struct {
 	Token          string   `json:"token"`
 	Models         []string `json:"models"`
 	TimeoutSeconds int      `json:"timeout_seconds"`
+	BridgeSHA256   string   `json:"bridge_sha256"`
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -43,19 +45,19 @@ func LoadConfig(path string) (Config, error) {
 		return Config{}, fmt.Errorf("credential config is unreadable or too large")
 	}
 	var fields map[string]json.RawMessage
-	if err := common.UnmarshalUseNumber(raw, &fields); err != nil || fields == nil {
+	if err := common.UnmarshalUnique(raw, &fields); err != nil || fields == nil {
 		return Config{}, fmt.Errorf("credential config is invalid JSON")
 	}
 	for name := range fields {
-		if name != "origin" && name != "token" && name != "models" && name != "timeout_seconds" {
+		if name != "origin" && name != "token" && name != "models" && name != "timeout_seconds" && name != "bridge_sha256" {
 			return Config{}, fmt.Errorf("credential config contains an unknown field")
 		}
 	}
-	if len(fields) != 4 {
+	if len(fields) != 5 {
 		return Config{}, fmt.Errorf("credential config is incomplete")
 	}
 	var config Config
-	if err := common.Unmarshal(raw, &config); err != nil {
+	if err := common.UnmarshalUnique(raw, &config); err != nil {
 		return Config{}, fmt.Errorf("credential config has invalid field types")
 	}
 	if err := config.Validate(); err != nil {
@@ -93,6 +95,10 @@ func (config Config) Validate() error {
 	}
 	if config.TimeoutSeconds < 1 || config.TimeoutSeconds > 30 {
 		return fmt.Errorf("credential timeout must be between 1 and 30 seconds")
+	}
+	checksum, err := hex.DecodeString(config.BridgeSHA256)
+	if err != nil || len(config.BridgeSHA256) != 64 || len(checksum) != 32 {
+		return fmt.Errorf("credential bridge checksum is invalid")
 	}
 	return nil
 }

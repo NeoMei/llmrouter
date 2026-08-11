@@ -56,7 +56,8 @@ func run(args []string) int {
 		}
 		result, err := onboarding.ConfigureClients(context.Background(), onboarding.ConfigureRequest{
 			Home: home, Platform: platform, ServerURL: options.ServerURL, Token: options.Token, Model: options.Model,
-			BridgePath: bridgePath,
+			BridgePath:   bridgePath,
+			BridgeSHA256: env["LLMAPI_MCP_BRIDGE_SHA256"],
 		}, options.Clients)
 		if err != nil {
 			return report(err)

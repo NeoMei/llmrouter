@@ -14,7 +14,7 @@ func MergeJSONObject(input []byte, keys []string, value any) ([]byte, error) {
 	}
 	root := make(map[string]any)
 	if len(strings.TrimSpace(string(input))) != 0 {
-		if err := common.UnmarshalUseNumber(input, &root); err != nil {
+		if err := common.UnmarshalUnique(input, &root); err != nil {
 			return nil, fmt.Errorf("%w: invalid JSON object", ErrUsage)
 		}
 		if root == nil {

@@ -57,7 +57,7 @@ clear_extra_acls() {
   case "$os" in
     darwin)
       chmod -N "$path" 2>/dev/null || fail "cannot remove inherited ACLs: $path"
-      [ -z "$(ls -le "$path" 2>/dev/null | sed 1d)" ] || fail "extra ACL entries remain: $path"
+      [ -z "$(ls -led "$path" 2>/dev/null | sed 1d)" ] || fail "extra ACL entries remain: $path"
       ;;
     linux)
       if command -v setfacl >/dev/null 2>&1; then setfacl -b -- "$path" || fail "cannot remove ACLs: $path"; fi
@@ -89,26 +89,39 @@ require_private_file() {
 }
 
 rollback_pair() {
-  set +e
   [ "${transaction_committed:-0}" = 1 ] && return
-  if [ "${onboard_had_original:-0}" = 1 ]; then rm -f "$onboard_target"; mv -f "$backup_directory/llmapi-onboard" "$onboard_target"; else rm -f "$onboard_target"; fi
-  if [ "${bridge_had_original:-0}" = 1 ]; then rm -f "$bridge_target"; mv -f "$backup_directory/llmapi-mcp-bridge" "$bridge_target"; else rm -f "$bridge_target"; fi
+  if [ "${onboard_backup_ready:-0}" = 1 ]; then
+    rm -f "${onboard_target:-}" || :
+    mv -f "$backup_directory/llmapi-onboard" "$onboard_target" || :
+  elif [ "${onboard_had_original:-0}" = 0 ]; then rm -f "${onboard_target:-}" || :; fi
+  if [ "${bridge_backup_ready:-0}" = 1 ]; then
+    rm -f "${bridge_target:-}" || :
+    mv -f "$backup_directory/llmapi-mcp-bridge" "$bridge_target" || :
+  elif [ "${bridge_had_original:-0}" = 0 ]; then rm -f "${bridge_target:-}" || :; fi
 }
 
 cleanup() {
+  [ "${cleanup_done:-0}" = 0 ] || return
+  cleanup_done=1
   rollback_pair
-  [ -z "${temporary_directory:-}" ] || rm -rf "$temporary_directory"
+  [ -z "${temporary_directory:-}" ] || rm -rf "$temporary_directory" || :
+}
+
+handle_signal() {
+  trap - EXIT HUP INT TERM
+  cleanup
+  exit "$1"
 }
 
 replace_helper_pair() {
   require_private_file "$temporary_directory/$onboard_artifact"
   require_private_file "$temporary_directory/$bridge_artifact"
-  if [ -e "$onboard_target" ] || [ -L "$onboard_target" ]; then require_private_file "$onboard_target"; onboard_had_original=1; fi
-  if [ -e "$bridge_target" ] || [ -L "$bridge_target" ]; then require_private_file "$bridge_target"; bridge_had_original=1; fi
+  if [ -e "$onboard_target" ] || [ -L "$onboard_target" ]; then onboard_had_original=1; require_private_file "$onboard_target"; fi
+  if [ -e "$bridge_target" ] || [ -L "$bridge_target" ]; then bridge_had_original=1; require_private_file "$bridge_target"; fi
   mkdir "$backup_directory" || return 1
   require_private_directory "$backup_directory"
-  [ "$onboard_had_original" = 0 ] || mv "$onboard_target" "$backup_directory/llmapi-onboard" || return 1
-  [ "$bridge_had_original" = 0 ] || mv "$bridge_target" "$backup_directory/llmapi-mcp-bridge" || return 1
+  if [ "$onboard_had_original" = 1 ]; then mv "$onboard_target" "$backup_directory/llmapi-onboard" || return 1; onboard_backup_ready=1; fi
+  if [ "$bridge_had_original" = 1 ]; then mv "$bridge_target" "$backup_directory/llmapi-mcp-bridge" || return 1; bridge_backup_ready=1; fi
   mv "$temporary_directory/$onboard_artifact" "$onboard_target" || return 1
   require_private_file "$onboard_target"
   mv "$temporary_directory/$bridge_artifact" "$bridge_target" || return 1
@@ -127,7 +140,16 @@ case "$HOME" in /*) ;; *) fail 'HOME must be absolute' ;; esac
 require_private_directory "$HOME/.llmapi"
 require_private_directory "$HOME/.llmapi/bin"
 temporary_directory=$(mktemp -d "$HOME/.llmapi/bin/.install.XXXXXXXX") || fail 'cannot create private temporary directory'
-trap cleanup EXIT HUP INT TERM
+transaction_committed=0
+onboard_had_original=0
+bridge_had_original=0
+onboard_backup_ready=0
+bridge_backup_ready=0
+cleanup_done=0
+trap cleanup EXIT
+trap 'handle_signal 129' HUP
+trap 'handle_signal 130' INT
+trap 'handle_signal 143' TERM
 require_private_directory "$temporary_directory"
 
 checksums="$temporary_directory/checksums.txt"
@@ -136,9 +158,6 @@ bridge_artifact="llmapi-mcp-bridge-$os-$arch"
 onboard_target="$HOME/.llmapi/bin/llmapi-onboard"
 bridge_target="$HOME/.llmapi/bin/llmapi-mcp-bridge"
 backup_directory="$temporary_directory/backups"
-onboard_had_original=0
-bridge_had_original=0
-transaction_committed=0
 
 download /install/checksums.txt "$checksums"
 download "/install/bin/$onboard_artifact" "$temporary_directory/$onboard_artifact"

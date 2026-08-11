@@ -18,6 +18,7 @@ Describe 'LLMAPI PowerShell bootstrap' {
   }
   It 'sets and verifies the current user as owner' {
     $script | Should -Match 'SetOwner\(\$currentSid\)'
+    $script | Should -Match 'GetOwner\(\[Security.Principal.SecurityIdentifier\]\)'
     $script | Should -Match 'ownerSid.Value -ne \$currentSid.Value'
   }
   It 'removes temporary downloads before launching onboarding' {
@@ -30,6 +31,15 @@ Describe 'LLMAPI PowerShell bootstrap' {
     $digest = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
     Set-Content -LiteralPath $path -Value "$digest  llmapi-mcp-bridge-windows-amd64.exe"
     Get-ExpectedChecksum $path 'llmapi-mcp-bridge-windows-amd64.exe' | Should -Be $digest
+  }
+  It 'sets and verifies owner SID on a real TestDrive path' -Skip:($env:OS -ne 'Windows_NT') {
+    $functionSource = $script.Substring(0, $script.IndexOf('$origin = Get-ServerOrigin'))
+    Invoke-Expression $functionSource
+    $path = Join-Path $TestDrive 'owner-check'
+    Set-Content -LiteralPath $path -Value 'private'
+    Set-PrivateAcl $path
+    $owner = (Get-Acl -LiteralPath $path).GetOwner([Security.Principal.SecurityIdentifier])
+    $owner.Value | Should -Be ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
   }
   It 'rolls back both original helpers when the second replacement fails' {
     $functionSource = $script.Substring(0, $script.IndexOf('$origin = Get-ServerOrigin'))

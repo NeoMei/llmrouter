@@ -34,7 +34,7 @@ function Set-PrivateAcl([string]$Path) {
   Set-Acl -LiteralPath $Path -AclObject $acl
 
   $verified = Get-Acl -LiteralPath $Path
-  $ownerSid = $verified.Owner.Translate([Security.Principal.SecurityIdentifier])
+  $ownerSid = $verified.GetOwner([Security.Principal.SecurityIdentifier])
   $allowed = @($verified.Access | Where-Object {
     $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
     $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq $currentSid.Value -and

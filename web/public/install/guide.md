@@ -7,7 +7,7 @@ The installer is served from the same LLMAPI origin as its checksums and helper 
 On macOS or Linux, open the install page in a browser and copy its command. It sets `LLMAPI_SERVER_URL` from the page origin:
 
 ```sh
-tmp="$(mktemp)"; http_status="$(curl -fsS --max-redirs 0 --write-out '%{http_code}' -o "$tmp" "https://stage.example/install/install.sh")"; status=$?; if [ "$status" -eq 0 ]; then case "$http_status" in 2??) LLMAPI_SERVER_URL="https://stage.example" bash "$tmp"; status=$? ;; *) status=1 ;; esac; fi; rm -f "$tmp"; [ "$status" -eq 0 ]
+llmapi_install() { local tmp http_status status=0; if tmp="$(mktemp)"; then if http_status="$(curl -fsS --max-redirs 0 --write-out '%{http_code}' -o "$tmp" "https://stage.example/install/install.sh")"; then case "$http_status" in 2??) if LLMAPI_SERVER_URL="https://stage.example" bash "$tmp"; then :; else status=$?; fi ;; *) status=1 ;; esac; else status=$?; fi; rm -f "$tmp" || :; else status=$?; fi; return "$status"; }; llmapi_install
 ```
 
 On Windows PowerShell:

@@ -4,6 +4,7 @@ import http.server
 import os
 import pathlib
 import platform
+import re
 import shutil
 import shlex
 import subprocess
@@ -245,6 +246,29 @@ class OnboardingAssetsTest(unittest.TestCase):
             self.assertEqual(paths, ["/install/checksums.txt"])
             self.assertFalse((home / ".llmapi" / "bin" / "llmapi-onboard").exists())
 
+    def test_public_bash_command_cleans_up_and_returns_curl_status_under_errexit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary) / "site"
+            self.bootstrap_site(root)
+            origin, _ = self.serve(root, redirect_checksums=True)
+            guide = (INSTALL / "guide.md").read_text()
+            command = re.search(r"```sh\n(.*?)\n```", guide, re.DOTALL).group(1).replace("https://stage.example", origin)
+            temp_directory = pathlib.Path(temporary) / "downloads"
+            temp_directory.mkdir()
+            wrappers = pathlib.Path(temporary) / "wrappers"
+            wrappers.mkdir()
+            (wrappers / "mktemp").write_text(f"#!/usr/bin/env bash\nprintf '%s/public-bootstrap' {shlex.quote(str(temp_directory))}\n")
+            (wrappers / "mktemp").chmod(0o755)
+            result = subprocess.run(
+                ["bash", "-c", f"set -e; {command}"],
+                env={**os.environ, "PATH": f"{wrappers}:{os.environ['PATH']}"},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 22, result.stderr)
+            self.assertEqual(list(temp_directory.iterdir()), [])
+
     @unittest.skipUnless(shutil.which("script"), "script is required for a pseudo-terminal fixture")
     def test_bash_bootstrap_routes_interactive_prompts_through_the_controlling_tty(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -271,17 +295,91 @@ class OnboardingAssetsTest(unittest.TestCase):
             _, bridge = self.bootstrap_site(root)
             origin, _ = self.serve(root)
             wrapper_directory = pathlib.Path(temporary) / "wrappers"
+            marker = pathlib.Path(temporary) / "second-replacement-reached"
             wrapper_directory.mkdir()
             (wrapper_directory / "mv").write_text(
                 "#!/usr/bin/env bash\n"
-                f"if [ \"$(basename \"$1\")\" = \"{bridge}\" ] && [ \"$(basename \"$2\")\" = \"llmapi-mcp-bridge\" ]; then exit 75; fi\n"
+                f"if [ \"$(basename \"$1\")\" = \"{bridge}\" ] && [ \"$(basename \"$2\")\" = \"llmapi-mcp-bridge\" ]; then printf reached > {shlex.quote(str(marker))}; exit 75; fi\n"
                 "exec /bin/mv \"$@\"\n"
             )
             (wrapper_directory / "mv").chmod(0o755)
             result = self.run_bash_bootstrap(home, origin, {"PATH": f"{wrapper_directory}:{os.environ['PATH']}"})
             self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(marker.read_text(), "reached")
             self.assertEqual((binary_directory / "llmapi-onboard").read_bytes(), b"old-onboard")
             self.assertEqual((binary_directory / "llmapi-mcp-bridge").read_bytes(), b"old-bridge")
+
+    @unittest.skipUnless(platform.system() == "Darwin", "macOS ACL fixture")
+    def test_bash_bootstrap_rerun_keeps_private_nonempty_bin_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary) / "site"
+            home = pathlib.Path(temporary) / "home"
+            home.mkdir()
+            self.bootstrap_site(root)
+            origin, _ = self.serve(root)
+            self.assertEqual(self.run_bash_bootstrap(home, origin).returncode, 0)
+            retained = home / ".llmapi" / "bin" / "unrelated-private-file"
+            retained.write_bytes(b"keep")
+            retained.chmod(0o700)
+            rerun = self.run_bash_bootstrap(home, origin)
+            self.assertEqual(rerun.returncode, 0, rerun.stderr)
+            self.assertEqual(retained.read_bytes(), b"keep")
+
+    def test_bash_bootstrap_rolls_back_only_created_backups_when_second_backup_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary) / "site"
+            home = pathlib.Path(temporary) / "home"
+            binary_directory = home / ".llmapi" / "bin"
+            binary_directory.mkdir(parents=True)
+            for name, content in (("llmapi-onboard", b"old-onboard"), ("llmapi-mcp-bridge", b"old-bridge")):
+                path = binary_directory / name
+                path.write_bytes(content)
+                path.chmod(0o700)
+            self.bootstrap_site(root)
+            origin, _ = self.serve(root)
+            wrappers = pathlib.Path(temporary) / "wrappers"
+            marker = pathlib.Path(temporary) / "second-backup-reached"
+            wrappers.mkdir()
+            (wrappers / "mv").write_text(
+                "#!/usr/bin/env bash\n"
+                f"if [ \"$(basename \"$1\")\" = llmapi-mcp-bridge ] && [ \"$(basename \"$2\")\" = llmapi-mcp-bridge ]; then printf reached > {shlex.quote(str(marker))}; exit 74; fi\n"
+                "exec /bin/mv \"$@\"\n"
+            )
+            (wrappers / "mv").chmod(0o755)
+            result = self.run_bash_bootstrap(home, origin, {"PATH": f"{wrappers}:{os.environ['PATH']}"})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(marker.read_text(), "reached")
+            self.assertEqual((binary_directory / "llmapi-onboard").read_bytes(), b"old-onboard")
+            self.assertEqual((binary_directory / "llmapi-mcp-bridge").read_bytes(), b"old-bridge")
+            self.assertFalse(any(binary_directory.glob(".install.*")))
+
+    def test_bash_bootstrap_sigterm_restores_pair_and_removes_transaction_state(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary) / "site"
+            home = pathlib.Path(temporary) / "home"
+            binary_directory = home / ".llmapi" / "bin"
+            binary_directory.mkdir(parents=True)
+            for name, content in (("llmapi-onboard", b"old-onboard"), ("llmapi-mcp-bridge", b"old-bridge")):
+                path = binary_directory / name
+                path.write_bytes(content)
+                path.chmod(0o700)
+            onboard, _ = self.bootstrap_site(root)
+            origin, _ = self.serve(root)
+            wrappers = pathlib.Path(temporary) / "wrappers"
+            marker = pathlib.Path(temporary) / "signal-stage-reached"
+            wrappers.mkdir()
+            (wrappers / "mv").write_text(
+                "#!/usr/bin/env bash\n"
+                f"if [ \"$(basename \"$1\")\" = \"{onboard}\" ] && [ \"$(basename \"$2\")\" = llmapi-onboard ]; then printf reached > {shlex.quote(str(marker))}; kill -TERM \"$PPID\"; sleep 1; exit 75; fi\n"
+                "exec /bin/mv \"$@\"\n"
+            )
+            (wrappers / "mv").chmod(0o755)
+            result = self.run_bash_bootstrap(home, origin, {"PATH": f"{wrappers}:{os.environ['PATH']}"})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(marker.read_text(), "reached")
+            self.assertEqual((binary_directory / "llmapi-onboard").read_bytes(), b"old-onboard")
+            self.assertEqual((binary_directory / "llmapi-mcp-bridge").read_bytes(), b"old-bridge")
+            self.assertFalse(any(binary_directory.glob(".install.*")))
 
     def test_bash_bootstrap_rejects_destination_symlink_and_linux_acl_it_cannot_remove(self):
         with tempfile.TemporaryDirectory() as temporary:

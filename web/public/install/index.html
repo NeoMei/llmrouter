@@ -95,7 +95,7 @@
         function renderCommand() {
           command.textContent = platform.value === 'windows'
             ? `$installer = Join-Path ([IO.Path]::GetTempPath()) ('llmapi-install-' + [guid]::NewGuid() + '.ps1'); try { $response = Invoke-WebRequest -Uri '${origin}/install/install.ps1' -OutFile $installer -PassThru -MaximumRedirection 0 -ErrorAction Stop; if ($response.StatusCode -lt 200 -or $response.StatusCode -ge 300) { throw 'installer download failed' }; $env:LLMAPI_SERVER_URL='${origin}'; & $installer } finally { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue }`
-            : `tmp="$(mktemp)"; http_status="$(curl -fsS --max-redirs 0 --write-out '%{http_code}' -o "$tmp" "${origin}/install/install.sh")"; status=$?; if [ "$status" -eq 0 ]; then case "$http_status" in 2??) LLMAPI_SERVER_URL="${origin}" bash "$tmp"; status=$? ;; *) status=1 ;; esac; fi; rm -f "$tmp"; [ "$status" -eq 0 ]`;
+            : `llmapi_install() { local tmp http_status status=0; if tmp="$(mktemp)"; then if http_status="$(curl -fsS --max-redirs 0 --write-out '%{http_code}' -o "$tmp" "${origin}/install/install.sh")"; then case "$http_status" in 2??) if LLMAPI_SERVER_URL="${origin}" bash "$tmp"; then :; else status=$?; fi ;; *) status=1 ;; esac; else status=$?; fi; rm -f "$tmp" || :; else status=$?; fi; return "$status"; }; llmapi_install`;
         }
         function showModels(models, source) {
           model.replaceChildren();

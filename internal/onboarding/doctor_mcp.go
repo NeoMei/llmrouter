@@ -47,22 +47,27 @@ func probeClaudeDesktopMCP(ctx context.Context, request CheckRequest, smoke bool
 	if err := process.Start(); err != nil {
 		return fmt.Errorf("MCP process start failed"), nil
 	}
-	waitDone := make(chan error, 1)
-	go func() { waitDone <- process.Wait() }()
 	stderrDone := make(chan struct{})
 	go func() {
 		_, _ = io.Copy(io.Discard, stderr)
 		close(stderrDone)
 	}()
-	finished := false
+	waited := false
+	wait := func() error {
+		if waited {
+			return fmt.Errorf("MCP process was already waited")
+		}
+		waited = true
+		return process.Wait()
+	}
 	defer func() {
 		_ = stdin.Close()
-		if !finished {
+		if !waited {
 			cancel()
 			if process.Process != nil {
 				_ = process.Process.Kill()
 			}
-			<-waitDone
+			_ = wait()
 		}
 		<-stderrDone
 	}()
@@ -101,17 +106,12 @@ func probeClaudeDesktopMCP(ctx context.Context, request CheckRequest, smoke bool
 		}
 	}
 	_ = stdin.Close()
-	select {
-	case waitErr := <-waitDone:
-		finished = true
-		if waitErr != nil {
-			if smoke {
-				return nil, fmt.Errorf("MCP bridge exited unsuccessfully")
-			}
-			return fmt.Errorf("MCP bridge exited unsuccessfully"), nil
+	waitErr := wait()
+	if waitErr != nil {
+		if smoke {
+			return nil, fmt.Errorf("MCP bridge exited unsuccessfully")
 		}
-	case <-processContext.Done():
-		return fmt.Errorf("MCP bridge timed out"), nil
+		return fmt.Errorf("MCP bridge exited unsuccessfully"), nil
 	}
 	return nil, nil
 }

@@ -28,6 +28,22 @@ func validateSecureOwner(info os.FileInfo) error {
 	return nil
 }
 
+func validateTrustedBridgeParentOwner(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("%w: inspect bridge parent owner", ErrUnsafe)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !trustedBridgeParentUID(stat.Uid, uint32(os.Getuid())) {
+		return fmt.Errorf("%w: bridge parent owner is not trusted", ErrUnsafe)
+	}
+	return nil
+}
+
+func trustedBridgeParentUID(owner, current uint32) bool {
+	return owner == 0 || owner == current
+}
+
 // secureParent is an open, no-follow parent directory held through the operation.
 type secureParent struct {
 	fd      int

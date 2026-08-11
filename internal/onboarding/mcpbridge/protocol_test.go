@@ -128,6 +128,15 @@ func TestInitializedNotificationMayOmitParams(t *testing.T) {
 	require.Nil(t, call(t, server, `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`).Error)
 }
 
+func TestInitializedNotificationTransitionsWhileRequestLockIsBusy(t *testing.T) {
+	server := NewServer(&fakeClient{models: []string{"model-a"}})
+	require.Nil(t, call(t, server, initializeCall(1)).Error)
+	server.mu.Lock()
+	require.Nil(t, server.Handle(t.Context(), []byte(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)))
+	server.mu.Unlock()
+	require.Nil(t, call(t, server, `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`).Error)
+}
+
 func TestStrictJSONRPCClassificationIDsAndDuplicateKeys(t *testing.T) {
 	server := NewServer(&fakeClient{models: []string{"model-a"}})
 	requireRPCError(t, server, `{"jsonrpc":`, -32700)
@@ -145,8 +154,13 @@ func TestStrictJSONRPCClassificationIDsAndDuplicateKeys(t *testing.T) {
 	duplicateID := call(t, server, `{"jsonrpc":"2.0","id":1,"id":2,"method":"initialize","params":{}}`)
 	require.Nil(t, duplicateID.ID)
 	ready := readyServer(t, &fakeClient{models: []string{"model-a"}})
-	requireRPCError(t, ready, `{"jsonrpc":"2.0","id":8,"method":"ping","params":[]}`, -32600)
-	requireRPCError(t, ready, `{"jsonrpc":"2.0","id":9,"method":"tools/list","params":[]}`, -32600)
+	requireRPCError(t, ready, `{"jsonrpc":"2.0","id":8,"method":"ping","params":[]}`, -32602)
+	requireRPCError(t, ready, `{"jsonrpc":"2.0","id":9,"method":"tools/list","params":[]}`, -32602)
+	requireRPCError(t, ready, `{"jsonrpc":"2.0","id":10,"method":"tools/call","params":[]}`, -32602)
+	oversizedNumericID := `{"jsonrpc":"2.0","id":` + strings.Repeat("1", maxIDBytes+1) + `,"method":"unknown","params":{}}`
+	invalidNumeric := call(t, ready, oversizedNumericID)
+	require.Equal(t, -32600, invalidNumeric.Error.Code)
+	require.Nil(t, invalidNumeric.ID)
 	unknown := call(t, ready, `{"jsonrpc":"2.0","id":"request-7","method":"resources/list","params":{}}`)
 	require.NotNil(t, unknown.Error)
 	require.Equal(t, "request-7", unknown.ID)
@@ -175,6 +189,12 @@ func TestEveryValidNotificationProducesNoBytes(t *testing.T) {
 	response := call(t, server, string(oversizedRequest))
 	require.Equal(t, "large-id", response.ID)
 	require.Equal(t, -32600, response.Error.Code)
+	oversizedDuplicateID := `{"jsonrpc":"2.0","id":1,"id":2,"method":"unknown","params":{"padding":"` + strings.Repeat("x", MaxLineBytes) + `"}}`
+	duplicateResponse := call(t, server, oversizedDuplicateID)
+	require.Equal(t, -32600, duplicateResponse.Error.Code)
+	require.Nil(t, duplicateResponse.ID)
+	oversizedInvalidNotification := `{"jsonrpc":"2.0","method":"unknown","method":"duplicate","params":{"padding":"` + strings.Repeat("x", MaxLineBytes) + `"}}`
+	require.Nil(t, server.Handle(t.Context(), []byte(oversizedInvalidNotification)))
 }
 
 func TestFullyMarshaledResponseIncludingNewlineIsBounded(t *testing.T) {

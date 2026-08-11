@@ -43,6 +43,7 @@ func run(args []string) int {
 		}
 		platform := onboarding.Platform{OS: runtime.GOOS, Arch: runtime.GOARCH}
 		bridgePath := ""
+		bridgeSHA256 := ""
 		for _, client := range options.Clients {
 			if client != onboarding.ClientClaudeDesktop {
 				continue
@@ -51,13 +52,21 @@ func run(args []string) int {
 			if executableErr != nil {
 				return report(fmt.Errorf("%w: onboarding executable path is unavailable", onboarding.ErrUnavailable))
 			}
+			executable, executableErr = filepath.EvalSymlinks(executable)
+			if executableErr != nil {
+				return report(fmt.Errorf("%w: onboarding executable path is unsafe", onboarding.ErrUnsafe))
+			}
 			bridgePath = claudeDesktopBridgePath(executable, platform)
+			bridgeSHA256, err = onboarding.ResolveBridgeChecksum(context.Background(), options.ServerURL, platform, nil)
+			if err != nil {
+				return report(err)
+			}
 			break
 		}
 		result, err := onboarding.ConfigureClients(context.Background(), onboarding.ConfigureRequest{
 			Home: home, Platform: platform, ServerURL: options.ServerURL, Token: options.Token, Model: options.Model,
 			BridgePath:   bridgePath,
-			BridgeSHA256: env["LLMAPI_MCP_BRIDGE_SHA256"],
+			BridgeSHA256: bridgeSHA256,
 		}, options.Clients)
 		if err != nil {
 			return report(err)

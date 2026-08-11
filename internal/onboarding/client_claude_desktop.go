@@ -178,7 +178,7 @@ func verifyClaudeDesktopBridge(home, path, expectedSHA256 string, platform Platf
 	}
 	for parent := filepath.Dir(path); ; parent = filepath.Dir(parent) {
 		parentInfo, parentErr := os.Lstat(parent)
-		if parentErr != nil || !parentInfo.IsDir() || parentInfo.Mode()&os.ModeSymlink != 0 || parentInfo.Mode().Perm()&0o022 != 0 {
+		if parentErr != nil || !parentInfo.IsDir() || parentInfo.Mode()&os.ModeSymlink != 0 || parentInfo.Mode().Perm()&0o022 != 0 || validateTrustedBridgeParentOwner(parent) != nil {
 			return "", fmt.Errorf("%w: installed Claude Desktop bridge parent is unsafe", ErrUnsafe)
 		}
 		if parent == anchor {

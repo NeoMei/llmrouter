@@ -155,3 +155,60 @@ func consumeUniqueJSONValue(decoder *json.Decoder, depth int) error {
 	}
 	return nil
 }
+
+// HasTopLevelJSONField reports whether a syntactically valid JSON object has
+// the named top-level field without decoding object values with last-win semantics.
+func HasTopLevelJSONField(data []byte, field string) (bool, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	opening, err := decoder.Token()
+	if err != nil || opening != json.Delim('{') {
+		return false, fmt.Errorf("JSON value is not an object")
+	}
+	found := false
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return false, err
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return false, fmt.Errorf("JSON object key is not a string")
+		}
+		found = found || key == field
+		if err := consumeJSONValue(decoder); err != nil {
+			return false, err
+		}
+	}
+	closing, err := decoder.Token()
+	if err != nil || closing != json.Delim('}') {
+		return false, fmt.Errorf("invalid JSON object")
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return false, fmt.Errorf("unexpected trailing JSON value")
+	}
+	return found, nil
+}
+
+func consumeJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	for decoder.More() {
+		if delimiter == json.Delim('{') {
+			if _, err := decoder.Token(); err != nil {
+				return err
+			}
+		}
+		if err := consumeJSONValue(decoder); err != nil {
+			return err
+		}
+	}
+	_, err = decoder.Token()
+	return err
+}

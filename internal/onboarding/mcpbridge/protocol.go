@@ -10,6 +10,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/QuantumNous/new-api/common"
 )
@@ -44,7 +45,7 @@ const (
 type Server struct {
 	client Client
 	mu     sync.Mutex
-	state  serverState
+	state  atomic.Uint32
 }
 
 func NewServer(client Client) *Server { return &Server{client: client} }
@@ -115,14 +116,24 @@ type parsedRPC struct {
 
 func (server *Server) Handle(ctx context.Context, line []byte) []byte {
 	if len(line) > MaxLineBytes {
-		var oversized map[string]any
-		if common.ValidJSON(line) && common.UnmarshalUseNumber(line, &oversized) == nil {
-			idValue, hasID := oversized["id"]
-			if !hasID {
-				return nil
-			}
-			if id, valid := validRPCID(idValue); valid {
-				return marshalRPCError(id, -32600, "request line exceeds 64 KiB")
+		var oversized map[string]json.RawMessage
+		if common.ValidJSON(line) {
+			if strictErr := common.UnmarshalUnique(line, &oversized); strictErr == nil && oversized != nil {
+				rawID, hasID := oversized["id"]
+				if !hasID {
+					return nil
+				}
+				var idValue any
+				if common.UnmarshalUseNumber(rawID, &idValue) == nil {
+					if id, valid := validRPCID(idValue); valid {
+						return marshalRPCError(id, -32600, "request line exceeds 64 KiB")
+					}
+				}
+			} else {
+				hasID, fieldErr := common.HasTopLevelJSONField(line, "id")
+				if fieldErr == nil && !hasID {
+					return nil
+				}
 			}
 		}
 		return marshalRPCError(nil, -32600, "request line exceeds 64 KiB")
@@ -194,7 +205,7 @@ func validRPCID(value any) (json.RawMessage, bool) {
 			return nil, false
 		}
 	case json.Number:
-		if strings.ContainsAny(typed.String(), ".eE") {
+		if len(typed.String()) > maxIDBytes || strings.ContainsAny(typed.String(), ".eE") {
 			return nil, false
 		}
 	default:
@@ -205,18 +216,17 @@ func validRPCID(value any) (json.RawMessage, bool) {
 }
 
 func (server *Server) handleNotification(request rpcRequest) {
-	if server == nil || server.client == nil || !server.mu.TryLock() {
+	if server == nil || server.client == nil {
 		return
 	}
-	defer server.mu.Unlock()
-	if request.Method != "notifications/initialized" || server.state != stateInitialized || !emptyObjectOrAbsent(request.Params) {
+	if request.Method != "notifications/initialized" || !emptyObjectOrAbsent(request.Params) {
 		return
 	}
-	server.state = stateReady
+	server.state.CompareAndSwap(uint32(stateInitialized), uint32(stateReady))
 }
 
 func (server *Server) dispatchRequest(ctx context.Context, request rpcRequest) []byte {
-	switch server.state {
+	switch serverState(server.state.Load()) {
 	case stateUninitialized:
 		if request.Method != "initialize" {
 			return marshalRPCError(request.ID, -32600, "initialize must be the first request")
@@ -228,7 +238,7 @@ func (server *Server) dispatchRequest(ctx context.Context, request rpcRequest) [
 			return marshalRPCError(request.ID, -32600, "initialize was already completed")
 		case "ping":
 			if !emptyObjectOrAbsent(request.Params) {
-				return marshalRPCError(request.ID, -32600, "invalid ping request")
+				return marshalRPCError(request.ID, -32602, "invalid ping parameters")
 			}
 			return marshalRPCResult(request.ID, map[string]any{})
 		default:
@@ -242,12 +252,12 @@ func (server *Server) dispatchRequest(ctx context.Context, request rpcRequest) [
 			return marshalRPCError(request.ID, -32600, "initialized must be a notification")
 		case "ping":
 			if !emptyObjectOrAbsent(request.Params) {
-				return marshalRPCError(request.ID, -32600, "invalid ping request")
+				return marshalRPCError(request.ID, -32602, "invalid ping parameters")
 			}
 			return marshalRPCResult(request.ID, map[string]any{})
 		case "tools/list":
 			if !emptyObjectOrAbsent(request.Params) {
-				return marshalRPCError(request.ID, -32600, "invalid tools list request")
+				return marshalRPCError(request.ID, -32602, "invalid tools list parameters")
 			}
 			return marshalRPCResult(request.ID, map[string]any{"tools": boundedTools()})
 		case "tools/call":
@@ -272,7 +282,7 @@ func (server *Server) initialize(request rpcRequest) []byte {
 	if err := common.UnmarshalUnique(request.Params, &params); err != nil || params.ProtocolVersion != ProtocolVersion || params.Capabilities == nil || params.ClientInfo.Name == "" || params.ClientInfo.Version == "" || hasControl(params.ClientInfo.Name) || hasControl(params.ClientInfo.Version) {
 		return marshalRPCError(request.ID, -32602, "invalid initialize parameters")
 	}
-	server.state = stateInitialized
+	server.state.Store(uint32(stateInitialized))
 	return marshalRPCResult(request.ID, map[string]any{
 		"protocolVersion": ProtocolVersion,
 		"capabilities":    map[string]any{"tools": map[string]any{}},

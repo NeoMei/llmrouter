@@ -39,19 +39,21 @@ func (aiderAdapter) Plan(_ context.Context, request ConfigureRequest) (ConfigPla
 	if err != nil {
 		return ConfigPlan{}, err
 	}
-	root := make(map[string]any)
+	var document yaml.Node
 	if strings.TrimSpace(withoutManaged) != "" {
-		if err := yaml.Unmarshal([]byte(withoutManaged), &root); err != nil || root == nil {
+		if err := yaml.Unmarshal([]byte(withoutManaged), &document); err != nil || len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
 			return ConfigPlan{}, fmt.Errorf("%w: invalid Aider YAML", ErrUsage)
 		}
 	}
-	root["env-file"] = environmentPath
-	root["model"] = "openai/" + request.Model
-	encoded, err := yaml.Marshal(root)
-	if err != nil {
-		return ConfigPlan{}, fmt.Errorf("%w: encode Aider YAML", ErrUsage)
+	lines := strings.SplitAfter(withoutManaged, "\n")
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if isAiderManagedKeyLine(line) {
+			continue
+		}
+		filtered = append(filtered, line)
 	}
-	configured, err := ApplyManagedBlock(string(encoded), "aider", "# Managed keys: env-file, model")
+	configured, err := ApplyManagedBlock(strings.Join(filtered, ""), "aider", "env-file: "+strconv.Quote(environmentPath)+"\nmodel: "+strconv.Quote("openai/"+request.Model))
 	if err != nil {
 		return ConfigPlan{}, err
 	}
@@ -74,6 +76,19 @@ func (aiderAdapter) Plan(_ context.Context, request ConfigureRequest) (ConfigPla
 		{Path: configPath, Data: []byte(configured), Mode: privateFileMode},
 		{Path: environmentPath, Data: []byte(configuredEnvironment), Mode: privateFileMode},
 	}, RestartRequired: true}, nil
+}
+
+func isAiderManagedKeyLine(line string) bool {
+	if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
+		return false
+	}
+	code, _, _ := strings.Cut(line, "#")
+	key, _, ok := strings.Cut(code, ":")
+	if !ok {
+		return false
+	}
+	key = strings.TrimSpace(key)
+	return key == "env-file" || key == "model"
 }
 
 func (aiderAdapter) Check(_ context.Context, request CheckRequest) []Check {
@@ -111,10 +126,14 @@ func checkAiderEnvironment(request CheckRequest, environmentPath string) error {
 	if err != nil {
 		return err
 	}
+	managed, err := aiderManagedEnvironment(string(data))
+	if err != nil {
+		return err
+	}
 	values := make(map[string]string)
-	for _, line := range strings.Split(string(data), "\n") {
+	for _, line := range strings.Split(managed, "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
+		if line == "" {
 			continue
 		}
 		key, raw, ok := strings.Cut(line, "=")
@@ -127,10 +146,41 @@ func checkAiderEnvironment(request CheckRequest, environmentPath string) error {
 		}
 		values[key] = value
 	}
-	if values["OPENAI_API_BASE"] != endpointV1(request.ServerURL) || values["OPENAI_API_KEY"] != request.Token.Reveal() {
+	if len(values) != 2 || values["OPENAI_API_BASE"] != endpointV1(request.ServerURL) || values["OPENAI_API_KEY"] != request.Token.Reveal() {
 		return fmt.Errorf("Aider environment mismatch")
 	}
 	return nil
+}
+
+func aiderManagedEnvironment(input string) (string, error) {
+	begin := "# LLMAPI:BEGIN aider-env"
+	end := "# LLMAPI:END aider-env"
+	inBlock := false
+	found := false
+	var content strings.Builder
+	for _, line := range strings.SplitAfter(input, "\n") {
+		text := strings.TrimSuffix(line, "\n")
+		switch text {
+		case begin:
+			if inBlock || found {
+				return "", fmt.Errorf("duplicate Aider environment block")
+			}
+			inBlock, found = true, true
+		case end:
+			if !inBlock {
+				return "", fmt.Errorf("unmatched Aider environment block")
+			}
+			inBlock = false
+		default:
+			if inBlock {
+				content.WriteString(line)
+			}
+		}
+	}
+	if inBlock || !found {
+		return "", fmt.Errorf("Aider environment block is unavailable")
+	}
+	return content.String(), nil
 }
 
 var _ ClientAdapter = aiderAdapter{}

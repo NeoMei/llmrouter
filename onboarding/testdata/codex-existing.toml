@@ -1,3 +1,5 @@
+# keep codex comment and spacing
+approval_policy    = "on-request" # keep inline comment
 model = "native-model"
 
 [model_providers.native]

@@ -135,6 +135,43 @@ func TestContinueModernYAMLPreservesSchemaAndUsesCurrentModelShape(t *testing.T)
 	require.Equal(t, "LLMAPI", managed["name"])
 	require.NotContains(t, managed, "title")
 	require.Equal(t, "model-a", managed["model"])
+	output := string(plan.Writes[0].Data)
+	require.Contains(t, output, "# keep continue comment and anchors")
+	require.Contains(t, output, "&model-defaults")
+	require.Contains(t, output, "*model-defaults")
+}
+
+func TestContinueRejectsMalformedModelsAndEmptySelection(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".continue", "config.yaml")
+	input := []byte("name: Existing\nversion: 1.0.0\nschema: v1\nmodels: [42]\n")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, input, 0o600))
+	adapter, ok := AdapterFor(ClientContinue)
+	require.True(t, ok)
+	request := ConfigureRequest{Home: home, Platform: Platform{OS: runtime.GOOS, Arch: runtime.GOARCH}, ServerURL: mustServerURL(t), Token: NewSecret("secret"), Model: "model-a"}
+	plan, err := adapter.Plan(t.Context(), request)
+	require.NoError(t, err)
+	require.Empty(t, plan.Writes)
+	require.Equal(t, input, mustRead(t, path))
+	request.Model = ""
+	plan, err = adapter.Plan(t.Context(), request)
+	require.Error(t, err)
+	require.Empty(t, plan.Writes)
+}
+
+func TestContinueLegacyJSONRejectsScalarModelEntry(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".continue", "config.json")
+	input := []byte(`{"models":[42]}`)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, input, 0o600))
+	adapter, ok := AdapterFor(ClientContinue)
+	require.True(t, ok)
+	plan, err := adapter.Plan(t.Context(), ConfigureRequest{Home: home, Platform: Platform{OS: runtime.GOOS, Arch: runtime.GOARCH}, ServerURL: mustServerURL(t), Token: NewSecret("secret"), Model: "model-a"})
+	require.NoError(t, err)
+	require.Empty(t, plan.Writes)
+	require.Equal(t, input, mustRead(t, path))
 }
 
 func TestConfigureClientsIsAllOrNothingAndReceiptsStaySecretFree(t *testing.T) {
@@ -213,6 +250,9 @@ func TestCodexSelectsProviderAndModelWithoutDuplicateKeys(t *testing.T) {
 	providers := root["model_providers"].(map[string]any)
 	require.Contains(t, providers, "native")
 	require.Contains(t, providers, "llmapi")
+	output := string(plan.Writes[0].Data)
+	require.Contains(t, output, "# keep codex comment and spacing")
+	require.Contains(t, output, `approval_policy    = "on-request" # keep inline comment`)
 	require.NoError(t, os.WriteFile(path, plan.Writes[0].Data, 0o600))
 	repeated, err := adapter.Plan(t.Context(), request)
 	require.NoError(t, err)
@@ -227,6 +267,43 @@ func TestAiderSelectsOpenAIModelAndPreservesYAML(t *testing.T) {
 	require.Equal(t, true, root["dark-mode"])
 	require.Equal(t, "openai/model-a", root["model"])
 	require.NotEmpty(t, root["env-file"])
+	require.Contains(t, configured, "# keep aider comment and anchors")
+	require.Contains(t, configured, "&shared-settings")
+	require.Contains(t, configured, "*shared-settings")
+}
+
+func TestOpenCodeAndContinueChecksRequireVisibleCredential(t *testing.T) {
+	t.Setenv("LLMAPI_TOKEN", "")
+	for _, client := range []ClientID{ClientOpenCode, ClientContinue} {
+		t.Run(string(client), func(t *testing.T) {
+			home := t.TempDir()
+			request := ConfigureRequest{Home: home, Platform: Platform{OS: runtime.GOOS, Arch: runtime.GOARCH}, ServerURL: mustServerURL(t), Token: NewSecret("hidden-token"), Model: "model-a"}
+			_, err := ConfigureClients(t.Context(), request, []ClientID{client})
+			require.NoError(t, err)
+			adapter, ok := AdapterFor(client)
+			require.True(t, ok)
+			checks := adapter.Check(t.Context(), CheckRequest{Home: home, Platform: request.Platform, ServerURL: request.ServerURL, Token: request.Token, Model: request.Model})
+			require.Len(t, checks, 2)
+			require.Equal(t, "PASS", checks[0].Status)
+			require.Equal(t, "FAIL", checks[1].Status)
+		})
+	}
+}
+
+func TestAiderCheckIgnoresUnrelatedValidDotenvSyntax(t *testing.T) {
+	home := t.TempDir()
+	environment := filepath.Join(home, ".config", "llmapi", "aider.env")
+	unrelated := "export KEEP=plain\nSINGLE='quoted value'\nUNQUOTED=value\n"
+	require.NoError(t, os.MkdirAll(filepath.Dir(environment), 0o700))
+	require.NoError(t, os.WriteFile(environment, []byte(unrelated), 0o600))
+	request := ConfigureRequest{Home: home, Platform: Platform{OS: runtime.GOOS, Arch: runtime.GOARCH}, ServerURL: mustServerURL(t), Token: NewSecret("secret"), Model: "model-a"}
+	_, err := ConfigureClients(t.Context(), request, []ClientID{ClientAider})
+	require.NoError(t, err)
+	adapter, ok := AdapterFor(ClientAider)
+	require.True(t, ok)
+	checks := adapter.Check(t.Context(), CheckRequest{Home: home, Platform: request.Platform, ServerURL: request.ServerURL, Token: request.Token, Model: request.Model})
+	require.Equal(t, "PASS", checks[1].Status)
+	require.Contains(t, string(mustRead(t, environment)), unrelated)
 }
 
 func TestAdapterChecksRequireExactSemanticConfiguration(t *testing.T) {

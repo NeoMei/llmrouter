@@ -108,6 +108,29 @@ func TestDoctorNeverReportsPromptShapedRequestID(t *testing.T) {
 	requireNoSensitiveDoctorText(t, report, "Reply with OK.")
 }
 
+func TestDoctorFailsOpenCodeAndContinueCredentialWhenHiddenPromptTokenIsNotInEnvironment(t *testing.T) {
+	t.Setenv("LLMAPI_TOKEN", "")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			_, _ = io.WriteString(w, `{"data":[{"id":"model-a","supported_endpoint_types":["openai"]}]}`)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	home := t.TempDir()
+	u := mustLoopbackURL(t, srv.URL)
+	clients := []ClientID{ClientOpenCode, ClientContinue}
+	_, err := ConfigureClients(t.Context(), ConfigureRequest{Home: home, Platform: Platform{OS: runtime.GOOS, Arch: runtime.GOARCH}, ServerURL: u, Token: NewSecret("hidden-token"), Model: "model-a"}, clients)
+	require.NoError(t, err)
+	report := RunDoctor(t.Context(), DoctorOptions{Home: home, ServerURL: u, Token: NewSecret("hidden-token"), Clients: clients, Model: "model-a"})
+	requireCheck(t, report, "authentication", "PASS")
+	requireCheck(t, report, "opencode-config", "PASS")
+	requireCheck(t, report, "continue-config", "PASS")
+	requireCheck(t, report, "opencode-credential", "FAIL")
+	requireCheck(t, report, "continue-credential", "FAIL")
+}
+
 func requireCheck(t *testing.T, report DoctorReport, name, status string) {
 	t.Helper()
 	for _, check := range report.Checks {

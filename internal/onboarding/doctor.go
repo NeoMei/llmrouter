@@ -203,6 +203,14 @@ func semanticConfigCheck(name string, err error) Check {
 	return Check{Name: name, Status: "PASS", Message: "managed configuration matches the selected LLMAPI settings"}
 }
 
+func environmentCredentialCheck(name string, token Secret) Check {
+	value, visible := os.LookupEnv("LLMAPI_TOKEN")
+	if !visible || value == "" || value != token.Reveal() {
+		return Check{Name: name, Status: "FAIL", Message: "LLMAPI_TOKEN is not visible with the expected value"}
+	}
+	return Check{Name: name, Status: "PASS", Message: "LLMAPI_TOKEN is visible with the expected value"}
+}
+
 func loadManagedConfig(home, path string) ([]byte, error) {
 	data, exists, err := readPlannedFile(home, path)
 	if err != nil {

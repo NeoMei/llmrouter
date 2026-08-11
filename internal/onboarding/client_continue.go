@@ -41,6 +41,9 @@ func (continueAdapter) Plan(_ context.Context, request ConfigureRequest) (Config
 	if err := validateConfigureRequest(request); err != nil {
 		return ConfigPlan{}, err
 	}
+	if request.Model == "" {
+		return ConfigPlan{}, fmt.Errorf("%w: Continue requires a selected model", ErrUsage)
+	}
 	path, strategy, err := selectContinueStrategy(request.Home)
 	if err != nil {
 		return ConfigPlan{}, err
@@ -71,6 +74,9 @@ func (continueAdapter) Plan(_ context.Context, request ConfigureRequest) (Config
 	if err != nil {
 		return continueManualPlan(request), nil
 	}
+	if !continueConfigSupported(strategy, configured) {
+		return ConfigPlan{}, fmt.Errorf("%w: generated Continue configuration is invalid", ErrConflict)
+	}
 	return ConfigPlan{Client: ClientContinue, Writes: []PlannedWrite{{Path: path, Data: configured, Mode: privateFileMode}}, Instructions: []string{"Set LLMAPI_TOKEN before launching Continue."}, RestartRequired: true}, nil
 }
 
@@ -98,7 +104,10 @@ func (continueAdapter) Check(_ context.Context, request CheckRequest) []Check {
 	if !continueConfigSupported(strategy, data) {
 		return []Check{{Name: "continue-config", Status: "SKIP", Message: "manual configuration is required for this Continue schema"}}
 	}
-	return []Check{semanticConfigCheck("continue-config", checkContinueConfig(request, path, strategy))}
+	return []Check{
+		semanticConfigCheck("continue-config", checkContinueConfig(request, path, strategy)),
+		environmentCredentialCheck("continue-credential", request.Token),
+	}
 }
 
 func continueConfigSupported(strategy string, data []byte) bool {
@@ -221,7 +230,10 @@ func mergeContinueJSON(input []byte, model map[string]any) ([]byte, error) {
 	updated := false
 	for index, item := range models {
 		entry, ok := item.(map[string]any)
-		if !ok || entry["llmapiManaged"] != "LLMAPI:BEGIN continue" {
+		if !ok {
+			return nil, fmt.Errorf("%w: Continue model entries must be objects", ErrUnavailable)
+		}
+		if entry["llmapiManaged"] != "LLMAPI:BEGIN continue" {
 			continue
 		}
 		models[index] = model
@@ -235,50 +247,110 @@ func mergeContinueJSON(input []byte, model map[string]any) ([]byte, error) {
 }
 
 func mergeContinueYAML(input []byte, model map[string]any) ([]byte, error) {
-	root := map[string]any{
-		"name": "LLMAPI", "version": "0.0.1", "schema": "v1", "models": []any{},
+	if len(strings.TrimSpace(string(input))) == 0 {
+		input = []byte("name: LLMAPI\nversion: 0.0.1\nschema: v1\nmodels: []\n")
 	}
-	if len(strings.TrimSpace(string(input))) != 0 {
-		root = make(map[string]any)
-		if err := yaml.Unmarshal(input, &root); err != nil {
-			return nil, fmt.Errorf("%w: invalid Continue YAML", ErrUsage)
-		}
+	var document yaml.Node
+	if err := yaml.Unmarshal(input, &document); err != nil {
+		return nil, fmt.Errorf("%w: invalid Continue YAML", ErrUsage)
 	}
-	if root == nil {
+	if len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
 		return nil, fmt.Errorf("%w: Continue YAML root is not an object", ErrConflict)
 	}
-	name, nameOK := root["name"].(string)
-	version, versionOK := root["version"].(string)
-	schema, schemaOK := root["schema"].(string)
-	if !nameOK || strings.TrimSpace(name) == "" || !versionOK || !validContinueVersion(version) || !schemaOK || schema != "v1" {
+	stripContinueMarkerComments(&document)
+	root := document.Content[0]
+	name := yamlMappingValue(root, "name")
+	version := yamlMappingValue(root, "version")
+	schema := yamlMappingValue(root, "schema")
+	if name == nil || name.Kind != yaml.ScalarNode || strings.TrimSpace(name.Value) == "" || version == nil || version.Kind != yaml.ScalarNode || !validContinueVersion(version.Value) || schema == nil || schema.Kind != yaml.ScalarNode || schema.Value != "v1" {
 		return nil, fmt.Errorf("%w: unsupported Continue YAML schema", ErrUnavailable)
 	}
-	value, exists := root["models"]
-	if !exists {
+	models := yamlMappingValue(root, "models")
+	if models == nil {
 		return nil, fmt.Errorf("%w: Continue YAML requires a models array", ErrUnavailable)
 	}
-	models, ok := value.([]any)
-	if !ok {
+	if models.Kind != yaml.SequenceNode {
 		return nil, fmt.Errorf("%w: Continue models is not an array", ErrConflict)
 	}
-	updated := false
-	for index, item := range models {
-		entry, ok := item.(map[string]any)
-		if !ok || entry["name"] != "LLMAPI" || entry["provider"] != "openai" {
+	managedIndex := -1
+	for index, item := range models.Content {
+		if item.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("%w: Continue model entries must be objects", ErrUnavailable)
+		}
+		entryName := yamlMappingValue(item, "name")
+		provider := yamlMappingValue(item, "provider")
+		if entryName == nil || provider == nil || entryName.Value != "LLMAPI" || provider.Value != "openai" {
 			continue
 		}
-		models[index] = model
-		updated = true
+		managedIndex = index
 	}
-	if !updated {
-		models = append(models, model)
+	managed := continueModelNode(model)
+	managed.HeadComment = "LLMAPI:BEGIN continue"
+	managed.FootComment = "LLMAPI:END continue"
+	if managedIndex >= 0 {
+		models.Content[managedIndex] = managed
+	} else {
+		models.Content = append(models.Content, managed)
 	}
-	root["models"] = models
-	configured, err := yaml.Marshal(root)
+	configured, err := yaml.Marshal(&document)
 	if err != nil {
 		return nil, fmt.Errorf("%w: encode Continue YAML", ErrUsage)
 	}
-	return append([]byte("# LLMAPI:BEGIN continue\n# LLMAPI:END continue\n"), configured...), nil
+	var validated yaml.Node
+	if err := yaml.Unmarshal(configured, &validated); err != nil {
+		return nil, fmt.Errorf("%w: generated Continue YAML is invalid", ErrConflict)
+	}
+	return configured, nil
+}
+
+func yamlMappingValue(mapping *yaml.Node, key string) *yaml.Node {
+	if mapping == nil || mapping.Kind != yaml.MappingNode {
+		return nil
+	}
+	for index := 0; index+1 < len(mapping.Content); index += 2 {
+		if mapping.Content[index].Kind == yaml.ScalarNode && mapping.Content[index].Value == key {
+			return mapping.Content[index+1]
+		}
+	}
+	return nil
+}
+
+func continueModelNode(model map[string]any) *yaml.Node {
+	mapping := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	for _, key := range []string{"name", "provider", "model", "apiBase", "apiKey"} {
+		mapping.Content = append(mapping.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: fmt.Sprint(model[key])},
+		)
+	}
+	return mapping
+}
+
+func stripContinueMarkerComments(node *yaml.Node) {
+	if node == nil {
+		return
+	}
+	node.HeadComment = withoutContinueMarkerComment(node.HeadComment)
+	node.LineComment = withoutContinueMarkerComment(node.LineComment)
+	node.FootComment = withoutContinueMarkerComment(node.FootComment)
+	for _, child := range node.Content {
+		stripContinueMarkerComments(child)
+	}
+}
+
+func withoutContinueMarkerComment(comment string) string {
+	lines := strings.Split(comment, "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(strings.TrimPrefix(line, "#"))
+		if trimmed == "LLMAPI:BEGIN continue" || trimmed == "LLMAPI:END continue" {
+			continue
+		}
+		if line != "" {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n")
 }
 
 func validContinueVersion(version string) bool {

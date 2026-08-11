@@ -52,7 +52,10 @@ func (openCodeAdapter) Plan(_ context.Context, request ConfigureRequest) (Config
 
 func (openCodeAdapter) Check(_ context.Context, request CheckRequest) []Check {
 	path := filepath.Join(request.Home, ".config", "opencode", "opencode.json")
-	return []Check{semanticConfigCheck("opencode-config", checkOpenCodeConfig(request, path))}
+	return []Check{
+		semanticConfigCheck("opencode-config", checkOpenCodeConfig(request, path)),
+		environmentCredentialCheck("opencode-credential", request.Token),
+	}
 }
 
 func checkOpenCodeConfig(request CheckRequest, path string) error {

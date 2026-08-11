@@ -1,2 +1,6 @@
+# keep aider comment and anchors
+shared-settings: &shared-settings
+  edit-format: diff
+shared-copy: *shared-settings
 dark-mode: true
 auto-commits: false

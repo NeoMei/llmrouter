@@ -29,7 +29,12 @@ func ensureStateRoots(string) error {
 }
 func setStateRootTestHook(func()) {}
 
-func setReceiptKeyPublishTestHook(func() error) {}
+func setReceiptKeyPublishTestHook(func() error)                   {}
+func setReceiptKeyPostPublishTestHook(func(string, string) error) {}
+func setReceiptKeyDirectorySyncTestHook(func())                   {}
 func publishReceiptKey(string, string, []byte) (bool, error) {
 	return false, fmt.Errorf("%w: Windows ACL enforcement is unavailable", ErrUnsafe)
+}
+func loadPublishedReceiptKey(string, string) ([]byte, error) {
+	return nil, fmt.Errorf("%w: Windows ACL enforcement is unavailable", ErrUnsafe)
 }

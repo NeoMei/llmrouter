@@ -266,8 +266,14 @@ func openPrivateDirectoryAt(parent int, name string) (int, error) {
 }
 
 var receiptKeyPublishTestHook func() error
+var receiptKeyPostPublishTestHook func(tempPath, finalPath string) error
+var receiptKeyDirectorySyncTestHook func()
 
 func setReceiptKeyPublishTestHook(hook func() error) { receiptKeyPublishTestHook = hook }
+func setReceiptKeyPostPublishTestHook(hook func(tempPath, finalPath string) error) {
+	receiptKeyPostPublishTestHook = hook
+}
+func setReceiptKeyDirectorySyncTestHook(hook func()) { receiptKeyDirectorySyncTestHook = hook }
 
 // publishReceiptKey prepares a complete private temp inode, then links it into the
 // final name. linkat fails when another creator has already published the key.
@@ -289,7 +295,12 @@ func publishReceiptKey(home, path string, key []byte) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("%w: create receipt key temporary file", ErrUnsafe)
 	}
-	defer unix.Unlinkat(parent.fd, tempName, 0)
+	removeTemp := true
+	defer func() {
+		if removeTemp {
+			_ = unix.Unlinkat(parent.fd, tempName, 0)
+		}
+	}()
 	file := os.NewFile(uintptr(fd), tempName)
 	if err := unix.Fchmod(fd, privateFileMode); err != nil {
 		file.Close()
@@ -317,10 +328,52 @@ func publishReceiptKey(home, path string, key []byte) (bool, error) {
 	} else if err != nil {
 		return false, fmt.Errorf("%w: publish receipt key", ErrUnsafe)
 	}
+	if receiptKeyPostPublishTestHook != nil {
+		if err := receiptKeyPostPublishTestHook(filepath.Join(parent.dirPath, tempName), filepath.Join(parent.dirPath, parent.name)); err != nil {
+			return false, err
+		}
+	}
+	if err := unix.Unlinkat(parent.fd, tempName, 0); err != nil {
+		return false, fmt.Errorf("%w: remove published receipt key temporary file", ErrUnsafe)
+	}
+	removeTemp = false
 	if err := unix.Fsync(parent.fd); err != nil {
 		return false, fmt.Errorf("%w: sync receipt key directory", ErrUnsafe)
 	}
 	return true, nil
+}
+
+// loadPublishedReceiptKey serializes observers through cleanup and directory sync
+// before opening the immutable final key under the same held credentials descriptor.
+func loadPublishedReceiptKey(home, path string) ([]byte, error) {
+	parent, err := openSecureParent(home, path, false)
+	if err != nil {
+		return nil, err
+	}
+	defer parent.close()
+	if err := cleanupStaleReceiptKeyTemps(parent); err != nil {
+		return nil, err
+	}
+	if err := unix.Fsync(parent.fd); err != nil {
+		return nil, fmt.Errorf("%w: sync receipt key directory", ErrUnsafe)
+	}
+	if receiptKeyDirectorySyncTestHook != nil {
+		receiptKeyDirectorySyncTestHook()
+	}
+	fd, err := unix.Openat(parent.fd, parent.name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), parent.name)
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || info.IsDir() {
+		return nil, fmt.Errorf("%w: invalid receipt key", ErrUnsafe)
+	}
+	if err := validateSecureOwner(info); err != nil {
+		return nil, err
+	}
+	return io.ReadAll(file)
 }
 
 func cleanupStaleReceiptKeyTemps(parent *secureParent) error {

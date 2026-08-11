@@ -406,7 +406,7 @@ func receiptMAC(key []byte, receipt Receipt) string {
 
 func receiptKey(home string, create bool) ([]byte, error) {
 	path := filepath.Join(home, ".llmapi", "credentials", "receipt.key")
-	key, err := secureReadFile(home, path)
+	key, err := loadPublishedReceiptKey(home, path)
 	if err == nil {
 		if len(key) != 32 {
 			return nil, fmt.Errorf("%w: receipt key is invalid", ErrUnsafe)
@@ -416,22 +416,18 @@ func receiptKey(home string, create bool) ([]byte, error) {
 	if !create || !os.IsNotExist(err) {
 		return nil, fmt.Errorf("%w: receipt key is unavailable", ErrUnsafe)
 	}
-	key = make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
+	candidate := make([]byte, 32)
+	if _, err := rand.Read(candidate); err != nil {
 		return nil, fmt.Errorf("%w: create receipt key", ErrUnsafe)
 	}
-	published, err := publishReceiptKey(home, path, key)
-	if err != nil {
+	if _, err := publishReceiptKey(home, path, candidate); err != nil {
 		return nil, err
 	}
-	if published {
-		return key, nil
-	}
-	winner, err := secureReadFile(home, path)
-	if err != nil || len(winner) != 32 {
+	key, err = loadPublishedReceiptKey(home, path)
+	if err != nil || len(key) != 32 {
 		return nil, fmt.Errorf("%w: receipt key is unavailable", ErrUnsafe)
 	}
-	return winner, nil
+	return key, nil
 }
 
 func newReceiptID() (string, error) {

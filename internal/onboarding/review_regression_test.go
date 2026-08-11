@@ -298,3 +298,46 @@ func TestRestoringReceiptResumesMixedTwoFileState(t *testing.T) {
 	require.Equal(t, "first-original", string(mustRead(t, first)))
 	require.Equal(t, "second-original", string(mustRead(t, second)))
 }
+
+func TestReceiptKeyObserverCleansPostPublishTempsAndSyncs(t *testing.T) {
+	home := t.TempDir()
+	require.NoError(t, ensureStateRoots(home))
+	credentials := filepath.Join(home, ".llmapi", "credentials")
+	stale := filepath.Join(credentials, receiptKeyTempPrefix+"post-publish.tmp")
+	var publisherTemp string
+	setReceiptKeyPostPublishTestHook(func(tempPath, finalPath string) error {
+		publisherTemp = tempPath
+		_, err := os.Stat(finalPath)
+		require.NoError(t, err)
+		_, err = os.Stat(tempPath)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(stale, []byte("stale"), 0o600))
+		return os.Chtimes(stale, time.Now().Add(-2*time.Hour), time.Now().Add(-2*time.Hour))
+	})
+	t.Cleanup(func() { setReceiptKeyPostPublishTestHook(nil) })
+	key := bytes.Repeat([]byte{7}, 32)
+	published, err := publishReceiptKey(home, filepath.Join(credentials, "receipt.key"), key)
+	require.NoError(t, err)
+	require.True(t, published)
+	_, err = os.Stat(publisherTemp)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(stale)
+	require.NoError(t, err)
+
+	syncs := 0
+	setReceiptKeyDirectorySyncTestHook(func() { syncs++ })
+	t.Cleanup(func() { setReceiptKeyDirectorySyncTestHook(nil) })
+	observed, err := receiptKey(home, false)
+	require.NoError(t, err)
+	require.Equal(t, key, observed)
+	require.Equal(t, 1, syncs)
+	_, err = os.Stat(stale)
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	fresh := filepath.Join(credentials, receiptKeyTempPrefix+"active.tmp")
+	require.NoError(t, os.WriteFile(fresh, []byte("active"), 0o600))
+	_, err = receiptKey(home, false)
+	require.NoError(t, err)
+	_, err = os.Stat(fresh)
+	require.NoError(t, err)
+}

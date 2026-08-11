@@ -100,6 +100,8 @@ function Install-PrivateHelperPair([string]$TemporaryDirectory, [string]$Onboard
   $onboardReplaced = $false
   $bridgeReplaced = $false
   $committed = $false
+  $rollbackFailed = $false
+  $operationError = $null
   try {
     Assert-SafeExistingHelper $OnboardTarget
     Assert-SafeExistingHelper $BridgeTarget
@@ -118,15 +120,21 @@ function Install-PrivateHelperPair([string]$TemporaryDirectory, [string]$Onboard
     Assert-HelperDigest $OnboardTarget $OnboardChecksum
     Assert-HelperDigest $BridgeTarget $BridgeChecksum
     $committed = $true
+  } catch {
+    $operationError = $_
   } finally {
     if (-not $committed) {
-      if ($onboardReplaced) { Remove-Item -LiteralPath $OnboardTarget -Force -ErrorAction SilentlyContinue }
-      if ($bridgeReplaced) { Remove-Item -LiteralPath $BridgeTarget -Force -ErrorAction SilentlyContinue }
-      if ($onboardOriginal -and (Test-Path -LiteralPath (Join-Path $backupDirectory 'llmapi-onboard.exe'))) { Move-PrivateItem (Join-Path $backupDirectory 'llmapi-onboard.exe') $OnboardTarget }
-      if ($bridgeOriginal -and (Test-Path -LiteralPath (Join-Path $backupDirectory 'llmapi-mcp-bridge.exe'))) { Move-PrivateItem (Join-Path $backupDirectory 'llmapi-mcp-bridge.exe') $BridgeTarget }
+      if ($onboardOriginal -and (Test-Path -LiteralPath (Join-Path $backupDirectory 'llmapi-onboard.exe'))) {
+        try { Move-PrivateItem (Join-Path $backupDirectory 'llmapi-onboard.exe') $OnboardTarget } catch { $rollbackFailed = $true }
+      } elseif ($onboardReplaced) { Remove-Item -LiteralPath $OnboardTarget -Force -ErrorAction SilentlyContinue }
+      if ($bridgeOriginal -and (Test-Path -LiteralPath (Join-Path $backupDirectory 'llmapi-mcp-bridge.exe'))) {
+        try { Move-PrivateItem (Join-Path $backupDirectory 'llmapi-mcp-bridge.exe') $BridgeTarget } catch { $rollbackFailed = $true }
+      } elseif ($bridgeReplaced) { Remove-Item -LiteralPath $BridgeTarget -Force -ErrorAction SilentlyContinue }
     }
-    if (Test-Path -LiteralPath $backupDirectory) { Remove-Item -LiteralPath $backupDirectory -Recurse -Force }
+    if (-not $rollbackFailed -and (Test-Path -LiteralPath $backupDirectory)) { Remove-Item -LiteralPath $backupDirectory -Recurse -Force }
   }
+  if ($rollbackFailed) { Fail "rollback could not restore every helper; recover from $backupDirectory" }
+  if ($null -ne $operationError) { throw $operationError }
   if (-not $committed) { Fail 'could not transactionally install both helpers' }
 }
 
@@ -144,6 +152,7 @@ Ensure-PrivateDirectory $llmapiDirectory
 Ensure-PrivateDirectory $binDirectory
 
 $temporaryDirectory = $null
+$retainTemporaryDirectory = $false
 try {
   $temporaryFile = New-TemporaryFile
   Remove-Item -LiteralPath $temporaryFile -Force
@@ -167,11 +176,16 @@ try {
 
   $onboardTarget = Join-Path $binDirectory 'llmapi-onboard.exe'
   $bridgeTarget = Join-Path $binDirectory 'llmapi-mcp-bridge.exe'
-  Install-PrivateHelperPair $temporaryDirectory $onboardPath $bridgePath $onboardTarget $bridgeTarget $onboardChecksum $bridgeChecksum
+  try {
+    Install-PrivateHelperPair $temporaryDirectory $onboardPath $bridgePath $onboardTarget $bridgeTarget $onboardChecksum $bridgeChecksum
+  } catch {
+    if ($_.Exception.Message -like 'LLMAPI installer: rollback could not restore every helper*') { $retainTemporaryDirectory = $true }
+    throw
+  }
   Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force
   $temporaryDirectory = $null
   & $onboardTarget install
   if ($LASTEXITCODE -ne 0) { Fail 'onboarding helper failed' }
 } finally {
-  if ($null -ne $temporaryDirectory -and (Test-Path -LiteralPath $temporaryDirectory)) { Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force }
+  if (-not $retainTemporaryDirectory -and $null -ne $temporaryDirectory -and (Test-Path -LiteralPath $temporaryDirectory)) { Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force }
 }

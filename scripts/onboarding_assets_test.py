@@ -381,6 +381,37 @@ class OnboardingAssetsTest(unittest.TestCase):
             self.assertEqual((binary_directory / "llmapi-mcp-bridge").read_bytes(), b"old-bridge")
             self.assertFalse(any(binary_directory.glob(".install.*")))
 
+    def test_bash_bootstrap_retains_recoverable_backup_when_rollback_restore_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary) / "site"
+            home = pathlib.Path(temporary) / "home"
+            binary_directory = home / ".llmapi" / "bin"
+            binary_directory.mkdir(parents=True)
+            for name, content in (("llmapi-onboard", b"old-onboard"), ("llmapi-mcp-bridge", b"old-bridge")):
+                path = binary_directory / name
+                path.write_bytes(content)
+                path.chmod(0o700)
+            _, bridge = self.bootstrap_site(root)
+            origin, _ = self.serve(root)
+            wrappers = pathlib.Path(temporary) / "wrappers"
+            wrappers.mkdir()
+            (wrappers / "mv").write_text(
+                "#!/usr/bin/env bash\n"
+                "source=$1; destination=$2; if [ \"$source\" = -f ]; then source=$2; destination=$3; fi\n"
+                f"if [ \"$(basename \"$source\")\" = \"{bridge}\" ] && [ \"$(basename \"$destination\")\" = llmapi-mcp-bridge ]; then exit 75; fi\n"
+                "if [[ \"$source\" == */backups/llmapi-mcp-bridge ]] && [ \"$(basename \"$destination\")\" = llmapi-mcp-bridge ]; then exit 76; fi\n"
+                "exec /bin/mv \"$@\"\n"
+            )
+            (wrappers / "mv").chmod(0o755)
+            result = self.run_bash_bootstrap(home, origin, {"PATH": f"{wrappers}:{os.environ['PATH']}"})
+            self.assertNotEqual(result.returncode, 0)
+            transactions = list(binary_directory.glob(".install.*"))
+            self.assertEqual(len(transactions), 1)
+            backup = transactions[0] / "backups" / "llmapi-mcp-bridge"
+            self.assertEqual(backup.read_bytes(), b"old-bridge")
+            self.assertEqual((binary_directory / "llmapi-onboard").read_bytes(), b"old-onboard")
+            self.assertIn(str(transactions[0]), result.stderr)
+
     def test_bash_bootstrap_rejects_destination_symlink_and_linux_acl_it_cannot_remove(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary) / "site"

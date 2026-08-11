@@ -90,20 +90,23 @@ require_private_file() {
 
 rollback_pair() {
   [ "${transaction_committed:-0}" = 1 ] && return
+  rollback_failed=0
   if [ "${onboard_backup_ready:-0}" = 1 ]; then
-    rm -f "${onboard_target:-}" || :
-    mv -f "$backup_directory/llmapi-onboard" "$onboard_target" || :
+    if mv -f "$backup_directory/llmapi-onboard" "$onboard_target"; then onboard_backup_ready=0; else rollback_failed=1; fi
   elif [ "${onboard_had_original:-0}" = 0 ]; then rm -f "${onboard_target:-}" || :; fi
   if [ "${bridge_backup_ready:-0}" = 1 ]; then
-    rm -f "${bridge_target:-}" || :
-    mv -f "$backup_directory/llmapi-mcp-bridge" "$bridge_target" || :
+    if mv -f "$backup_directory/llmapi-mcp-bridge" "$bridge_target"; then bridge_backup_ready=0; else rollback_failed=1; fi
   elif [ "${bridge_had_original:-0}" = 0 ]; then rm -f "${bridge_target:-}" || :; fi
+  [ "$rollback_failed" = 0 ]
 }
 
 cleanup() {
   [ "${cleanup_done:-0}" = 0 ] || return
   cleanup_done=1
-  rollback_pair
+  if ! rollback_pair; then
+    printf '%s\n' "LLMAPI installer: rollback could not restore every helper; recover from $temporary_directory" >&2
+    return 1
+  fi
   [ -z "${temporary_directory:-}" ] || rm -rf "$temporary_directory" || :
 }
 

@@ -19,6 +19,7 @@ test('configure then restore reproduces the original bytes', async () => {
 
   const receipt = await configureCodex({
     home,
+    shell: '/bin/zsh',
     serverUrl: 'https://gateway.test',
     apiToken: 'secret',
     model: 'deepseek/deepseek-v4-flash',
@@ -31,8 +32,8 @@ test('configure then restore reproduces the original bytes', async () => {
 
 test('configure is idempotent and never duplicates managed env keys', async () => {
   const home = await makeHome();
-  await configureClaude({ home, serverUrl: 'https://gateway.test', apiToken: 'secret' });
-  await configureClaude({ home, serverUrl: 'https://gateway.test', apiToken: 'secret' });
+  await configureClaude({ home, shell: '/bin/zsh', serverUrl: 'https://gateway.test', apiToken: 'secret' });
+  await configureClaude({ home, shell: '/bin/zsh', serverUrl: 'https://gateway.test', apiToken: 'secret' });
   const profile = await readFile(path.join(home, '.zshrc'), 'utf8');
   assert.equal(profile.match(/CODEX-GATEWAY:BEGIN/g)?.length, 1);
 });
@@ -45,14 +46,14 @@ test('refuses to modify a symlink', async () => {
   await import('node:fs/promises').then((fs) => fs.symlink(real, profile));
 
   await assert.rejects(
-    () => configureClaude({ home, serverUrl: 'https://gateway.test', apiToken: 'secret' }),
+    () => configureClaude({ home, shell: '/bin/zsh', serverUrl: 'https://gateway.test', apiToken: 'secret' }),
     /symlink/
   );
 });
 
 test('restoring after manual change fails with conflict', async () => {
   const home = await makeHome();
-  const receipt = await configureClaude({ home, serverUrl: 'https://gateway.test', apiToken: 'secret' });
+  const receipt = await configureClaude({ home, shell: '/bin/zsh', serverUrl: 'https://gateway.test', apiToken: 'secret' });
   const profile = receipt.files[0].path;
   await import('node:fs/promises').then((fs) => fs.writeFile(profile, 'pwned'));
   await assert.rejects(() => restoreClient(receipt), /changed/);
@@ -62,6 +63,7 @@ test('Codex receipt includes managed block and model', async () => {
   const home = await makeHome();
   const receipt = await configureCodex({
     home,
+    shell: '/bin/zsh',
     serverUrl: 'https://gateway.test/',
     apiToken: 'secret',
     model: 'deepseek/deepseek-v4-flash',
@@ -77,7 +79,7 @@ test('Codex receipt includes managed block and model', async () => {
 
 test('saved receipt file is mode 0600', async () => {
   const home = await makeHome();
-  await configureClaude({ home, serverUrl: 'https://gateway.test', apiToken: 'secret' });
+  await configureClaude({ home, shell: '/bin/zsh', serverUrl: 'https://gateway.test', apiToken: 'secret' });
   const receiptDir = path.join(home, '.codex-gateway', 'receipts');
   const entries = await import('node:fs/promises').then((fs) => fs.readdir(receiptDir));
   assert.equal(entries.length, 1);

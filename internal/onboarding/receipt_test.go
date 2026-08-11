@@ -42,6 +42,9 @@ func TestListReceiptsNewestFirst(t *testing.T) {
 
 func TestRestoreRejectsReceiptFileOutsideHome(t *testing.T) {
 	home := t.TempDir()
+	canonical, err := canonicalHome(home)
+	require.NoError(t, err)
+	home = canonical
 	outside := filepath.Join(t.TempDir(), "outside")
 	receiptDir := filepath.Join(home, ".llmapi", "receipts")
 	receiptID := "forged"
@@ -50,6 +53,10 @@ func TestRestoreRejectsReceiptFileOutsideHome(t *testing.T) {
 		Files: []ReceiptFile{{Path: outside, OriginalHash: digest(nil), ConfiguredHash: digest(nil), BackupPath: outside, Existed: false}},
 	}
 	receipt.CreatedAt = time.Now().UTC()
+	require.NoError(t, ensureStateRoots(home))
+	key, err := receiptKey(home, true)
+	require.NoError(t, err)
+	receipt.Integrity = receiptMAC(key, receipt)
 	require.NoError(t, os.MkdirAll(receiptDir, 0o700))
 	raw, err := common.Marshal(receipt)
 	require.NoError(t, err)

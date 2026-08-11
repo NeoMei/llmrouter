@@ -59,3 +59,10 @@ func JsonRawMessageToString(data json.RawMessage) string {
 	}
 	return value
 }
+
+// UnmarshalUseNumber preserves JSON numeric lexemes in interface values.
+func UnmarshalUseNumber(data []byte, v any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	return decoder.Decode(v)
+}

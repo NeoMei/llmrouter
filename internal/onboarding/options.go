@@ -8,10 +8,11 @@ import (
 )
 
 var (
-	ErrUsage    = errors.New("onboarding usage error")
-	ErrUnsafe   = errors.New("unsafe filesystem or configuration")
-	ErrConflict = errors.New("configuration conflict")
-	ErrNetwork  = errors.New("network or authentication failure")
+	ErrUsage       = errors.New("onboarding usage error")
+	ErrUnsafe      = errors.New("unsafe filesystem or configuration")
+	ErrConflict    = errors.New("configuration conflict")
+	ErrNetwork     = errors.New("network or authentication failure")
+	ErrUnavailable = errors.New("onboarding capability unavailable")
 )
 
 type Inputs struct {

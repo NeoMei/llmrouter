@@ -14,6 +14,7 @@ const privateDirMode = 0o700
 
 type Transaction struct {
 	home      string
+	inputHome string
 	files     map[string]transactionFile
 	committed bool
 }
@@ -27,14 +28,15 @@ type transactionFile struct {
 }
 
 func BeginTransaction(home string) (*Transaction, error) {
-	absolute, err := filepath.Abs(home)
+	inputHome, err := filepath.Abs(home)
 	if err != nil {
 		return nil, fmt.Errorf("%w: resolve home", ErrUnsafe)
 	}
-	if err := validateHome(absolute); err != nil {
+	absolute, err := canonicalHome(inputHome)
+	if err != nil {
 		return nil, err
 	}
-	tx := &Transaction{home: filepath.Clean(absolute), files: make(map[string]transactionFile)}
+	tx := &Transaction{home: absolute, inputHome: filepath.Clean(inputHome), files: make(map[string]transactionFile)}
 	if err := ensureStateRoots(tx.home); err != nil {
 		return nil, err
 	}
@@ -46,11 +48,27 @@ func (tx *Transaction) Write(path string, data []byte) error {
 	if tx == nil || tx.committed {
 		return fmt.Errorf("%w: transaction is closed", ErrConflict)
 	}
-	absolute, err := filepath.Abs(path)
+	rawPath, err := filepath.Abs(path)
 	if err != nil {
 		return fmt.Errorf("%w: resolve destination", ErrUnsafe)
 	}
-	absolute = filepath.Clean(absolute)
+	rawPath = filepath.Clean(rawPath)
+	if err := validateWithinHome(tx.inputHome, rawPath); err != nil {
+		return err
+	}
+	if err := rejectSymlinksBelow(tx.inputHome, rawPath); err != nil {
+		return err
+	}
+	absolute, err := canonicalPath(rawPath)
+	if err != nil {
+		return err
+	}
+	if err := validateWithinHome(tx.home, absolute); err != nil {
+		return err
+	}
+	if !isAllowedManagedDestination(tx.home, absolute) {
+		return fmt.Errorf("%w: destination is not a managed destination", ErrUnsafe)
+	}
 	if err := validateSecurePath(tx.home, absolute); err != nil {
 		return err
 	}
@@ -60,7 +78,7 @@ func (tx *Transaction) Write(path string, data []byte) error {
 		tx.files[absolute] = file
 		return nil
 	}
-	original, err := os.ReadFile(absolute)
+	original, err := secureReadFile(tx.home, absolute)
 	existed := err == nil
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("%w: read destination", ErrUnsafe)
@@ -153,6 +171,67 @@ func validateSecurePath(home, path string) error {
 	return validateSecureOwner(info)
 }
 
+func canonicalHome(home string) (string, error) {
+	info, err := os.Lstat(home)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("%w: home directory is unavailable", ErrUnsafe)
+	}
+	resolved, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		return "", fmt.Errorf("%w: resolve home links", ErrUnsafe)
+	}
+	resolved = filepath.Clean(resolved)
+	if err := rejectSymlinksBelow(filepath.VolumeName(resolved)+string(filepath.Separator), resolved); err != nil {
+		return "", err
+	}
+	if err := validateHome(resolved); err != nil {
+		return "", err
+	}
+	return resolved, nil
+}
+
+func canonicalPath(path string) (string, error) {
+	path = filepath.Clean(path)
+	for parent := filepath.Dir(path); ; parent = filepath.Dir(parent) {
+		if _, err := os.Lstat(parent); err == nil {
+			resolved, resolveErr := filepath.EvalSymlinks(parent)
+			if resolveErr != nil {
+				return "", fmt.Errorf("%w: resolve destination links", ErrUnsafe)
+			}
+			rel, _ := filepath.Rel(parent, path)
+			return filepath.Join(resolved, rel), nil
+		}
+		if parent == filepath.Dir(parent) {
+			return "", fmt.Errorf("%w: destination parent is unavailable", ErrUnsafe)
+		}
+	}
+}
+
+func rejectSymlinksBelow(root, path string) error {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("%w: destination is outside home", ErrUnsafe)
+	}
+	current := root
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("%w: inspect path component", ErrUnsafe)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%w: path component is a symlink", ErrUnsafe)
+		}
+	}
+	return nil
+}
+
 func validateHome(home string) error {
 	info, err := os.Lstat(home)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
@@ -165,66 +244,6 @@ func validateWithinHome(home, path string) error {
 	rel, err := filepath.Rel(home, path)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 		return fmt.Errorf("%w: destination is outside home", ErrUnsafe)
-	}
-	return nil
-}
-
-func atomicWrite(home, path string, data []byte) error {
-	if err := validateSecurePath(home, path); err != nil {
-		return err
-	}
-	dir := filepath.Dir(path)
-	temp, err := os.CreateTemp(dir, ".llmapi-")
-	if err != nil {
-		return fmt.Errorf("%w: create private temporary file", ErrUnsafe)
-	}
-	tempPath := temp.Name()
-	defer os.Remove(tempPath)
-	if err := temp.Chmod(privateFileMode); err != nil {
-		temp.Close()
-		return fmt.Errorf("%w: protect temporary file", ErrUnsafe)
-	}
-	if _, err := temp.Write(data); err != nil {
-		temp.Close()
-		return fmt.Errorf("%w: write temporary file", ErrUnsafe)
-	}
-	if err := temp.Sync(); err != nil {
-		temp.Close()
-		return fmt.Errorf("%w: sync temporary file", ErrUnsafe)
-	}
-	if err := temp.Close(); err != nil {
-		return fmt.Errorf("%w: close temporary file", ErrUnsafe)
-	}
-	if err := os.Rename(tempPath, path); err != nil {
-		return fmt.Errorf("%w: atomically replace destination", ErrUnsafe)
-	}
-	if err := secureFilePlatform(path); err != nil {
-		return err
-	}
-	if err := syncDirectory(dir); err != nil {
-		return err
-	}
-	return nil
-}
-
-func removeSecureFile(home, path string) error {
-	if err := validateSecurePath(home, path); err != nil {
-		return err
-	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("%w: remove destination", ErrUnsafe)
-	}
-	return syncDirectory(filepath.Dir(path))
-}
-
-func syncDirectory(path string) error {
-	dir, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("%w: open directory for sync", ErrUnsafe)
-	}
-	defer dir.Close()
-	if err := dir.Sync(); err != nil {
-		return fmt.Errorf("%w: sync directory", ErrUnsafe)
 	}
 	return nil
 }

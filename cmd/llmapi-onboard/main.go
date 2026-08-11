@@ -33,13 +33,13 @@ func run(args []string) int {
 
 	switch args[0] {
 	case "install":
-		options, err := onboarding.ResolveOptions(onboarding.Inputs{Args: args[1:], Env: environment(), Prompt: terminalPrompter{}})
+		env := environment()
+		options, err := onboarding.ResolveOptions(onboarding.Inputs{Args: args[1:], Env: env, PageOrigin: env["LLMAPI_PAGE_ORIGIN"], Prompt: terminalPrompter{}})
 		if err != nil {
 			return report(err)
 		}
-		_ = options // Client adapters consume validated options in later onboarding tasks.
-		fmt.Fprintln(os.Stdout, "installation options validated")
-		return 0
+		_ = options
+		return report(fmt.Errorf("%w: no client adapters are registered", onboarding.ErrUnavailable))
 	case "doctor":
 		if len(args) != 1 {
 			return report(fmt.Errorf("%w: doctor accepts no options", onboarding.ErrUsage))
@@ -183,6 +183,9 @@ func report(err error) int {
 	case errors.Is(err, onboarding.ErrNetwork):
 		fmt.Fprintln(os.Stderr, "network or authentication failure")
 		return 4
+	case errors.Is(err, onboarding.ErrUnavailable):
+		fmt.Fprintln(os.Stderr, "client adapters are not registered")
+		return 1
 	default:
 		fmt.Fprintln(os.Stderr, "unexpected onboarding failure")
 		return 1

@@ -2,9 +2,24 @@
 
 package onboarding
 
-import "os"
+import (
+	"fmt"
+	"os"
+)
 
-// Go's standard library has no cross-version ACL API equivalent to POSIX owner checks.
-// This no-op hook keeps the core buildable; an installer-owned ACL implementation is required before Windows credential writes.
-func validateSecureOwner(os.FileInfo) error { return nil }
-func secureFilePlatform(string) error       { return nil }
+// Windows operations fail closed until the installer supplies a current-user-only ACL implementation.
+// Go's standard library does not expose the required ACL ownership primitives.
+func validateSecureOwner(os.FileInfo) error {
+	return fmt.Errorf("%w: Windows ACL enforcement is unavailable", ErrUnsafe)
+}
+func secureReadFile(string, string) ([]byte, error) {
+	return nil, fmt.Errorf("%w: Windows ACL enforcement is unavailable", ErrUnsafe)
+}
+func atomicWrite(string, string, []byte) error {
+	return fmt.Errorf("%w: Windows ACL enforcement is unavailable", ErrUnsafe)
+}
+func removeSecureFile(string, string) error {
+	return fmt.Errorf("%w: Windows ACL enforcement is unavailable", ErrUnsafe)
+}
+
+func setSecureFSTestHook(func()) {}

@@ -112,7 +112,8 @@
       "additionalProperties": false,
       "required": [
         "basePath",
-        "checksumPath"
+        "checksumPath",
+        "binaries"
       ],
       "properties": {
         "basePath": {
@@ -122,6 +123,34 @@
         "checksumPath": {
           "type": "string",
           "const": "/install/checksums.txt"
+        },
+        "binaries": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "namePattern"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "enum": [
+                  "llmapi-onboard",
+                  "llmapi-mcp-bridge"
+                ]
+              },
+              "namePattern": {
+                "type": "string",
+                "enum": [
+                  "llmapi-onboard-{os}-{arch}[.exe]",
+                  "llmapi-mcp-bridge-{os}-{arch}[.exe]"
+                ]
+              }
+            }
+          }
         }
       }
     }

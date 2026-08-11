@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
@@ -65,8 +66,12 @@ def load_manifest(path: Path) -> dict:
 def is_loopback_host(host: str | None) -> bool:
     if host is None:
         return False
-    host = host.lower()
-    return host in {"localhost", "127.0.0.1", "::1"} or host.startswith("127.")
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def validate_optional_default_url(value: object, field_name: str) -> None:
@@ -78,6 +83,35 @@ def validate_optional_default_url(value: object, field_name: str) -> None:
     if parsed.scheme == "http" and is_loopback_host(parsed.hostname):
         return
     fail(f"{field_name} must use https or a loopback http URL")
+
+
+def validate_artifact_contract(artifacts: object) -> None:
+    if not isinstance(artifacts, dict):
+        fail("artifacts must be an object")
+    if artifacts.get("basePath") != "/install/bin":
+        fail("artifacts.basePath must be /install/bin")
+    if artifacts.get("checksumPath") != "/install/checksums.txt":
+        fail("artifacts.checksumPath must be /install/checksums.txt")
+    binaries = artifacts.get("binaries")
+    if not isinstance(binaries, list) or len(binaries) != 2:
+        fail("artifacts.binaries must contain both helper binaries")
+    expected = {
+        "llmapi-onboard": "llmapi-onboard-{os}-{arch}[.exe]",
+        "llmapi-mcp-bridge": "llmapi-mcp-bridge-{os}-{arch}[.exe]",
+    }
+    seen: set[str] = set()
+    for binary in binaries:
+        if not isinstance(binary, dict):
+            fail("each artifact binary must be an object")
+        binary_id = binary.get("id")
+        name_pattern = binary.get("namePattern")
+        if binary_id not in expected:
+            fail(f"unsupported artifact id: {binary_id}")
+        if name_pattern != expected[binary_id]:
+            fail(f"unsupported artifact pattern for {binary_id}")
+        seen.add(binary_id)
+    if seen != set(expected):
+        fail("artifacts.binaries must include both helper binaries")
 
 
 def validate_manifest(data: dict) -> None:
@@ -125,13 +159,7 @@ def validate_manifest(data: dict) -> None:
     if "claude-desktop" in seen and seen["claude-desktop"].get("integration") != "mcp-tool":
         fail("Claude Desktop must not be configured as direct access")
 
-    artifacts = data.get("artifacts")
-    if not isinstance(artifacts, dict):
-        fail("artifacts must be an object")
-    if artifacts.get("basePath") != "/install/bin":
-        fail("artifacts.basePath must be /install/bin")
-    if artifacts.get("checksumPath") != "/install/checksums.txt":
-        fail("artifacts.checksumPath must be /install/checksums.txt")
+    validate_artifact_contract(data.get("artifacts"))
 
     validate_optional_default_url(data.get("defaultServerUrl"), "defaultServerUrl")
     validate_optional_default_url(data.get("defaultServerURL"), "defaultServerURL")

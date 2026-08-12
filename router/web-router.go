@@ -25,6 +25,20 @@ func SetWebRouter(router *gin.Engine, assets WebAssets) {
 	router.Use(gzip.Gzip(gzip.DefaultCompression))
 	router.Use(middleware.GlobalWebRateLimit())
 	router.Use(middleware.Cache())
+
+	// Explicitly register the /install onboarding directory. Relay wildcard
+	// routes such as /:mode/mj/... make gin's RedirectTrailingSlash believe a
+	// sibling path exists, so /install/ would be 301-redirected to /install
+	// before the static middleware runs. Registering the route keeps the
+	// trailing-slash URL serving the onboarding index.html directly.
+	installServer := http.FileServer(frontendFS)
+	router.GET("/install", func(c *gin.Context) {
+		installServer.ServeHTTP(c.Writer, c.Request)
+	})
+	router.GET("/install/*filepath", func(c *gin.Context) {
+		installServer.ServeHTTP(c.Writer, c.Request)
+	})
+
 	router.Use(static.Serve("/", frontendFS))
 	router.NoRoute(func(c *gin.Context) {
 		c.Set(middleware.RouteTagKey, "web")

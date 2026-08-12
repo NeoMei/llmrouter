@@ -54,3 +54,26 @@ No screenshots, traces, or temporary Playwright configuration were added to comm
 
 - Production is intentionally RED until the new web assets are deployed; no deployment was performed in this task.
 - The Go server emits its existing `TRUSTED_PROXIES` startup warning and Playwright emits existing `NO_COLOR` environment warnings; neither was a docs UI or test failure.
+
+## Review-finding follow-up (2026-08-12)
+
+Implemented all Task 3 review findings in `web/e2e/docs.spec.ts`:
+
+- The Base URL copy-success test remains covered.
+- Added a minimal connection-check copy-success test with native clipboard unavailable and successful `document.execCommand` fallback; it observes visible `Copied` feedback.
+- Added a clipboard-failure test with clipboard unavailable and `document.execCommand` returning `false`; it asserts that no `Copied` feedback appears and that `#verify code` remains visible with the `select-all` class.
+- The mobile navigation test now clicks `Configure an Agent`, verifies the `/docs#configure-agent` hash, and confirms the target is visible.
+- Removed the incomplete E2E text-substring exclusions for SDK/API tutorials; `docs-content.test.ts` remains the comprehensive scope contract.
+
+Exact verification evidence:
+
+```sh
+cd web && ./node_modules/.bin/playwright test docs.spec.ts client-model-routes.spec.ts --retries=0
+# 21 passed, 1 skipped (desktop instance of mobile-only navigation test), 4.8 s
+
+cd web && npm test -- src/features/docs/docs-content.test.ts src/features/docs/docs-locale.test.ts src/features/docs/docs-page.test.ts
+# 12 passed, 0 failed
+
+cd .. && git diff --check
+# exit 0
+```

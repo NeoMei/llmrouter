@@ -42,9 +42,6 @@ test('renders the public concise LLMRouter connection guide', async ({
   await expect(
     page.getByRole('heading', { name: 'Connect an LLMRouter Agent' })
   ).toBeVisible()
-  await expect(page.getByText('SDK', { exact: false })).toHaveCount(0)
-  await expect(page.getByText('API tutorial', { exact: false })).toHaveCount(0)
-
   for (const sectionId of expectedSections) {
     await expect(page.locator(`#${sectionId}`)).toBeVisible()
   }
@@ -103,6 +100,47 @@ test('copies the Base URL and confirms the action', async ({ page }) => {
   ).toBeVisible()
 })
 
+test('copies the minimal connection check and confirms the action', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: undefined,
+    })
+    document.execCommand = () => true
+  })
+  await page.goto('/docs')
+
+  await page
+    .getByRole('button', { name: 'Copy Minimal connection check' })
+    .click()
+
+  await expect(page.getByText('Copied', { exact: true })).toBeVisible()
+})
+
+test('keeps the connection check visible when clipboard copy fails', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: undefined,
+    })
+    document.execCommand = () => false
+  })
+  await page.goto('/docs')
+
+  await page
+    .getByRole('button', { name: 'Copy Minimal connection check' })
+    .click()
+
+  await expect(page.getByText('Copied', { exact: true })).toHaveCount(0)
+  const connectionCheck = page.locator('#verify code')
+  await expect(connectionCheck).toBeVisible()
+  await expect(connectionCheck).toHaveClass(/select-all/)
+})
+
 test('lists supported Agents and the install script link', async ({ page }) => {
   await page.goto('/docs#configure-agent')
 
@@ -141,7 +179,12 @@ test('shows documentation navigation on mobile', async ({ page }, testInfo) => {
     name: 'Documentation navigation',
   })
   await expect(navigation).toBeVisible()
-  await expect(
-    navigation.getByRole('link', { name: 'Configure an Agent' })
-  ).toHaveAttribute('href', '#configure-agent')
+  const configureAgentLink = navigation.getByRole('link', {
+    name: 'Configure an Agent',
+  })
+  await expect(configureAgentLink).toHaveAttribute('href', '#configure-agent')
+
+  await configureAgentLink.click()
+  await expect(page).toHaveURL(/\/docs#configure-agent$/)
+  await expect(page.locator('#configure-agent')).toBeVisible()
 })

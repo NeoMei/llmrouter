@@ -79,10 +79,8 @@ test('install page generates same-origin commands without secrets', async ({
   ).toBeVisible()
 
   // Claude Desktop is labelled as MCP tool access, not model replacement
-  await expect(page.getByText('MCP tool access')).toBeVisible()
-  await expect(
-    page.getByText(/does not replace.*built-in model/i)
-  ).toBeVisible()
+  await expect(page.getByText('MCP tool access', { exact: true })).toBeVisible()
+  await expect(page.getByText('does not replace Claude Desktop')).toBeVisible()
 
   // The generated command must reference the page origin and never a token
   const command = await page.locator('#install-command').textContent()
@@ -108,7 +106,8 @@ test('install page shows fallback models and supports platform switch', async ({
   await page.locator('#platform').selectOption('windows')
   await page.waitForTimeout(300)
   const command = await page.locator('#install-command').textContent()
-  expect(command).toContain('irm')
+  expect(command).toContain('Invoke-WebRequest')
+  expect(command).toContain('LLMROUTER_SERVER_URL')
 })
 
 test('install page copy button provides feedback', async ({ page }) => {

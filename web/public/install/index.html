@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>LLMAPI client setup</title>
+    <title>LLMROUTER client setup</title>
     <style>
       :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
       body { margin: 0; background: #f6f7fb; color: #172033; }
@@ -23,7 +23,7 @@
   <body>
     <main>
       <header>
-        <h1>Connect an LLMAPI client</h1>
+        <h1>Connect an LLMROUTER client</h1>
         <p class="lede">Choose a platform to preview supported clients. The installer obtains credentials privately through its terminal flow; this page never handles them.</p>
       </header>
       <noscript><p class="notice">JavaScript is optional. Follow the <a href="guide.md">command-line setup guide</a>.</p></noscript>
@@ -39,7 +39,7 @@
 
       <section aria-labelledby="clients-heading">
         <h2 id="clients-heading">Choose a client</h2>
-        <p class="muted">Select a card to preview it. The installer asks for the final client selection interactively, or you can use <code>LLMAPI_CLIENTS</code> as documented in the guide.</p>
+        <p class="muted">Select a card to preview it. The installer asks for the final client selection interactively, or you can use <code>LLMROUTER_CLIENTS</code> as documented in the guide.</p>
         <div id="client-cards" class="grid" aria-live="polite"></div>
       </section>
 
@@ -94,8 +94,8 @@
         }
         function renderCommand() {
           command.textContent = platform.value === 'windows'
-            ? `$installer = Join-Path ([IO.Path]::GetTempPath()) ('llmapi-install-' + [guid]::NewGuid() + '.ps1'); try { $response = Invoke-WebRequest -Uri '${origin}/install/install.ps1' -OutFile $installer -PassThru -MaximumRedirection 0 -ErrorAction Stop; if ($response.StatusCode -lt 200 -or $response.StatusCode -ge 300) { throw 'installer download failed' }; $env:LLMAPI_SERVER_URL='${origin}'; & $installer } finally { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue }`
-            : `llmapi_install() { local tmp http_status status=0; if tmp="$(mktemp)"; then if http_status="$(curl -fsS --max-redirs 0 --write-out '%{http_code}' -o "$tmp" "${origin}/install/install.sh")"; then case "$http_status" in 2??) if LLMAPI_SERVER_URL="${origin}" bash "$tmp"; then :; else status=$?; fi ;; *) status=1 ;; esac; else status=$?; fi; rm -f "$tmp" || :; else status=$?; fi; return "$status"; }; llmapi_install`;
+            ? `$installer = Join-Path ([IO.Path]::GetTempPath()) ('llmrouter-install-' + [guid]::NewGuid() + '.ps1'); try { $response = Invoke-WebRequest -Uri '${origin}/install/install.ps1' -OutFile $installer -PassThru -MaximumRedirection 0 -ErrorAction Stop; if ($response.StatusCode -lt 200 -or $response.StatusCode -ge 300) { throw 'installer download failed' }; $env:LLMROUTER_SERVER_URL='${origin}'; & $installer } finally { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue }`
+            : `llmrouter_install() { local tmp http_status status=0; if tmp="$(mktemp)"; then if http_status="$(curl -fsS --max-redirs 0 --write-out '%{http_code}' -o "$tmp" "${origin}/install/install.sh")"; then case "$http_status" in 2??) if LLMROUTER_SERVER_URL="${origin}" bash "$tmp"; then :; else status=$?; fi ;; *) status=1 ;; esac; else status=$?; fi; rm -f "$tmp" || :; else status=$?; fi; return "$status"; }; llmrouter_install`;
         }
         function showModels(models, source) {
           model.replaceChildren();

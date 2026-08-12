@@ -74,4 +74,8 @@ const (
 	// fallback in authHelper (finishAdminAudit) skips its record to avoid
 	// duplicate entries.
 	ContextKeyAuditLogged ContextKey = "audit_logged"
+
+	// ContextKeyResponsesInput stores the normalized input items of the current
+	// Responses request so the response handler can persist a stateful turn.
+	ContextKeyResponsesInput ContextKey = "responses_input"
 )

@@ -1,17 +1,20 @@
 package openai
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	appconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/responsesstate"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -39,6 +42,8 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		c.Set("image_generation_call_quality", responsesResponse.GetQuality())
 		c.Set("image_generation_call_size", responsesResponse.GetSize())
 	}
+
+	persistResponsesTurn(c, info, &responsesResponse)
 
 	// 写入新的 response body
 	service.IOCopyBytesGracefully(c, resp, responseBody)
@@ -93,6 +98,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		switch streamResponse.Type {
 		case "response.completed":
 			if streamResponse.Response != nil {
+				persistResponsesTurn(c, info, streamResponse.Response)
 				if streamResponse.Response.Usage != nil {
 					if streamResponse.Response.Usage.InputTokens != 0 {
 						usage.PromptTokens = streamResponse.Response.Usage.InputTokens
@@ -149,4 +155,40 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 
 	return usage, nil
+}
+
+// persistResponsesTurn stores a completed Responses turn for later
+// previous_response_id replay when stateful continuity is enabled. It is
+// best-effort: a nil store, missing response ID, or validation failure simply
+// skips persistence without affecting the relay path.
+func persistResponsesTurn(c *gin.Context, info *relaycommon.RelayInfo, responsesResponse *dto.OpenAIResponsesResponse) {
+	if !responsesstate.Enabled() || info == nil || responsesResponse == nil || responsesResponse.ID == "" {
+		return
+	}
+	store, err := responsesstate.Default()
+	if err != nil {
+		return
+	}
+	rawInput, exists := c.Get(string(appconstant.ContextKeyResponsesInput))
+	if !exists {
+		return
+	}
+	input, ok := rawInput.(json.RawMessage)
+	if !ok || len(input) == 0 {
+		return
+	}
+	output, err := json.Marshal(responsesResponse.Output)
+	if err != nil {
+		return
+	}
+	responsesstate.SaveTurn(
+		c.Request.Context(),
+		store,
+		info.UserId,
+		info.TokenId,
+		responsesResponse.ID,
+		info.UpstreamModelName,
+		input,
+		output,
+	)
 }

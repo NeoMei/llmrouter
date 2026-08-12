@@ -174,3 +174,26 @@ func Expand(ctx context.Context, store Store, tenantID, tokenID int, request jso
 	}
 	return json.RawMessage(result), nil
 }
+
+// SaveTurn persists a completed Responses turn for later previous_response_id
+// replay. It is a best-effort helper: callers pass the response ID, the model,
+// the normalized input items, and the output items. The record is bounded by
+// ValidateRecord and silently ignored on validation failure so a bad turn never
+// breaks the relay path.
+func SaveTurn(ctx context.Context, store Store, tenantID, tokenID int, responseID, model string, input, output json.RawMessage) {
+	if store == nil || responseID == "" {
+		return
+	}
+	record := Record{
+		TenantID:   tenantID,
+		TokenID:    tokenID,
+		ResponseID: responseID,
+		Model:      model,
+		Input:      input,
+		Output:     output,
+		ExpiresAt:  time.Now().Add(DefaultRecordTTL),
+	}
+	if err := store.Save(ctx, record); err != nil {
+		common.SysLog("responses state save skipped: " + err.Error())
+	}
+}

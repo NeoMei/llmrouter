@@ -14,6 +14,8 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/modelcatalog"
+	"github.com/QuantumNous/new-api/service/responsesstate"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -68,6 +70,37 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	request, err := common.DeepCopy(responsesReq)
 	if err != nil {
 		return types.NewError(fmt.Errorf("failed to copy request to GeneralOpenAIRequest: %w", err), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+
+	// Bounded Responses continuity: expand previous_response_id chains only when
+	// the selected upstream wire cannot handle native state (chat conversion).
+	// Native responses providers pass the ID through unchanged.
+	if responsesstate.Enabled() && info.SelectedWire != "" && info.SelectedWire != string(modelcatalog.WireResponses) && request.PreviousResponseID != "" {
+		if store, storeErr := responsesstate.Default(); storeErr == nil {
+			encoded, marshalErr := common.Marshal(request)
+			if marshalErr != nil {
+				return types.NewError(fmt.Errorf("failed to marshal responses request for state expansion: %w", marshalErr), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+			}
+			expanded, expandErr := responsesstate.Expand(c.Request.Context(), store, info.UserId, info.TokenId, encoded)
+			if expandErr != nil {
+				common.SysLog("responses state expansion skipped: " + expandErr.Error())
+			} else if len(expanded) > 0 && string(expanded) != string(encoded) {
+				var expandedReq dto.OpenAIResponsesRequest
+				if unmarshalErr := common.Unmarshal(expanded, &expandedReq); unmarshalErr != nil {
+					common.SysLog("responses state expansion decode failed: " + unmarshalErr.Error())
+				} else {
+					request = &expandedReq
+				}
+			}
+		} else {
+			common.SysLog("responses state store unavailable: " + storeErr.Error())
+		}
+	}
+
+	// Stash the normalized input so the response handler can persist a stateful
+	// turn for later previous_response_id replay.
+	if responsesstate.Enabled() && request.Input != nil {
+		c.Set(string(appconstant.ContextKeyResponsesInput), request.Input)
 	}
 
 	err = helper.ModelMappedHelper(c, info, request)

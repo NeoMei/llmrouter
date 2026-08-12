@@ -44,7 +44,7 @@ const pageLabels: Record<
     navigation: string
   }
 > = {
-  zh: {
+  zhCN: {
     copy: '复制',
     copied: '已复制',
     baseUrl: 'Base URL',
@@ -57,6 +57,41 @@ const pageLabels: Record<
     baseUrl: 'Base URL',
     connectionCheck: 'Minimal connection check',
     navigation: 'Documentation navigation',
+  },
+  fr: {
+    copy: 'Copier',
+    copied: 'Copié',
+    baseUrl: 'Base URL',
+    connectionCheck: 'Vérification minimale',
+    navigation: 'Navigation de la documentation',
+  },
+  ru: {
+    copy: 'Копировать',
+    copied: 'Скопировано',
+    baseUrl: 'Base URL',
+    connectionCheck: 'Минимальная проверка',
+    navigation: 'Навигация по документации',
+  },
+  ja: {
+    copy: 'コピー',
+    copied: 'コピー済み',
+    baseUrl: 'Base URL',
+    connectionCheck: '最小接続確認',
+    navigation: 'ドキュメントナビゲーション',
+  },
+  vi: {
+    copy: 'Sao chép',
+    copied: 'Đã sao chép',
+    baseUrl: 'Base URL',
+    connectionCheck: 'Kiểm tra tối thiểu',
+    navigation: 'Điều hướng tài liệu',
+  },
+  zhTW: {
+    copy: '複製',
+    copied: '已複製',
+    baseUrl: 'Base URL',
+    connectionCheck: '最小連接檢查',
+    navigation: '文件導覽',
   },
 }
 

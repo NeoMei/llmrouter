@@ -42,8 +42,8 @@ function publicText(content: DocsContent) {
 }
 
 describe('LLMRouter connection guide content', () => {
-  test('provides concise Chinese and English content with exactly seven sections', () => {
-    assert.deepEqual(DOCS_LANGUAGES, ['zh', 'en'])
+  test('provides content in every interface language with exactly seven sections', () => {
+    assert.deepEqual(DOCS_LANGUAGES, ['zhCN', 'en', 'fr', 'ru', 'ja', 'vi', 'zhTW'])
 
     for (const language of DOCS_LANGUAGES) {
       const content = docsContent[language as DocsLanguage]
@@ -57,14 +57,16 @@ describe('LLMRouter connection guide content', () => {
     }
   })
 
-  test('maps the site-wide interface language onto available content languages', () => {
-    assert.equal(docsLanguageForInterface('zhCN'), 'zh')
-    assert.equal(docsLanguageForInterface('zhTW'), 'zh')
+  test('maps each site-wide interface language onto its dedicated content', () => {
+    assert.equal(docsLanguageForInterface('zhCN'), 'zhCN')
+    assert.equal(docsLanguageForInterface('zhTW'), 'zhTW')
     assert.equal(docsLanguageForInterface('en'), 'en')
-    assert.equal(docsLanguageForInterface('fr'), 'en')
-    assert.equal(docsLanguageForInterface('ja'), 'en')
-    assert.equal(docsLanguageForInterface('vi'), 'en')
+    assert.equal(docsLanguageForInterface('fr'), 'fr')
+    assert.equal(docsLanguageForInterface('ru'), 'ru')
+    assert.equal(docsLanguageForInterface('ja'), 'ja')
+    assert.equal(docsLanguageForInterface('vi'), 'vi')
     assert.equal(docsLanguageForInterface(undefined), 'en')
+    assert.equal(docsLanguageForInterface('unknown'), 'en')
   })
 
   test('covers the supported Agents and labels Claude Desktop as MCP tool access', () => {
@@ -84,11 +86,15 @@ describe('LLMRouter connection guide content', () => {
           'Aider',
         ]
       )
-      assert.match(
+      const claudeDetail =
         agents.find((agent) => agent.name === 'Claude Code/Desktop')?.detail ??
-          '',
-        /Claude Desktop.*MCP.*tool access/i
-      )
+        ''
+      // English keeps the exact canonical wording; other languages mention MCP.
+      if (language === 'en') {
+        assert.match(claudeDetail, /Claude Desktop.*MCP.*tool access/i)
+      } else {
+        assert.match(claudeDetail, /MCP/i)
+      }
     }
   })
 

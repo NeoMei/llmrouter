@@ -27,10 +27,10 @@
 
 **Interfaces:** export `DOCS_LANGUAGES`, `DocsLanguage`, `DocsContent`, `docsContent`, `DOCS_LANGUAGE_STORAGE_KEY`, `resolveDocsLanguage`, and `persistDocsLanguage`.
 
-- [ ] Write failing Node tests for exactly seven section IDs (`start`, `get-token`, `connection-address`, `choose-model`, `configure-agent`, `verify`, `troubleshooting`), required Agent names, internal links, forbidden scope/legacy terms, locale precedence, and storage failure.
-- [ ] Run tests and confirm failure because modules do not exist.
-- [ ] Implement concise Chinese/English static content and exact storage key `llmrouter.docs.language`.
-- [ ] Run focused tests and commit `feat(docs): define bilingual developer content`.
+- [x] Write failing Node tests for exactly seven section IDs (`start`, `get-token`, `connection-address`, `choose-model`, `configure-agent`, `verify`, `troubleshooting`), required Agent names, internal links, forbidden scope/legacy terms, locale precedence, and storage failure.
+- [x] Run tests and confirm failure because modules do not exist.
+- [x] Implement concise Chinese/English static content and exact storage key `llmrouter.docs.language`.
+- [x] Run focused tests and commit `feat(docs): define bilingual developer content`.
 
 ### Task 2: Responsive Page, Clipboard, and Route
 
@@ -38,25 +38,25 @@
 
 **Interfaces:** public `DocsPage`, `/docs` route, seven stable anchors, two labelled copy controls, and responsive navigation.
 
-- [ ] Write failing source-contract tests for route registration, `PublicLayout`, seven anchors, four internal links, no API imports, public naming, and native clipboard fallback.
-- [ ] Run tests and confirm failure.
-- [ ] Implement one data-driven page with locale switch, compact desktop/mobile navigation, selectable code, native copy feedback, and route.
-- [ ] Run focused tests, `npm run build:check`, lint, and commit `feat(web): add LLMRouter developer docs`.
+- [x] Write failing source-contract tests for route registration, `PublicLayout`, seven anchors, four internal links, no API imports, public naming, and native clipboard fallback.
+- [x] Run tests and confirm failure.
+- [x] Implement one data-driven page with locale switch, compact desktop/mobile navigation, selectable code, native copy feedback, and route.
+- [x] Run focused tests, `npm run build:check`, lint, and commit `feat(web): add LLMRouter developer docs`.
 
 ### Task 3: Browser Acceptance
 
 **Files:** create `web/e2e/docs.spec.ts`.
 
-- [ ] Write Playwright coverage for public render, language switching/persistence, Base URL copy, Agent section, internal links, anchor refresh, and mobile navigation.
-- [ ] Verify the test fails against current production 404.
-- [ ] Run against the new build and fix any defects.
-- [ ] Run `scripts/verify-web.sh` plus docs/client-route e2e tests and commit `test(web): certify developer docs`.
+- [x] Write Playwright coverage for public render, language switching/persistence, Base URL copy, Agent section, internal links, anchor refresh, and mobile navigation.
+- [x] Verify the test fails against current production 404.
+- [x] Run against the new build and fix any defects.
+- [x] Run `scripts/verify-web.sh` plus docs/client-route e2e tests and commit `test(web): certify developer docs`.
 
 ### Task 4: Parallel Deployment and Certification
 
-- [ ] Run web, CLI, onboarding, and diff verification.
-- [ ] Push `feat/llmrouter-docs` to private `NeoMei/llmrouter`.
-- [ ] Build a revision-labelled image on the server.
-- [ ] Start a candidate on a temporary loopback port with existing protected env, volumes, and network; certify before replacing the current LLMRouter service.
-- [ ] Verify public health, docs, Agent anchor, install, Token/model/route links, authenticated model-list, and Playwright acceptance.
-- [ ] Keep the previous LLMRouter service and image available for rollback.
+- [x] Run web, CLI, onboarding, and diff verification.
+- [x] Push `feat/llmrouter-docs` to private `NeoMei/llmrouter`.
+- [x] Build a revision-labelled image on the server.
+- [x] Start a candidate on a temporary loopback port with existing protected env, volumes, and network; certify before replacing the current LLMRouter service.
+- [x] Verify public health, docs, Agent anchor, install, Token/model/route links, authenticated model-list, and Playwright acceptance.
+- [x] Keep the previous LLMRouter service and image available for rollback.

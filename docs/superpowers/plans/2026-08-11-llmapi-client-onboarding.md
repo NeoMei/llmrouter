@@ -1,6 +1,6 @@
 # LLMROUTER Client Onboarding Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Publish, test, deploy, and release a secure cross-platform `/install/` onboarding system for LLMROUTER direct-API and desktop-MCP clients.
 
@@ -92,7 +92,7 @@
 - Produces: manifest schema version `1` and client IDs `codex-cli`, `codex-desktop`, `claude-code`, `claude-desktop`, `opencode`, `continue`, `aider`, `cursor`, `cline`, `roo-code`, `openai-sdk`, `langchain`.
 - Produces: artifact names `llmrouter-onboard-{os}-{arch}[.exe]` and `llmrouter-mcp-bridge-{os}-{arch}[.exe]` consumed by Tasks 4, 5, and 7.
 
-- [ ] **Step 1: Write the failing semantic manifest test**
+- [x] **Step 1: Write the failing semantic manifest test**
 
 ```python
 # scripts/onboarding_assets_test.py
@@ -122,13 +122,13 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: Run the test and verify the missing manifest fails**
+- [x] **Step 2: Run the test and verify the missing manifest fails**
 
 Run: `python3 -m unittest scripts/onboarding_assets_test.py -v`
 
 Expected: `ERROR` containing `web/public/install/manifest.json`.
 
-- [ ] **Step 3: Add schema, manifest, validator, and generated-binary ignore rule**
+- [x] **Step 3: Add schema, manifest, validator, and generated-binary ignore rule**
 
 The manifest's client records must use this exact shape:
 
@@ -166,7 +166,7 @@ The manifest's client records must use this exact shape:
 
 Add all twelve records, with automatic/direct modes matching the design. `validate-onboarding-manifest.py` must reject duplicate IDs, unsupported modes, missing required clients, non-HTTPS non-loopback defaults, an unknown schema version, and Claude Desktop configured as direct access. Add `web/public/install/bin/*` and `!web/public/install/bin/.gitkeep` to `web/.gitignore`.
 
-- [ ] **Step 4: Run semantic and formatting checks**
+- [x] **Step 4: Run semantic and formatting checks**
 
 Run:
 
@@ -179,7 +179,7 @@ python3 -m json.tool onboarding/manifest.schema.json >/dev/null
 
 Expected: validator prints `onboarding manifest: PASS`; unit tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add onboarding/manifest.schema.json web/public/install/manifest.json web/public/install/bin/.gitkeep web/.gitignore scripts/validate-onboarding-manifest.py scripts/onboarding_assets_test.py
@@ -207,7 +207,7 @@ git commit -m "feat(onboarding): define client manifest contract"
 - Produces: `NormalizeServerURL(string) (*url.URL, error)`, `ResolveOptions(Inputs) (Options, error)`, `BeginTransaction(home string) (*Transaction, error)`, `(*Transaction).Write(path string, data []byte) error`, `(*Transaction).Commit(meta ReceiptMeta) (Receipt, error)`, `Restore(home, receiptID string) error`, and `Uninstall(home, receiptID string) error`.
 - Produces: executable commands `install`, `doctor`, `restore`, `uninstall`, and `receipts` consumed by client adapters and launchers.
 
-- [ ] **Step 1: Write failing table tests for input precedence and URL policy**
+- [x] **Step 1: Write failing table tests for input precedence and URL policy**
 
 ```go
 func TestNormalizeServerURL(t *testing.T) {
@@ -230,13 +230,13 @@ func TestResolveOptionsDoesNotAcceptTokenFlag(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the focused tests and verify they fail to compile**
+- [x] **Step 2: Run the focused tests and verify they fail to compile**
 
 Run: `go test ./internal/onboarding -run 'TestNormalizeServerURL|TestResolveOptions' -count=1`
 
 Expected: FAIL because package symbols do not exist.
 
-- [ ] **Step 3: Implement the public types and strict precedence**
+- [x] **Step 3: Implement the public types and strict precedence**
 
 ```go
 type Inputs struct {
@@ -278,7 +278,7 @@ type Prompter interface {
 
 Reject `--token`, unknown clients, missing non-interactive inputs, control characters, and unsupported URL components. Make `Secret.String()` return `[REDACTED]`; expose token bytes only through `Secret.Reveal()` at the HTTP/config boundary.
 
-- [ ] **Step 4: Write failing transaction tests**
+- [x] **Step 4: Write failing transaction tests**
 
 ```go
 func TestTransactionRollbackAndConflict(t *testing.T) {
@@ -306,7 +306,7 @@ func TestTransactionRejectsDestinationSymlink(t *testing.T) {
 }
 ```
 
-- [ ] **Step 5: Implement secure writes, receipts, restore, and managed merges**
+- [x] **Step 5: Implement secure writes, receipts, restore, and managed merges**
 
 Use state roots `~/.llmrouter/receipts`, `~/.llmrouter/backups`, and `~/.llmrouter/credentials`. Each `ReceiptFile` must contain `Path`, `OriginalHash`, `ConfiguredHash`, `BackupPath`, and `Existed`; `Receipt` must not contain a token or environment-value map. Atomic write uses `CreateTemp` in the destination directory, `Chmod(0600)`, `Sync`, `Close`, `Rename`, then directory `Sync` on POSIX. Check every existing path component with `Lstat`; reject symlinks and files not owned by the current UID. Keep Windows ACL application behind a `secureFilePlatform(path string) error` build-tag implementation.
 
@@ -320,11 +320,11 @@ func ApplyManagedBlock(input, client, content string) (string, error)
 func RemoveManagedBlock(input, client string) (string, error)
 ```
 
-- [ ] **Step 6: Add the command entry point and exit codes**
+- [x] **Step 6: Add the command entry point and exit codes**
 
 `cmd/llmrouter-onboard/main.go` maps usage errors to `2`, unsafe filesystem/config conflicts to `3`, network/auth failures to `4`, and unexpected failures to `1`. It must print only redacted errors and support `--home` solely for tests/administration.
 
-- [ ] **Step 7: Run core tests including race detection**
+- [x] **Step 7: Run core tests including race detection**
 
 Run:
 
@@ -336,7 +336,7 @@ go build ./cmd/llmrouter-onboard
 
 Expected: all tests pass; build succeeds without creating tracked output.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add cmd/llmrouter-onboard internal/onboarding
@@ -365,7 +365,7 @@ git commit -m "feat(onboarding): add secure configuration transactions"
 - Consumes: `Options`, `Transaction`, `ApplyManagedBlock`, and `MergeJSONObject` from Task 2.
 - Produces: `ClientAdapter` registry and `RunDoctor(context.Context, DoctorOptions) DoctorReport` used by the CLI and certification scripts.
 
-- [ ] **Step 1: Write the adapter contract and failing fixture tests**
+- [x] **Step 1: Write the adapter contract and failing fixture tests**
 
 ```go
 type ClientAdapter interface {
@@ -399,13 +399,13 @@ func TestAdaptersPreserveUnrelatedConfiguration(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run focused tests and verify missing adapters fail**
+- [x] **Step 2: Run focused tests and verify missing adapters fail**
 
 Run: `go test ./internal/onboarding -run 'TestAdapters|TestDoctor|TestAPI' -count=1`
 
 Expected: FAIL because adapter registry and API probes do not exist.
 
-- [ ] **Step 3: Implement exact client configuration behavior**
+- [x] **Step 3: Implement exact client configuration behavior**
 
 Use these managed values:
 
@@ -419,7 +419,7 @@ Aider: OPENAI_API_BASE=<origin>/v1 and OPENAI_API_KEY via an LLMROUTER managed e
 
 Codex CLI and Desktop return the same planned config file but separate checks. Continue automatic mutation must require a recognized JSON/YAML strategy; unknown syntax returns generated manual settings without changing files. `manual.go` returns secret-free snippets for Cursor, Cline, Roo Code, OpenAI Python/Node SDK, and LangChain.
 
-- [ ] **Step 4: Add mock HTTP protocol tests**
+- [x] **Step 4: Add mock HTTP protocol tests**
 
 ```go
 func TestAPIProbesUseCorrectEndpointsAndBoundedBodies(t *testing.T) {
@@ -444,7 +444,7 @@ Define `mustLoopbackURL(t, raw)` in `api_test.go` as a wrapper around `Normalize
 
 Every request uses a 10-second default timeout, `max_output_tokens`/`max_tokens <= 16`, no streaming in the default doctor, and a user agent containing the onboarding version. Error text includes status/request ID but not response secrets or token values.
 
-- [ ] **Step 5: Implement doctor reports and opt-in smoke behavior**
+- [x] **Step 5: Implement doctor reports and opt-in smoke behavior**
 
 ```go
 type Check struct { Name, Status, Message string }
@@ -456,7 +456,7 @@ type DoctorOptions struct {
 
 Without `Smoke`, health/auth/model/config/permission checks run and inference checks are `SKIP`. With `Smoke`, execute only the protocol probes required by selected clients. Never put prompt text or credentials in `DoctorReport`.
 
-- [ ] **Step 6: Run adapter, doctor, CLI, and race tests**
+- [x] **Step 6: Run adapter, doctor, CLI, and race tests**
 
 Run:
 
@@ -468,7 +468,7 @@ go run ./cmd/llmrouter-onboard --help
 
 Expected: tests pass; help lists `install`, `doctor`, `restore`, `uninstall`, and `receipts`, and does not list `--token`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add internal/onboarding onboarding/testdata cmd/llmrouter-onboard
@@ -492,7 +492,7 @@ git commit -m "feat(onboarding): configure direct API clients"
 - Consumes: normalized URL, private credential file, transaction API, and selected model allow-list.
 - Produces: MCP protocol version `2025-06-18`, tools `llmapi_list_models` and `llmapi_chat`, and executable `llmrouter-mcp-bridge` consumed by Claude Desktop configuration.
 
-- [ ] **Step 1: Write failing MCP protocol tests**
+- [x] **Step 1: Write failing MCP protocol tests**
 
 ```go
 func TestServerInitializesAndListsOnlyBoundedTools(t *testing.T) {
@@ -512,17 +512,17 @@ func TestChatRejectsUnknownModelAndOversizedPrompt(t *testing.T) {
 
 In `protocol_test.go`, define `fakeClient` against `type Client interface { ListModels(context.Context) ([]string, error); Chat(context.Context, ChatRequest) (string, error) }`; `call`, `chatCall`, `toolNames`, and `requireRPCError` encode one JSON-RPC line, pass it to `Server.Handle`, and decode/assert the response. Production exports `NewServer(client Client) *Server` and `(*Server).Handle(context.Context, []byte) []byte`.
 
-- [ ] **Step 2: Run MCP tests and verify they fail to compile**
+- [x] **Step 2: Run MCP tests and verify they fail to compile**
 
 Run: `go test ./internal/onboarding/mcpbridge -count=1`
 
 Expected: FAIL because the package is not implemented.
 
-- [ ] **Step 3: Implement newline-delimited stdio JSON-RPC and bounded tools**
+- [x] **Step 3: Implement newline-delimited stdio JSON-RPC and bounded tools**
 
 Accept `initialize`, `notifications/initialized`, `ping`, `tools/list`, and `tools/call`. Reject all other methods with `-32601`. Limit each input line to 64 KiB, prompt to 32 KiB, output text to 64 KiB, one in-flight request, and HTTP duration to 30 seconds. `llmapi_chat` accepts only `{model, prompt, max_output_tokens}` with a configured model and clamps output tokens to `1..256`. It calls `/v1/chat/completions` non-streaming. Do not implement arbitrary URLs, headers, files, shell, or generic proxying.
 
-- [ ] **Step 4: Write and implement Claude Desktop merge tests**
+- [x] **Step 4: Write and implement Claude Desktop merge tests**
 
 ```go
 func TestClaudeDesktopMergePreservesExistingServersAndHidesToken(t *testing.T) {
@@ -539,7 +539,7 @@ func TestClaudeDesktopMergePreservesExistingServersAndHidesToken(t *testing.T) {
 
 Use macOS path `~/Library/Application Support/Claude/claude_desktop_config.json` and Windows path `%APPDATA%/Claude/claude_desktop_config.json`. The merged entry executes the installed bridge with `--config <private ~/.llmrouter/credentials/claude-desktop.json>`. The credential file contains origin, token, model allow-list, and timeout; mode/ACL must be private. Linux is reported unsupported for official Claude Desktop rather than creating a speculative path.
 
-- [ ] **Step 5: Run bridge, adapter, redaction, and build tests**
+- [x] **Step 5: Run bridge, adapter, redaction, and build tests**
 
 Run:
 
@@ -551,7 +551,7 @@ go build ./cmd/llmrouter-mcp-bridge
 
 Expected: all pass; binary builds.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add cmd/llmrouter-mcp-bridge internal/onboarding/mcpbridge internal/onboarding/client_claude_desktop.go internal/onboarding/client_claude_desktop_test.go
@@ -572,7 +572,7 @@ git commit -m "feat(onboarding): support Claude Desktop through MCP"
 - Consumes: manifest/artifact names and onboarding CLI from Tasks 1–4.
 - Produces: public same-origin bootstrap commands and static UI consumed by Playwright and deployment checks.
 
-- [ ] **Step 1: Add failing bootstrap and secret-leak tests**
+- [x] **Step 1: Add failing bootstrap and secret-leak tests**
 
 ```python
 def test_bootstraps_use_origin_override_and_never_token_argument(self):
@@ -590,13 +590,13 @@ def test_page_has_all_clients_and_explicit_claude_desktop_limit(self):
     self.assertNotRegex(html, r"type=[\"']password")
 ```
 
-- [ ] **Step 2: Run asset tests and verify missing assets fail**
+- [x] **Step 2: Run asset tests and verify missing assets fail**
 
 Run: `python3 -m unittest scripts/onboarding_assets_test.py -v`
 
 Expected: FAIL for missing `install.sh`, `install.ps1`, and `index.html`.
 
-- [ ] **Step 3: Implement the Bash bootstrap**
+- [x] **Step 3: Implement the Bash bootstrap**
 
 The script must use `set -eu`, normalize `uname -s/-m` to manifest artifact names, create a `0700` temporary directory, download `checksums.txt` and the binary from `${LLMROUTER_SERVER_URL%/}/install`, validate SHA-256 using `sha256sum` or `shasum -a 256`, and `exec` the binary. It must reject HTTP except loopback and clean the directory with `trap`. The generated page command is exactly:
 
@@ -604,7 +604,7 @@ The script must use `set -eu`, normalize `uname -s/-m` to manifest artifact name
 curl -fsSL "${ORIGIN}/install/install.sh" | LLMROUTER_SERVER_URL="${ORIGIN}" bash
 ```
 
-- [ ] **Step 4: Implement the PowerShell bootstrap**
+- [x] **Step 4: Implement the PowerShell bootstrap**
 
 Use `$ErrorActionPreference = 'Stop'`, `[System.Uri]`, `New-TemporaryFile`/private temporary directory, `Invoke-WebRequest`, `Get-FileHash -Algorithm SHA256`, an exact checksum comparison, and `try/finally` cleanup. Pass server origin through `$env:LLMROUTER_SERVER_URL`; do not accept or print a token parameter. The page command is:
 
@@ -612,11 +612,11 @@ Use `$ErrorActionPreference = 'Stop'`, `[System.Uri]`, `New-TemporaryFile`/priva
 $env:LLMROUTER_SERVER_URL='https://stage.example'; irm "$env:LLMROUTER_SERVER_URL/install/install.ps1" | iex
 ```
 
-- [ ] **Step 5: Implement the static page and guide**
+- [x] **Step 5: Implement the static page and guide**
 
 The page reads `manifest.json`, detects OS, renders all client cards, labels direct versus MCP, fetches same-origin `/v1/models` without a token and visibly falls back when authentication is required/unavailable, and generates OS-specific commands. Copy buttons use `navigator.clipboard.writeText` and an `aria-live` status element. Never request, store, render, or append a token. `guide.md` documents hidden prompt, `LLMROUTER_TOKEN`, `LLMROUTER_CLIENTS`, `--server-url`, doctor, receipts, restore, uninstall, Quick Tunnel SSE limits, and desktop restart behavior.
 
-- [ ] **Step 6: Add PowerShell parser and Pester tests**
+- [x] **Step 6: Add PowerShell parser and Pester tests**
 
 ```powershell
 # scripts/install_ps1.Tests.ps1
@@ -639,7 +639,7 @@ Describe 'LLMROUTER PowerShell bootstrap' {
 
 On Windows run `Invoke-Pester scripts/install_ps1.Tests.ps1 -CI`; on non-Windows development machines run it when `pwsh` is installed. CI installation of Pester is pinned to the repository-approved major version and the test is mandatory.
 
-- [ ] **Step 7: Run static, shell, PowerShell, and build checks**
+- [x] **Step 7: Run static, shell, PowerShell, and build checks**
 
 Run:
 
@@ -655,7 +655,7 @@ test -f dist/install/manifest.json
 
 Expected: tests pass, Bash parses, web build contains install assets.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add web/public/install scripts/onboarding_assets_test.py scripts/install_ps1.Tests.ps1
@@ -680,7 +680,7 @@ git commit -m "feat(web): publish LLMROUTER client installer"
 - Consumes: LLMROUTER markers, state-root naming, URL policy, and receipt secrecy contract.
 - Produces: `llmrouter init|status|doctor|restore|uninstall`, with a temporary `codex-gateway` bin alias only for migration.
 
-- [ ] **Step 1: Write failing branding, receipt, and command tests**
+- [x] **Step 1: Write failing branding, receipt, and command tests**
 
 ```ts
 test('public CLI is LLMROUTER branded and exposes reversible commands', () => {
@@ -701,21 +701,21 @@ test('receipt never serializes environment values', async () => {
 })
 ```
 
-- [ ] **Step 2: Run CLI tests and verify failures**
+- [x] **Step 2: Run CLI tests and verify failures**
 
 Run: `cd cli && npm test`
 
 Expected: FAIL because the program is named `codex-gateway`, commands are missing, and receipts contain `envVars` values.
 
-- [ ] **Step 3: Rename public state and preserve one-way migration discovery**
+- [x] **Step 3: Rename public state and preserve one-way migration discovery**
 
 Use package/bin `llmrouter`, description `Configure supported clients to use LLMROUTER`, marker `# LLMROUTER:BEGIN`, environment key `LLMROUTER_TOKEN`, provider ID/name `llmrouter`/`LLMROUTER`, and state root `.llmrouter`. On first run, detect read-only legacy receipts/backups under `.codex-gateway` but never rewrite/delete them automatically. Remove token values from `ClientReceipt`; store only environment variable names.
 
-- [ ] **Step 4: Expose restore and uninstall commands**
+- [x] **Step 4: Expose restore and uninstall commands**
 
 `restore [receipt]` defaults to the latest receipt and uses existing hash conflict protection. `uninstall [client]` removes only the matching managed LLMROUTER block/provider when its current hash matches and then writes a new reversible receipt. Both commands return nonzero on conflicts and redact paths only when they contain a detected token-like value.
 
-- [ ] **Step 5: Run CLI verification**
+- [x] **Step 5: Run CLI verification**
 
 Run:
 
@@ -726,7 +726,7 @@ cd cli && node dist/index.js --help
 
 Expected: all tests/build pass; help is LLMROUTER-branded and lists reversible commands.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add cli
@@ -748,7 +748,7 @@ git commit -m "feat(cli): converge onboarding on LLMROUTER"
 - Consumes: helper commands and static assets from Tasks 1–6.
 - Produces: six onboarding binaries per command (`linux-amd64`, `linux-arm64`, `darwin-amd64`, `darwin-arm64`, `windows-amd64.exe`, `windows-arm64.exe`), deterministic `checksums.txt`, container-served assets, and release uploads.
 
-- [ ] **Step 1: Write the failing build/e2e script assertions**
+- [x] **Step 1: Write the failing build/e2e script assertions**
 
 `scripts/build-onboarding-artifacts.sh --check` must fail unless every expected binary exists and its checksum entry matches. `scripts/onboarding_e2e.sh` starts a local mock server, uses a temporary HOME, runs install twice, doctor without smoke, restore, and uninstall, then asserts no `secret-test-token` appears beneath the receipt directory or captured logs.
 
@@ -756,19 +756,19 @@ Run: `bash scripts/build-onboarding-artifacts.sh --check`
 
 Expected: FAIL listing all missing binaries.
 
-- [ ] **Step 2: Implement reproducible cross-build and checksums**
+- [x] **Step 2: Implement reproducible cross-build and checksums**
 
 Use `CGO_ENABLED=0`, `-trimpath`, and `-ldflags "-s -w -buildid="`. Build both commands for the platform matrix into `web/public/install/bin/`, sort filenames bytewise, and generate checksums with a Go/Python helper so Linux/macOS output format is identical. Running the script twice at the same revision must produce identical checksums.
 
-- [ ] **Step 3: Restructure Docker stages without changing the runtime service**
+- [x] **Step 3: Restructure Docker stages without changing the runtime service**
 
 Add a Go `onboarding-artifacts` stage before the web stage, run the build script, then `COPY --from=onboarding-artifacts /build/web/public/install/bin ...` and `checksums.txt` into the web builder before `bun run build`. Continue embedding `web/dist` into the backend and keep the runtime entry point unchanged. Add a container smoke assertion for `/install/index.html`, `/install/manifest.json`, and one helper binary.
 
-- [ ] **Step 4: Add mandatory CI and release gates**
+- [x] **Step 4: Add mandatory CI and release gates**
 
 CI runs manifest tests, Go onboarding tests with race detection, Bash syntax, PowerShell parser on Windows, CLI verification, web verification, and `onboarding_e2e.sh`. Release jobs upload helper binaries/checksums and include their aggregate checksum in platform evidence JSON. Release publication must fail when the static manifest references a missing artifact.
 
-- [ ] **Step 5: Run local build and container verification**
+- [x] **Step 5: Run local build and container verification**
 
 Run:
 
@@ -786,7 +786,7 @@ curl -fsSI http://127.0.0.1:33100/install/bin/llmrouter-onboard-linux-amd64
 
 Expected: build/check/e2e pass; container endpoints return `200`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/build-onboarding-artifacts.sh scripts/onboarding_e2e.sh scripts/verify-backend.sh scripts/verify-web.sh Dockerfile .github/workflows/ci.yml .github/workflows/release.yml web/public/install/checksums.txt
@@ -804,7 +804,7 @@ git commit -m "build(release): package onboarding artifacts"
 - Consumes: complete container/web/onboarding functionality.
 - Produces: desktop/mobile screenshots, clean repository gates, and release-ready documentation.
 
-- [ ] **Step 1: Write Playwright acceptance tests**
+- [x] **Step 1: Write Playwright acceptance tests**
 
 ```ts
 test('install page generates same-origin commands without secrets', async ({ page }, testInfo) => {
@@ -823,17 +823,17 @@ test('install page generates same-origin commands without secrets', async ({ pag
 
 Add a fallback-model test, OS override test, copy feedback test, all-client visibility test, keyboard navigation test, and an assertion that no token input exists. Existing Playwright projects provide desktop Chrome and Pixel 7 coverage.
 
-- [ ] **Step 2: Run focused browser tests and fix failures**
+- [x] **Step 2: Run focused browser tests and fix failures**
 
 Run: `cd web && bunx playwright test e2e/install.spec.ts`
 
 Expected: both Chromium projects pass and attach screenshots.
 
-- [ ] **Step 3: Run three review/test loops**
+- [x] **Step 3: Run three review/test loops**
 
 For each loop, inspect `git diff`, unsafe path/secret handling, configuration preservation, cross-platform branches, subprocess arguments, network timeouts, output limits, and product wording. Fix only evidence-backed issues, add a regression test first, then rerun the focused suite. Record loop results in `artifacts/onboarding/review-summary.md` with headings `Loop 1`, `Loop 2`, and `Loop 3`; each issue entry contains file, failing test, fix commit, and final result.
 
-- [ ] **Step 4: Run full backend, frontend, CLI, browser, and security verification**
+- [x] **Step 4: Run full backend, frontend, CLI, browser, and security verification**
 
 Run:
 
@@ -849,11 +849,11 @@ git diff --check
 
 Expected: all commands pass. Warnings must be classified in the review summary; unresolved correctness/security failures block release.
 
-- [ ] **Step 5: Update user documentation**
+- [x] **Step 5: Update user documentation**
 
 Document `/install/`, direct versus MCP modes, supported clients, hidden-token usage, restore/uninstall, temporary staging URL behavior, and Quick Tunnel SSE limitation. Leave the written-spec status pending until Task 9's real-system certification passes.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add web/e2e/install.spec.ts README.md README.zh_CN.md artifacts/onboarding/review-summary.md
@@ -871,7 +871,7 @@ git commit -m "test(onboarding): certify client installation flows"
 - Consumes: immutable image and release artifacts from Tasks 7–8.
 - Produces: healthy public staging `/install/`, certification evidence, pushed commits/tag, and private GitHub prerelease.
 
-- [ ] **Step 1: Verify repository and remote safety before deployment**
+- [x] **Step 1: Verify repository and remote safety before deployment**
 
 Run:
 
@@ -884,7 +884,7 @@ gh repo view NeoMei/LLMROUTER --json nameWithOwner,visibility,url
 
 Expected: only intentional onboarding commits are ahead; repository visibility is `PRIVATE`; `.codebase-memory/` and `scripts/prepare-sidecar-env.py` are untracked and unstaged.
 
-- [ ] **Step 2: Build and identify the immutable image**
+- [x] **Step 2: Build and identify the immutable image**
 
 Run:
 
@@ -898,11 +898,11 @@ docker image inspect "$image" --format '{{.Id}}' | tee artifacts/onboarding/imag
 
 Expected: build passes and records a content-addressed image ID.
 
-- [ ] **Step 3: Back up and recreate only the parallel LLMROUTER service**
+- [x] **Step 3: Back up and recreate only the parallel LLMROUTER service**
 
 Using an SSH agent or `SSHPASS` supplied outside shell history, copy the image and release assets to `113.249.120.24`. Before recreation, record `docker inspect llmrouter`, its image ID, environment file checksum, database counts, Redis DB setting, `docker inspect new-api`, and current Nginx upstream. Recreate only `llmrouter` on `127.0.0.1:13100`, retaining its existing database and Redis separation. If mandatory health checks fail, recreate `llmrouter` from the recorded previous image; never alter `new-api` or Nginx.
 
-- [ ] **Step 4: Run server and public-origin certification**
+- [x] **Step 4: Run server and public-origin certification**
 
 Save command output under `/opt/codex-gateway-next/evidence/onboarding-<timestamp>/`:
 
@@ -917,15 +917,15 @@ docker logs --since 10m llmrouter 2>&1 | tee llmrouter-logs.txt
 
 Repeat health, manifest, page, helper download, `/v1/models`, and one bounded non-streaming request through the current public staging origin. Run SSE certification only through local `13100` or another streaming-capable route.
 
-- [ ] **Step 5: Run disposable-profile real onboarding certification**
+- [x] **Step 5: Run disposable-profile real onboarding certification**
 
 On Linux, use a disposable HOME to install and verify Codex CLI, Claude Code, OpenCode, Continue, and Aider plans, then run doctor, repeat install, restore, and uninstall. On the available macOS workstation, use disposable configuration roots to verify Codex Desktop configuration/credential visibility and Claude Desktop JSON/MCP bridge initialization. If official applications are installed, launch and perform the bounded real interaction; otherwise record `UNEXECUTED: application unavailable` rather than `PASS`. Do not expose the real token in evidence.
 
-- [ ] **Step 6: Verify NewAPI non-regression and isolation**
+- [x] **Step 6: Verify NewAPI non-regression and isolation**
 
 Compare the before/after `new-api` container ID/image, Nginx upstream, production database counts, LLMROUTER database counts, and health endpoints. Expected: production identifiers and upstream are unchanged; LLMROUTER alone uses the new image; both services are healthy.
 
-- [ ] **Step 7: Finalize tracked certification evidence**
+- [x] **Step 7: Finalize tracked certification evidence**
 
 Write `artifacts/onboarding/deployment-evidence.md` with image ID, staging origin, server evidence directory, protocol/client matrix, desktop executed/unexecuted status, NewAPI isolation comparison, test commands, known limitations, and rollback image. Change `docs/superpowers/specs/2026-08-11-llmrouter-client-onboarding-design.md` status to `Implemented and certified`, commit both files, and rerun `git diff --check` plus the focused onboarding suites. This commit must exist before the release tag.
 
@@ -934,7 +934,7 @@ git add artifacts/onboarding/deployment-evidence.md docs/superpowers/specs/2026-
 git commit -m "docs(release): record onboarding certification"
 ```
 
-- [ ] **Step 8: Push, tag, and publish the private prerelease**
+- [x] **Step 8: Push, tag, and publish the private prerelease**
 
 After all mandatory evidence passes:
 
@@ -952,7 +952,7 @@ gh release create v0.1.0-rc.2 \
 
 Expected: main contains the certified revision; tag and private prerelease resolve to the same commit; artifacts and checksums are attached.
 
-- [ ] **Step 9: Final verification**
+- [x] **Step 9: Final verification**
 
 Run:
 
@@ -969,16 +969,16 @@ Expected: only intentionally untracked local files remain; release is a prerelea
 
 ## Final Evidence Checklist
 
-- [ ] Manifest/schema semantic validation output.
-- [ ] Go unit, race, bridge, and disposable-HOME integration results.
-- [ ] Bash syntax/ShellCheck and PowerShell parser/Pester results or explicit platform evidence.
-- [ ] Backend, web, CLI, and full Playwright results.
-- [ ] Desktop and mobile install-page screenshots.
-- [ ] Container image ID and static-asset HTTP checks.
-- [ ] LLMROUTER protocol matrix and bounded inference results.
-- [ ] Direct-client configuration matrix.
-- [ ] Codex Desktop configuration and credential-visibility result.
-- [ ] Claude Desktop MCP initialize/list-tools/tool-call result.
-- [ ] NewAPI unchanged and LLMROUTER database/Redis isolation evidence.
-- [ ] Public staging install URL and Quick Tunnel limitation.
-- [ ] Git commit, tag, private GitHub release URL, and attached checksums.
+- [x] Manifest/schema semantic validation output.
+- [x] Go unit, race, bridge, and disposable-HOME integration results.
+- [x] Bash syntax/ShellCheck and PowerShell parser/Pester results or explicit platform evidence.
+- [x] Backend, web, CLI, and full Playwright results.
+- [x] Desktop and mobile install-page screenshots.
+- [x] Container image ID and static-asset HTTP checks.
+- [x] LLMROUTER protocol matrix and bounded inference results.
+- [x] Direct-client configuration matrix.
+- [x] Codex Desktop configuration and credential-visibility result.
+- [x] Claude Desktop MCP initialize/list-tools/tool-call result.
+- [x] NewAPI unchanged and LLMROUTER database/Redis isolation evidence.
+- [x] Public staging install URL and Quick Tunnel limitation.
+- [x] Git commit, tag, private GitHub release URL, and attached checksums.

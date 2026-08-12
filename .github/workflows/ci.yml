@@ -5,7 +5,7 @@ on:
   push:
     branches:
       - main
-      - codex-gateway
+      - llmrouter
 
 permissions:
   contents: read

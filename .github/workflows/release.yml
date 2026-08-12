@@ -77,7 +77,7 @@ jobs:
           cat web/public/install/checksums.txt >> onboarding-checksums-linux.txt
       - name: Probe native binary and record evidence
         run: |
-          PORT=31991 OBJECT_STORE_TYPE=local OBJECT_STORE_LOCAL_ROOT=/tmp/codex-gateway-release-files ./new-api-$VERSION > startup-linux.log 2>&1 &
+          PORT=31991 OBJECT_STORE_TYPE=local OBJECT_STORE_LOCAL_ROOT=/tmp/llmrouter-release-files ./new-api-$VERSION > startup-linux.log 2>&1 &
           pid=$!
           trap 'kill $pid 2>/dev/null || true' EXIT
           for attempt in {1..60}; do curl --fail --silent http://127.0.0.1:31991/healthz && break; sleep 1; done
@@ -163,7 +163,7 @@ jobs:
         run: shasum -a 256 new-api-macos-* > checksums-macos.txt
       - name: Probe native binary and record evidence
         run: |
-          PORT=31992 OBJECT_STORE_TYPE=local OBJECT_STORE_LOCAL_ROOT=/tmp/codex-gateway-release-files ./new-api-macos-$VERSION > startup-macos.log 2>&1 &
+          PORT=31992 OBJECT_STORE_TYPE=local OBJECT_STORE_LOCAL_ROOT=/tmp/llmrouter-release-files ./new-api-macos-$VERSION > startup-macos.log 2>&1 &
           pid=$!
           trap 'kill $pid 2>/dev/null || true' EXIT
           for attempt in {1..60}; do curl --fail --silent http://127.0.0.1:31992/healthz && break; sleep 1; done
@@ -240,7 +240,7 @@ jobs:
         run: sha256sum new-api-*.exe > checksums-windows.txt
       - name: Probe native binary and record evidence
         run: |
-          PORT=31993 OBJECT_STORE_TYPE=local OBJECT_STORE_LOCAL_ROOT="$RUNNER_TEMP/codex-gateway-release-files" ./new-api-$VERSION.exe > startup-windows.log 2>&1 &
+          PORT=31993 OBJECT_STORE_TYPE=local OBJECT_STORE_LOCAL_ROOT="$RUNNER_TEMP/llmrouter-release-files" ./new-api-$VERSION.exe > startup-windows.log 2>&1 &
           pid=$!
           trap 'kill $pid 2>/dev/null || true' EXIT
           for attempt in {1..60}; do curl --fail --silent http://127.0.0.1:31993/healthz && break; sleep 1; done
@@ -312,7 +312,7 @@ jobs:
         run: |
           container=$(docker run --detach --publish 31994:3000 \
             --env PORT=3000 --env OBJECT_STORE_TYPE=local \
-            --env OBJECT_STORE_LOCAL_ROOT=/tmp/codex-gateway-files \
+            --env OBJECT_STORE_LOCAL_ROOT=/tmp/llmrouter-files \
             "$IMAGE@$DIGEST")
           trap 'docker rm --force "$container" >/dev/null 2>&1 || true' EXIT
           for attempt in {1..60}; do curl --fail --silent http://127.0.0.1:31994/healthz && break; sleep 1; done

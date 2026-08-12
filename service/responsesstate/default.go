@@ -1,6 +1,7 @@
 package responsesstate
 
 import (
+	"fmt"
 	"os"
 	"sync"
 
@@ -64,3 +65,20 @@ func ResetForTest() {
 	defaultErr = nil
 	mu.Unlock()
 }
+
+// ReadinessCheck returns nil when Responses continuity is safe for the current
+// deployment, or an error describing why it is not. It enforces the plan
+// invariant that stateful compatibility must use Redis in multi-instance
+// production, because the in-memory fallback is only correct for a single
+// process.
+func ReadinessCheck() error {
+	if !Enabled() {
+		return nil
+	}
+	if common.RDB != nil {
+		return nil
+	}
+	return errStatefulWithoutRedis
+}
+
+var errStatefulWithoutRedis = fmt.Errorf("responses state continuity is enabled but Redis is unavailable; disable RESPONSES_STATE_ENABLED or configure REDIS_CONN_STRING for multi-instance production")

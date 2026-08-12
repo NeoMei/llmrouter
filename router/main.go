@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/observability"
 	"github.com/QuantumNous/new-api/relay/capability"
 	"github.com/QuantumNous/new-api/service/objectstore"
+	"github.com/QuantumNous/new-api/service/responsesstate"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -44,6 +45,12 @@ func SetRouter(router *gin.Engine, assets WebAssets) {
 					return storeErr
 				}
 				return store.Health(ctx)
+			},
+		},
+		health.NamedProbe{
+			Name: "responses_state",
+			Check: func(context.Context) error {
+				return responsesstate.ReadinessCheck()
 			},
 		},
 	)

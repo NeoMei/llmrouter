@@ -1,7 +1,7 @@
-name: codex-gateway
+name: llmrouter
 
 services:
-  gateway:
+  llmrouter:
     image: ${APP_IMAGE:?APP_IMAGE is required}@${APP_IMAGE_DIGEST:?APP_IMAGE_DIGEST is required}
     restart: unless-stopped
     ports:
@@ -26,7 +26,7 @@ services:
       BATCH_UPDATE_ENABLED: "true"
       NODE_NAME: ${NODE_NAME:?NODE_NAME is required}
     volumes:
-      - gateway_logs:/app/logs
+      - llmrouter_logs:/app/logs
     depends_on:
       postgres:
         condition: service_healthy
@@ -38,7 +38,7 @@ services:
       timeout: 3s
       retries: 10
       start_period: 20s
-    networks: [gateway]
+    networks: [llmrouter]
 
   postgres:
     image: postgres:16.4-alpine
@@ -54,7 +54,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-    networks: [gateway]
+    networks: [llmrouter]
 
   redis:
     image: redis:7.4.0-alpine
@@ -69,13 +69,13 @@ services:
       retries: 20
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
-    networks: [gateway]
+    networks: [llmrouter]
 
 volumes:
-  gateway_logs:
+  llmrouter_logs:
   postgres_data:
   redis_data:
 
 networks:
-  gateway:
+  llmrouter:
     driver: bridge

@@ -27,3 +27,8 @@ func TestEnabledReflectsEnv(t *testing.T) {
 	t.Setenv(stateEnabledEnv, "1")
 	require.True(t, Enabled())
 }
+
+func TestReadinessCheckPassesWhenDisabled(t *testing.T) {
+	t.Setenv(stateEnabledEnv, "")
+	require.NoError(t, ReadinessCheck())
+}

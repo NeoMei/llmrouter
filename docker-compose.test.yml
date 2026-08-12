@@ -1,4 +1,4 @@
-name: codex-gateway-test
+name: llmrouter-test
 
 services:
   postgres:

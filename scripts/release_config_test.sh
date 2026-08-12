@@ -57,7 +57,7 @@ done
 
 env \
   RUN_MODE=production \
-  APP_IMAGE=ghcr.io/example/codex-gateway \
+  APP_IMAGE=ghcr.io/example/llmrouter \
   APP_IMAGE_DIGEST=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
   SESSION_SECRET=session-secret-that-is-at-least-32-bytes \
   GATEWAY_AES_KEY=gateway-key-that-is-at-least-32-bytes \
@@ -74,6 +74,6 @@ env \
   SESSION_COOKIE_TRUSTED_URL=https://gateway.example.com \
   TRUSTED_ORIGINS=https://gateway.example.com \
   TRUSTED_PROXIES=10.0.0.10/32 \
-  BACKUP_DIR=/tmp/codex-gateway-backups \
-  ROLLBACK_IMAGE=ghcr.io/example/codex-gateway@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+  BACKUP_DIR=/tmp/llmrouter-backups \
+  ROLLBACK_IMAGE=ghcr.io/example/llmrouter@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
   bash scripts/release-preflight.sh --check

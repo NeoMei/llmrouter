@@ -19,7 +19,6 @@ platforms=(
 )
 
 ldflags="-s -w -buildid="
-build_args=(CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags")
 
 # --- --check mode: verify every expected binary exists and checksums match ---
 if [[ "${1:-}" == "--check" ]]; then
@@ -73,7 +72,7 @@ for cmd in "${commands[@]}"; do
     [[ "$os" == "windows" ]] && ext=".exe"
     artifact="$bin_dir/${cmd}-${os}-${arch}${ext}"
     echo "Building $artifact..."
-    GOOS="$os" GOARCH="$arch" "${build_args[@]}" -o "$artifact" "./cmd/$cmd"
+    GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "$artifact" "./cmd/$cmd"
   done
 done
 

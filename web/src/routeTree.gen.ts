@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as authRouteRouteImport } from './routes/(auth)/route'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as DiagRouteImport } from './routes/diag'
+import { Route as DocsRouteImport } from './routes/docs'
 import { Route as PrivacyPolicyRouteImport } from './routes/privacy-policy'
 import { Route as UserAgreementRouteImport } from './routes/user-agreement'
 import { Route as authForgotPasswordRouteImport } from './routes/(auth)/forgot-password'
@@ -88,6 +89,11 @@ const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
 const DiagRoute = DiagRouteImport.update({
   id: '/diag',
   path: '/diag',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocsRoute = DocsRouteImport.update({
+  id: '/docs',
+  path: '/docs',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PrivacyPolicyRoute = PrivacyPolicyRouteImport.update({
@@ -416,6 +422,7 @@ const AuthenticatedSystemSettingsSiteSectionRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/diag': typeof DiagRoute
+  '/docs': typeof DocsRoute
   '/privacy-policy': typeof PrivacyPolicyRoute
   '/user-agreement': typeof UserAgreementRoute
   '/system-settings': typeof AuthenticatedSystemSettingsRouteRouteWithChildren
@@ -478,6 +485,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/diag': typeof DiagRoute
+  '/docs': typeof DocsRoute
   '/privacy-policy': typeof PrivacyPolicyRoute
   '/user-agreement': typeof UserAgreementRoute
   '/forgot-password': typeof authForgotPasswordRoute
@@ -542,6 +550,7 @@ export interface FileRoutesById {
   '/(auth)': typeof authRouteRouteWithChildren
   '/_authenticated': typeof AuthenticatedRouteRouteWithChildren
   '/diag': typeof DiagRoute
+  '/docs': typeof DocsRoute
   '/privacy-policy': typeof PrivacyPolicyRoute
   '/user-agreement': typeof UserAgreementRoute
   '/_authenticated/system-settings': typeof AuthenticatedSystemSettingsRouteRouteWithChildren
@@ -606,6 +615,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/diag'
+    | '/docs'
     | '/privacy-policy'
     | '/user-agreement'
     | '/system-settings'
@@ -668,6 +678,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/diag'
+    | '/docs'
     | '/privacy-policy'
     | '/user-agreement'
     | '/forgot-password'
@@ -731,6 +742,7 @@ export interface FileRouteTypes {
     | '/(auth)'
     | '/_authenticated'
     | '/diag'
+    | '/docs'
     | '/privacy-policy'
     | '/user-agreement'
     | '/_authenticated/system-settings'
@@ -796,6 +808,7 @@ export interface RootRouteChildren {
   authRouteRoute: typeof authRouteRouteWithChildren
   AuthenticatedRouteRoute: typeof AuthenticatedRouteRouteWithChildren
   DiagRoute: typeof DiagRoute
+  DocsRoute: typeof DocsRoute
   PrivacyPolicyRoute: typeof PrivacyPolicyRoute
   UserAgreementRoute: typeof UserAgreementRoute
   errors401Route: typeof errors401Route
@@ -839,6 +852,13 @@ declare module '@tanstack/react-router' {
       path: '/diag'
       fullPath: '/diag'
       preLoaderRoute: typeof DiagRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/docs': {
+      id: '/docs'
+      path: '/docs'
+      fullPath: '/docs'
+      preLoaderRoute: typeof DocsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/privacy-policy': {
@@ -1393,6 +1413,7 @@ const rootRouteChildren: RootRouteChildren = {
   authRouteRoute: authRouteRouteWithChildren,
   AuthenticatedRouteRoute: AuthenticatedRouteRouteWithChildren,
   DiagRoute: DiagRoute,
+  DocsRoute: DocsRoute,
   PrivacyPolicyRoute: PrivacyPolicyRoute,
   UserAgreementRoute: UserAgreementRoute,
   errors401Route: errors401Route,

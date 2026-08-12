@@ -13,7 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/internal/onboarding/mcpbridge"
 )
 
-const mcpDoctorTimeout = 5 * time.Second
+const mcpDoctorTimeout = 10 * time.Second
 
 type doctorMCPResponse struct {
 	JSONRPC string          `json:"jsonrpc"`

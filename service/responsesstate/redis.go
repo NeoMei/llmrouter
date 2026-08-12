@@ -15,6 +15,7 @@ import (
 	"github.com/go-redis/redis/v8"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/pkg/crypto"
 )
 
 // RedisStore is a multi-instance Responses state store backed by Redis. Records
@@ -30,7 +31,11 @@ func NewRedis() (*RedisStore, error) {
 	if k == "" {
 		return nil, errors.New("GATEWAY_AES_KEY is required for Redis responses state store")
 	}
-	return &RedisStore{key: []byte(k)}, nil
+	key, err := crypto.ParseAESKey(k)
+	if err != nil {
+		return nil, err
+	}
+	return &RedisStore{key: key}, nil
 }
 
 func (s *RedisStore) Load(ctx context.Context, tenantID, tokenID int, responseID string) (Record, error) {

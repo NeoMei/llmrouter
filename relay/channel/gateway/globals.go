@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"database/sql"
-	"encoding/hex"
 	"os"
 
 	"github.com/QuantumNous/new-api/common"
@@ -60,21 +59,13 @@ func InitFromEnv(rdb *redis.Client, db *sql.DB) {
 	InitGlobals(loader, keySel)
 }
 
-// decodeAESKey tries hex-decoding first (standard for key exchange), falls back
-// to raw bytes for ASCII keys. Returns nil if the result isn't a valid AES key size.
+// decodeAESKey normalizes a GATEWAY_AES_KEY value (raw bytes, hex, or base64)
+// into key material. When the value is unusable it is returned as-is so the
+// caller's NewAESGCM error path still reports the true problem.
 func decodeAESKey(s string) []byte {
-	// Try hex decode first
-	if decoded, err := hex.DecodeString(s); err == nil {
-		switch len(decoded) {
-		case 16, 24, 32:
-			return decoded
-		}
-	}
-	// Fall back to raw bytes
-	switch len(s) {
-	case 16, 24, 32:
+	key, err := crypto.ParseAESKey(s)
+	if err != nil {
 		return []byte(s)
 	}
-	// Not a valid key size — return as-is and let AES-GCM reject it
-	return []byte(s)
+	return key
 }

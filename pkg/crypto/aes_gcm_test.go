@@ -2,11 +2,50 @@ package crypto
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/hex"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestParseAESKeyRawBytes(t *testing.T) {
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	got, err := ParseAESKey(string(key))
+	require.NoError(t, err)
+	assert.True(t, bytes.Equal(key, got))
+}
+
+func TestParseAESKeyHex(t *testing.T) {
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	got, err := ParseAESKey(hex.EncodeToString(key))
+	require.NoError(t, err)
+	assert.True(t, bytes.Equal(key, got))
+}
+
+func TestParseAESKeyBase64(t *testing.T) {
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	got, err := ParseAESKey(base64.StdEncoding.EncodeToString(key))
+	require.NoError(t, err)
+	assert.True(t, bytes.Equal(key, got))
+}
+
+func TestParseAESKeyRejectsInvalidLength(t *testing.T) {
+	_, err := ParseAESKey("too-short")
+	require.Error(t, err)
+	_, err = ParseAESKey(base64.StdEncoding.EncodeToString([]byte("short")))
+	require.Error(t, err)
+}
 
 func TestEncryptDecryptRoundtrip(t *testing.T) {
 	key := make([]byte, 32) // AES-256

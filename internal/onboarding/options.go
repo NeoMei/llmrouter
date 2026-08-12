@@ -65,34 +65,34 @@ func ResolveOptions(input Inputs) (Options, error) {
 		return Options{}, err
 	}
 
-	server := firstNonEmpty(flags.serverURL, input.Env["LLMAPI_SERVER_URL"], input.PageOrigin)
+	server := firstNonEmpty(flags.serverURL, input.Env["LLMROUTER_SERVER_URL"], input.PageOrigin)
 	if server == "" {
-		return Options{}, fmt.Errorf("%w: --server-url, LLMAPI_SERVER_URL, or page origin is required", ErrUsage)
+		return Options{}, fmt.Errorf("%w: --server-url, LLMROUTER_SERVER_URL, or page origin is required", ErrUsage)
 	}
 	serverURL, err := NormalizeServerURL(server)
 	if err != nil {
 		return Options{}, err
 	}
 
-	token := input.Env["LLMAPI_TOKEN"]
+	token := input.Env["LLMROUTER_TOKEN"]
 	if token == "" {
 		if input.Prompt == nil {
-			return Options{}, fmt.Errorf("%w: LLMAPI_TOKEN or hidden prompt is required", ErrUsage)
+			return Options{}, fmt.Errorf("%w: LLMROUTER_TOKEN or hidden prompt is required", ErrUsage)
 		}
-		token, err = input.Prompt.ReadHidden("LLMAPI token")
+		token, err = input.Prompt.ReadHidden("LLMROUTER token")
 		if err != nil || token == "" {
-			return Options{}, fmt.Errorf("%w: LLMAPI_TOKEN or hidden prompt is required", ErrUsage)
+			return Options{}, fmt.Errorf("%w: LLMROUTER_TOKEN or hidden prompt is required", ErrUsage)
 		}
 	}
 	if hasControl(token) {
 		return Options{}, fmt.Errorf("%w: token contains control characters", ErrUsage)
 	}
 
-	clients, err := resolveClients(flags.clients, input.Env["LLMAPI_CLIENTS"], input.Prompt)
+	clients, err := resolveClients(flags.clients, input.Env["LLMROUTER_CLIENTS"], input.Prompt)
 	if err != nil {
 		return Options{}, err
 	}
-	model := firstNonEmpty(flags.model, input.Env["LLMAPI_MODEL"])
+	model := firstNonEmpty(flags.model, input.Env["LLMROUTER_MODEL"])
 	if hasControl(model) {
 		return Options{}, fmt.Errorf("%w: model contains control characters", ErrUsage)
 	}
@@ -112,7 +112,7 @@ func parseOptionFlags(args []string) (optionFlags, error) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--token" || strings.HasPrefix(arg, "--token=") || arg == "--api-token" || strings.HasPrefix(arg, "--api-token=") {
-			return result, fmt.Errorf("%w: pass the token through LLMAPI_TOKEN or hidden prompt", ErrUsage)
+			return result, fmt.Errorf("%w: pass the token through LLMROUTER_TOKEN or hidden prompt", ErrUsage)
 		}
 		name, value, hasValue := strings.Cut(arg, "=")
 		if name == "--smoke" {
@@ -169,11 +169,11 @@ func resolveClients(flagValue, envValue string, prompt Prompter) ([]ClientID, er
 		return clients, nil
 	}
 	if prompt == nil {
-		return nil, fmt.Errorf("%w: LLMAPI_CLIENTS or interactive client selection is required", ErrUsage)
+		return nil, fmt.Errorf("%w: LLMROUTER_CLIENTS or interactive client selection is required", ErrUsage)
 	}
 	clients, err := prompt.SelectMany("Clients", append([]ClientID(nil), supportedClients...))
 	if err != nil || len(clients) == 0 {
-		return nil, fmt.Errorf("%w: LLMAPI_CLIENTS or interactive client selection is required", ErrUsage)
+		return nil, fmt.Errorf("%w: LLMROUTER_CLIENTS or interactive client selection is required", ErrUsage)
 	}
 	for _, client := range clients {
 		if !isSupportedClient(client) {

@@ -228,17 +228,17 @@ func checkManagedPermissions(name string, paths []string) Check {
 
 func semanticConfigCheck(name string, err error) Check {
 	if err != nil {
-		return Check{Name: name, Status: "FAIL", Message: "managed configuration does not match the selected LLMAPI settings"}
+		return Check{Name: name, Status: "FAIL", Message: "managed configuration does not match the selected LLMROUTER settings"}
 	}
-	return Check{Name: name, Status: "PASS", Message: "managed configuration matches the selected LLMAPI settings"}
+	return Check{Name: name, Status: "PASS", Message: "managed configuration matches the selected LLMROUTER settings"}
 }
 
 func environmentCredentialCheck(name string, token Secret) Check {
-	value, visible := os.LookupEnv("LLMAPI_TOKEN")
+	value, visible := os.LookupEnv("LLMROUTER_TOKEN")
 	if !visible || value == "" || value != token.Reveal() {
-		return Check{Name: name, Status: "FAIL", Message: "LLMAPI_TOKEN is not visible with the expected value"}
+		return Check{Name: name, Status: "FAIL", Message: "LLMROUTER_TOKEN is not visible with the expected value"}
 	}
-	return Check{Name: name, Status: "PASS", Message: "LLMAPI_TOKEN is visible with the expected value"}
+	return Check{Name: name, Status: "PASS", Message: "LLMROUTER_TOKEN is visible with the expected value"}
 }
 
 func loadManagedConfig(home, path string) ([]byte, error) {

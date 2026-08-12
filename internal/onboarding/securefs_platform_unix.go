@@ -166,7 +166,7 @@ func atomicWrite(home, path string, data []byte) error {
 		if _, err := rand.Read(bytes); err != nil {
 			return fmt.Errorf("%w: random temporary name", ErrUnsafe)
 		}
-		tempName = fmt.Sprintf(".llmapi-%x", bytes)
+		tempName = fmt.Sprintf(".llmrouter-%x", bytes)
 		tempFD, err = unix.Openat(parent.fd, tempName, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, privateFileMode)
 		if errors.Is(err, unix.EEXIST) {
 			continue
@@ -240,7 +240,7 @@ func ensureStateRoots(home string) error {
 	if stateRootTestHook != nil {
 		stateRootTestHook()
 	}
-	state, err := openPrivateDirectoryAt(fd, ".llmapi")
+	state, err := openPrivateDirectoryAt(fd, ".llmrouter")
 	if err != nil {
 		return fmt.Errorf("%w: state root", ErrUnsafe)
 	}

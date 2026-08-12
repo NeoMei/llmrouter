@@ -1,44 +1,44 @@
-# LLMAPI client setup guide
+# LLMROUTER client setup guide
 
-The installer is served from the same LLMAPI origin as its checksums and helper binaries. It downloads `llmapi-onboard` and `llmapi-mcp-bridge` into a private temporary directory, verifies the exact SHA-256 checksum entries, and atomically installs private helpers under `~/.llmapi/bin` (the Windows current-user equivalent) before it starts onboarding. A failed private installation stops the process; do not work around that failure by pointing Claude Desktop at a temporary download.
+The installer is served from the same LLMROUTER origin as its checksums and helper binaries. It downloads `llmrouter-onboard` and `llmrouter-mcp-bridge` into a private temporary directory, verifies the exact SHA-256 checksum entries, and atomically installs private helpers under `~/.llmrouter/bin` (the Windows current-user equivalent) before it starts onboarding. A failed private installation stops the process; do not work around that failure by pointing Claude Desktop at a temporary download.
 
 ## Install
 
-On macOS or Linux, open the install page in a browser and copy its command. It sets `LLMAPI_SERVER_URL` from the page origin:
+On macOS or Linux, open the install page in a browser and copy its command. It sets `LLMROUTER_SERVER_URL` from the page origin:
 
 ```sh
-llmapi_install() { local tmp http_status status=0; if tmp="$(mktemp)"; then if http_status="$(curl -fsS --max-redirs 0 --write-out '%{http_code}' -o "$tmp" "https://stage.example/install/install.sh")"; then case "$http_status" in 2??) if LLMAPI_SERVER_URL="https://stage.example" bash "$tmp"; then :; else status=$?; fi ;; *) status=1 ;; esac; else status=$?; fi; rm -f "$tmp" || :; else status=$?; fi; return "$status"; }; llmapi_install
+llmapi_install() { local tmp http_status status=0; if tmp="$(mktemp)"; then if http_status="$(curl -fsS --max-redirs 0 --write-out '%{http_code}' -o "$tmp" "https://stage.example/install/install.sh")"; then case "$http_status" in 2??) if LLMROUTER_SERVER_URL="https://stage.example" bash "$tmp"; then :; else status=$?; fi ;; *) status=1 ;; esac; else status=$?; fi; rm -f "$tmp" || :; else status=$?; fi; return "$status"; }; llmapi_install
 ```
 
 On Windows PowerShell:
 
 ```powershell
-$installer = Join-Path ([IO.Path]::GetTempPath()) ('llmapi-install-' + [guid]::NewGuid() + '.ps1'); try { $response = Invoke-WebRequest -Uri 'https://stage.example/install/install.ps1' -OutFile $installer -PassThru -MaximumRedirection 0 -ErrorAction Stop; if ($response.StatusCode -lt 200 -or $response.StatusCode -ge 300) { throw 'installer download failed' }; $env:LLMAPI_SERVER_URL='https://stage.example'; & $installer } finally { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue }
+$installer = Join-Path ([IO.Path]::GetTempPath()) ('llmrouter-install-' + [guid]::NewGuid() + '.ps1'); try { $response = Invoke-WebRequest -Uri 'https://stage.example/install/install.ps1' -OutFile $installer -PassThru -MaximumRedirection 0 -ErrorAction Stop; if ($response.StatusCode -lt 200 -or $response.StatusCode -ge 300) { throw 'installer download failed' }; $env:LLMROUTER_SERVER_URL='https://stage.example'; & $installer } finally { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue }
 ```
 
-The bootstrap intentionally does not take a credential command-line argument. It asks for one through the CLI's hidden prompt, unless `LLMAPI_TOKEN` is already set in the terminal environment:
+The bootstrap intentionally does not take a credential command-line argument. It asks for one through the CLI's hidden prompt, unless `LLMROUTER_TOKEN` is already set in the terminal environment:
 
 ```sh
-export LLMAPI_TOKEN='…'
+export LLMROUTER_TOKEN='…'
 ```
 
-Choose clients interactively, or provide a comma-separated approved list with `LLMAPI_CLIENTS`:
+Choose clients interactively, or provide a comma-separated approved list with `LLMROUTER_CLIENTS`:
 
 ```sh
-export LLMAPI_CLIENTS='codex-cli,claude-code,claude-desktop'
+export LLMROUTER_CLIENTS='codex-cli,claude-code,claude-desktop'
 ```
 
-You can override the selected server only with the normal onboarding option, for example `llmapi-onboard install --server-url https://stage.example`. The bootstrap itself derives its server from `LLMAPI_SERVER_URL` and verifies its downloads against that same origin.
+You can override the selected server only with the normal onboarding option, for example `llmrouter-onboard install --server-url https://stage.example`. The bootstrap itself derives its server from `LLMROUTER_SERVER_URL` and verifies its downloads against that same origin.
 
 ## Verify and maintain
 
 Run a diagnostic after installation:
 
 ```sh
-~/.llmapi/bin/llmapi-onboard doctor
+~/.llmrouter/bin/llmrouter-onboard doctor
 ```
 
-Each managed change has a receipt. List them with `llmapi-onboard receipts`, restore a receipt with `llmapi-onboard restore <receipt-id>`, and remove managed changes with `llmapi-onboard uninstall <receipt-id>`. Keep the private helpers if you intend to restore later; remove `~/.llmapi` only after uninstalling all managed receipts.
+Each managed change has a receipt. List them with `llmrouter-onboard receipts`, restore a receipt with `llmrouter-onboard restore <receipt-id>`, and remove managed changes with `llmrouter-onboard uninstall <receipt-id>`. Keep the private helpers if you intend to restore later; remove `~/.llmrouter` only after uninstalling all managed receipts.
 
 ## Claude Desktop and streaming
 

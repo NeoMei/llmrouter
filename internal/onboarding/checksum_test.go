@@ -17,14 +17,14 @@ func TestResolveBridgeChecksumUsesExactSameOriginArtifact(t *testing.T) {
 		require.Equal(t, "/install/checksums.txt", request.URL.Path)
 		require.Empty(t, request.Header.Get("Authorization"))
 		_, _ = io.WriteString(writer,
-			"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  llmapi-onboard-darwin-arm64\n"+
-				expected+"  llmapi-mcp-bridge-darwin-arm64\n")
+			"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  llmrouter-onboard-darwin-arm64\n"+
+				expected+"  llmrouter-mcp-bridge-darwin-arm64\n")
 	}))
 	defer server.Close()
 	digest, err := ResolveBridgeChecksum(t.Context(), mustLoopbackURL(t, server.URL), Platform{OS: "darwin", Arch: "arm64"}, server.Client())
 	require.NoError(t, err)
 	require.Equal(t, expected, digest)
-	require.Equal(t, "llmapi-mcp-bridge-windows-amd64.exe", bridgeArtifactName(Platform{OS: "windows", Arch: "amd64"}))
+	require.Equal(t, "llmrouter-mcp-bridge-windows-amd64.exe", bridgeArtifactName(Platform{OS: "windows", Arch: "amd64"}))
 }
 
 func TestResolveBridgeChecksumRejectsRedirectsWithoutMutatingCaller(t *testing.T) {
@@ -88,7 +88,7 @@ func TestResolveBridgeChecksumRejectsMalformedDuplicateMissingAndOversizedFiles(
 		{name: "malformed separator", body: strings.Repeat("a", 64) + " " + target + "\n"},
 		{name: "path filename", body: strings.Repeat("a", 64) + "  ../" + target + "\n"},
 		{name: "duplicate target", body: strings.Repeat("a", 64) + "  " + target + "\n" + strings.Repeat("b", 64) + "  " + target + "\n"},
-		{name: "missing target", body: strings.Repeat("a", 64) + "  llmapi-onboard-darwin-arm64\n"},
+		{name: "missing target", body: strings.Repeat("a", 64) + "  llmrouter-onboard-darwin-arm64\n"},
 		{name: "oversized", body: strings.Repeat("a", maxChecksumsBytes+1)},
 	}
 	for _, tc := range tests {

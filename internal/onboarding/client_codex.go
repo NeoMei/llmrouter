@@ -53,9 +53,9 @@ func (adapter codexAdapter) Plan(_ context.Context, request ConfigureRequest) (C
 	if err := validateConfigSyntax(path, []byte(configured)); err != nil {
 		return ConfigPlan{}, fmt.Errorf("%w: Codex configuration conflicts with the managed provider", ErrConflict)
 	}
-	instructions := []string{"Set LLMAPI_TOKEN in the environment before launching Codex."}
+	instructions := []string{"Set LLMROUTER_TOKEN in the environment before launching Codex."}
 	if adapter.id == ClientCodexDesktop {
-		instructions = []string{"Set LLMAPI_TOKEN in the desktop launch environment, then restart Codex Desktop."}
+		instructions = []string{"Set LLMROUTER_TOKEN in the desktop launch environment, then restart Codex Desktop."}
 	}
 	return ConfigPlan{Client: adapter.id, Writes: []PlannedWrite{{Path: path, Data: []byte(configured), Mode: privateFileMode}}, Instructions: instructions, RestartRequired: adapter.id == ClientCodexDesktop}, nil
 }
@@ -81,7 +81,7 @@ func mergeCodexText(input string, request ConfigureRequest) (string, error) {
 		if expression.kind == unstable.Comment && isCodexMarker(expression.comment) {
 			removals = append(removals, codexRange{start: expression.start, end: expression.end})
 		}
-		if expression.kind == unstable.Table && equalCodexKey(expression.keys, "model_providers", "llmapi") {
+		if expression.kind == unstable.Table && equalCodexKey(expression.keys, "model_providers", "llmrouter") {
 			removals = append(removals, codexRange{start: expression.start, end: expression.end})
 			for next := index + 1; next < len(expressions); next++ {
 				if expressions[next].kind == unstable.Table || expressions[next].kind == unstable.ArrayTable {
@@ -98,20 +98,20 @@ func mergeCodexText(input string, request ConfigureRequest) (string, error) {
 	var output strings.Builder
 	output.WriteString(prefix)
 	ensureCodexNewline(&output)
-	output.WriteString("# LLMAPI:BEGIN codex\n")
+	output.WriteString("# LLMROUTER:BEGIN codex\n")
 	output.WriteString("model = " + strconv.Quote(request.Model) + "\n")
-	output.WriteString("model_provider = \"llmapi\"\n")
-	output.WriteString("# LLMAPI:END codex\n")
+	output.WriteString("model_provider = \"llmrouter\"\n")
+	output.WriteString("# LLMROUTER:END codex\n")
 	output.WriteString(suffix)
 	ensureCodexNewline(&output)
 	if !strings.HasSuffix(output.String(), "\n\n") {
 		output.WriteByte('\n')
 	}
-	output.WriteString("[model_providers.llmapi]\n")
-	output.WriteString("name = \"LLMAPI\"\n")
+	output.WriteString("[model_providers.llmrouter]\n")
+	output.WriteString("name = \"LLMROUTER\"\n")
 	output.WriteString("base_url = " + strconv.Quote(endpointV1(request.ServerURL)) + "\n")
 	output.WriteString("wire_api = \"responses\"\n")
-	output.WriteString("env_key = \"LLMAPI_TOKEN\"\n")
+	output.WriteString("env_key = \"LLMROUTER_TOKEN\"\n")
 	return output.String(), nil
 }
 
@@ -244,7 +244,7 @@ func equalCodexKey(keys []string, expected ...string) bool {
 
 func isCodexMarker(comment string) bool {
 	switch strings.TrimSpace(comment) {
-	case "# LLMAPI:BEGIN codex", "# LLMAPI:END codex", "# Managed keys: model, model_provider, model_providers.llmapi":
+	case "# LLMROUTER:BEGIN codex", "# LLMROUTER:END codex", "# Managed keys: model, model_provider, model_providers.llmrouter":
 		return true
 	default:
 		return false
@@ -258,11 +258,11 @@ func (adapter codexAdapter) Check(_ context.Context, request CheckRequest) []Che
 	}
 	path := filepath.Join(request.Home, ".codex", "config.toml")
 	check := semanticConfigCheck(name, checkCodexConfig(request, path))
-	credential := Check{Name: "codex-cli-credential", Status: "FAIL", Message: "LLMAPI_TOKEN is not visible to the Codex CLI process"}
+	credential := Check{Name: "codex-cli-credential", Status: "FAIL", Message: "LLMROUTER_TOKEN is not visible to the Codex CLI process"}
 	if adapter.id == ClientCodexDesktop {
 		credential = Check{Name: "codex-desktop-credential", Status: "SKIP", Message: "desktop launch credential visibility requires application-level verification"}
-	} else if value, ok := os.LookupEnv("LLMAPI_TOKEN"); ok && value != "" && value == request.Token.Reveal() {
-		credential = Check{Name: "codex-cli-credential", Status: "PASS", Message: "LLMAPI_TOKEN is visible to the Codex CLI process"}
+	} else if value, ok := os.LookupEnv("LLMROUTER_TOKEN"); ok && value != "" && value == request.Token.Reveal() {
+		credential = Check{Name: "codex-cli-credential", Status: "PASS", Message: "LLMROUTER_TOKEN is visible to the Codex CLI process"}
 	}
 	return []Check{check, credential}
 }
@@ -279,15 +279,15 @@ func checkCodexConfig(request CheckRequest, path string) error {
 	if err := toml.Unmarshal(data, &root); err != nil {
 		return err
 	}
-	if root["model_provider"] != "llmapi" || root["model"] != request.Model {
+	if root["model_provider"] != "llmrouter" || root["model"] != request.Model {
 		return fmt.Errorf("Codex selection mismatch")
 	}
 	providers, ok := root["model_providers"].(map[string]any)
 	if !ok {
 		return fmt.Errorf("Codex providers missing")
 	}
-	provider, ok := providers["llmapi"].(map[string]any)
-	if !ok || provider["name"] != "LLMAPI" || provider["base_url"] != endpointV1(request.ServerURL) || provider["wire_api"] != "responses" || provider["env_key"] != "LLMAPI_TOKEN" {
+	provider, ok := providers["llmrouter"].(map[string]any)
+	if !ok || provider["name"] != "LLMROUTER" || provider["base_url"] != endpointV1(request.ServerURL) || provider["wire_api"] != "responses" || provider["env_key"] != "LLMROUTER_TOKEN" {
 		return fmt.Errorf("Codex provider mismatch")
 	}
 	return nil

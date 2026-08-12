@@ -128,25 +128,25 @@ func (client *HTTPClient) do(ctx context.Context, method, path string, body []by
 	}
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Authorization", "Bearer "+client.token)
-	request.Header.Set("User-Agent", "llmapi-mcp-bridge/0.1.0")
+	request.Header.Set("User-Agent", "llmrouter-mcp-bridge/0.1.0")
 	if len(body) != 0 {
 		request.Header.Set("Content-Type", "application/json")
 	}
 	response, err := client.http.Do(request)
 	if err != nil {
-		return fmt.Errorf("LLMAPI request failed")
+		return fmt.Errorf("LLMROUTER request failed")
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxHTTPResponseBytes))
-		return fmt.Errorf("LLMAPI status %d", response.StatusCode)
+		return fmt.Errorf("LLMROUTER status %d", response.StatusCode)
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxHTTPResponseBytes+1))
 	if err != nil || len(raw) > maxHTTPResponseBytes {
-		return fmt.Errorf("LLMAPI response is unreadable or too large")
+		return fmt.Errorf("LLMROUTER response is unreadable or too large")
 	}
 	if err := common.UnmarshalUseNumber(raw, output); err != nil {
-		return fmt.Errorf("LLMAPI response is invalid")
+		return fmt.Errorf("LLMROUTER response is invalid")
 	}
 	return nil
 }

@@ -49,7 +49,7 @@ func (claudeDesktopAdapter) Plan(_ context.Context, request ConfigureRequest) (C
 		return ConfigPlan{}, err
 	}
 	entry := map[string]any{"command": bridgePath, "args": []string{"--config", credentialPath}}
-	configured, err := MergeJSONObject(existing, []string{"mcpServers", "llmapi"}, entry)
+	configured, err := MergeJSONObject(existing, []string{"mcpServers", "llmrouter"}, entry)
 	if err != nil {
 		return ConfigPlan{}, err
 	}
@@ -106,9 +106,9 @@ func loadClaudeDesktopBridge(request CheckRequest) (string, string, mcpbridge.Co
 	if !ok {
 		return "", "", mcpbridge.Config{}, fmt.Errorf("Claude Desktop MCP servers are unavailable")
 	}
-	entry, ok := servers["llmapi"].(map[string]any)
+	entry, ok := servers["llmrouter"].(map[string]any)
 	if !ok || len(entry) != 2 {
-		return "", "", mcpbridge.Config{}, fmt.Errorf("Claude Desktop LLMAPI server is invalid")
+		return "", "", mcpbridge.Config{}, fmt.Errorf("Claude Desktop LLMROUTER server is invalid")
 	}
 	command, ok := entry["command"].(string)
 	if !ok {
@@ -143,7 +143,7 @@ func claudeDesktopConfigPath(platform Platform, home string) string {
 }
 
 func claudeDesktopCredentialPath(home string) string {
-	return filepath.Join(home, ".llmapi", "credentials", "claude-desktop.json")
+	return filepath.Join(home, ".llmrouter", "credentials", "claude-desktop.json")
 }
 
 func verifyClaudeDesktopBridge(home, path, expectedSHA256 string, platform Platform) (string, error) {
@@ -156,7 +156,7 @@ func verifyClaudeDesktopBridge(home, path, expectedSHA256 string, platform Platf
 		return "", fmt.Errorf("%w: installed Claude Desktop bridge path is unsafe", ErrUnsafe)
 	}
 	name := strings.ToLower(filepath.Base(path))
-	installedName := "llmapi-mcp-bridge"
+	installedName := "llmrouter-mcp-bridge"
 	artifactName := installedName + "-" + platform.OS + "-" + platform.Arch
 	if platform.OS == "windows" {
 		installedName += ".exe"

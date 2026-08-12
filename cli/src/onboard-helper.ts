@@ -18,9 +18,9 @@ export type VerifiedHelper = { path: string; checksum: string };
 export function resolveOnboardHelper(home: string): VerifiedHelper {
   if (process.platform === 'win32') throw new Error('trusted helper validation is unavailable on Windows');
   const canonicalHome = fs.realpathSync(home); verifyNode(canonicalHome);
-  const state = path.join(canonicalHome, '.llmapi'); const bin = path.join(state, 'bin'); const checksums = path.join(state, 'checksums');
+  const state = path.join(canonicalHome, '.llmrouter'); const bin = path.join(state, 'bin'); const checksums = path.join(state, 'checksums');
   verifyNode(state); verifyNode(bin); verifyNode(checksums);
-  const helper = path.join(bin, 'llmapi-onboard'); const checksumFile = path.join(checksums, 'llmapi-onboard.sha256');
+  const helper = path.join(bin, 'llmrouter-onboard'); const checksumFile = path.join(checksums, 'llmrouter-onboard.sha256');
   verifyNode(helper, true); verifyNode(checksumFile);
   const canonicalHelper = fs.realpathSync(helper); if (canonicalHelper !== helper || !canonicalHelper.startsWith(`${bin}${path.sep}`)) throw unsafe();
   const expected = fs.readFileSync(checksumFile, 'utf8').trim().toLowerCase();
@@ -28,11 +28,11 @@ export function resolveOnboardHelper(home: string): VerifiedHelper {
   return { path: helper, checksum: expected };
 }
 export function helperArgs(home: string, command: string, args: readonly string[] = []): string[] { return ['--home', path.resolve(home), command, ...args]; }
-export function redact(value: string, token = process.env.LLMAPI_TOKEN ?? ''): string {
+export function redact(value: string, token = process.env.LLMROUTER_TOKEN ?? ''): string {
   return value.slice(0, MAX_OUTPUT).replaceAll(token, token ? '[REDACTED]' : '').replace(/(?:sk|tok|key)[_-]?[A-Za-z0-9_-]{8,}|Bearer\s+\S+/gi, '[REDACTED]');
 }
 export function runOnboard(home: string, command: string, args: readonly string[] = []): void {
-  const verified = resolveOnboardHelper(home); const copy = path.join(os.tmpdir(), `llmapi-onboard-${process.pid}-${crypto.randomBytes(8).toString('hex')}`);
+  const verified = resolveOnboardHelper(home); const copy = path.join(os.tmpdir(), `llmrouter-onboard-${process.pid}-${crypto.randomBytes(8).toString('hex')}`);
   try {
     const bytes = fs.readFileSync(verified.path); if (crypto.createHash('sha256').update(bytes).digest('hex') !== verified.checksum) throw unsafe();
     fs.writeFileSync(copy, bytes, { mode: 0o700, flag: 'wx' }); fs.chmodSync(copy, 0o700);

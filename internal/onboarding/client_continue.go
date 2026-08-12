@@ -59,14 +59,14 @@ func (continueAdapter) Plan(_ context.Context, request ConfigureRequest) (Config
 	switch strategy {
 	case "json":
 		configured, err = mergeContinueJSON(existing, map[string]any{
-			"title": "LLMAPI", "provider": "openai", "model": request.Model,
-			"apiBase": endpointV1(request.ServerURL), "apiKey": "${LLMAPI_TOKEN}",
-			"llmapiManaged": "LLMAPI:BEGIN continue",
+			"title": "LLMROUTER", "provider": "openai", "model": request.Model,
+			"apiBase": endpointV1(request.ServerURL), "apiKey": "${LLMROUTER_TOKEN}",
+			"llmapiManaged": "LLMROUTER:BEGIN continue",
 		})
 	case "yaml":
 		configured, err = mergeContinueYAML(existing, map[string]any{
-			"name": "LLMAPI", "provider": "openai", "model": request.Model,
-			"apiBase": endpointV1(request.ServerURL), "apiKey": "${LLMAPI_TOKEN}",
+			"name": "LLMROUTER", "provider": "openai", "model": request.Model,
+			"apiBase": endpointV1(request.ServerURL), "apiKey": "${LLMROUTER_TOKEN}",
 		})
 	default:
 		err = fmt.Errorf("%w: unsupported Continue strategy", ErrUnavailable)
@@ -77,7 +77,7 @@ func (continueAdapter) Plan(_ context.Context, request ConfigureRequest) (Config
 	if !continueConfigSupported(strategy, configured) {
 		return ConfigPlan{}, fmt.Errorf("%w: generated Continue configuration is invalid", ErrConflict)
 	}
-	return ConfigPlan{Client: ClientContinue, Writes: []PlannedWrite{{Path: path, Data: configured, Mode: privateFileMode}}, Instructions: []string{"Set LLMAPI_TOKEN before launching Continue."}, RestartRequired: true}, nil
+	return ConfigPlan{Client: ClientContinue, Writes: []PlannedWrite{{Path: path, Data: configured, Mode: privateFileMode}}, Instructions: []string{"Set LLMROUTER_TOKEN before launching Continue."}, RestartRequired: true}, nil
 }
 
 func continueManualPlan(request ConfigureRequest) ConfigPlan {
@@ -85,7 +85,7 @@ func continueManualPlan(request ConfigureRequest) ConfigPlan {
 	if model == "" {
 		model = "<select-model>"
 	}
-	instructions := fmt.Sprintf("Continue configuration format is not recognized; add a model manually with provider openai, apiBase %s, apiKey ${LLMAPI_TOKEN}, and model %s.", endpointV1(request.ServerURL), model)
+	instructions := fmt.Sprintf("Continue configuration format is not recognized; add a model manually with provider openai, apiBase %s, apiKey ${LLMROUTER_TOKEN}, and model %s.", endpointV1(request.ServerURL), model)
 	return ConfigPlan{Client: ClientContinue, Instructions: []string{instructions}}
 }
 
@@ -111,7 +111,7 @@ func (continueAdapter) Check(_ context.Context, request CheckRequest) []Check {
 }
 
 func continueConfigSupported(strategy string, data []byte) bool {
-	model := map[string]any{"name": "LLMAPI", "title": "LLMAPI", "provider": "openai", "model": "model", "apiBase": "https://example.invalid/v1", "apiKey": "${LLMAPI_TOKEN}", "llmapiManaged": "LLMAPI:BEGIN continue"}
+	model := map[string]any{"name": "LLMROUTER", "title": "LLMROUTER", "provider": "openai", "model": "model", "apiBase": "https://example.invalid/v1", "apiKey": "${LLMROUTER_TOKEN}", "llmapiManaged": "LLMROUTER:BEGIN continue"}
 	var err error
 	if strategy == "json" {
 		_, err = mergeContinueJSON(data, model)
@@ -155,12 +155,12 @@ func checkContinueConfig(request CheckRequest, path, strategy string) error {
 		if !ok {
 			continue
 		}
-		managed := model["llmapiManaged"] == "LLMAPI:BEGIN continue"
+		managed := model["llmapiManaged"] == "LLMROUTER:BEGIN continue"
 		if strategy == "yaml" {
-			managed = model["name"] == "LLMAPI"
+			managed = model["name"] == "LLMROUTER"
 		}
-		if managed && model["provider"] == "openai" && model["model"] == request.Model && model["apiBase"] == endpointV1(request.ServerURL) && model["apiKey"] == "${LLMAPI_TOKEN}" {
-			if strategy == "json" && model["title"] != "LLMAPI" {
+		if managed && model["provider"] == "openai" && model["model"] == request.Model && model["apiBase"] == endpointV1(request.ServerURL) && model["apiKey"] == "${LLMROUTER_TOKEN}" {
+			if strategy == "json" && model["title"] != "LLMROUTER" {
 				return fmt.Errorf("Continue legacy model title mismatch")
 			}
 			return nil
@@ -233,7 +233,7 @@ func mergeContinueJSON(input []byte, model map[string]any) ([]byte, error) {
 		if !ok {
 			return nil, fmt.Errorf("%w: Continue model entries must be objects", ErrUnavailable)
 		}
-		if entry["llmapiManaged"] != "LLMAPI:BEGIN continue" {
+		if entry["llmapiManaged"] != "LLMROUTER:BEGIN continue" {
 			continue
 		}
 		models[index] = model
@@ -248,7 +248,7 @@ func mergeContinueJSON(input []byte, model map[string]any) ([]byte, error) {
 
 func mergeContinueYAML(input []byte, model map[string]any) ([]byte, error) {
 	if len(strings.TrimSpace(string(input))) == 0 {
-		input = []byte("name: LLMAPI\nversion: 0.0.1\nschema: v1\nmodels: []\n")
+		input = []byte("name: LLMROUTER\nversion: 0.0.1\nschema: v1\nmodels: []\n")
 	}
 	var document yaml.Node
 	if err := yaml.Unmarshal(input, &document); err != nil {
@@ -282,7 +282,7 @@ func mergeContinueYAML(input []byte, model map[string]any) ([]byte, error) {
 		}
 		entryName := yamlMappingValue(item, "name")
 		provider := yamlMappingValue(item, "provider")
-		if entryName == nil || provider == nil || entryName.Value != "LLMAPI" || provider.Value != "openai" {
+		if entryName == nil || provider == nil || entryName.Value != "LLMROUTER" || provider.Value != "openai" {
 			continue
 		}
 		managedIndex = index
@@ -290,13 +290,13 @@ func mergeContinueYAML(input []byte, model map[string]any) ([]byte, error) {
 	managed := continueModelNode(model)
 	if managedIndex >= 0 {
 		existing := models.Content[managedIndex]
-		managed.HeadComment = appendYAMLComment("LLMAPI:BEGIN continue", existing.HeadComment)
+		managed.HeadComment = appendYAMLComment("LLMROUTER:BEGIN continue", existing.HeadComment)
 		managed.LineComment = existing.LineComment
-		managed.FootComment = appendYAMLComment(existing.FootComment, "LLMAPI:END continue")
+		managed.FootComment = appendYAMLComment(existing.FootComment, "LLMROUTER:END continue")
 		models.Content[managedIndex] = managed
 	} else {
-		managed.HeadComment = "LLMAPI:BEGIN continue"
-		managed.FootComment = "LLMAPI:END continue"
+		managed.HeadComment = "LLMROUTER:BEGIN continue"
+		managed.FootComment = "LLMROUTER:END continue"
 		models.Content = append(models.Content, managed)
 	}
 	configured, err := yaml.Marshal(&document)
@@ -378,7 +378,7 @@ func withoutContinueMarkerComment(comment string) string {
 	lines := strings.Split(comment, "\n")
 	kept := make([]string, 0, len(lines))
 	for _, line := range lines {
-		if line == "LLMAPI:BEGIN continue" || line == "LLMAPI:END continue" || line == "# LLMAPI:BEGIN continue" || line == "# LLMAPI:END continue" {
+		if line == "LLMROUTER:BEGIN continue" || line == "LLMROUTER:END continue" || line == "# LLMROUTER:BEGIN continue" || line == "# LLMROUTER:END continue" {
 			continue
 		}
 		kept = append(kept, line)

@@ -4,7 +4,7 @@
 
 **Goal:** Build, test, and deploy a public bilingual `/docs` developer center for LLMRouter without embedding dynamic model, pricing, quota, capability, or routing data.
 
-**Architecture:** Add one public TanStack Router route backed by a focused React feature module. Keep all documentation and examples in typed static data, isolate locale resolution and clipboard behavior in testable helpers, and reuse the existing `PublicLayout` and UI primitives. Build a dedicated image from the production branch, deploy it to the parallel `llmapi` container behind `llmrouter.quukk.com:8445`, and leave `llmapi.quukk.com` unchanged.
+**Architecture:** Add one public TanStack Router route backed by a focused React feature module. Keep all documentation and examples in typed static data, isolate locale resolution and clipboard behavior in testable helpers, and reuse the existing `PublicLayout` and UI primitives. Build a dedicated image from the production branch, deploy it to the parallel `llmrouter` container behind `llmrouter.quukk.com:8445`, and leave `llmrouter.quukk.com` unchanged.
 
 **Tech Stack:** React 19, TypeScript, TanStack Router, Tailwind CSS, existing UI primitives, Node test runner through `tsx --test`, Playwright, Go embedded web assets, Docker, nginx.
 
@@ -19,7 +19,7 @@
 - Dynamic information is linked to `/dashboard/models` and `/client-model-routes`.
 - The production origin is `https://llmrouter.quukk.com`; OpenAI-compatible examples use `https://llmrouter.quukk.com/v1`.
 - Reuse the existing design system and dependencies; do not add Markdown, syntax-highlighting, OpenAPI, or documentation-framework dependencies.
-- Keep `llmapi.quukk.com` routed to the parallel NewAPI system and do not modify it.
+- Keep `llmrouter.quukk.com` routed to the parallel NewAPI system and do not modify it.
 - Preserve the previous LLMRouter container/image and nginx configuration for rollback.
 
 ---
@@ -305,18 +305,18 @@ git commit -m "test(web): certify developer docs"
 
 **Files:**
 - Modify: deployment evidence under the server's existing protected backup/evidence directory only; do not commit secrets
-- Do not modify: `llmapi.quukk.com` nginx routing
+- Do not modify: `llmrouter.quukk.com` nginx routing
 
 **Interfaces:**
 - Consumes: reviewed Task 1–3 commits.
-- Produces: a versioned LLMRouter image, a parallel `llmapi` container serving `/docs`, production browser/API evidence, and a rollback reference.
+- Produces: a versioned LLMRouter image, a parallel `llmrouter` container serving `/docs`, production browser/API evidence, and a rollback reference.
 
 - [ ] **Step 1: Run release verification before building**
 
 Run:
 
 ```bash
-go test ./internal/onboarding ./cmd/llmapi-onboard
+go test ./internal/onboarding ./cmd/llmrouter-onboard
 bash scripts/verify-web.sh
 bash scripts/verify-cli.sh
 git diff --check
@@ -339,7 +339,7 @@ Fetch the exact reviewed commit into a new server source directory, build an ima
 
 - [ ] **Step 4: Replace only the parallel LLMRouter container**
 
-Record the current `llmapi` container inspect output and image ID. Start a candidate container on a temporary loopback port using the same protected env file, volumes, and Docker network. Verify `/healthz` and rendered `/docs` before replacing the `llmapi` container. Keep the old container renamed and stopped until certification completes.
+Record the current `llmrouter` container inspect output and image ID. Start a candidate container on a temporary loopback port using the same protected env file, volumes, and Docker network. Verify `/healthz` and rendered `/docs` before replacing the `llmrouter` container. Keep the old container renamed and stopped until certification completes.
 
 - [ ] **Step 5: Certify production routes and APIs**
 
@@ -356,11 +356,11 @@ Verify through `https://llmrouter.quukk.com`:
 one bounded inference request    200 with a non-empty result
 ```
 
-Run the Playwright docs acceptance test against the public URL. Confirm `https://llmapi.quukk.com` still returns its original parallel system.
+Run the Playwright docs acceptance test against the public URL. Confirm `https://llmrouter.quukk.com` still returns its original parallel system.
 
 - [ ] **Step 6: Roll back on any failed certification**
 
-If any check fails, stop/remove only the candidate container, restore the previous `llmapi` container name and start it, then re-run `/healthz` and the public baseline. Do not alter the NewAPI container or its nginx virtual host.
+If any check fails, stop/remove only the candidate container, restore the previous `llmrouter` container name and start it, then re-run `/healthz` and the public baseline. Do not alter the NewAPI container or its nginx virtual host.
 
 - [ ] **Step 7: Publish reviewed commits**
 

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Secure same-origin bootstrap for the LLMAPI onboarding helpers.
+# Secure same-origin bootstrap for the LLMROUTER onboarding helpers.
 set -eu
 umask 077
 
-fail() { printf '%s\n' "LLMAPI installer: $*" >&2; exit 1; }
+fail() { printf '%s\n' "LLMROUTER installer: $*" >&2; exit 1; }
 
 require_origin() {
-  origin=${LLMAPI_SERVER_URL-}
-  [ -n "$origin" ] || fail 'LLMAPI_SERVER_URL is required'
+  origin=${LLMROUTER_SERVER_URL-}
+  [ -n "$origin" ] || fail 'LLMROUTER_SERVER_URL is required'
   origin=${origin%/}
   case "$origin" in https://*) scheme=https; hostport=${origin#https://} ;; http://*) scheme=http; hostport=${origin#http://} ;; *) fail 'server URL must use HTTPS or loopback HTTP' ;; esac
   [ -n "$hostport" ] || fail 'server URL has no host'
@@ -92,10 +92,10 @@ rollback_pair() {
   [ "${transaction_committed:-0}" = 1 ] && return
   rollback_failed=0
   if [ "${onboard_backup_ready:-0}" = 1 ]; then
-    if mv -f "$backup_directory/llmapi-onboard" "$onboard_target"; then onboard_backup_ready=0; else rollback_failed=1; fi
+    if mv -f "$backup_directory/llmrouter-onboard" "$onboard_target"; then onboard_backup_ready=0; else rollback_failed=1; fi
   elif [ "${onboard_had_original:-0}" = 0 ]; then rm -f "${onboard_target:-}" || :; fi
   if [ "${bridge_backup_ready:-0}" = 1 ]; then
-    if mv -f "$backup_directory/llmapi-mcp-bridge" "$bridge_target"; then bridge_backup_ready=0; else rollback_failed=1; fi
+    if mv -f "$backup_directory/llmrouter-mcp-bridge" "$bridge_target"; then bridge_backup_ready=0; else rollback_failed=1; fi
   elif [ "${bridge_had_original:-0}" = 0 ]; then rm -f "${bridge_target:-}" || :; fi
   [ "$rollback_failed" = 0 ]
 }
@@ -104,7 +104,7 @@ cleanup() {
   [ "${cleanup_done:-0}" = 0 ] || return
   cleanup_done=1
   if ! rollback_pair; then
-    printf '%s\n' "LLMAPI installer: rollback could not restore every helper; recover from $temporary_directory" >&2
+    printf '%s\n' "LLMROUTER installer: rollback could not restore every helper; recover from $temporary_directory" >&2
     return 1
   fi
   [ -z "${temporary_directory:-}" ] || rm -rf "$temporary_directory" || :
@@ -123,8 +123,8 @@ replace_helper_pair() {
   if [ -e "$bridge_target" ] || [ -L "$bridge_target" ]; then bridge_had_original=1; require_private_file "$bridge_target"; fi
   mkdir "$backup_directory" || return 1
   require_private_directory "$backup_directory"
-  if [ "$onboard_had_original" = 1 ]; then mv "$onboard_target" "$backup_directory/llmapi-onboard" || return 1; onboard_backup_ready=1; fi
-  if [ "$bridge_had_original" = 1 ]; then mv "$bridge_target" "$backup_directory/llmapi-mcp-bridge" || return 1; bridge_backup_ready=1; fi
+  if [ "$onboard_had_original" = 1 ]; then mv "$onboard_target" "$backup_directory/llmrouter-onboard" || return 1; onboard_backup_ready=1; fi
+  if [ "$bridge_had_original" = 1 ]; then mv "$bridge_target" "$backup_directory/llmrouter-mcp-bridge" || return 1; bridge_backup_ready=1; fi
   mv "$temporary_directory/$onboard_artifact" "$onboard_target" || return 1
   require_private_file "$onboard_target"
   mv "$temporary_directory/$bridge_artifact" "$bridge_target" || return 1
@@ -140,10 +140,10 @@ case "$(uname -s)" in Linux) os=linux ;; Darwin) os=darwin ;; *) fail 'unsupport
 case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; *) fail 'unsupported processor architecture' ;; esac
 [ -n "${HOME-}" ] || fail 'HOME is required'
 case "$HOME" in /*) ;; *) fail 'HOME must be absolute' ;; esac
-require_private_directory "$HOME/.llmapi"
-require_private_directory "$HOME/.llmapi/bin"
-require_private_directory "$HOME/.llmapi/checksums"
-temporary_directory=$(mktemp -d "$HOME/.llmapi/bin/.install.XXXXXXXX") || fail 'cannot create private temporary directory'
+require_private_directory "$HOME/.llmrouter"
+require_private_directory "$HOME/.llmrouter/bin"
+require_private_directory "$HOME/.llmrouter/checksums"
+temporary_directory=$(mktemp -d "$HOME/.llmrouter/bin/.install.XXXXXXXX") || fail 'cannot create private temporary directory'
 transaction_committed=0
 onboard_had_original=0
 bridge_had_original=0
@@ -157,11 +157,11 @@ trap 'handle_signal 143' TERM
 require_private_directory "$temporary_directory"
 
 checksums="$temporary_directory/checksums.txt"
-onboard_artifact="llmapi-onboard-$os-$arch"
-bridge_artifact="llmapi-mcp-bridge-$os-$arch"
-onboard_target="$HOME/.llmapi/bin/llmapi-onboard"
-bridge_target="$HOME/.llmapi/bin/llmapi-mcp-bridge"
-checksum_target="$HOME/.llmapi/checksums/llmapi-onboard.sha256"
+onboard_artifact="llmrouter-onboard-$os-$arch"
+bridge_artifact="llmrouter-mcp-bridge-$os-$arch"
+onboard_target="$HOME/.llmrouter/bin/llmrouter-onboard"
+bridge_target="$HOME/.llmrouter/bin/llmrouter-mcp-bridge"
+checksum_target="$HOME/.llmrouter/checksums/llmrouter-onboard.sha256"
 backup_directory="$temporary_directory/backups"
 
 download /install/checksums.txt "$checksums"
@@ -172,15 +172,15 @@ bridge_checksum=$(checksum_for "$bridge_artifact") || fail 'checksum file is inv
 [ "$(sha256_file "$temporary_directory/$onboard_artifact")" = "$onboard_checksum" ] || fail 'onboarding helper checksum mismatch'
 [ "$(sha256_file "$temporary_directory/$bridge_artifact")" = "$bridge_checksum" ] || fail 'MCP helper checksum mismatch'
 replace_helper_pair || fail 'cannot transactionally install both helpers'
-printf '%s\n' "$onboard_checksum" > "$temporary_directory/llmapi-onboard.sha256" || fail 'cannot stage helper checksum'
-chmod 600 "$temporary_directory/llmapi-onboard.sha256" || fail 'cannot secure helper checksum'
-mv "$temporary_directory/llmapi-onboard.sha256" "$checksum_target" || fail 'cannot install helper checksum'
+printf '%s\n' "$onboard_checksum" > "$temporary_directory/llmrouter-onboard.sha256" || fail 'cannot stage helper checksum'
+chmod 600 "$temporary_directory/llmrouter-onboard.sha256" || fail 'cannot secure helper checksum'
+mv "$temporary_directory/llmrouter-onboard.sha256" "$checksum_target" || fail 'cannot install helper checksum'
 require_private_file "$checksum_target"
 chmod 600 "$checksum_target" || fail 'cannot secure helper checksum'
 
 rm -rf "$temporary_directory" || fail 'cannot clean temporary downloads'
 temporary_directory=
 trap - EXIT HUP INT TERM
-export LLMAPI_SERVER_URL="$origin"
+export LLMROUTER_SERVER_URL="$origin"
 if [ -r /dev/tty ] && [ -w /dev/tty ] && (: </dev/tty) 2>/dev/null; then exec "$onboard_target" install </dev/tty; fi
 exec "$onboard_target" install

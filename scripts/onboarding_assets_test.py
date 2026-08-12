@@ -36,8 +36,8 @@ class OnboardingAssetsTest(unittest.TestCase):
         install = root / "install"
         binary_directory = install / "bin"
         binary_directory.mkdir(parents=True)
-        onboard = f"llmapi-onboard-{operating_system}-{architecture}"
-        bridge = f"llmapi-mcp-bridge-{operating_system}-{architecture}"
+        onboard = f"llmrouter-onboard-{operating_system}-{architecture}"
+        bridge = f"llmrouter-mcp-bridge-{operating_system}-{architecture}"
         (binary_directory / onboard).write_text(onboarding_body or "#!/usr/bin/env bash\nprintf invoked > \"$HOME/onboard-ran\"\n")
         (binary_directory / bridge).write_text("#!/usr/bin/env bash\nexit 0\n")
         for artifact in (onboard, bridge):
@@ -78,7 +78,7 @@ class OnboardingAssetsTest(unittest.TestCase):
 
     def run_bash_bootstrap(self, home, origin, extra_environment=None):
         environment = os.environ.copy()
-        environment.update({"HOME": str(home), "LLMAPI_SERVER_URL": origin})
+        environment.update({"HOME": str(home), "LLMROUTER_SERVER_URL": origin})
         if extra_environment:
             environment.update(extra_environment)
         return subprocess.run(
@@ -123,8 +123,8 @@ class OnboardingAssetsTest(unittest.TestCase):
         self.assertEqual(
             data["artifacts"]["binaries"],
             [
-                {"id": "llmapi-onboard", "namePattern": "llmapi-onboard-{os}-{arch}[.exe]"},
-                {"id": "llmapi-mcp-bridge", "namePattern": "llmapi-mcp-bridge-{os}-{arch}[.exe]"},
+                {"id": "llmrouter-onboard", "namePattern": "llmrouter-onboard-{os}-{arch}[.exe]"},
+                {"id": "llmrouter-mcp-bridge", "namePattern": "llmrouter-mcp-bridge-{os}-{arch}[.exe]"},
             ],
         )
 
@@ -166,22 +166,22 @@ class OnboardingAssetsTest(unittest.TestCase):
         sh = (INSTALL / "install.sh").read_text()
         ps = (INSTALL / "install.ps1").read_text()
         bootstrap = sh + ps
-        self.assertIn("LLMAPI_SERVER_URL", bootstrap)
+        self.assertIn("LLMROUTER_SERVER_URL", bootstrap)
         self.assertNotRegex(bootstrap, r"--(api-)?token")
         self.assertIn("checksums.txt", bootstrap)
         self.assertIn("/install/bin/$onboard_artifact", sh)
         self.assertIn("/install/bin/$bridge_artifact", sh)
         self.assertIn("/install/bin/$onboardArtifact", ps)
         self.assertIn("/install/bin/$bridgeArtifact", ps)
-        self.assertIn("llmapi-onboard", bootstrap)
-        self.assertIn("llmapi-mcp-bridge", bootstrap)
+        self.assertIn("llmrouter-onboard", bootstrap)
+        self.assertIn("llmrouter-mcp-bridge", bootstrap)
         self.assertIn("sha256sum", sh)
         self.assertIn("shasum -a 256", sh)
         self.assertIn("mktemp -d", sh)
         self.assertIn("chmod 700", sh)
         self.assertIn("trap", sh)
         self.assertIn('rm -rf "$temporary_directory"', sh)
-        self.assertIn("$HOME/.llmapi/bin", sh)
+        self.assertIn("$HOME/.llmrouter/bin", sh)
         self.assertIn("Move-Item", ps)
         self.assertRegex(ps, r"Get-FileHash.+SHA256")
         self.assertIn("New-TemporaryFile", ps)
@@ -200,7 +200,7 @@ class OnboardingAssetsTest(unittest.TestCase):
         self.assertIn("mktemp", html)
         self.assertIn("MaximumRedirection 0", html)
         self.assertNotIn(" | iex", html)
-        self.assertNotIn(" | LLMAPI_SERVER_URL", html)
+        self.assertNotIn(" | LLMROUTER_SERVER_URL", html)
         self.assertNotRegex(html, r"type=[\"']password")
         self.assertNotRegex(html, r"(?:local|session)Storage")
         self.assertNotRegex(html, r"--(api-)?token")
@@ -220,7 +220,7 @@ class OnboardingAssetsTest(unittest.TestCase):
             onboard, bridge = self.bootstrap_site(
                 root,
                 "#!/usr/bin/env bash\n"
-                "test -z \"$(find \"$HOME/.llmapi/bin\" -maxdepth 1 -name '.install.*' -print)\" || exit 77\n"
+                "test -z \"$(find \"$HOME/.llmrouter/bin\" -maxdepth 1 -name '.install.*' -print)\" || exit 77\n"
                 "test -t 0 && printf tty > \"$HOME/input-mode\" || printf noninteractive > \"$HOME/input-mode\"\n"
                 "printf invoked > \"$HOME/onboard-ran\"\n",
             )
@@ -232,7 +232,7 @@ class OnboardingAssetsTest(unittest.TestCase):
             self.assertIn(f"/install/bin/{bridge}", paths)
             self.assertEqual((home / "onboard-ran").read_text(), "invoked")
             self.assertEqual((home / "input-mode").read_text(), "noninteractive")
-            self.assertFalse(any((home / ".llmapi" / "bin").glob(".install.*")))
+            self.assertFalse(any((home / ".llmrouter" / "bin").glob(".install.*")))
 
     def test_bash_bootstrap_rejects_checksum_redirect_before_installing(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -244,7 +244,7 @@ class OnboardingAssetsTest(unittest.TestCase):
             result = self.run_bash_bootstrap(home, origin)
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(paths, ["/install/checksums.txt"])
-            self.assertFalse((home / ".llmapi" / "bin" / "llmapi-onboard").exists())
+            self.assertFalse((home / ".llmrouter" / "bin" / "llmrouter-onboard").exists())
 
     def test_public_bash_command_cleans_up_and_returns_curl_status_under_errexit(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -277,7 +277,7 @@ class OnboardingAssetsTest(unittest.TestCase):
             home.mkdir()
             self.bootstrap_site(root, "#!/usr/bin/env bash\ntest -t 0 && printf tty > \"$HOME/input-mode\" || exit 78\n")
             origin, _ = self.serve(root)
-            command = f"HOME={shlex.quote(str(home))} LLMAPI_SERVER_URL={shlex.quote(origin)} bash {shlex.quote(str(INSTALL / 'install.sh'))}"
+            command = f"HOME={shlex.quote(str(home))} LLMROUTER_SERVER_URL={shlex.quote(origin)} bash {shlex.quote(str(INSTALL / 'install.sh'))}"
             result = subprocess.run(["script", "-q", "/dev/null", "bash", "-c", command], capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual((home / "input-mode").read_text(), "tty")
@@ -286,9 +286,9 @@ class OnboardingAssetsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary) / "site"
             home = pathlib.Path(temporary) / "home"
-            binary_directory = home / ".llmapi" / "bin"
+            binary_directory = home / ".llmrouter" / "bin"
             binary_directory.mkdir(parents=True)
-            for name, content in (("llmapi-onboard", b"old-onboard"), ("llmapi-mcp-bridge", b"old-bridge")):
+            for name, content in (("llmrouter-onboard", b"old-onboard"), ("llmrouter-mcp-bridge", b"old-bridge")):
                 path = binary_directory / name
                 path.write_bytes(content)
                 path.chmod(0o700)
@@ -299,15 +299,15 @@ class OnboardingAssetsTest(unittest.TestCase):
             wrapper_directory.mkdir()
             (wrapper_directory / "mv").write_text(
                 "#!/usr/bin/env bash\n"
-                f"if [ \"$(basename \"$1\")\" = \"{bridge}\" ] && [ \"$(basename \"$2\")\" = \"llmapi-mcp-bridge\" ]; then printf reached > {shlex.quote(str(marker))}; exit 75; fi\n"
+                f"if [ \"$(basename \"$1\")\" = \"{bridge}\" ] && [ \"$(basename \"$2\")\" = \"llmrouter-mcp-bridge\" ]; then printf reached > {shlex.quote(str(marker))}; exit 75; fi\n"
                 "exec /bin/mv \"$@\"\n"
             )
             (wrapper_directory / "mv").chmod(0o755)
             result = self.run_bash_bootstrap(home, origin, {"PATH": f"{wrapper_directory}:{os.environ['PATH']}"})
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(marker.read_text(), "reached")
-            self.assertEqual((binary_directory / "llmapi-onboard").read_bytes(), b"old-onboard")
-            self.assertEqual((binary_directory / "llmapi-mcp-bridge").read_bytes(), b"old-bridge")
+            self.assertEqual((binary_directory / "llmrouter-onboard").read_bytes(), b"old-onboard")
+            self.assertEqual((binary_directory / "llmrouter-mcp-bridge").read_bytes(), b"old-bridge")
 
     @unittest.skipUnless(platform.system() == "Darwin", "macOS ACL fixture")
     def test_bash_bootstrap_rerun_keeps_private_nonempty_bin_directory(self):
@@ -318,7 +318,7 @@ class OnboardingAssetsTest(unittest.TestCase):
             self.bootstrap_site(root)
             origin, _ = self.serve(root)
             self.assertEqual(self.run_bash_bootstrap(home, origin).returncode, 0)
-            retained = home / ".llmapi" / "bin" / "unrelated-private-file"
+            retained = home / ".llmrouter" / "bin" / "unrelated-private-file"
             retained.write_bytes(b"keep")
             retained.chmod(0o700)
             rerun = self.run_bash_bootstrap(home, origin)
@@ -329,9 +329,9 @@ class OnboardingAssetsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary) / "site"
             home = pathlib.Path(temporary) / "home"
-            binary_directory = home / ".llmapi" / "bin"
+            binary_directory = home / ".llmrouter" / "bin"
             binary_directory.mkdir(parents=True)
-            for name, content in (("llmapi-onboard", b"old-onboard"), ("llmapi-mcp-bridge", b"old-bridge")):
+            for name, content in (("llmrouter-onboard", b"old-onboard"), ("llmrouter-mcp-bridge", b"old-bridge")):
                 path = binary_directory / name
                 path.write_bytes(content)
                 path.chmod(0o700)
@@ -342,24 +342,24 @@ class OnboardingAssetsTest(unittest.TestCase):
             wrappers.mkdir()
             (wrappers / "mv").write_text(
                 "#!/usr/bin/env bash\n"
-                f"if [ \"$(basename \"$1\")\" = llmapi-mcp-bridge ] && [ \"$(basename \"$2\")\" = llmapi-mcp-bridge ]; then printf reached > {shlex.quote(str(marker))}; exit 74; fi\n"
+                f"if [ \"$(basename \"$1\")\" = llmrouter-mcp-bridge ] && [ \"$(basename \"$2\")\" = llmrouter-mcp-bridge ]; then printf reached > {shlex.quote(str(marker))}; exit 74; fi\n"
                 "exec /bin/mv \"$@\"\n"
             )
             (wrappers / "mv").chmod(0o755)
             result = self.run_bash_bootstrap(home, origin, {"PATH": f"{wrappers}:{os.environ['PATH']}"})
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(marker.read_text(), "reached")
-            self.assertEqual((binary_directory / "llmapi-onboard").read_bytes(), b"old-onboard")
-            self.assertEqual((binary_directory / "llmapi-mcp-bridge").read_bytes(), b"old-bridge")
+            self.assertEqual((binary_directory / "llmrouter-onboard").read_bytes(), b"old-onboard")
+            self.assertEqual((binary_directory / "llmrouter-mcp-bridge").read_bytes(), b"old-bridge")
             self.assertFalse(any(binary_directory.glob(".install.*")))
 
     def test_bash_bootstrap_sigterm_restores_pair_and_removes_transaction_state(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary) / "site"
             home = pathlib.Path(temporary) / "home"
-            binary_directory = home / ".llmapi" / "bin"
+            binary_directory = home / ".llmrouter" / "bin"
             binary_directory.mkdir(parents=True)
-            for name, content in (("llmapi-onboard", b"old-onboard"), ("llmapi-mcp-bridge", b"old-bridge")):
+            for name, content in (("llmrouter-onboard", b"old-onboard"), ("llmrouter-mcp-bridge", b"old-bridge")):
                 path = binary_directory / name
                 path.write_bytes(content)
                 path.chmod(0o700)
@@ -370,24 +370,24 @@ class OnboardingAssetsTest(unittest.TestCase):
             wrappers.mkdir()
             (wrappers / "mv").write_text(
                 "#!/usr/bin/env bash\n"
-                f"if [ \"$(basename \"$1\")\" = \"{onboard}\" ] && [ \"$(basename \"$2\")\" = llmapi-onboard ]; then printf reached > {shlex.quote(str(marker))}; kill -TERM \"$PPID\"; sleep 1; exit 75; fi\n"
+                f"if [ \"$(basename \"$1\")\" = \"{onboard}\" ] && [ \"$(basename \"$2\")\" = llmrouter-onboard ]; then printf reached > {shlex.quote(str(marker))}; kill -TERM \"$PPID\"; sleep 1; exit 75; fi\n"
                 "exec /bin/mv \"$@\"\n"
             )
             (wrappers / "mv").chmod(0o755)
             result = self.run_bash_bootstrap(home, origin, {"PATH": f"{wrappers}:{os.environ['PATH']}"})
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(marker.read_text(), "reached")
-            self.assertEqual((binary_directory / "llmapi-onboard").read_bytes(), b"old-onboard")
-            self.assertEqual((binary_directory / "llmapi-mcp-bridge").read_bytes(), b"old-bridge")
+            self.assertEqual((binary_directory / "llmrouter-onboard").read_bytes(), b"old-onboard")
+            self.assertEqual((binary_directory / "llmrouter-mcp-bridge").read_bytes(), b"old-bridge")
             self.assertFalse(any(binary_directory.glob(".install.*")))
 
     def test_bash_bootstrap_retains_recoverable_backup_when_rollback_restore_fails(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary) / "site"
             home = pathlib.Path(temporary) / "home"
-            binary_directory = home / ".llmapi" / "bin"
+            binary_directory = home / ".llmrouter" / "bin"
             binary_directory.mkdir(parents=True)
-            for name, content in (("llmapi-onboard", b"old-onboard"), ("llmapi-mcp-bridge", b"old-bridge")):
+            for name, content in (("llmrouter-onboard", b"old-onboard"), ("llmrouter-mcp-bridge", b"old-bridge")):
                 path = binary_directory / name
                 path.write_bytes(content)
                 path.chmod(0o700)
@@ -398,8 +398,8 @@ class OnboardingAssetsTest(unittest.TestCase):
             (wrappers / "mv").write_text(
                 "#!/usr/bin/env bash\n"
                 "source=$1; destination=$2; if [ \"$source\" = -f ]; then source=$2; destination=$3; fi\n"
-                f"if [ \"$(basename \"$source\")\" = \"{bridge}\" ] && [ \"$(basename \"$destination\")\" = llmapi-mcp-bridge ]; then exit 75; fi\n"
-                "if [[ \"$source\" == */backups/llmapi-mcp-bridge ]] && [ \"$(basename \"$destination\")\" = llmapi-mcp-bridge ]; then exit 76; fi\n"
+                f"if [ \"$(basename \"$source\")\" = \"{bridge}\" ] && [ \"$(basename \"$destination\")\" = llmrouter-mcp-bridge ]; then exit 75; fi\n"
+                "if [[ \"$source\" == */backups/llmrouter-mcp-bridge ]] && [ \"$(basename \"$destination\")\" = llmrouter-mcp-bridge ]; then exit 76; fi\n"
                 "exec /bin/mv \"$@\"\n"
             )
             (wrappers / "mv").chmod(0o755)
@@ -407,25 +407,25 @@ class OnboardingAssetsTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             transactions = list(binary_directory.glob(".install.*"))
             self.assertEqual(len(transactions), 1)
-            backup = transactions[0] / "backups" / "llmapi-mcp-bridge"
+            backup = transactions[0] / "backups" / "llmrouter-mcp-bridge"
             self.assertEqual(backup.read_bytes(), b"old-bridge")
-            self.assertEqual((binary_directory / "llmapi-onboard").read_bytes(), b"old-onboard")
+            self.assertEqual((binary_directory / "llmrouter-onboard").read_bytes(), b"old-onboard")
             self.assertIn(str(transactions[0]), result.stderr)
 
     def test_bash_bootstrap_rejects_destination_symlink_and_linux_acl_it_cannot_remove(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary) / "site"
             home = pathlib.Path(temporary) / "home"
-            binary_directory = home / ".llmapi" / "bin"
+            binary_directory = home / ".llmrouter" / "bin"
             binary_directory.mkdir(parents=True)
             target = pathlib.Path(temporary) / "elsewhere"
             target.write_text("not a helper")
-            (binary_directory / "llmapi-onboard").symlink_to(target)
+            (binary_directory / "llmrouter-onboard").symlink_to(target)
             self.bootstrap_site(root)
             origin, _ = self.serve(root)
             result = self.run_bash_bootstrap(home, origin)
             self.assertNotEqual(result.returncode, 0)
-            self.assertTrue((binary_directory / "llmapi-onboard").is_symlink())
+            self.assertTrue((binary_directory / "llmrouter-onboard").is_symlink())
 
     def test_bash_bootstrap_fails_closed_when_linux_acl_cannot_be_removed(self):
         with tempfile.TemporaryDirectory() as temporary:

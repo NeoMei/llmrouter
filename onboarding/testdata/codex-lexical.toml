@@ -3,7 +3,7 @@
 "model_provider" = "native" # replace this too
 instructions = """
 model = "text inside multiline string"
-[model_providers.llmapi]
+[model_providers.llmrouter]
 """
 quoted = "value # inside quotes"
 
@@ -11,8 +11,8 @@ quoted = "value # inside quotes"
 name = "keep-hook"
 script = "echo # keep"
 
-["model_providers"."llmapi"] # replace quoted managed table
-name = "Old LLMAPI"
+["model_providers"."llmrouter"] # replace quoted managed table
+name = "Old LLMROUTER"
 base_url = "https://old.example/v1"
 # preserve standalone comment after managed keys
 

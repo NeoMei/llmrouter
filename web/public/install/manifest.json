@@ -166,12 +166,12 @@
     "checksumPath": "/install/checksums.txt",
     "binaries": [
       {
-        "id": "llmapi-onboard",
-        "namePattern": "llmapi-onboard-{os}-{arch}[.exe]"
+        "id": "llmrouter-onboard",
+        "namePattern": "llmrouter-onboard-{os}-{arch}[.exe]"
       },
       {
-        "id": "llmapi-mcp-bridge",
-        "namePattern": "llmapi-mcp-bridge-{os}-{arch}[.exe]"
+        "id": "llmrouter-mcp-bridge",
+        "namePattern": "llmrouter-mcp-bridge-{os}-{arch}[.exe]"
       }
     ]
   }

@@ -77,7 +77,7 @@ func probeClaudeDesktopMCP(ctx context.Context, request CheckRequest, smoke bool
 		"jsonrpc": "2.0", "id": 1, "method": "initialize",
 		"params": map[string]any{
 			"protocolVersion": mcpbridge.ProtocolVersion, "capabilities": map[string]any{},
-			"clientInfo": map[string]any{"name": "llmapi-onboard-doctor", "version": OnboardingVersion},
+			"clientInfo": map[string]any{"name": "llmrouter-onboard-doctor", "version": OnboardingVersion},
 		},
 	}
 	initialized, err := exchangeDoctorMCP(stdin, reader, initialize, 1)

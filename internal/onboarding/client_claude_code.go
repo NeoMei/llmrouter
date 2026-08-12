@@ -51,20 +51,20 @@ func (claudeCodeAdapter) Plan(_ context.Context, request ConfigureRequest) (Conf
 	if err != nil {
 		return ConfigPlan{}, err
 	}
-	managedProfile, err := ApplyManagedBlock(string(existingProfile), "claude-code-env", `export ANTHROPIC_AUTH_TOKEN="${LLMAPI_TOKEN}"`)
+	managedProfile, err := ApplyManagedBlock(string(existingProfile), "claude-code-env", `export ANTHROPIC_AUTH_TOKEN="${LLMROUTER_TOKEN}"`)
 	if err != nil {
 		return ConfigPlan{}, err
 	}
-	return ConfigPlan{Client: ClientClaudeCode, Writes: []PlannedWrite{{Path: path, Data: configured, Mode: privateFileMode}, {Path: profile, Data: []byte(managedProfile), Mode: privateFileMode}}, Instructions: []string{"Set LLMAPI_TOKEN before launching Claude Code."}, RestartRequired: true}, nil
+	return ConfigPlan{Client: ClientClaudeCode, Writes: []PlannedWrite{{Path: path, Data: configured, Mode: privateFileMode}, {Path: profile, Data: []byte(managedProfile), Mode: privateFileMode}}, Instructions: []string{"Set LLMROUTER_TOKEN before launching Claude Code."}, RestartRequired: true}, nil
 }
 
 func (claudeCodeAdapter) Check(_ context.Context, request CheckRequest) []Check {
 	path := filepath.Join(request.Home, ".claude", "settings.json")
 	checks := []Check{semanticConfigCheck("claude-code-config", checkClaudeCodeConfig(request, path))}
-	if os.Getenv("LLMAPI_TOKEN") == request.Token.Reveal() && request.Token.Reveal() != "" {
-		checks = append(checks, Check{Name: "claude-code-credential", Status: "PASS", Message: "LLMAPI_TOKEN is visible"})
+	if os.Getenv("LLMROUTER_TOKEN") == request.Token.Reveal() && request.Token.Reveal() != "" {
+		checks = append(checks, Check{Name: "claude-code-credential", Status: "PASS", Message: "LLMROUTER_TOKEN is visible"})
 	} else {
-		checks = append(checks, Check{Name: "claude-code-credential", Status: "FAIL", Message: "LLMAPI_TOKEN is not visible"})
+		checks = append(checks, Check{Name: "claude-code-credential", Status: "FAIL", Message: "LLMROUTER_TOKEN is not visible"})
 	}
 	return checks
 }

@@ -17,7 +17,7 @@ func (aiderAdapter) ID() ClientID { return ClientAider }
 
 func (aiderAdapter) Discover(_ Platform, home string) Discovery {
 	config := filepath.Join(home, ".aider.conf.yml")
-	environment := filepath.Join(home, ".config", "llmapi", "aider.env")
+	environment := filepath.Join(home, ".config", "llmrouter", "aider.env")
 	_, err := exec.LookPath("aider")
 	return Discovery{Installed: fileExists(config) || err == nil, Paths: []string{config, environment}, Automatic: true}
 }
@@ -30,7 +30,7 @@ func (aiderAdapter) Plan(_ context.Context, request ConfigureRequest) (ConfigPla
 		return ConfigPlan{}, fmt.Errorf("%w: Aider requires a selected model", ErrUsage)
 	}
 	configPath := filepath.Join(request.Home, ".aider.conf.yml")
-	environmentPath := filepath.Join(request.Home, ".config", "llmapi", "aider.env")
+	environmentPath := filepath.Join(request.Home, ".config", "llmrouter", "aider.env")
 	config, _, err := readPlannedFile(request.Home, configPath)
 	if err != nil {
 		return ConfigPlan{}, err
@@ -57,8 +57,8 @@ func (aiderAdapter) Plan(_ context.Context, request ConfigureRequest) (ConfigPla
 	if first > last {
 		first, last = last, first
 	}
-	root.Content[first].HeadComment = appendYAMLComment(root.Content[first].HeadComment, "LLMAPI:BEGIN aider")
-	root.Content[last+1].FootComment = appendYAMLComment(root.Content[last+1].FootComment, "LLMAPI:END aider")
+	root.Content[first].HeadComment = appendYAMLComment(root.Content[first].HeadComment, "LLMROUTER:BEGIN aider")
+	root.Content[last+1].FootComment = appendYAMLComment(root.Content[last+1].FootComment, "LLMROUTER:END aider")
 	configured, err := yaml.Marshal(&document)
 	if err != nil {
 		return ConfigPlan{}, fmt.Errorf("%w: encode Aider YAML", ErrConflict)
@@ -115,9 +115,9 @@ func stripAiderMarkerComments(node *yaml.Node) {
 	if node == nil {
 		return
 	}
-	node.HeadComment = withoutExactYAMLCommentLines(node.HeadComment, "LLMAPI:BEGIN aider", "LLMAPI:END aider")
-	node.LineComment = withoutExactYAMLCommentLines(node.LineComment, "LLMAPI:BEGIN aider", "LLMAPI:END aider")
-	node.FootComment = withoutExactYAMLCommentLines(node.FootComment, "LLMAPI:BEGIN aider", "LLMAPI:END aider")
+	node.HeadComment = withoutExactYAMLCommentLines(node.HeadComment, "LLMROUTER:BEGIN aider", "LLMROUTER:END aider")
+	node.LineComment = withoutExactYAMLCommentLines(node.LineComment, "LLMROUTER:BEGIN aider", "LLMROUTER:END aider")
+	node.FootComment = withoutExactYAMLCommentLines(node.FootComment, "LLMROUTER:BEGIN aider", "LLMROUTER:END aider")
 	for _, child := range node.Content {
 		stripAiderMarkerComments(child)
 	}
@@ -161,7 +161,7 @@ func validateAiderGeneratedConfig(data []byte, environmentPath, model string) er
 
 func (aiderAdapter) Check(_ context.Context, request CheckRequest) []Check {
 	config := filepath.Join(request.Home, ".aider.conf.yml")
-	environment := filepath.Join(request.Home, ".config", "llmapi", "aider.env")
+	environment := filepath.Join(request.Home, ".config", "llmrouter", "aider.env")
 	return []Check{
 		semanticConfigCheck("aider-config", checkAiderConfig(request, config, environment)),
 		semanticConfigCheck("aider-environment", checkAiderEnvironment(request, environment)),
@@ -221,8 +221,8 @@ func checkAiderEnvironment(request CheckRequest, environmentPath string) error {
 }
 
 func aiderManagedEnvironment(input string) (string, error) {
-	begin := "# LLMAPI:BEGIN aider-env"
-	end := "# LLMAPI:END aider-env"
+	begin := "# LLMROUTER:BEGIN aider-env"
+	end := "# LLMROUTER:END aider-env"
 	inBlock := false
 	found := false
 	var content strings.Builder

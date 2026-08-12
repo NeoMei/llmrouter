@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://llmapi.local/schemas/onboarding/manifest.schema.json",
-  "title": "LLMAPI onboarding manifest",
+  "$id": "https://llmrouter.local/schemas/onboarding/manifest.schema.json",
+  "title": "LLMROUTER onboarding manifest",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -138,15 +138,15 @@
               "id": {
                 "type": "string",
                 "enum": [
-                  "llmapi-onboard",
-                  "llmapi-mcp-bridge"
+                  "llmrouter-onboard",
+                  "llmrouter-mcp-bridge"
                 ]
               },
               "namePattern": {
                 "type": "string",
                 "enum": [
-                  "llmapi-onboard-{os}-{arch}[.exe]",
-                  "llmapi-mcp-bridge-{os}-{arch}[.exe]"
+                  "llmrouter-onboard-{os}-{arch}[.exe]",
+                  "llmrouter-mcp-bridge-{os}-{arch}[.exe]"
                 ]
               }
             }

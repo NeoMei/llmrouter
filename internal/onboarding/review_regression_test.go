@@ -15,7 +15,7 @@ import (
 
 func TestMergeJSONObjectPreservesLargeSiblingInteger(t *testing.T) {
 	input := []byte(`{"large":9007199254740993,"nested":{"keep":true}}`)
-	got, err := MergeJSONObject(input, []string{"nested", "llmapi"}, true)
+	got, err := MergeJSONObject(input, []string{"nested", "llmrouter"}, true)
 	require.NoError(t, err)
 	require.Contains(t, string(got), `"large":9007199254740993`)
 }
@@ -66,7 +66,7 @@ func TestTransactionRejectsStateRootDestination(t *testing.T) {
 	home := t.TempDir()
 	tx, err := BeginTransaction(home)
 	require.NoError(t, err)
-	require.ErrorContains(t, tx.Allow(filepath.Join(home, ".llmapi", "credentials", "receipt.key")), "eligible")
+	require.ErrorContains(t, tx.Allow(filepath.Join(home, ".llmrouter", "credentials", "receipt.key")), "eligible")
 }
 
 func TestLoadReceiptRejectsTamperedReceiptAndNonCanonicalBackup(t *testing.T) {
@@ -159,8 +159,8 @@ func TestTransactionRequiresExplicitDestination(t *testing.T) {
 
 func TestStateRootSetupRejectsSymlinkSwap(t *testing.T) {
 	home := t.TempDir()
-	state := filepath.Join(home, ".llmapi")
-	moved := filepath.Join(home, ".llmapi-held")
+	state := filepath.Join(home, ".llmrouter")
+	moved := filepath.Join(home, ".llmrouter-held")
 	alternate := filepath.Join(home, "alternate")
 	require.NoError(t, os.Mkdir(state, 0o700))
 	require.NoError(t, os.Mkdir(alternate, 0o700))
@@ -248,7 +248,7 @@ func TestReceiptKeyCrashBeforePublicationLeavesNoFinalKey(t *testing.T) {
 	t.Cleanup(func() { setReceiptKeyPublishTestHook(nil) })
 	_, err := receiptKey(home, true)
 	require.ErrorIs(t, err, errSimulatedCrash)
-	_, err = os.Stat(filepath.Join(home, ".llmapi", "credentials", "receipt.key"))
+	_, err = os.Stat(filepath.Join(home, ".llmrouter", "credentials", "receipt.key"))
 	require.ErrorIs(t, err, os.ErrNotExist)
 	setReceiptKeyPublishTestHook(nil)
 	key, err := receiptKey(home, true)
@@ -259,7 +259,7 @@ func TestReceiptKeyCrashBeforePublicationLeavesNoFinalKey(t *testing.T) {
 func TestStaleReceiptKeyTempDoesNotBlockBootstrap(t *testing.T) {
 	home := t.TempDir()
 	require.NoError(t, ensureStateRoots(home))
-	stale := filepath.Join(home, ".llmapi", "credentials", receiptKeyTempPrefix+"stale.tmp")
+	stale := filepath.Join(home, ".llmrouter", "credentials", receiptKeyTempPrefix+"stale.tmp")
 	require.NoError(t, os.WriteFile(stale, []byte("partial"), 0o600))
 	require.NoError(t, os.Chtimes(stale, time.Now().Add(-2*time.Hour), time.Now().Add(-2*time.Hour)))
 	key, err := receiptKey(home, true)
@@ -302,7 +302,7 @@ func TestRestoringReceiptResumesMixedTwoFileState(t *testing.T) {
 func TestReceiptKeyObserverCleansPostPublishTempsAndSyncs(t *testing.T) {
 	home := t.TempDir()
 	require.NoError(t, ensureStateRoots(home))
-	credentials := filepath.Join(home, ".llmapi", "credentials")
+	credentials := filepath.Join(home, ".llmrouter", "credentials")
 	stale := filepath.Join(credentials, receiptKeyTempPrefix+"post-publish.tmp")
 	var publisherTemp string
 	setReceiptKeyPostPublishTestHook(func(tempPath, finalPath string) error {

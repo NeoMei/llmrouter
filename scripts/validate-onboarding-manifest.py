@@ -96,8 +96,8 @@ def validate_artifact_contract(artifacts: object) -> None:
     if not isinstance(binaries, list) or len(binaries) != 2:
         fail("artifacts.binaries must contain both helper binaries")
     expected = {
-        "llmapi-onboard": "llmapi-onboard-{os}-{arch}[.exe]",
-        "llmapi-mcp-bridge": "llmapi-mcp-bridge-{os}-{arch}[.exe]",
+        "llmrouter-onboard": "llmrouter-onboard-{os}-{arch}[.exe]",
+        "llmrouter-mcp-bridge": "llmrouter-mcp-bridge-{os}-{arch}[.exe]",
     }
     seen: set[str] = set()
     for binary in binaries:

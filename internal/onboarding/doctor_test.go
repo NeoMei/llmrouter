@@ -12,7 +12,7 @@ import (
 )
 
 func TestDoctorSkipsInferenceByDefaultAndRunsSelectedSmokeProtocols(t *testing.T) {
-	t.Setenv("LLMAPI_TOKEN", "doctor-secret")
+	t.Setenv("LLMROUTER_TOKEN", "doctor-secret")
 	var mu sync.Mutex
 	seen := make(map[string]int)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -78,7 +78,7 @@ func TestDoctorReportsMissingModelWithoutLeakingResponse(t *testing.T) {
 }
 
 func TestDoctorDetectsSelectedModelProtocolMismatchWithoutSmoke(t *testing.T) {
-	t.Setenv("LLMAPI_TOKEN", "doctor-secret")
+	t.Setenv("LLMROUTER_TOKEN", "doctor-secret")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/models" {
 			_, _ = io.WriteString(w, `{"data":[{"id":"chat-only","supported_endpoint_types":["openai"]}]}`)
@@ -109,7 +109,7 @@ func TestDoctorNeverReportsPromptShapedRequestID(t *testing.T) {
 }
 
 func TestDoctorFailsOpenCodeAndContinueCredentialWhenHiddenPromptTokenIsNotInEnvironment(t *testing.T) {
-	t.Setenv("LLMAPI_TOKEN", "")
+	t.Setenv("LLMROUTER_TOKEN", "")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/models" {
 			_, _ = io.WriteString(w, `{"data":[{"id":"model-a","supported_endpoint_types":["openai"]}]}`)

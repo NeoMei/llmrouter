@@ -49,7 +49,7 @@ func TestRestoreRejectsReceiptFileOutsideHome(t *testing.T) {
 	require.NoError(t, err)
 	home = canonical
 	outside := filepath.Join(t.TempDir(), "outside")
-	receiptDir := filepath.Join(home, ".llmapi", "receipts")
+	receiptDir := filepath.Join(home, ".llmrouter", "receipts")
 	receiptID := "forged"
 	receipt := Receipt{
 		ID: receiptID, Path: filepath.Join(receiptDir, receiptID+".json"), Home: home,

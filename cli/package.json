@@ -1,10 +1,10 @@
 {
-  "name": "llmapi",
+  "name": "llmrouter",
   "version": "1.0.0",
-  "description": "Configure supported clients to use LLMAPI",
+  "description": "Configure supported clients to use LLMROUTER",
   "type": "module",
   "bin": {
-    "llmapi": "./dist/index.js",
+    "llmrouter": "./dist/index.js",
     "codex-gateway": "./dist/index.js"
   },
   "scripts": {

@@ -19,5 +19,5 @@ func TestClaudeCodePlanDoesNotPersistToken(t *testing.T) {
   for _, write := range plan.Writes { if write.Path == filepath.Join(home, ".claude", "settings.json") { settings = write.Data } else { profile = write.Data } }
   require.NotContains(t, string(settings), "secret-token")
   require.NotContains(t, string(settings), "ANTHROPIC_AUTH_TOKEN")
-  require.Contains(t, string(profile), `ANTHROPIC_AUTH_TOKEN="${LLMAPI_TOKEN}"`)
+  require.Contains(t, string(profile), `ANTHROPIC_AUTH_TOKEN="${LLMROUTER_TOKEN}"`)
 }

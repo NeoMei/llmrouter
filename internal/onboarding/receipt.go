@@ -268,7 +268,7 @@ func ListReceipts(home string) ([]Receipt, error) {
 	if err := ensureStateRoots(absolute); err != nil {
 		return nil, err
 	}
-	dir := filepath.Join(absolute, ".llmapi", "receipts")
+	dir := filepath.Join(absolute, ".llmrouter", "receipts")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("%w: list receipts", ErrUnsafe)
@@ -355,7 +355,7 @@ func isAllowedManagedDestination(home, path string) bool {
 	if len(parts) == 0 || parts[0] == ".ssh" {
 		return false
 	}
-	if parts[0] == ".llmapi" {
+	if parts[0] == ".llmrouter" {
 		return len(parts) == 3 && parts[1] == "credentials" && parts[2] == "claude-desktop.json"
 	}
 	if len(parts) >= 3 && parts[len(parts)-2] == "Claude" && parts[len(parts)-1] == "claude_desktop_config.json" {
@@ -373,9 +373,9 @@ func isAllowedManagedDestination(home, path string) bool {
 }
 
 func receiptPath(home, id string) string {
-	return filepath.Join(home, ".llmapi", "receipts", id+".json")
+	return filepath.Join(home, ".llmrouter", "receipts", id+".json")
 }
-func receiptBackupDir(home, id string) string { return filepath.Join(home, ".llmapi", "backups", id) }
+func receiptBackupDir(home, id string) string { return filepath.Join(home, ".llmrouter", "backups", id) }
 func canonicalBackupPath(home, id string, index int) string {
 	return filepath.Join(receiptBackupDir(home, id), fmt.Sprintf("%03d.backup", index))
 }
@@ -416,7 +416,7 @@ func receiptMAC(key []byte, receipt Receipt) string {
 }
 
 func receiptKey(home string, create bool) ([]byte, error) {
-	path := filepath.Join(home, ".llmapi", "credentials", "receipt.key")
+	path := filepath.Join(home, ".llmrouter", "credentials", "receipt.key")
 	key, err := loadPublishedReceiptKey(home, path)
 	if err == nil {
 		if len(key) != 32 {

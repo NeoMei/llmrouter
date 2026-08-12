@@ -30,18 +30,18 @@ func TestClaudeDesktopMergePreservesExistingServersAndHidesToken(t *testing.T) {
 	receipt := configureClaudeDesktop(t, home, "https://stage.example", "super-secret")
 	config := readClaudeDesktopConfig(t, home)
 	require.Contains(t, config, `"filesystem"`)
-	require.Contains(t, config, `"llmapi"`)
+	require.Contains(t, config, `"llmrouter"`)
 	require.Contains(t, config, `"theme":"dark"`)
 	require.NotContains(t, config, "super-secret")
 	require.NotContains(t, string(mustRead(t, receipt.Path)), "super-secret")
 
-	credentialPath := filepath.Join(home, ".llmapi", "credentials", "claude-desktop.json")
+	credentialPath := filepath.Join(home, ".llmrouter", "credentials", "claude-desktop.json")
 	credential := string(mustRead(t, credentialPath))
 	require.Contains(t, credential, "super-secret")
 	require.Contains(t, credential, `"models":["model-a"]`)
 	require.Contains(t, credential, `"timeout_seconds":30`)
 	require.Contains(t, credential, `"bridge_sha256":"`)
-	require.Equal(t, checksumFile(t, filepath.Join(canonicalTestHome(t, home), "bin", "llmapi-mcp-bridge")), receipt.Meta.BridgeSHA256)
+	require.Equal(t, checksumFile(t, filepath.Join(canonicalTestHome(t, home), "bin", "llmrouter-mcp-bridge")), receipt.Meta.BridgeSHA256)
 	require.Len(t, receipt.Files, 2)
 	for _, path := range []string{claudeDesktopConfigPath(Platform{OS: "darwin"}, home), credentialPath} {
 		info, err := os.Stat(path)
@@ -55,11 +55,11 @@ func TestClaudeDesktopUsesBridgeConfigArgumentWithoutEnvironmentToken(t *testing
 	receipt := configureClaudeDesktop(t, home, "https://stage.example", "super-secret")
 	var root map[string]any
 	require.NoError(t, common.UnmarshalUseNumber(mustRead(t, claudeDesktopConfigPath(Platform{OS: "darwin"}, home)), &root))
-	entry := root["mcpServers"].(map[string]any)["llmapi"].(map[string]any)
+	entry := root["mcpServers"].(map[string]any)["llmrouter"].(map[string]any)
 	canonicalHome, err := filepath.EvalSymlinks(home)
 	require.NoError(t, err)
-	require.Equal(t, filepath.Join(canonicalHome, "bin", "llmapi-mcp-bridge"), entry["command"])
-	require.Equal(t, []any{"--config", filepath.Join(home, ".llmapi", "credentials", "claude-desktop.json")}, entry["args"])
+	require.Equal(t, filepath.Join(canonicalHome, "bin", "llmrouter-mcp-bridge"), entry["command"])
+	require.Equal(t, []any{"--config", filepath.Join(home, ".llmrouter", "credentials", "claude-desktop.json")}, entry["args"])
 	require.NotContains(t, entry, "env")
 	require.NotContains(t, string(mustRead(t, receipt.Path)), "super-secret")
 }
@@ -95,7 +95,7 @@ func TestClaudeDesktopBridgeRejectsWritableFileAndSymlinkComponents(t *testing.T
 	realBin := bin + "-real"
 	require.NoError(t, os.Rename(bin, realBin))
 	require.NoError(t, os.Symlink(realBin, bin))
-	request.BridgePath = filepath.Join(bin, "llmapi-mcp-bridge")
+	request.BridgePath = filepath.Join(bin, "llmrouter-mcp-bridge")
 	_, err = adapter.Plan(t.Context(), request)
 	require.Error(t, err)
 }
@@ -159,7 +159,7 @@ func TestClaudeDesktopDoctorChecksExactSecretFreeConfiguration(t *testing.T) {
 	require.Equal(t, "FAIL", checks[0].Status)
 	require.NoError(t, os.WriteFile(desktopPath, []byte(desktop), 0o600))
 
-	credentialPath := filepath.Join(home, ".llmapi", "credentials", "claude-desktop.json")
+	credentialPath := filepath.Join(home, ".llmrouter", "credentials", "claude-desktop.json")
 	credential := strings.Replace(string(mustRead(t, credentialPath)), "model-a", "model-b", 1)
 	require.NoError(t, os.WriteFile(credentialPath, []byte(credential), 0o600))
 	checks = adapter.Check(context.Background(), request)
@@ -239,7 +239,7 @@ func configureClaudeDesktop(t *testing.T, home, origin, token string) Receipt {
 func claudeDesktopRequest(t *testing.T, home string, platform Platform, token string) ConfigureRequest {
 	t.Helper()
 	canonicalHome := canonicalTestHome(t, home)
-	bridge := filepath.Join(canonicalHome, "bin", "llmapi-mcp-bridge")
+	bridge := filepath.Join(canonicalHome, "bin", "llmrouter-mcp-bridge")
 	require.NoError(t, os.MkdirAll(filepath.Dir(bridge), 0o700))
 	executable, err := os.Executable()
 	require.NoError(t, err)

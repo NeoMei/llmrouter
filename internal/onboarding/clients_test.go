@@ -28,7 +28,7 @@ func TestAdaptersPreserveUnrelatedConfiguration(t *testing.T) {
 		t.Run(string(tc.client), func(t *testing.T) {
 			result := configureFixture(t, tc.client, tc.fixture)
 			require.Contains(t, result, tc.preserved)
-			require.Equal(t, 1, strings.Count(result, "LLMAPI:BEGIN"))
+			require.Equal(t, 1, strings.Count(result, "LLMROUTER:BEGIN"))
 		})
 	}
 }
@@ -132,7 +132,7 @@ func TestContinueModernYAMLPreservesSchemaAndUsesCurrentModelShape(t *testing.T)
 	models := root["models"].([]any)
 	require.Len(t, models, 2)
 	managed := models[1].(map[string]any)
-	require.Equal(t, "LLMAPI", managed["name"])
+	require.Equal(t, "LLMROUTER", managed["name"])
 	require.NotContains(t, managed, "title")
 	require.Equal(t, "model-a", managed["model"])
 	output := string(plan.Writes[0].Data)
@@ -207,7 +207,7 @@ func TestManualSnippetsNeverContainToken(t *testing.T) {
 	for _, id := range []string{"cursor", "cline", "roo-code", "openai-python", "openai-node", "openai-sdk", "langchain"} {
 		snippet, err := ManualSnippet(id, mustServerURL(t), "model-a")
 		require.NoError(t, err)
-		require.Contains(t, snippet, "LLMAPI_TOKEN")
+		require.Contains(t, snippet, "LLMROUTER_TOKEN")
 		require.NotContains(t, snippet, "super-secret")
 	}
 }
@@ -245,11 +245,11 @@ func TestCodexSelectsProviderAndModelWithoutDuplicateKeys(t *testing.T) {
 	require.Len(t, plan.Writes, 1)
 	var root map[string]any
 	require.NoError(t, toml.Unmarshal(plan.Writes[0].Data, &root))
-	require.Equal(t, "llmapi", root["model_provider"])
+	require.Equal(t, "llmrouter", root["model_provider"])
 	require.Equal(t, "model-a", root["model"])
 	providers := root["model_providers"].(map[string]any)
 	require.Contains(t, providers, "native")
-	require.Contains(t, providers, "llmapi")
+	require.Contains(t, providers, "llmrouter")
 	output := string(plan.Writes[0].Data)
 	require.Contains(t, output, "# keep codex comment and spacing")
 	require.Contains(t, output, `approval_policy    = "on-request" # keep inline comment`)
@@ -257,7 +257,7 @@ func TestCodexSelectsProviderAndModelWithoutDuplicateKeys(t *testing.T) {
 	repeated, err := adapter.Plan(t.Context(), request)
 	require.NoError(t, err)
 	require.Equal(t, plan.Writes[0].Data, repeated.Writes[0].Data)
-	require.Equal(t, 1, strings.Count(string(repeated.Writes[0].Data), "LLMAPI:BEGIN"))
+	require.Equal(t, 1, strings.Count(string(repeated.Writes[0].Data), "LLMROUTER:BEGIN"))
 }
 
 func TestCodexLexicalEditPreservesMultilineStringsArrayTablesAndQuotedNames(t *testing.T) {
@@ -276,7 +276,7 @@ func TestCodexLexicalEditPreservesMultilineStringsArrayTablesAndQuotedNames(t *t
 	for _, preserved := range []string{
 		"# preserve lexical TOML bytes",
 		"model = \"text inside multiline string\"",
-		"[model_providers.llmapi]\n\"\"\"",
+		"[model_providers.llmrouter]\n\"\"\"",
 		"quoted = \"value # inside quotes\"",
 		"[[hooks]] # keep array table",
 		"script = \"echo # keep\"",
@@ -287,11 +287,11 @@ func TestCodexLexicalEditPreservesMultilineStringsArrayTablesAndQuotedNames(t *t
 	} {
 		require.Contains(t, output, preserved)
 	}
-	require.NotContains(t, output, "Old LLMAPI")
+	require.NotContains(t, output, "Old LLMROUTER")
 	var root map[string]any
 	require.NoError(t, toml.Unmarshal(plan.Writes[0].Data, &root))
 	require.Equal(t, "model-a", root["model"])
-	require.Equal(t, "llmapi", root["model_provider"])
+	require.Equal(t, "llmrouter", root["model_provider"])
 	require.Len(t, root["hooks"], 2)
 	require.NoError(t, os.WriteFile(path, plan.Writes[0].Data, 0o600))
 	repeated, err := adapter.Plan(t.Context(), request)
@@ -377,26 +377,26 @@ func TestContinueYAMLRejectsDuplicateMappingKeysWithoutWrites(t *testing.T) {
 }
 
 func TestContinueMarkerRemovalPreservesUnrelatedBlankCommentLines(t *testing.T) {
-	input := "# paragraph one\n#\n# LLMAPI:BEGIN continue\n#\n# paragraph two\n#  LLMAPI:END continue"
-	require.Equal(t, "# paragraph one\n#\n#\n# paragraph two\n#  LLMAPI:END continue", withoutContinueMarkerComment(input))
+	input := "# paragraph one\n#\n# LLMROUTER:BEGIN continue\n#\n# paragraph two\n#  LLMROUTER:END continue"
+	require.Equal(t, "# paragraph one\n#\n#\n# paragraph two\n#  LLMROUTER:END continue", withoutContinueMarkerComment(input))
 	model := map[string]any{
-		"name": "LLMAPI", "provider": "openai", "model": "model-a", "apiBase": "https://stage.example/v1", "apiKey": "${LLMAPI_TOKEN}",
+		"name": "LLMROUTER", "provider": "openai", "model": "model-a", "apiBase": "https://stage.example/v1", "apiKey": "${LLMROUTER_TOKEN}",
 	}
-	configured, err := mergeContinueYAML([]byte("# paragraph one\n#\n# paragraph two\nname: Existing\nversion: 1.0.0\nschema: v1\nmodels:\n  # LLMAPI:BEGIN continue\n  # managed paragraph one\n  #\n  # managed paragraph two\n  - name: LLMAPI\n    provider: openai\n    model: old\n    apiBase: https://old.example/v1\n    apiKey: ${LLMAPI_TOKEN}\n  # LLMAPI:END continue\n  # trailing one\n  #\n  # trailing two\n"), model)
+	configured, err := mergeContinueYAML([]byte("# paragraph one\n#\n# paragraph two\nname: Existing\nversion: 1.0.0\nschema: v1\nmodels:\n  # LLMROUTER:BEGIN continue\n  # managed paragraph one\n  #\n  # managed paragraph two\n  - name: LLMROUTER\n    provider: openai\n    model: old\n    apiBase: https://old.example/v1\n    apiKey: ${LLMROUTER_TOKEN}\n  # LLMROUTER:END continue\n  # trailing one\n  #\n  # trailing two\n"), model)
 	require.NoError(t, err)
 	output := string(configured)
 	require.Contains(t, output, "# paragraph one\n#\n# paragraph two")
 	require.Contains(t, output, "# managed paragraph one\n    #\n    # managed paragraph two")
 	require.Contains(t, output, "# trailing one\n#\n# trailing two")
-	require.Equal(t, 1, strings.Count(output, "LLMAPI:BEGIN continue"))
-	require.Equal(t, 1, strings.Count(output, "LLMAPI:END continue"))
+	require.Equal(t, 1, strings.Count(output, "LLMROUTER:BEGIN continue"))
+	require.Equal(t, 1, strings.Count(output, "LLMROUTER:END continue"))
 	repeated, err := mergeContinueYAML(configured, model)
 	require.NoError(t, err)
 	require.Equal(t, configured, repeated)
 }
 
 func TestOpenCodeAndContinueChecksRequireVisibleCredential(t *testing.T) {
-	t.Setenv("LLMAPI_TOKEN", "")
+	t.Setenv("LLMROUTER_TOKEN", "")
 	for _, client := range []ClientID{ClientOpenCode, ClientContinue} {
 		t.Run(string(client), func(t *testing.T) {
 			home := t.TempDir()
@@ -415,7 +415,7 @@ func TestOpenCodeAndContinueChecksRequireVisibleCredential(t *testing.T) {
 
 func TestAiderCheckIgnoresUnrelatedValidDotenvSyntax(t *testing.T) {
 	home := t.TempDir()
-	environment := filepath.Join(home, ".config", "llmapi", "aider.env")
+	environment := filepath.Join(home, ".config", "llmrouter", "aider.env")
 	unrelated := "export KEEP=plain\nSINGLE='quoted value'\nUNQUOTED=value\n"
 	require.NoError(t, os.MkdirAll(filepath.Dir(environment), 0o700))
 	require.NoError(t, os.WriteFile(environment, []byte(unrelated), 0o600))
@@ -430,7 +430,7 @@ func TestAiderCheckIgnoresUnrelatedValidDotenvSyntax(t *testing.T) {
 }
 
 func TestAdapterChecksRequireExactSemanticConfiguration(t *testing.T) {
-	t.Setenv("LLMAPI_TOKEN", "secret")
+	t.Setenv("LLMROUTER_TOKEN", "secret")
 	for _, client := range []ClientID{ClientCodexCLI, ClientClaudeCode, ClientOpenCode, ClientContinue, ClientAider} {
 		t.Run(string(client), func(t *testing.T) {
 			home := t.TempDir()
@@ -455,16 +455,16 @@ func TestAdapterChecksRequireExactSemanticConfiguration(t *testing.T) {
 }
 
 func TestAdapterChecksIgnoreUnrelatedTextThatLooksManaged(t *testing.T) {
-	t.Setenv("LLMAPI_TOKEN", "secret")
+	t.Setenv("LLMROUTER_TOKEN", "secret")
 	tests := []struct {
 		client ClientID
 		path   func(string) string
 		data   string
 	}{
-		{ClientCodexCLI, func(home string) string { return filepath.Join(home, ".codex", "config.toml") }, "# model_provider = 'llmapi' model = 'model-a' base_url = 'https://stage.example/v1' env_key = 'LLMAPI_TOKEN'\n"},
+		{ClientCodexCLI, func(home string) string { return filepath.Join(home, ".codex", "config.toml") }, "# model_provider = 'llmrouter' model = 'model-a' base_url = 'https://stage.example/v1' env_key = 'LLMROUTER_TOKEN'\n"},
 		{ClientClaudeCode, func(home string) string { return filepath.Join(home, ".claude", "settings.json") }, `{"note":"ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN model-a"}`},
-		{ClientOpenCode, func(home string) string { return filepath.Join(home, ".config", "opencode", "opencode.json") }, `{"note":"llmapi @ai-sdk/openai-compatible {env:LLMAPI_TOKEN}"}`},
-		{ClientContinue, func(home string) string { return filepath.Join(home, ".continue", "config.json") }, `{"models":[{"note":"LLMAPI:BEGIN continue LLMAPI_TOKEN model-a"}]}`},
+		{ClientOpenCode, func(home string) string { return filepath.Join(home, ".config", "opencode", "opencode.json") }, `{"note":"llmrouter @ai-sdk/openai-compatible {env:LLMROUTER_TOKEN}"}`},
+		{ClientContinue, func(home string) string { return filepath.Join(home, ".continue", "config.json") }, `{"models":[{"note":"LLMROUTER:BEGIN continue LLMROUTER_TOKEN model-a"}]}`},
 		{ClientAider, func(home string) string { return filepath.Join(home, ".aider.conf.yml") }, "note: 'env-file model openai/model-a OPENAI_API_KEY'\n"},
 	}
 	for _, tc := range tests {

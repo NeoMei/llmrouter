@@ -13,8 +13,8 @@ import { uninstallCommand } from './uninstall.js';
 export function createProgram(): Command {
   const program = new Command();
   program
-    .name('llmapi')
-    .description('Configure supported clients to use LLMAPI')
+    .name('llmrouter')
+    .description('Configure supported clients to use LLMROUTER')
     .version('1.0.0');
   program.addCommand(initCommand);
   program.addCommand(statusCommand);

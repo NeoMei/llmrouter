@@ -37,7 +37,7 @@ func run(args []string) int {
 	switch args[0] {
 	case "install":
 		env := environment()
-		options, err := onboarding.ResolveOptions(onboarding.Inputs{Args: args[1:], Env: env, PageOrigin: env["LLMAPI_PAGE_ORIGIN"], Prompt: terminalPrompter{}})
+		options, err := onboarding.ResolveOptions(onboarding.Inputs{Args: args[1:], Env: env, PageOrigin: env["LLMROUTER_PAGE_ORIGIN"], Prompt: terminalPrompter{}})
 		if err != nil {
 			return report(err)
 		}
@@ -104,7 +104,7 @@ func run(args []string) int {
 			}
 		}
 		env := environment()
-		options, err := onboarding.ResolveOptions(onboarding.Inputs{Args: args[1:], Env: env, PageOrigin: env["LLMAPI_PAGE_ORIGIN"], Prompt: terminalPrompter{}})
+		options, err := onboarding.ResolveOptions(onboarding.Inputs{Args: args[1:], Env: env, PageOrigin: env["LLMROUTER_PAGE_ORIGIN"], Prompt: terminalPrompter{}})
 		if err != nil {
 			return report(err)
 		}
@@ -165,11 +165,11 @@ func claudeDesktopBridgePath(executable string, platform onboarding.Platform) st
 	if platform.OS == "windows" {
 		extension = ".exe"
 	}
-	releaseOnboard := "llmapi-onboard-" + platform.OS + "-" + platform.Arch + extension
+	releaseOnboard := "llmrouter-onboard-" + platform.OS + "-" + platform.Arch + extension
 	if strings.EqualFold(filepath.Base(executable), releaseOnboard) {
-		return filepath.Join(directory, "llmapi-mcp-bridge-"+platform.OS+"-"+platform.Arch+extension)
+		return filepath.Join(directory, "llmrouter-mcp-bridge-"+platform.OS+"-"+platform.Arch+extension)
 	}
-	return filepath.Join(directory, "llmapi-mcp-bridge"+extension)
+	return filepath.Join(directory, "llmrouter-mcp-bridge"+extension)
 }
 
 func extractHome(args []string) (string, []string, error) {
@@ -297,7 +297,7 @@ func report(err error) int {
 }
 
 func usage(output *os.File) {
-	fmt.Fprintln(output, "usage: llmapi-onboard [--home DIR] install|doctor|restore|uninstall|receipts")
+	fmt.Fprintln(output, "usage: llmrouter-onboard [--home DIR] install|doctor|restore|uninstall|receipts")
 }
 
 func hasOption(args []string, name string) bool {

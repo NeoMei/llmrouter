@@ -147,7 +147,7 @@ func (client *APIClient) doWithHeaders(ctx context.Context, method, path string,
 	if err != nil {
 		return fmt.Errorf("%w: create API request", ErrNetwork)
 	}
-	request.Header.Set("User-Agent", "llmapi-onboard/"+OnboardingVersion)
+	request.Header.Set("User-Agent", "llmrouter-onboard/"+OnboardingVersion)
 	request.Header.Set("Accept", "application/json")
 	if len(body) != 0 {
 		request.Header.Set("Content-Type", "application/json")

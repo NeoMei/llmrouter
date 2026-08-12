@@ -41,7 +41,7 @@ func ResolveBridgeChecksum(ctx context.Context, origin *url.URL, platform Platfo
 		return "", fmt.Errorf("%w: checksum request is invalid", ErrNetwork)
 	}
 	request.Header.Set("Accept", "text/plain")
-	request.Header.Set("User-Agent", "llmapi-onboard/"+OnboardingVersion)
+	request.Header.Set("User-Agent", "llmrouter-onboard/"+OnboardingVersion)
 	response, err := contained.Do(request)
 	if err != nil {
 		return "", fmt.Errorf("%w: checksum request failed", ErrNetwork)
@@ -65,7 +65,7 @@ func bridgeArtifactName(platform Platform) string {
 	if platform.Arch != "amd64" && platform.Arch != "arm64" {
 		return ""
 	}
-	name := "llmapi-mcp-bridge-" + platform.OS + "-" + platform.Arch
+	name := "llmrouter-mcp-bridge-" + platform.OS + "-" + platform.Arch
 	if platform.OS == "windows" {
 		name += ".exe"
 	}

@@ -14,7 +14,7 @@ func ApplyManagedBlock(input, client, content string) (string, error) {
 		return "", err
 	}
 	content = strings.TrimSuffix(content, "\n")
-	block := "# LLMAPI:BEGIN " + client + "\n" + content + "\n# LLMAPI:END " + client + "\n"
+	block := "# LLMROUTER:BEGIN " + client + "\n" + content + "\n# LLMROUTER:END " + client + "\n"
 	if without == "" {
 		return block, nil
 	}
@@ -25,8 +25,8 @@ func ApplyManagedBlock(input, client, content string) (string, error) {
 }
 
 func RemoveManagedBlock(input, client string) (string, error) {
-	begin := "# LLMAPI:BEGIN " + client
-	end := "# LLMAPI:END " + client
+	begin := "# LLMROUTER:BEGIN " + client
+	end := "# LLMROUTER:END " + client
 	lines := strings.SplitAfter(input, "\n")
 	var output strings.Builder
 	inBlock := false

@@ -2,13 +2,13 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 function Fail([string]$Message) {
-  throw "LLMAPI installer: $Message"
+  throw "LLMROUTER installer: $Message"
 }
 
 function Get-ServerOrigin {
-  if ([string]::IsNullOrWhiteSpace($env:LLMAPI_SERVER_URL)) { Fail 'LLMAPI_SERVER_URL is required' }
+  if ([string]::IsNullOrWhiteSpace($env:LLMROUTER_SERVER_URL)) { Fail 'LLMROUTER_SERVER_URL is required' }
   $serverUri = $null
-  if (-not [System.Uri]::TryCreate($env:LLMAPI_SERVER_URL, [System.UriKind]::Absolute, [ref]$serverUri)) { Fail 'server URL is invalid' }
+  if (-not [System.Uri]::TryCreate($env:LLMROUTER_SERVER_URL, [System.UriKind]::Absolute, [ref]$serverUri)) { Fail 'server URL is invalid' }
   if ($serverUri.UserInfo -or $serverUri.Query -or $serverUri.Fragment -or ($serverUri.AbsolutePath -ne '/' -and $serverUri.AbsolutePath -ne '')) { Fail 'server URL must be an origin' }
   if ($serverUri.Scheme -ne 'https') {
     if ($serverUri.Scheme -ne 'http' -or $serverUri.Host -notin @('localhost', '127.0.0.1', '::1')) { Fail 'server URL must use HTTPS or loopback HTTP' }
@@ -109,8 +109,8 @@ function Install-PrivateHelperPair([string]$TemporaryDirectory, [string]$Onboard
     Set-PrivateAcl $BridgePath
     New-Item -ItemType Directory -LiteralPath $backupDirectory | Out-Null
     Set-PrivateAcl $backupDirectory
-    if ($onboardOriginal) { Move-PrivateItem $OnboardTarget (Join-Path $backupDirectory 'llmapi-onboard.exe') }
-    if ($bridgeOriginal) { Move-PrivateItem $BridgeTarget (Join-Path $backupDirectory 'llmapi-mcp-bridge.exe') }
+    if ($onboardOriginal) { Move-PrivateItem $OnboardTarget (Join-Path $backupDirectory 'llmrouter-onboard.exe') }
+    if ($bridgeOriginal) { Move-PrivateItem $BridgeTarget (Join-Path $backupDirectory 'llmrouter-mcp-bridge.exe') }
     Move-PrivateItem $OnboardPath $OnboardTarget
     $onboardReplaced = $true
     Set-PrivateAcl $OnboardTarget
@@ -124,11 +124,11 @@ function Install-PrivateHelperPair([string]$TemporaryDirectory, [string]$Onboard
     $operationError = $_
   } finally {
     if (-not $committed) {
-      if ($onboardOriginal -and (Test-Path -LiteralPath (Join-Path $backupDirectory 'llmapi-onboard.exe'))) {
-        try { Move-PrivateItem (Join-Path $backupDirectory 'llmapi-onboard.exe') $OnboardTarget } catch { $rollbackFailed = $true }
+      if ($onboardOriginal -and (Test-Path -LiteralPath (Join-Path $backupDirectory 'llmrouter-onboard.exe'))) {
+        try { Move-PrivateItem (Join-Path $backupDirectory 'llmrouter-onboard.exe') $OnboardTarget } catch { $rollbackFailed = $true }
       } elseif ($onboardReplaced) { Remove-Item -LiteralPath $OnboardTarget -Force -ErrorAction SilentlyContinue }
-      if ($bridgeOriginal -and (Test-Path -LiteralPath (Join-Path $backupDirectory 'llmapi-mcp-bridge.exe'))) {
-        try { Move-PrivateItem (Join-Path $backupDirectory 'llmapi-mcp-bridge.exe') $BridgeTarget } catch { $rollbackFailed = $true }
+      if ($bridgeOriginal -and (Test-Path -LiteralPath (Join-Path $backupDirectory 'llmrouter-mcp-bridge.exe'))) {
+        try { Move-PrivateItem (Join-Path $backupDirectory 'llmrouter-mcp-bridge.exe') $BridgeTarget } catch { $rollbackFailed = $true }
       } elseif ($bridgeReplaced) { Remove-Item -LiteralPath $BridgeTarget -Force -ErrorAction SilentlyContinue }
     }
     if (-not $rollbackFailed -and (Test-Path -LiteralPath $backupDirectory)) { Remove-Item -LiteralPath $backupDirectory -Recurse -Force }
@@ -146,7 +146,7 @@ $architecture = switch -Regex ($env:PROCESSOR_ARCHITECTURE) {
 }
 $home = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
 if ([string]::IsNullOrWhiteSpace($home) -or -not [IO.Path]::IsPathRooted($home)) { Fail 'user profile is unavailable' }
-$llmapiDirectory = Join-Path $home '.llmapi'
+$llmapiDirectory = Join-Path $home '.llmrouter'
 $binDirectory = Join-Path $llmapiDirectory 'bin'
 Ensure-PrivateDirectory $llmapiDirectory
 Ensure-PrivateDirectory $binDirectory
@@ -160,8 +160,8 @@ try {
   New-Item -ItemType Directory -LiteralPath $temporaryDirectory | Out-Null
   Set-PrivateAcl $temporaryDirectory
 
-  $onboardArtifact = "llmapi-onboard-windows-$architecture.exe"
-  $bridgeArtifact = "llmapi-mcp-bridge-windows-$architecture.exe"
+  $onboardArtifact = "llmrouter-onboard-windows-$architecture.exe"
+  $bridgeArtifact = "llmrouter-mcp-bridge-windows-$architecture.exe"
   $checksumsPath = Join-Path $temporaryDirectory 'checksums.txt'
   $onboardPath = Join-Path $temporaryDirectory $onboardArtifact
   $bridgePath = Join-Path $temporaryDirectory $bridgeArtifact
@@ -174,12 +174,12 @@ try {
   Assert-HelperDigest $onboardPath $onboardChecksum
   Assert-HelperDigest $bridgePath $bridgeChecksum
 
-  $onboardTarget = Join-Path $binDirectory 'llmapi-onboard.exe'
-  $bridgeTarget = Join-Path $binDirectory 'llmapi-mcp-bridge.exe'
+  $onboardTarget = Join-Path $binDirectory 'llmrouter-onboard.exe'
+  $bridgeTarget = Join-Path $binDirectory 'llmrouter-mcp-bridge.exe'
   try {
     Install-PrivateHelperPair $temporaryDirectory $onboardPath $bridgePath $onboardTarget $bridgeTarget $onboardChecksum $bridgeChecksum
   } catch {
-    if ($_.Exception.Message -like 'LLMAPI installer: rollback could not restore every helper*') { $retainTemporaryDirectory = $true }
+    if ($_.Exception.Message -like 'LLMROUTER installer: rollback could not restore every helper*') { $retainTemporaryDirectory = $true }
     throw
   }
   Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force

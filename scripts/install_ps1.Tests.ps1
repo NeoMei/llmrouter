@@ -1,12 +1,12 @@
-Describe 'LLMAPI PowerShell bootstrap' {
+Describe 'LLMROUTER PowerShell bootstrap' {
   BeforeAll { $script = Get-Content "$PSScriptRoot/../web/public/install/install.ps1" -Raw }
 
   It 'has no token parameter' { $script | Should -Not -Match '--(api-)?token' }
   It 'requires SHA-256 verification' { $script | Should -Match 'Get-FileHash.+SHA256' }
-  It 'uses the explicit server environment' { $script | Should -Match 'LLMAPI_SERVER_URL' }
+  It 'uses the explicit server environment' { $script | Should -Match 'LLMROUTER_SERVER_URL' }
   It 'always cleans temporary files' { $script | Should -Match 'finally' }
   It 'installs helpers privately before onboarding' {
-    $script | Should -Match 'llmapi-mcp-bridge'
+    $script | Should -Match 'llmrouter-mcp-bridge'
     $script | Should -Match 'Set-Acl'
     $script | Should -Match 'Move-Item'
   }
@@ -29,8 +29,8 @@ Describe 'LLMAPI PowerShell bootstrap' {
     Invoke-Expression $functionSource
     $path = Join-Path $TestDrive 'checksums.txt'
     $digest = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-    Set-Content -LiteralPath $path -Value "$digest  llmapi-mcp-bridge-windows-amd64.exe"
-    Get-ExpectedChecksum $path 'llmapi-mcp-bridge-windows-amd64.exe' | Should -Be $digest
+    Set-Content -LiteralPath $path -Value "$digest  llmrouter-mcp-bridge-windows-amd64.exe"
+    Get-ExpectedChecksum $path 'llmrouter-mcp-bridge-windows-amd64.exe' | Should -Be $digest
   }
   It 'sets and verifies owner SID on a real TestDrive path' -Skip:($env:OS -ne 'Windows_NT') {
     $functionSource = $script.Substring(0, $script.IndexOf('$origin = Get-ServerOrigin'))
@@ -47,8 +47,8 @@ Describe 'LLMAPI PowerShell bootstrap' {
     $bin = Join-Path $TestDrive 'bin'
     $temp = Join-Path $bin '.install-test'
     New-Item -ItemType Directory -Path $temp -Force | Out-Null
-    $onboardTarget = Join-Path $bin 'llmapi-onboard.exe'
-    $bridgeTarget = Join-Path $bin 'llmapi-mcp-bridge.exe'
+    $onboardTarget = Join-Path $bin 'llmrouter-onboard.exe'
+    $bridgeTarget = Join-Path $bin 'llmrouter-mcp-bridge.exe'
     Set-Content -LiteralPath $onboardTarget -Value 'old-onboard' -NoNewline
     Set-Content -LiteralPath $bridgeTarget -Value 'old-bridge' -NoNewline
     $onboardSource = Join-Path $temp 'new-onboard.exe'
@@ -73,8 +73,8 @@ Describe 'LLMAPI PowerShell bootstrap' {
     $bin = Join-Path $TestDrive 'retain-bin'
     $temp = Join-Path $bin '.install-test'
     New-Item -ItemType Directory -Path $temp -Force | Out-Null
-    $onboardTarget = Join-Path $bin 'llmapi-onboard.exe'
-    $bridgeTarget = Join-Path $bin 'llmapi-mcp-bridge.exe'
+    $onboardTarget = Join-Path $bin 'llmrouter-onboard.exe'
+    $bridgeTarget = Join-Path $bin 'llmrouter-mcp-bridge.exe'
     Set-Content -LiteralPath $onboardTarget -Value 'old-onboard' -NoNewline
     Set-Content -LiteralPath $bridgeTarget -Value 'old-bridge' -NoNewline
     $onboardSource = Join-Path $temp 'new-onboard.exe'
@@ -87,12 +87,12 @@ Describe 'LLMAPI PowerShell bootstrap' {
     Mock Move-PrivateItem {
       param($Source, $Destination)
       if ($Source -eq $bridgeSource -and $Destination -eq $bridgeTarget) { throw 'second replacement failed' }
-      if ($Source -eq (Join-Path $temp 'backups/llmapi-mcp-bridge.exe') -and $Destination -eq $bridgeTarget) { throw 'restore failed' }
+      if ($Source -eq (Join-Path $temp 'backups/llmrouter-mcp-bridge.exe') -and $Destination -eq $bridgeTarget) { throw 'restore failed' }
       Microsoft.PowerShell.Management\Move-Item -LiteralPath $Source -Destination $Destination -Force
     }
     { Install-PrivateHelperPair $temp $onboardSource $bridgeSource $onboardTarget $bridgeTarget ('a' * 64) ('b' * 64) } | Should -Throw '*recover from*'
     (Get-Content -LiteralPath $onboardTarget -Raw) | Should -Be 'old-onboard'
-    (Get-Content -LiteralPath (Join-Path $temp 'backups/llmapi-mcp-bridge.exe') -Raw) | Should -Be 'old-bridge'
+    (Get-Content -LiteralPath (Join-Path $temp 'backups/llmrouter-mcp-bridge.exe') -Raw) | Should -Be 'old-bridge'
   }
   It 'parses as valid PowerShell' {
     $tokens = $null

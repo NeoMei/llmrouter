@@ -30,24 +30,24 @@ func (openCodeAdapter) Plan(_ context.Context, request ConfigureRequest) (Config
 	}
 	provider := map[string]any{
 		"npm":  "@ai-sdk/openai-compatible",
-		"name": "LLMAPI",
+		"name": "LLMROUTER",
 		"options": map[string]any{
 			"baseURL": endpointV1(request.ServerURL),
-			"apiKey":  "{env:LLMAPI_TOKEN}",
+			"apiKey":  "{env:LLMROUTER_TOKEN}",
 		},
 	}
 	if request.Model != "" {
 		provider["models"] = map[string]any{request.Model: map[string]any{"name": request.Model}}
 	}
-	configured, err := MergeJSONObject(existing, []string{"provider", "llmapi"}, provider)
+	configured, err := MergeJSONObject(existing, []string{"provider", "llmrouter"}, provider)
 	if err != nil {
 		return ConfigPlan{}, err
 	}
-	configured, err = MergeJSONObject(configured, []string{"_llmapi"}, "LLMAPI:BEGIN opencode")
+	configured, err = MergeJSONObject(configured, []string{"_llmapi"}, "LLMROUTER:BEGIN opencode")
 	if err != nil {
 		return ConfigPlan{}, err
 	}
-	return ConfigPlan{Client: ClientOpenCode, Writes: []PlannedWrite{{Path: path, Data: configured, Mode: privateFileMode}}, Instructions: []string{"Set LLMAPI_TOKEN before launching OpenCode."}}, nil
+	return ConfigPlan{Client: ClientOpenCode, Writes: []PlannedWrite{{Path: path, Data: configured, Mode: privateFileMode}}, Instructions: []string{"Set LLMROUTER_TOKEN before launching OpenCode."}}, nil
 }
 
 func (openCodeAdapter) Check(_ context.Context, request CheckRequest) []Check {
@@ -74,12 +74,12 @@ func checkOpenCodeConfig(request CheckRequest, path string) error {
 	if !ok {
 		return fmt.Errorf("OpenCode providers missing")
 	}
-	provider, ok := providers["llmapi"].(map[string]any)
-	if !ok || provider["npm"] != "@ai-sdk/openai-compatible" || provider["name"] != "LLMAPI" {
+	provider, ok := providers["llmrouter"].(map[string]any)
+	if !ok || provider["npm"] != "@ai-sdk/openai-compatible" || provider["name"] != "LLMROUTER" {
 		return fmt.Errorf("OpenCode provider mismatch")
 	}
 	options, ok := provider["options"].(map[string]any)
-	if !ok || options["baseURL"] != endpointV1(request.ServerURL) || options["apiKey"] != "{env:LLMAPI_TOKEN}" {
+	if !ok || options["baseURL"] != endpointV1(request.ServerURL) || options["apiKey"] != "{env:LLMROUTER_TOKEN}" {
 		return fmt.Errorf("OpenCode options mismatch")
 	}
 	if request.Model != "" {

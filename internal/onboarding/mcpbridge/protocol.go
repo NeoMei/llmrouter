@@ -286,7 +286,7 @@ func (server *Server) initialize(request rpcRequest) []byte {
 	return marshalRPCResult(request.ID, map[string]any{
 		"protocolVersion": ProtocolVersion,
 		"capabilities":    map[string]any{"tools": map[string]any{}},
-		"serverInfo":      map[string]any{"name": "llmapi-mcp-bridge", "version": "0.1.0"},
+		"serverInfo":      map[string]any{"name": "llmrouter-mcp-bridge", "version": "0.1.0"},
 	})
 }
 
@@ -379,7 +379,7 @@ func emptyObjectOrMissing(raw json.RawMessage) bool {
 func boundedTools() []map[string]any {
 	return []map[string]any{
 		{
-			"name": "llmapi_list_models", "description": "List the configured LLMAPI model allow-list.",
+			"name": "llmapi_list_models", "description": "List the configured LLMROUTER model allow-list.",
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false},
 		},
 		{

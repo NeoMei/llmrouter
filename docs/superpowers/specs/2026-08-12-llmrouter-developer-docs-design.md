@@ -145,7 +145,7 @@ After deployment:
 - `GET https://llmrouter.quukk.com/docs` returns the application shell with HTTP 200;
 - the client router renders the developer documentation rather than the not-found component;
 - refreshing `/docs#tool-calling` renders the same section correctly;
-- `llmapi.quukk.com` remains routed to the parallel NewAPI system and is not modified.
+- `llmrouter.quukk.com` remains routed to the parallel NewAPI system and is not modified.
 
 ## Testing and Acceptance
 
@@ -174,7 +174,7 @@ Validate desktop and mobile viewports, page identity, no not-found/framework ove
 
 ### Production acceptance
 
-Build a new LLMRouter image from the reviewed commit, deploy it in parallel without changing `llmapi.quukk.com`, and verify:
+Build a new LLMRouter image from the reviewed commit, deploy it in parallel without changing `llmrouter.quukk.com`, and verify:
 
 - `/healthz` remains 200;
 - `/docs` renders documentation after JavaScript execution;

@@ -375,7 +375,9 @@ func isAllowedManagedDestination(home, path string) bool {
 func receiptPath(home, id string) string {
 	return filepath.Join(home, ".llmrouter", "receipts", id+".json")
 }
-func receiptBackupDir(home, id string) string { return filepath.Join(home, ".llmrouter", "backups", id) }
+func receiptBackupDir(home, id string) string {
+	return filepath.Join(home, ".llmrouter", "backups", id)
+}
 func canonicalBackupPath(home, id string, index int) string {
 	return filepath.Join(receiptBackupDir(home, id), fmt.Sprintf("%03d.backup", index))
 }

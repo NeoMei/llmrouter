@@ -102,6 +102,7 @@ describe('LLMRouter connection guide content', () => {
 
   test('keeps public copy limited to the Agent connection scope and LLMRouter identity', () => {
     const forbiddenScope = [
+      /llmapi|new api/i,
       /sdk/,
       /protocol/,
       /streaming/,

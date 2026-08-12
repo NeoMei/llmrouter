@@ -63,7 +63,7 @@ describe('LLMRouter docs page source contract', () => {
   test('uses only the four approved internal destinations and keeps public naming', async () => {
     const source = await readSource(docsPagePath)
     const hrefs = [
-      '/dashboard/tokens',
+      '/keys',
       '/dashboard/models',
       '/client-model-routes',
       '/install/',

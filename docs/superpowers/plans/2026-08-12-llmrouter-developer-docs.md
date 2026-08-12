@@ -15,7 +15,7 @@
 - Persist language only after explicit user action.
 - Do not call live APIs from the docs page or accept a Token in the page.
 - Do not embed SDK tutorials, API protocol tutorials, streaming, tools, images, reasoning internals, model lists, prices, quotas, capabilities, or system history.
-- Link Token management to `/dashboard/tokens`, models to `/dashboard/models`, routes to `/client-model-routes`, and installers to `/install/`.
+- Link Token management to `/keys`, models to `/dashboard/models`, routes to `/client-model-routes`, and installers to `/install/`.
 - Use `https://llmrouter.quukk.com` and `https://llmrouter.quukk.com/v1` in examples.
 - Reuse existing dependencies and design system.
 - Public content must not mention any previous product name or migration system.

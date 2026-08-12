@@ -83,7 +83,7 @@ describe('LLMRouter connection guide content', () => {
 
   test('links users to the current dashboard and installation destinations', () => {
     const expectedLinks = [
-      '/dashboard/tokens',
+      '/keys',
       '/dashboard/models',
       '/client-model-routes',
       '/install/',

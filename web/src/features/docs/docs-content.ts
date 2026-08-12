@@ -22,7 +22,7 @@ export type DocsLanguage = (typeof DOCS_LANGUAGES)[number]
 
 export type DocsLink = {
   href:
-    | '/dashboard/tokens'
+    | '/keys'
     | '/dashboard/models'
     | '/client-model-routes'
     | '/install/'
@@ -75,7 +75,7 @@ export const docsContent: Record<DocsLanguage, DocsContent> = {
         id: 'get-token',
         title: '获取 Token',
         body: '登录后创建或管理 Token，并妥善保管它。',
-        links: [{ href: '/dashboard/tokens', label: 'Token 管理' }],
+        links: [{ href: '/keys', label: 'Token 管理' }],
       },
       {
         id: 'connection-address',
@@ -137,7 +137,7 @@ export const docsContent: Record<DocsLanguage, DocsContent> = {
         id: 'get-token',
         title: 'Get a Token',
         body: 'Sign in to create or manage a Token, then keep it private.',
-        links: [{ href: '/dashboard/tokens', label: 'Manage Tokens' }],
+        links: [{ href: '/keys', label: 'Manage Tokens' }],
       },
       {
         id: 'connection-address',

@@ -77,6 +77,18 @@ describe('LLMRouter docs page source contract', () => {
     assert.match(source, /llmrouter\.quukk\.com/)
   })
 
+  test('follows the site-wide i18n language instead of a custom locale', async () => {
+    const source = await readSource(docsPagePath)
+
+    assert.match(source, /useTranslation/)
+    assert.match(source, /i18n\.language/)
+    assert.match(source, /docsLanguageForInterface/)
+    assert.doesNotMatch(source, /docs-locale/)
+    assert.doesNotMatch(source, /showLanguageSwitcher:\s*false/)
+    assert.doesNotMatch(source, /changeLanguage\(/)
+    assert.doesNotMatch(source, /中文|English/)
+  })
+
   test('has native copy controls with a selectable fallback and no API imports', async () => {
     const source = await readSource(docsPagePath)
 

@@ -22,6 +22,7 @@ import { describe, test } from 'node:test'
 import {
   DOCS_LANGUAGES,
   docsContent,
+  docsLanguageForInterface,
   type DocsContent,
   type DocsLanguage,
 } from './docs-content'
@@ -42,7 +43,7 @@ function publicText(content: DocsContent) {
 
 describe('LLMRouter connection guide content', () => {
   test('provides concise Chinese and English content with exactly seven sections', () => {
-    assert.deepEqual(DOCS_LANGUAGES, ['zh-CN', 'en'])
+    assert.deepEqual(DOCS_LANGUAGES, ['zh', 'en'])
 
     for (const language of DOCS_LANGUAGES) {
       const content = docsContent[language as DocsLanguage]
@@ -54,6 +55,16 @@ describe('LLMRouter connection guide content', () => {
       assert.ok(content.title.length > 0)
       assert.ok(content.introduction.length > 0)
     }
+  })
+
+  test('maps the site-wide interface language onto available content languages', () => {
+    assert.equal(docsLanguageForInterface('zhCN'), 'zh')
+    assert.equal(docsLanguageForInterface('zhTW'), 'zh')
+    assert.equal(docsLanguageForInterface('en'), 'en')
+    assert.equal(docsLanguageForInterface('fr'), 'en')
+    assert.equal(docsLanguageForInterface('ja'), 'en')
+    assert.equal(docsLanguageForInterface('vi'), 'en')
+    assert.equal(docsLanguageForInterface(undefined), 'en')
   })
 
   test('covers the supported Agents and labels Claude Desktop as MCP tool access', () => {

@@ -16,9 +16,24 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-export const DOCS_LANGUAGES = ['zh-CN', 'en'] as const
+export const DOCS_LANGUAGES = ['zh', 'en'] as const
 
 export type DocsLanguage = (typeof DOCS_LANGUAGES)[number]
+
+/**
+ * Map the site-wide interface language (i18next codes such as `zhCN`/`zhTW`)
+ * onto the content languages available for the docs guide. Chinese variants
+ * use the Chinese content; all other interface languages fall back to English
+ * until full translations are provided.
+ */
+export function docsLanguageForInterface(
+  interfaceLanguage: string | undefined
+): DocsLanguage {
+  if (interfaceLanguage === 'zhCN' || interfaceLanguage === 'zhTW') {
+    return 'zh'
+  }
+  return 'en'
+}
 
 export type DocsLink = {
   href: '/keys' | '/dashboard/models' | '/client-model-routes' | '/install/'
@@ -57,7 +72,7 @@ export type DocsContent = {
 }
 
 export const docsContent: Record<DocsLanguage, DocsContent> = {
-  'zh-CN': {
+  zh: {
     title: '连接 LLMRouter Agent',
     introduction: '使用 Token 将常用 Agent 连接到 LLMRouter。',
     sections: [

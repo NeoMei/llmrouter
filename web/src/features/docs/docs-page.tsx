@@ -18,13 +18,17 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { Check, Copy } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { PublicLayout } from '@/components/layout'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
-import { docsContent, type DocsLanguage } from './docs-content'
-import { persistDocsLanguage, resolveDocsLanguage } from './docs-locale'
+import {
+  docsContent,
+  docsLanguageForInterface,
+  type DocsLanguage,
+} from './docs-content'
 
 const baseUrl = 'https://llmrouter.quukk.com/v1'
 const connectionCheck =
@@ -38,16 +42,14 @@ const pageLabels: Record<
     baseUrl: string
     connectionCheck: string
     navigation: string
-    language: string
   }
 > = {
-  'zh-CN': {
+  zh: {
     copy: '复制',
     copied: '已复制',
     baseUrl: 'Base URL',
     connectionCheck: '最小连接检查',
     navigation: '文档导航',
-    language: '语言',
   },
   en: {
     copy: 'Copy',
@@ -55,16 +57,13 @@ const pageLabels: Record<
     baseUrl: 'Base URL',
     connectionCheck: 'Minimal connection check',
     navigation: 'Documentation navigation',
-    language: 'Language',
   },
 }
 
 export function DocsPage() {
-  const [language, setLanguage] = useState<DocsLanguage>(() => {
-    if (typeof window === 'undefined') return 'en'
-    return resolveDocsLanguage(window.localStorage, navigator.language)
-  })
+  const { i18n } = useTranslation()
   const [copiedValue, setCopiedValue] = useState<string | null>(null)
+  const language = docsLanguageForInterface(i18n.language)
   const content = docsContent[language]
   const labels = pageLabels[language]
 
@@ -94,38 +93,14 @@ export function DocsPage() {
     setCopiedValue(value)
   }
 
-  function changeLanguage(nextLanguage: DocsLanguage) {
-    setLanguage(nextLanguage)
-    if (typeof window !== 'undefined') {
-      persistDocsLanguage(nextLanguage, window.localStorage)
-    }
-  }
-
   return (
-    <PublicLayout headerProps={{ showLanguageSwitcher: false }}>
+    <PublicLayout>
       <div className='mx-auto max-w-5xl pb-10'>
-        <div className='flex flex-col gap-5 border-b pb-6 sm:flex-row sm:items-start sm:justify-between'>
-          <div className='max-w-2xl space-y-2'>
-            <h1 className='text-3xl font-semibold tracking-tight'>
-              {content.title}
-            </h1>
-            <p className='text-muted-foreground'>{content.introduction}</p>
-          </div>
-
-          <div className='flex items-center gap-1' aria-label={labels.language}>
-            {(['zh-CN', 'en'] as const).map((item) => (
-              <Button
-                key={item}
-                type='button'
-                variant={language === item ? 'secondary' : 'ghost'}
-                size='sm'
-                aria-pressed={language === item}
-                onClick={() => changeLanguage(item)}
-              >
-                {item === 'zh-CN' ? '中文' : 'English'}
-              </Button>
-            ))}
-          </div>
+        <div className='max-w-2xl space-y-2 border-b pb-6'>
+          <h1 className='text-3xl font-semibold tracking-tight'>
+            {content.title}
+          </h1>
+          <p className='text-muted-foreground'>{content.introduction}</p>
         </div>
 
         <nav aria-label={labels.navigation} className='border-b lg:hidden'>

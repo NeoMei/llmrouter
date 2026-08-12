@@ -61,12 +61,23 @@ test('renders the public concise LLMRouter connection guide', async ({
   ).toHaveAttribute('href', '/install/')
 })
 
-test('persists an explicitly selected documentation language', async ({
+test('follows the site-wide language switcher and persists the choice', async ({
   page,
-}) => {
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name !== 'chromium',
+    'The public header language switcher is desktop-only in this app.'
+  )
+
   await page.goto('/docs')
 
-  await page.getByRole('button', { name: '中文' }).click()
+  const languageSwitcher = page.getByRole('button', {
+    name: 'Change language',
+  })
+  await expect(languageSwitcher).toBeVisible()
+
+  await languageSwitcher.click()
+  await page.getByRole('menuitem', { name: '简体中文' }).click()
   await expect(
     page.getByRole('heading', { name: '连接 LLMRouter Agent' })
   ).toBeVisible()
@@ -74,11 +85,6 @@ test('persists an explicitly selected documentation language', async ({
   await page.reload()
   await expect(
     page.getByRole('heading', { name: '连接 LLMRouter Agent' })
-  ).toBeVisible()
-
-  await page.getByRole('button', { name: 'English' }).click()
-  await expect(
-    page.getByRole('heading', { name: 'Connect an LLMRouter Agent' })
   ).toBeVisible()
 })
 

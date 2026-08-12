@@ -41,7 +41,7 @@ if [[ "${1:-}" == "--check" ]]; then
     exit 1
   fi
   if [[ -f "$checksums_file" ]]; then
-    (cd "$bin_dir" && sha256sum -c < <(sed 's|^\([^ ]*\)  \*\(.*\)$|\1  \2|' "../$checksums_file" 2>/dev/null || true)) || {
+    (cd "$bin_dir" && sha256sum -c < <(sed 's|^\([^ ]*\)  \*\(.*\)$|\1  \2|' "$root_dir/$checksums_file" 2>/dev/null || true)) || {
       # Fallback for macOS where sha256sum may not exist
       (cd "$bin_dir" && while IFS= read -r line; do
         expected=$(echo "$line" | awk '{print $1}')
@@ -52,7 +52,7 @@ if [[ "${1:-}" == "--check" ]]; then
           echo "CHECKSUM MISMATCH: $fname" >&2
           exit 1
         fi
-      done < "../$checksums_file")
+      done < "$root_dir/$checksums_file")
     }
     echo "OK: all onboarding binaries present and checksums verified"
   else

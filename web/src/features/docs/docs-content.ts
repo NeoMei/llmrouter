@@ -21,11 +21,7 @@ export const DOCS_LANGUAGES = ['zh-CN', 'en'] as const
 export type DocsLanguage = (typeof DOCS_LANGUAGES)[number]
 
 export type DocsLink = {
-  href:
-    | '/keys'
-    | '/dashboard/models'
-    | '/client-model-routes'
-    | '/install/'
+  href: '/keys' | '/dashboard/models' | '/client-model-routes' | '/install/'
   label: string
 }
 

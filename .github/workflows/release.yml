@@ -68,6 +68,13 @@ jobs:
           cp dist/SHA256SUMS ../electron-SHA256SUMS-linux.txt
       - name: Generate checksums
         run: sha256sum new-api-* > checksums-linux.txt
+      - name: Build onboarding artifacts
+        run: bash scripts/build-onboarding-artifacts.sh
+      - name: Verify onboarding artifacts
+        run: bash scripts/build-onboarding-artifacts.sh --check
+      - name: Append onboarding checksums
+        run: |
+          cat web/public/install/checksums.txt >> onboarding-checksums-linux.txt
       - name: Probe native binary and record evidence
         run: |
           PORT=31991 OBJECT_STORE_TYPE=local OBJECT_STORE_LOCAL_ROOT=/tmp/codex-gateway-release-files ./new-api-$VERSION > startup-linux.log 2>&1 &
@@ -85,6 +92,9 @@ jobs:
           path: |
             new-api-*
             checksums-linux.txt
+            onboarding-checksums-linux.txt
+            web/public/install/bin/*
+            web/public/install/checksums.txt
             desktop-linux.json
             electron/dist/*.AppImage
             electron/dist/*.deb

@@ -28,6 +28,25 @@ jobs:
           cache: true
       - run: bash scripts/verify-backend.sh
 
+  onboarding:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5955356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: '1.25.1'
+          cache: true
+      - name: Manifest and asset tests
+        run: python3 -m unittest scripts/onboarding_assets_test.py -v
+      - name: Go onboarding tests with race detection
+        run: go test -race ./internal/onboarding/... ./cmd/llmrouter-onboard/... -count=1
+      - name: Bash syntax check
+        run: |
+          bash -n scripts/build-onboarding-artifacts.sh
+          bash -n scripts/onboarding_e2e.sh
+      - name: Onboarding e2e
+        run: bash scripts/onboarding_e2e.sh
+
   web:
     runs-on: ubuntu-latest
     steps:
@@ -38,6 +57,11 @@ jobs:
       - run: bun install --frozen-lockfile
         working-directory: web
       - run: bash scripts/verify-web.sh
+
+      - name: Onboarding manifest in build output
+        run: |
+          test -f dist/install/manifest.json
+          python3 -m json.tool dist/install/manifest.json > /dev/null
 
   cli:
     runs-on: ubuntu-latest

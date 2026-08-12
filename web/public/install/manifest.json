@@ -1,19 +1,12 @@
 {
   "schemaVersion": 1,
   "installerMinVersion": "0.1.0",
-  "fallbackModels": [
-    "DeepSeek-V4-Flash-A",
-    "glm-5.2"
-  ],
+  "fallbackModels": ["DeepSeek-V4-Flash-A", "glm-5.2"],
   "clients": [
     {
       "id": "codex-cli",
       "displayName": "Codex CLI",
-      "platforms": [
-        "linux",
-        "darwin",
-        "windows"
-      ],
+      "platforms": ["linux", "darwin", "windows"],
       "integration": "direct-responses",
       "delivery": "automatic",
       "configFamily": "codex",
@@ -22,10 +15,7 @@
     {
       "id": "codex-desktop",
       "displayName": "Codex Desktop",
-      "platforms": [
-        "darwin",
-        "windows"
-      ],
+      "platforms": ["darwin", "windows"],
       "integration": "direct-responses",
       "delivery": "automatic",
       "configFamily": "codex",
@@ -34,11 +24,7 @@
     {
       "id": "claude-code",
       "displayName": "Claude Code",
-      "platforms": [
-        "linux",
-        "darwin",
-        "windows"
-      ],
+      "platforms": ["linux", "darwin", "windows"],
       "integration": "direct-anthropic",
       "delivery": "automatic",
       "configFamily": "claude-code",
@@ -47,10 +33,7 @@
     {
       "id": "claude-desktop",
       "displayName": "Claude Desktop",
-      "platforms": [
-        "darwin",
-        "windows"
-      ],
+      "platforms": ["darwin", "windows"],
       "integration": "mcp-tool",
       "delivery": "automatic",
       "configFamily": "claude-desktop",
@@ -59,11 +42,7 @@
     {
       "id": "opencode",
       "displayName": "OpenCode",
-      "platforms": [
-        "linux",
-        "darwin",
-        "windows"
-      ],
+      "platforms": ["linux", "darwin", "windows"],
       "integration": "direct-openai",
       "delivery": "automatic",
       "configFamily": "opencode",
@@ -72,11 +51,7 @@
     {
       "id": "continue",
       "displayName": "Continue",
-      "platforms": [
-        "linux",
-        "darwin",
-        "windows"
-      ],
+      "platforms": ["linux", "darwin", "windows"],
       "integration": "direct-openai",
       "delivery": "automatic",
       "configFamily": "continue",
@@ -85,11 +60,7 @@
     {
       "id": "aider",
       "displayName": "Aider",
-      "platforms": [
-        "linux",
-        "darwin",
-        "windows"
-      ],
+      "platforms": ["linux", "darwin", "windows"],
       "integration": "direct-openai",
       "delivery": "automatic",
       "configFamily": "aider",
@@ -98,11 +69,7 @@
     {
       "id": "cursor",
       "displayName": "Cursor",
-      "platforms": [
-        "linux",
-        "darwin",
-        "windows"
-      ],
+      "platforms": ["linux", "darwin", "windows"],
       "integration": "direct-openai",
       "delivery": "generated",
       "configFamily": "cursor",
@@ -111,11 +78,7 @@
     {
       "id": "cline",
       "displayName": "Cline",
-      "platforms": [
-        "linux",
-        "darwin",
-        "windows"
-      ],
+      "platforms": ["linux", "darwin", "windows"],
       "integration": "direct-openai",
       "delivery": "generated",
       "configFamily": "cline",
@@ -124,11 +87,7 @@
     {
       "id": "roo-code",
       "displayName": "Roo Code",
-      "platforms": [
-        "linux",
-        "darwin",
-        "windows"
-      ],
+      "platforms": ["linux", "darwin", "windows"],
       "integration": "direct-openai",
       "delivery": "generated",
       "configFamily": "roo-code",
@@ -137,11 +96,7 @@
     {
       "id": "openai-sdk",
       "displayName": "OpenAI Python/Node SDK",
-      "platforms": [
-        "linux",
-        "darwin",
-        "windows"
-      ],
+      "platforms": ["linux", "darwin", "windows"],
       "integration": "direct-openai",
       "delivery": "generated",
       "configFamily": "openai-sdk",
@@ -150,11 +105,7 @@
     {
       "id": "langchain",
       "displayName": "LangChain",
-      "platforms": [
-        "linux",
-        "darwin",
-        "windows"
-      ],
+      "platforms": ["linux", "darwin", "windows"],
       "integration": "direct-openai",
       "delivery": "generated",
       "configFamily": "langchain",

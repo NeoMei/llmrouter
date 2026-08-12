@@ -78,7 +78,6 @@ export type DocsContent = {
   sections: DocsSection[]
 }
 
-
 export const docsContent: Record<DocsLanguage, DocsContent> = {
   zhCN: {
     title: '连接 LLMRouter Agent',
@@ -218,8 +217,7 @@ export const docsContent: Record<DocsLanguage, DocsContent> = {
   },
   fr: {
     title: 'Connecter un agent LLMRouter',
-    introduction:
-      'Utilisez un Token pour connecter votre agent à LLMRouter.',
+    introduction: 'Utilisez un Token pour connecter votre agent à LLMRouter.',
     sections: [
       {
         id: 'start',
@@ -236,7 +234,7 @@ export const docsContent: Record<DocsLanguage, DocsContent> = {
       {
         id: 'connection-address',
         title: 'Adresse de connexion',
-        body: 'Utilisez l\'adresse fournie par llmrouter.quukk.com dans les paramètres de connexion de votre agent.',
+        body: "Utilisez l'adresse fournie par llmrouter.quukk.com dans les paramètres de connexion de votre agent.",
         links: [],
       },
       {
@@ -251,42 +249,46 @@ export const docsContent: Record<DocsLanguage, DocsContent> = {
       {
         id: 'configure-agent',
         title: 'Configurer un agent',
-        body: 'Utilisez les scripts d\'installation ou saisissez votre Token, l\'adresse de connexion et le nom du modèle dans les paramètres de l\'agent.',
+        body: "Utilisez les scripts d'installation ou saisissez votre Token, l'adresse de connexion et le nom du modèle dans les paramètres de l'agent.",
         links: [{ href: '/install/', label: "Scripts d'installation" }],
         agents: [
           {
             name: 'Codex CLI/Desktop',
-            detail: 'Suivez les scripts d\'installation pour configurer la connexion.',
+            detail:
+              "Suivez les scripts d'installation pour configurer la connexion.",
           },
           {
             name: 'Claude Code/Desktop',
             detail:
-              'Configurez Claude Code avec les scripts d\'installation ; Claude Desktop utilise l\'accès aux outils MCP.',
+              "Configurez Claude Code avec les scripts d'installation ; Claude Desktop utilise l'accès aux outils MCP.",
           },
           {
             name: 'OpenCode',
-            detail: 'Saisissez les informations de connexion dans les paramètres du fournisseur.',
+            detail:
+              'Saisissez les informations de connexion dans les paramètres du fournisseur.',
           },
           {
             name: 'Continue',
-            detail: 'Saisissez les informations de connexion dans les paramètres du modèle.',
+            detail:
+              'Saisissez les informations de connexion dans les paramètres du modèle.',
           },
           {
             name: 'Aider',
-            detail: 'Saisissez les informations de connexion dans la configuration de démarrage.',
+            detail:
+              'Saisissez les informations de connexion dans la configuration de démarrage.',
           },
         ],
       },
       {
         id: 'verify',
         title: 'Vérifier',
-        body: 'Envoyez une requête courte dans l\'agent. Une réponse valide confirme la connexion.',
+        body: "Envoyez une requête courte dans l'agent. Une réponse valide confirme la connexion.",
         links: [],
       },
       {
         id: 'troubleshooting',
         title: 'Dépannage',
-        body: 'Vérifiez que le Token, l\'adresse de connexion et le nom du modèle correspondent ; enregistrez à nouveau les paramètres si nécessaire.',
+        body: "Vérifiez que le Token, l'adresse de connexion et le nom du modèle correspondent ; enregistrez à nouveau les paramètres si nécessaire.",
         links: [],
       },
     ],
@@ -368,7 +370,8 @@ export const docsContent: Record<DocsLanguage, DocsContent> = {
   },
   ja: {
     title: 'LLMRouter エージェントを接続',
-    introduction: 'Token を使って、お使いのエージェントを LLMRouter に接続します。',
+    introduction:
+      'Token を使って、お使いのエージェントを LLMRouter に接続します。',
     sections: [
       {
         id: 'start',
@@ -442,8 +445,7 @@ export const docsContent: Record<DocsLanguage, DocsContent> = {
   },
   vi: {
     title: 'Kết nối tác nhân LLMRouter',
-    introduction:
-      'Sử dụng Token để kết nối tác nhân của bạn với LLMRouter.',
+    introduction: 'Sử dụng Token để kết nối tác nhân của bạn với LLMRouter.',
     sections: [
       {
         id: 'start',

@@ -43,7 +43,15 @@ function publicText(content: DocsContent) {
 
 describe('LLMRouter connection guide content', () => {
   test('provides content in every interface language with exactly seven sections', () => {
-    assert.deepEqual(DOCS_LANGUAGES, ['zhCN', 'en', 'fr', 'ru', 'ja', 'vi', 'zhTW'])
+    assert.deepEqual(DOCS_LANGUAGES, [
+      'zhCN',
+      'en',
+      'fr',
+      'ru',
+      'ja',
+      'vi',
+      'zhTW',
+    ])
 
     for (const language of DOCS_LANGUAGES) {
       const content = docsContent[language as DocsLanguage]

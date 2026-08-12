@@ -762,3 +762,27 @@ The optimization is complete only when all of the following are true:
 ## 2026-08-11 Remaining Blocker Note
 
 - Task 8, Step 4 (real client acceptance matrix) is **blocked by external prerequisites**: live provider credentials for DeepSeek/Kimi/Zhipu/Alibaba, a scoped relay token, and real Codex CLI / Claude Code installations. These must not be simulated or fabricated. The rest of the architecture-optimization tasks are complete and all local gates pass.
+
+## 2026-08-13 Completion Audit Note
+
+Audited the plan against the live codebase. Two steps that were checked as
+complete had not actually been wired into the runtime; both are now implemented
+and covered by regression tests:
+
+- **Task 5 (bounded Responses continuity)**: the `responsesstate` store and
+  `Expand` helper existed with tests but were never called from the relay path.
+  Added `responsesstate.Default()` (Redis-backed when available, bounded memory
+  otherwise), expanded `previous_response_id` chains in `ResponsesHelper` when
+  the selected wire is chat conversion, and persisted completed turns from both
+  non-streaming and streaming OpenAI Responses handlers. Added
+  `relay/responses_handler_test.go` and `relay/channel/openai/responses_state_test.go`.
+- **Install directory serving**: gin's `RedirectTrailingSlash`, triggered by the
+  `/:mode/mj/...` wildcard relay routes, 301-redirected `/install/` to `/install`
+  before the static middleware could serve the onboarding index. Registered
+  `/install` and `/install/*filepath` explicitly in `SetWebRouter` and
+  normalized trailing slashes in `embedFileSystem.Open`. Added
+  `router/install_route_test.go`.
+
+All local gates pass: `verify-backend.sh`, `verify-web.sh`, `verify-cli.sh`,
+`onboarding_e2e.sh`, `build-onboarding-artifacts.sh --check`, and Playwright
+desktop/mobile e2e for install, docs, and client-model-routes.

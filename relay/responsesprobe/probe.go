@@ -22,6 +22,9 @@ import (
 
 const responsesProbeTimeout = 5 * time.Second
 
+// wireResponsesCompact namespaces compact endpoint probe cache entries.
+const wireResponsesCompact = modelcatalog.WireProtocol("responses-compact")
+
 var (
 	probeStoreOnce sync.Once
 	probeStoreInst protocol.ProbeStore
@@ -92,14 +95,21 @@ func (g *probeInflightGroup) do(key string, fn func() (protocol.Observation, boo
 // 24h, failure 10min) and self-heals via TTL. Probe errors are conservative:
 // they never force conversion, preserving the passthrough status quo.
 func ShouldServeResponsesViaChat(c context.Context, info *relaycommon.RelayInfo) bool {
-	if info == nil || info.RelayMode != relayconstant.RelayModeResponses {
+	if info == nil {
+		return false
+	}
+	if info.RelayMode != relayconstant.RelayModeResponses && info.RelayMode != relayconstant.RelayModeResponsesCompact {
 		return false
 	}
 	probeURL, ok := responsesProbeTargetURL(info)
 	if !ok {
 		return false
 	}
-	key := protocol.ProbeKey(info.ChannelId, modelcatalog.WireResponses)
+	wire := modelcatalog.WireResponses
+	if info.RelayMode == relayconstant.RelayModeResponsesCompact {
+		wire = wireResponsesCompact
+	}
+	key := protocol.ProbeKey(info.ChannelId, wire)
 	store := ResponsesProbeStore()
 	if obs, found := store.Get(c, key); found {
 		return !obs.Healthy
@@ -115,7 +125,7 @@ func ShouldServeResponsesViaChat(c context.Context, info *relaycommon.RelayInfo)
 	if !definitive {
 		return false
 	}
-	protocol.RecordProbe(store, info.ChannelId, modelcatalog.WireResponses, obs)
+	protocol.RecordProbe(store, info.ChannelId, wire, obs)
 	return !obs.Healthy
 }
 
@@ -127,12 +137,20 @@ func ShouldServeResponsesViaChat(c context.Context, info *relaycommon.RelayInfo)
 //     and cache the decision (native passthrough when supported).
 //   - All other channel types keep their existing behavior (no flag set).
 func DecideResponsesViaChat(ctx context.Context, info *relaycommon.RelayInfo) {
-	if info == nil || info.RelayMode != relayconstant.RelayModeResponses {
+	if info == nil {
+		return
+	}
+	responsesMode := info.RelayMode == relayconstant.RelayModeResponses
+	compactMode := info.RelayMode == relayconstant.RelayModeResponsesCompact
+	if !responsesMode && !compactMode {
 		return
 	}
 	switch info.ChannelType {
 	case constant.ChannelTypeMoonshot, constant.ChannelTypeZhipu_v4:
 		info.ResponsesViaChat = true
+		return
+	case constant.ChannelTypeDeepSeek:
+		info.ResponsesViaChat = compactMode
 		return
 	}
 	if info.ChannelType == constant.ChannelTypeAzure {
@@ -151,7 +169,11 @@ func responsesProbeTargetURL(info *relaycommon.RelayInfo) (string, bool) {
 		return "", false
 	}
 	if info.ChannelType == constant.ChannelTypeOpenAI {
-		return relaycommon.GetFullRequestURL(info.ChannelBaseUrl, "/v1/responses", info.ChannelType), true
+		path := "/v1/responses"
+		if info.RelayMode == relayconstant.RelayModeResponsesCompact {
+			path = "/v1/responses/compact"
+		}
+		return relaycommon.GetFullRequestURL(info.ChannelBaseUrl, path, info.ChannelType), true
 	}
 	return "", false
 }

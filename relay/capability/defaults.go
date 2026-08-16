@@ -92,8 +92,12 @@ func defaultDeclarations() []Declaration {
 		constant.ChannelTypeVertexAi,
 		constant.ChannelTypeZhipu_v4,
 		constant.ChannelTypeMoonshot,
+		constant.ChannelTypeDeepSeek,
 		constant.ChannelTypeAdvancedCustom,
 		constant.ChannelTypeGateway,
+		// OpenAI-compatible upstreams serve /v1/messages via bidirectional
+		// claude<->chat conversion implemented in the openai adaptor.
+		constant.ChannelTypeOpenAI,
 	}
 	support(claudeCompatible, OperationClaudeMessageCreate)
 

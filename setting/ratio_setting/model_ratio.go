@@ -365,14 +365,18 @@ func GetModelPrice(name string, printErr bool) (float64, bool) {
 	}
 
 	if strings.HasSuffix(name, CompactModelSuffix) {
-		price, ok := modelPriceMap.Get(CompactWildcardModelKey)
-		if !ok {
-			if printErr {
-				common.SysError("model price not found: " + name)
-			}
-			return -1, false
+		if price, ok := modelPriceMap.Get(CompactWildcardModelKey); ok {
+			return price, true
 		}
-		return price, true
+		// Fall back to the base model price: a compaction turn is an ordinary
+		// summarization call on the same model.
+		if price, ok := modelPriceMap.Get(strings.TrimSuffix(name, CompactModelSuffix)); ok {
+			return price, true
+		}
+		if printErr {
+			common.SysError("model price not found: " + name)
+		}
+		return -1, false
 	}
 
 	if printErr {
@@ -402,7 +406,9 @@ func GetModelRatio(name string) (float64, bool, string) {
 			if wildcardRatio, ok := modelRatioMap.Get(CompactWildcardModelKey); ok {
 				return wildcardRatio, true, name
 			}
-			//return 0, true, name
+			if baseRatio, ok := modelRatioMap.Get(strings.TrimSuffix(name, CompactModelSuffix)); ok {
+				return baseRatio, true, name
+			}
 		}
 		return 37.5, operation_setting.SelfUseModeEnabled, name
 	}

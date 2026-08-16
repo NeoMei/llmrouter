@@ -150,9 +150,6 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			requestPath = "/v1/responses/compact"
 		}
 	}
-	if strings.HasPrefix(requestPath, "/v1/responses/compact") {
-		testModel = ratio_setting.WithCompactModelSuffix(testModel)
-	}
 
 	c.Request = httptest.NewRequestWithContext(ctx, http.MethodPost, requestPath, nil)
 
@@ -778,10 +775,12 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 		}
 	}
 
-	// Responses compaction models (must use /v1/responses/compact)
+	// Responses compaction models (must use /v1/responses/compact). The relay
+	// layer routes compaction by the base model name and applies the compact
+	// pricing suffix internally, so legacy suffixed test models are trimmed.
 	if strings.HasSuffix(model, ratio_setting.CompactModelSuffix) {
 		return &dto.OpenAIResponsesCompactionRequest{
-			Model: model,
+			Model: strings.TrimSuffix(model, ratio_setting.CompactModelSuffix),
 			Input: testResponsesInput,
 		}
 	}

@@ -25,16 +25,25 @@ import (
 
 func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
+	// Automatic responses negotiation runs before endpoint guards so chat-only
+	// upstreams can serve /v1/responses (and /v1/responses/compact) via
+	// conversion. Pass-through bodies keep native behavior.
+	passthroughBody := model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled
+	if !passthroughBody {
+		responsesprobe.DecideResponsesViaChat(c.Request.Context(), info)
+	}
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact {
 		switch info.ApiType {
 		case appconstant.APITypeOpenAI, appconstant.APITypeCodex:
 		default:
-			return types.NewErrorWithStatusCode(
-				fmt.Errorf("unsupported endpoint %q for api type %d", "/v1/responses/compact", info.ApiType),
-				types.ErrorCodeInvalidRequest,
-				http.StatusBadRequest,
-				types.ErrOptionWithSkipRetry(),
-			)
+			if !info.ResponsesViaChat {
+				return types.NewErrorWithStatusCode(
+					fmt.Errorf("unsupported endpoint %q for api type %d", "/v1/responses/compact", info.ApiType),
+					types.ErrorCodeInvalidRequest,
+					http.StatusBadRequest,
+					types.ErrOptionWithSkipRetry(),
+				)
+			}
 		}
 	}
 
@@ -71,15 +80,6 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	request, err := common.DeepCopy(responsesReq)
 	if err != nil {
 		return types.NewError(fmt.Errorf("failed to copy request to GeneralOpenAIRequest: %w", err), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
-	}
-
-	// Automatic responses negotiation: for chat-only upstreams (probed or
-	// declared), convert the request to chat completions. Decided before the
-	// state expansion below so previous_response_id is replayed into full
-	// history before the chat converter (which has no notion of response IDs).
-	passthroughBody := model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled
-	if !passthroughBody {
-		responsesprobe.DecideResponsesViaChat(c.Request.Context(), info)
 	}
 
 	// Bounded Responses continuity: expand previous_response_id chains only when
@@ -124,6 +124,24 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
 	adaptor.Init(info)
+	if info.RelayMode == relayconstant.RelayModeResponsesCompact && info.ResponsesViaChat {
+		usage, compactErr := responsesCompactViaChat(c, info, adaptor, request)
+		if compactErr != nil {
+			return compactErr
+		}
+		usageDto := usage
+		originModelName := info.OriginModelName
+		originPriceData := info.PriceData
+		if _, err := helper.ModelPriceHelper(c, info, info.GetEstimatePromptTokens(), &types.TokenCountMeta{}); err != nil {
+			info.OriginModelName = originModelName
+			info.PriceData = originPriceData
+			return types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithSkipRetry(), types.ErrOptionWithStatusCode(http.StatusBadRequest))
+		}
+		service.PostTextConsumeQuota(c, info, usageDto, nil)
+		info.OriginModelName = originModelName
+		info.PriceData = originPriceData
+		return nil
+	}
 	var requestBody io.Reader
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
 		storage, err := common.GetBodyStorage(c)

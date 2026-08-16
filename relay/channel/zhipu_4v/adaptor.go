@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relay/responsesprobe"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/samber/lo"
 
@@ -100,7 +101,13 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	return nil, channel.ErrUnsupportedOperation
+	// Zhipu upstream is chat-only: always convert responses requests.
+	// GetRequestURL already targets the chat completions endpoint for this
+	// mode, and the shared openai response handler converts back.
+	if info != nil {
+		info.ResponsesViaChat = true
+	}
+	return responsesprobe.ConvertResponsesRequestToChat(request)
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {

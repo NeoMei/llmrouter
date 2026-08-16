@@ -13,6 +13,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relay/responsesprobe"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/modelcatalog"
 	"github.com/QuantumNous/new-api/service/responsesstate"
@@ -72,10 +73,20 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		return types.NewError(fmt.Errorf("failed to copy request to GeneralOpenAIRequest: %w", err), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
 
+	// Automatic responses negotiation: for chat-only upstreams (probed or
+	// declared), convert the request to chat completions. Decided before the
+	// state expansion below so previous_response_id is replayed into full
+	// history before the chat converter (which has no notion of response IDs).
+	passthroughBody := model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled
+	if !passthroughBody {
+		responsesprobe.DecideResponsesViaChat(c.Request.Context(), info)
+	}
+
 	// Bounded Responses continuity: expand previous_response_id chains only when
 	// the selected upstream wire cannot handle native state (chat conversion).
 	// Native responses providers pass the ID through unchanged.
-	if responsesstate.Enabled() && info.SelectedWire != "" && info.SelectedWire != string(modelcatalog.WireResponses) && request.PreviousResponseID != "" {
+	if responsesstate.Enabled() && request.PreviousResponseID != "" &&
+		(info.ResponsesViaChat || (info.SelectedWire != "" && info.SelectedWire != string(modelcatalog.WireResponses))) {
 		if store, storeErr := responsesstate.Default(); storeErr == nil {
 			encoded, marshalErr := common.Marshal(request)
 			if marshalErr != nil {

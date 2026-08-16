@@ -108,6 +108,7 @@ type RelayInfo struct {
 	BillingModelName       string          // 用于计费的规范模型名称
 	ModelRouteId           int             // 命中的公开模型路由目标 ID
 	SelectedWire           string          // 经 capability/probe 选择的 wire protocol
+	ResponsesViaChat       bool            // /v1/responses 需转换为 chat completions 发上游
 	RouteDecisionTrace     json.RawMessage // 序列化的路由决策 trace
 	RequestURLPath         string
 	RequestHeaders         map[string]string

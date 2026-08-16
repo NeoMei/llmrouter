@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relay/responsesprobe"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -96,7 +97,13 @@ func isTemperatureOneOnlyModel(model string) bool {
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	return nil, channel.ErrUnsupportedOperation
+	// Moonshot upstream is chat-only: always convert responses requests.
+	// GetRequestURL already targets /v1/chat/completions for this mode, and
+	// the shared openai response handler converts back via ResponsesViaChat.
+	if info != nil {
+		info.ResponsesViaChat = true
+	}
+	return responsesprobe.ConvertResponsesRequestToChat(request)
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {

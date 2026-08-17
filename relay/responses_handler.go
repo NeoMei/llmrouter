@@ -104,9 +104,9 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			expanded, expandErr := responsesstate.Expand(c.Request.Context(), store, expectedScope, encoded)
 			if expandErr != nil {
 				common.SysLog("responses state expansion skipped: " + expandErr.Error())
-			} else if len(expanded) > 0 && string(expanded) != string(encoded) {
+			} else if len(expanded.Request) > 0 && string(expanded.Request) != string(encoded) {
 				var expandedReq dto.OpenAIResponsesRequest
-				if unmarshalErr := common.Unmarshal(expanded, &expandedReq); unmarshalErr != nil {
+				if unmarshalErr := common.Unmarshal(expanded.Request, &expandedReq); unmarshalErr != nil {
 					common.SysLog("responses state expansion decode failed: " + unmarshalErr.Error())
 				} else {
 					request = &expandedReq

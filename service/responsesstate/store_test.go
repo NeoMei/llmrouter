@@ -357,18 +357,21 @@ func TestExpandPreviousResponsePrependsStoredTurn(t *testing.T) {
 	store := seededStore(t, `[{"type":"message","role":"user","content":"first"}]`, `[{"type":"message","role":"assistant","content":"answer"}]`)
 	expanded, err := Expand(context.Background(), store, testScope(), json.RawMessage(`{"previous_response_id":"resp_1","input":[{"type":"message","role":"user","content":"second"}]}`))
 	require.NoError(t, err)
-	require.Contains(t, string(expanded), `"content":"first"`)
-	require.Contains(t, string(expanded), `"content":"second"`)
-	require.NotContains(t, string(expanded), `"previous_response_id"`)
+	require.Contains(t, string(expanded.Request), `"content":"first"`)
+	require.Contains(t, string(expanded.Request), `"content":"second"`)
+	require.NotContains(t, string(expanded.Request), `"previous_response_id"`)
+	assert.JSONEq(t, `[{"type":"message","role":"user","content":"second"}]`, string(expanded.CurrentInput))
+	assert.Equal(t, "resp_1", expanded.ParentResponseID)
+	assert.Equal(t, testScope(), expanded.Scope)
 }
 
 func TestExpandRejectsCycles(t *testing.T) {
 	store := NewMemory(1*time.Hour, 1<<20)
 	record1 := testRecord("resp_1")
-	record1.Input = json.RawMessage(`[{"type":"previous_response_id","id":"resp_2"}]`)
+	record1.ParentResponseID = "resp_2"
 	require.NoError(t, store.Save(context.Background(), record1))
 	record2 := testRecord("resp_2")
-	record2.Input = json.RawMessage(`[{"type":"previous_response_id","id":"resp_1"}]`)
+	record2.ParentResponseID = "resp_1"
 	require.NoError(t, store.Save(context.Background(), record2))
 	_, err := Expand(context.Background(), store, testScope(), json.RawMessage(`{"previous_response_id":"resp_1","input":[]}`))
 	require.ErrorIs(t, err, ErrReplayRejected)
@@ -378,14 +381,138 @@ func TestExpandRejectsTooManyHops(t *testing.T) {
 	store := NewMemory(1*time.Hour, 1<<20)
 	for i := 0; i < MaxReplayHops+1; i++ {
 		next := fmt.Sprintf("resp_%d", i+1)
-		input := json.RawMessage(`[]`)
-		if i < MaxReplayHops {
-			input = json.RawMessage(fmt.Sprintf(`[{"type":"previous_response_id","id":"%s"}]`, next))
-		}
 		record := testRecord(fmt.Sprintf("resp_%d", i))
-		record.Input = input
+		if i < MaxReplayHops {
+			record.ParentResponseID = next
+		}
 		require.NoError(t, store.Save(context.Background(), record))
 	}
 	_, err := Expand(context.Background(), store, testScope(), json.RawMessage(`{"previous_response_id":"resp_0","input":[]}`))
 	require.ErrorIs(t, err, ErrReplayRejected)
+}
+
+type loadCountingStore struct {
+	Store
+	loads int
+}
+
+func (s *loadCountingStore) Load(ctx context.Context, expected Scope, responseID string) (Record, error) {
+	s.loads++
+	return s.Store.Load(ctx, expected, responseID)
+}
+
+func TestExpandUsesParentLinksWithoutResavingMaterializedHistory(t *testing.T) {
+	memory := NewMemory(time.Hour, 1<<20)
+	root := testRecord("resp_1")
+	root.Input = json.RawMessage(`[{"turn":"root-input"}]`)
+	root.Output = json.RawMessage(`[{"turn":"root-output"}]`)
+	require.NoError(t, memory.Save(context.Background(), root))
+
+	child := testRecord("resp_2")
+	child.ParentResponseID = root.ResponseID
+	child.Input = json.RawMessage(`[{"turn":"child-input"}]`)
+	child.Output = json.RawMessage(`[{"turn":"child-output"}]`)
+	require.NoError(t, memory.Save(context.Background(), child))
+
+	store := &loadCountingStore{Store: memory}
+	current := json.RawMessage(`[{ "turn": "current-input" }]`)
+	expansion, err := Expand(context.Background(), store, testScope(), json.RawMessage(`{"model":"model-a","previous_response_id":"resp_2","input":[{ "turn": "current-input" }]}`))
+	require.NoError(t, err)
+	assert.Equal(t, 2, store.loads, "a retained chain of N turns must perform exactly N loads")
+	assert.Equal(t, "resp_2", expansion.ParentResponseID)
+	assert.Equal(t, testScope(), expansion.Scope)
+	assert.Equal(t, current, expansion.CurrentInput, "current input must remain the original unmaterialized input")
+
+	var payload struct {
+		PreviousResponseID string            `json:"previous_response_id"`
+		Input              []json.RawMessage `json:"input"`
+	}
+	require.NoError(t, common.Unmarshal(expansion.Request, &payload))
+	assert.Empty(t, payload.PreviousResponseID)
+	require.Len(t, payload.Input, 5)
+	assert.JSONEq(t, `{"turn":"root-input"}`, string(payload.Input[0]))
+	assert.JSONEq(t, `{"turn":"root-output"}`, string(payload.Input[1]))
+	assert.JSONEq(t, `{"turn":"child-input"}`, string(payload.Input[2]))
+	assert.JSONEq(t, `{"turn":"child-output"}`, string(payload.Input[3]))
+	assert.JSONEq(t, `{"turn":"current-input"}`, string(payload.Input[4]))
+
+	require.NoError(t, SaveTurn(context.Background(), memory, Record{
+		Version:          CurrentVersion,
+		Scope:            expansion.Scope,
+		ResponseID:       "resp_3",
+		ParentResponseID: expansion.ParentResponseID,
+		Input:            expansion.CurrentInput,
+		Output:           json.RawMessage(`[{"turn":"current-output"}]`),
+	}))
+	saved, err := memory.Load(context.Background(), testScope(), "resp_3")
+	require.NoError(t, err)
+	assert.JSONEq(t, string(expansion.CurrentInput), string(saved.Input))
+	assert.NotContains(t, string(saved.Input), "root-input")
+	assert.NotContains(t, string(saved.Input), "child-input")
+}
+
+func TestExpandIgnoresSyntheticPreviousResponseItems(t *testing.T) {
+	memory := NewMemory(time.Hour, 1<<20)
+	unused := testRecord("resp_unused")
+	unused.Input = json.RawMessage(`[{"turn":"must-not-load"}]`)
+	require.NoError(t, memory.Save(context.Background(), unused))
+
+	record := testRecord("resp_leaf")
+	record.Input = json.RawMessage(`[{"type":"previous_response_id","id":"resp_unused"}]`)
+	require.NoError(t, memory.Save(context.Background(), record))
+
+	store := &loadCountingStore{Store: memory}
+	expansion, err := Expand(context.Background(), store, testScope(), json.RawMessage(`{"previous_response_id":"resp_leaf","input":[]}`))
+	require.NoError(t, err)
+	assert.Equal(t, 1, store.loads)
+	assert.NotContains(t, string(expansion.Request), "must-not-load")
+	assert.Contains(t, string(expansion.Request), `"type":"previous_response_id"`)
+}
+
+func TestExpandAdoptsStoredTaskScope(t *testing.T) {
+	store := NewMemory(time.Hour, 1<<20)
+	record := testRecord("resp_task_adopt")
+	require.NoError(t, store.Save(context.Background(), record))
+
+	expected := testScope()
+	expected.ClientTaskID = ""
+	expansion, err := Expand(context.Background(), store, expected, json.RawMessage(`{"previous_response_id":"resp_task_adopt","input":[]}`))
+	require.NoError(t, err)
+	assert.Equal(t, "task-a", expansion.Scope.ClientTaskID)
+}
+
+func TestExpandWithoutParentStillPreservesCurrentInput(t *testing.T) {
+	request := json.RawMessage(`{"model":"model-a","input":[ {"turn":"current"} ]}`)
+	expansion, err := Expand(context.Background(), nil, testScope(), request)
+	require.NoError(t, err)
+	assert.Equal(t, request, expansion.Request)
+	assert.Equal(t, testScope(), expansion.Scope)
+	assert.Empty(t, expansion.ParentResponseID)
+	assert.Equal(t, json.RawMessage(`[ {"turn":"current"} ]`), expansion.CurrentInput)
+}
+
+func TestExpandWithParentRejectsNilStore(t *testing.T) {
+	_, err := Expand(context.Background(), nil, testScope(), json.RawMessage(`{"previous_response_id":"resp_1","input":[]}`))
+	require.Error(t, err)
+}
+
+func TestSaveTurnReturnsValidationAndStorageErrors(t *testing.T) {
+	err := SaveTurn(context.Background(), nil, testRecord("resp_nil"))
+	require.Error(t, err)
+
+	store := NewMemory(time.Hour, 1<<20)
+	record := testRecord("resp_defaulted")
+	record.Scope.ClientTaskID = ""
+	record.ExpiresAt = time.Time{}
+	require.NoError(t, SaveTurn(context.Background(), store, record))
+
+	expected := testScope()
+	expected.ClientTaskID = record.ResponseID
+	saved, err := store.Load(context.Background(), expected, record.ResponseID)
+	require.NoError(t, err)
+	assert.Equal(t, record.ResponseID, saved.Scope.ClientTaskID)
+	assert.WithinDuration(t, time.Now().Add(DefaultRecordTTL), saved.ExpiresAt, time.Second)
+
+	invalid := testRecord("")
+	require.Error(t, SaveTurn(context.Background(), store, invalid))
 }

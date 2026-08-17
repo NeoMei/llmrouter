@@ -181,20 +181,25 @@ func persistResponsesTurn(c *gin.Context, info *relaycommon.RelayInfo, responses
 	if err != nil {
 		return
 	}
-	responsesstate.SaveTurn(
+	if err := responsesstate.SaveTurn(
 		c.Request.Context(),
 		store,
-		responsesstate.Scope{
-			TenantID:  info.UserId,
-			UserID:    info.UserId,
-			TokenID:   info.TokenId,
-			RouteID:   info.ModelRouteId,
-			TargetID:  info.ModelTargetId,
-			ChannelID: info.ResolvedChannelId,
-			Model:     info.ResolvedModelNameOrOrigin(),
+		responsesstate.Record{
+			Version: responsesstate.CurrentVersion,
+			Scope: responsesstate.Scope{
+				TenantID:  info.UserId,
+				UserID:    info.UserId,
+				TokenID:   info.TokenId,
+				RouteID:   info.ModelRouteId,
+				TargetID:  info.ModelTargetId,
+				ChannelID: info.ResolvedChannelId,
+				Model:     info.ResolvedModelNameOrOrigin(),
+			},
+			ResponseID: responsesResponse.ID,
+			Input:      input,
+			Output:     output,
 		},
-		responsesResponse.ID,
-		input,
-		output,
-	)
+	); err != nil {
+		common.SysLog("responses state save skipped: " + err.Error())
+	}
 }

@@ -34,7 +34,7 @@ func TestResponsesStateExpandOnChatWire(t *testing.T) {
 	require.NoError(t, err)
 
 	var payload map[string]any
-	require.NoError(t, common.Unmarshal(expanded, &payload))
+	require.NoError(t, common.Unmarshal(expanded.Request, &payload))
 	require.Empty(t, payload["previous_response_id"], "previous_response_id must be removed after expansion")
 
 	var input []any

@@ -32,17 +32,20 @@ func TestPersistResponsesTurn(t *testing.T) {
 		},
 	}
 
-	responsesstate.SaveTurn(
+	require.NoError(t, responsesstate.SaveTurn(
 		c.Request.Context(),
 		store,
-		responsesstate.Scope{
-			TenantID: info.UserId, UserID: info.UserId, TokenID: info.TokenId, RouteID: info.ModelRouteId,
-			TargetID: info.ModelTargetId, ChannelID: info.ResolvedChannelId, Model: info.ResolvedModelNameOrOrigin(),
+		responsesstate.Record{
+			Version: responsesstate.CurrentVersion,
+			Scope: responsesstate.Scope{
+				TenantID: info.UserId, UserID: info.UserId, TokenID: info.TokenId, RouteID: info.ModelRouteId,
+				TargetID: info.ModelTargetId, ChannelID: info.ResolvedChannelId, Model: info.ResolvedModelNameOrOrigin(),
+			},
+			ResponseID: "resp_1",
+			Input:      json.RawMessage(`[{"type":"message","role":"user","content":"hello"}]`),
+			Output:     json.RawMessage(`[{"type":"message","role":"assistant","content":"answer"}]`),
 		},
-		"resp_1",
-		json.RawMessage(`[{"type":"message","role":"user","content":"hello"}]`),
-		json.RawMessage(`[{"type":"message","role":"assistant","content":"answer"}]`),
-	)
+	))
 
 	expected := responsesstate.Scope{
 		TenantID: 11, UserID: 11, TokenID: 7, RouteID: 3,

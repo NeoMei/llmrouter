@@ -144,126 +144,123 @@ func scopeMatches(expected, actual Scope) bool {
 		(expected.ClientTaskID == "" || expected.ClientTaskID == actual.ClientTaskID)
 }
 
-// Expand prepends stored turns from previous_response_id chains into the request
-// input. It only expands when the selected wire cannot handle native state; the
-// caller is responsible for removing previous_response_id after expansion.
-func Expand(ctx context.Context, store Store, expected Scope, request json.RawMessage) (json.RawMessage, error) {
-	if store == nil {
-		return request, nil
-	}
+// Expansion contains both the materialized request sent upstream and the
+// unmaterialized continuity metadata needed to persist the current turn.
+type Expansion struct {
+	Request          json.RawMessage
+	Scope            Scope
+	ParentResponseID string
+	CurrentInput     json.RawMessage
+}
+
+// Expand prepends stored turns from a bounded ParentResponseID chain into the
+// request input. Stored turns contain only their own input and output, so
+// replay and persistence grow linearly with the number of retained turns.
+func Expand(ctx context.Context, store Store, expected Scope, request json.RawMessage) (Expansion, error) {
 	var payload map[string]any
 	if err := common.Unmarshal(request, &payload); err != nil {
-		return nil, fmt.Errorf("invalid responses request: %w", err)
+		return Expansion{}, fmt.Errorf("invalid responses request: %w", err)
 	}
-	previousID := common.Interface2String(payload["previous_response_id"])
+	var envelope struct {
+		PreviousResponseID string          `json:"previous_response_id"`
+		Input              json.RawMessage `json:"input"`
+	}
+	if err := common.Unmarshal(request, &envelope); err != nil {
+		return Expansion{}, fmt.Errorf("invalid responses request: %w", err)
+	}
+	expansion := Expansion{
+		Request:          append(json.RawMessage(nil), request...),
+		Scope:            expected,
+		ParentResponseID: envelope.PreviousResponseID,
+		CurrentInput:     append(json.RawMessage(nil), envelope.Input...),
+	}
+	previousID := envelope.PreviousResponseID
 	if previousID == "" {
-		return request, nil
+		return expansion, nil
+	}
+	if store == nil {
+		return Expansion{}, errors.New("responses state store is nil")
 	}
 
 	seen := make(map[string]struct{})
-	accumulated := make([]any, 0)
+	records := make([]Record, 0)
+	loadScope := expected
 	for hops := 0; hops < MaxReplayHops; hops++ {
 		if _, ok := seen[previousID]; ok {
-			return nil, fmt.Errorf("%w: cycle detected at %q", ErrReplayRejected, previousID)
+			return Expansion{}, fmt.Errorf("%w: cycle detected at %q", ErrReplayRejected, previousID)
 		}
 		seen[previousID] = struct{}{}
 
-		record, err := store.Load(ctx, expected, previousID)
+		record, err := store.Load(ctx, loadScope, previousID)
 		if err != nil {
-			return nil, err
+			return Expansion{}, err
 		}
 		if time.Now().After(record.ExpiresAt) {
-			return nil, ErrNotFound
+			return Expansion{}, ErrNotFound
 		}
-
-		var priorInput []any
-		if err := common.Unmarshal(record.Input, &priorInput); err != nil {
-			return nil, fmt.Errorf("invalid stored input: %w", err)
+		records = append(records, record)
+		if len(records) == 1 {
+			expansion.Scope = record.Scope
+			loadScope = record.Scope
 		}
-		var priorOutput []any
-		if err := common.Unmarshal(record.Output, &priorOutput); err != nil {
-			return nil, fmt.Errorf("invalid stored output: %w", err)
-		}
-		// Prepend input then output turn, preserving order within each list.
-		turn := make([]any, 0, len(priorInput)+len(priorOutput))
-		turn = append(turn, priorInput...)
-		turn = append(turn, priorOutput...)
-		accumulated = append(turn, accumulated...)
-
-		// Find the next previous_response_id in the stored input, if any.
-		nextID := ""
-		for _, item := range priorInput {
-			if m, ok := item.(map[string]any); ok && common.Interface2String(m["type"]) == "previous_response_id" {
-				if id := common.Interface2String(m["id"]); id != "" {
-					nextID = id
-					break
-				}
-			}
-		}
-		if nextID != "" {
-			previousID = nextID
-		} else {
+		if record.ParentResponseID == "" {
 			previousID = ""
 			break
 		}
+		previousID = record.ParentResponseID
 	}
 	if previousID != "" {
-		return nil, fmt.Errorf("%w: more than %d replay hops", ErrReplayRejected, MaxReplayHops)
-	}
-
-	if len(accumulated) == 0 {
-		return request, nil
+		return Expansion{}, fmt.Errorf("%w: more than %d replay hops", ErrReplayRejected, MaxReplayHops)
 	}
 
 	var currentInput []any
-	if raw, ok := payload["input"].(json.RawMessage); ok && len(raw) > 0 {
-		if err := common.Unmarshal(raw, &currentInput); err != nil {
-			return nil, fmt.Errorf("invalid request input: %w", err)
+	if len(expansion.CurrentInput) > 0 {
+		if err := common.Unmarshal(expansion.CurrentInput, &currentInput); err != nil {
+			return Expansion{}, fmt.Errorf("invalid request input: %w", err)
 		}
-	} else if raw, ok := payload["input"].([]byte); ok && len(raw) > 0 {
-		if err := common.Unmarshal(raw, &currentInput); err != nil {
-			return nil, fmt.Errorf("invalid request input: %w", err)
-		}
-	} else if raw, ok := payload["input"].([]any); ok {
-		currentInput = raw
 	}
 
+	accumulated := make([]any, 0)
+	for i := len(records) - 1; i >= 0; i-- {
+		var priorInput []any
+		if err := common.Unmarshal(records[i].Input, &priorInput); err != nil {
+			return Expansion{}, fmt.Errorf("invalid stored input: %w", err)
+		}
+		var priorOutput []any
+		if err := common.Unmarshal(records[i].Output, &priorOutput); err != nil {
+			return Expansion{}, fmt.Errorf("invalid stored output: %w", err)
+		}
+		accumulated = append(accumulated, priorInput...)
+		accumulated = append(accumulated, priorOutput...)
+	}
 	newInput := append(accumulated, currentInput...)
 	encoded, err := common.Marshal(newInput)
 	if err != nil {
-		return nil, fmt.Errorf("encode expanded input: %w", err)
+		return Expansion{}, fmt.Errorf("encode expanded input: %w", err)
 	}
 	payload["input"] = json.RawMessage(encoded)
 	delete(payload, "previous_response_id")
 
 	result, err := common.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("encode expanded request: %w", err)
+		return Expansion{}, fmt.Errorf("encode expanded request: %w", err)
 	}
-	return json.RawMessage(result), nil
+	expansion.Request = json.RawMessage(result)
+	return expansion, nil
 }
 
 // SaveTurn persists a completed Responses turn for later previous_response_id
-// replay. It is a best-effort helper: callers pass the complete route scope,
-// response ID, normalized input items, and output items. The record is bounded
-// by ValidateRecord and silently ignored on validation failure so a bad turn
-// never breaks the relay path.
-func SaveTurn(ctx context.Context, store Store, scope Scope, responseID string, input, output json.RawMessage) {
-	if store == nil || responseID == "" {
-		return
+// replay. Callers provide a complete v2 record and decide whether a returned
+// persistence error is best-effort for their request path.
+func SaveTurn(ctx context.Context, store Store, record Record) error {
+	if store == nil {
+		return errors.New("responses state store is nil")
 	}
-	if scope.ClientTaskID == "" {
-		scope.ClientTaskID = responseID
+	if record.Scope.ClientTaskID == "" {
+		record.Scope.ClientTaskID = record.ResponseID
 	}
-	record := Record{
-		Version:    CurrentVersion,
-		Scope:      scope,
-		ResponseID: responseID,
-		Input:      input,
-		Output:     output,
-		ExpiresAt:  time.Now().Add(DefaultRecordTTL),
+	if record.ExpiresAt.IsZero() {
+		record.ExpiresAt = time.Now().Add(DefaultRecordTTL)
 	}
-	if err := store.Save(ctx, record); err != nil {
-		common.SysLog("responses state save skipped: " + err.Error())
-	}
+	return store.Save(ctx, record)
 }

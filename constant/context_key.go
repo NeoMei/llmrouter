@@ -86,4 +86,8 @@ const (
 	// ContextKeyResponsesPreparedRequest stores a continuity-validated request
 	// prepared before billing and upstream dispatch for the current attempt.
 	ContextKeyResponsesPreparedRequest ContextKey = "responses_prepared_request"
+
+	// ContextKeyToolPolicy stores the immutable normalized tool declaration and
+	// choice snapshot for the current upstream attempt.
+	ContextKeyToolPolicy ContextKey = "tool_policy"
 )

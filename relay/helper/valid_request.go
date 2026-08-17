@@ -1,6 +1,7 @@
 package helper
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -135,7 +136,7 @@ func exceedsMaxTokensLimit(values ...*uint) bool {
 
 func GetAndValidateResponsesRequest(c *gin.Context) (*dto.OpenAIResponsesRequest, error) {
 	request := &dto.OpenAIResponsesRequest{}
-	err := common.UnmarshalBodyReusable(c, request)
+	err := unmarshalUniqueResponsesBody(c, request)
 	if err != nil {
 		return nil, err
 	}
@@ -153,13 +154,73 @@ func GetAndValidateResponsesRequest(c *gin.Context) (*dto.OpenAIResponsesRequest
 
 func GetAndValidateResponsesCompactionRequest(c *gin.Context) (*dto.OpenAIResponsesCompactionRequest, error) {
 	request := &dto.OpenAIResponsesCompactionRequest{}
-	if err := common.UnmarshalBodyReusable(c, request); err != nil {
+	if err := unmarshalUniqueResponsesBody(c, request); err != nil {
 		return nil, err
 	}
 	if request.Model == "" {
 		return nil, errors.New("model is required")
 	}
 	return request, nil
+}
+
+// unmarshalUniqueResponsesBody parses from an independent BodyStorage reader
+// so validation cannot consume the replayable request body. Duplicate keys are
+// rejected recursively before billing or upstream dispatch can use parser-
+// dependent values.
+func unmarshalUniqueResponsesBody(c *gin.Context, request any) error {
+	return validateUniqueResponsesBody(c, request)
+}
+
+const responsesUniqueJSONValidatedKey = "responses_unique_json_validated"
+
+// ValidateUniqueResponsesBody validates the original replayable request body
+// when a caller reaches a Responses execution path without using the standard
+// request decoder. Standard requests carry a marker and are not read twice.
+func ValidateUniqueResponsesBody(c *gin.Context) error {
+	if c != nil && c.GetBool(responsesUniqueJSONValidatedKey) {
+		return nil
+	}
+	var raw json.RawMessage
+	return validateUniqueResponsesBody(c, &raw)
+}
+
+func validateUniqueResponsesBody(c *gin.Context, request any) error {
+	if c == nil || c.Request == nil {
+		return types.NewErrorWithStatusCode(
+			errors.New("responses request context is incomplete"),
+			types.ErrorCodeInvalidRequest,
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return err
+	}
+	reader, err := storage.NewReader()
+	if err != nil {
+		return err
+	}
+	rawRequest, readErr := io.ReadAll(reader)
+	closeErr := reader.Close()
+	if readErr != nil {
+		return readErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if err := common.UnmarshalUnique(rawRequest, request); err != nil {
+		return types.NewErrorWithStatusCode(
+			err,
+			types.ErrorCodeInvalidRequest,
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+	// Preserve the reusable-body behavior expected by the downstream relay.
+	c.Request.Body = io.NopCloser(storage)
+	c.Set(responsesUniqueJSONValidatedKey, true)
+	return nil
 }
 
 func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageRequest, error) {

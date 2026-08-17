@@ -25,6 +25,9 @@ import (
 )
 
 func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
+	if err := helper.ValidateUniqueResponsesBody(c); err != nil {
+		return types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
 	info.InitChannelMeta(c)
 	// Automatic responses negotiation runs before endpoint guards so chat-only
 	// upstreams can serve /v1/responses (and /v1/responses/compact) via
@@ -325,8 +328,14 @@ func PrepareResponsesContinuityForAttempt(c *gin.Context, info *relaycommon.Rela
 	if c != nil {
 		c.Set(string(appconstant.ContextKeyResponsesPreparedRequest), nil)
 	}
-	if !responsesstate.Enabled() || info == nil ||
+	if info == nil ||
 		(info.RelayMode != relayconstant.RelayModeResponses && info.RelayMode != relayconstant.RelayModeResponsesCompact) {
+		return nil
+	}
+	if err := helper.ValidateUniqueResponsesBody(c); err != nil {
+		return types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+	if !responsesstate.Enabled() {
 		return nil
 	}
 	var request *dto.OpenAIResponsesRequest

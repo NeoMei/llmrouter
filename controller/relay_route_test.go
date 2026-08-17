@@ -89,10 +89,12 @@ func setupRelayRouteRuntimeDB(t *testing.T) *gorm.DB {
 func relayRouteResolutionContext(t *testing.T) *gin.Context {
 	t.Helper()
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"coder","input":[]}`))
+	c.Request.Header.Set("Content-Type", "application/json")
 	c.Set("id", 99)
 	common.SetContextKey(c, constant.ContextKeyTokenGroup, "default")
 	common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+	t.Cleanup(func() { common.CleanupBodyStorage(c) })
 	return c
 }
 
@@ -372,6 +374,59 @@ func TestPrepareRouteCandidateExpandsContinuityBeforeReserve(t *testing.T) {
 
 	require.Nil(t, apiErr)
 	require.Len(t, spy.calls, 1)
+}
+
+func TestPrepareRouteCandidateRejectsDuplicateResponsesJSONBeforeReserveOrSend(t *testing.T) {
+	t.Setenv("RESPONSES_STATE_ENABLED", "0")
+	responsesstate.ResetForTest()
+	t.Cleanup(responsesstate.ResetForTest)
+	db := setupRelayRouteRuntimeDB(t)
+	seedRelayRouteTargets(t, db, 128000)
+
+	for _, test := range []struct {
+		name        string
+		mode        int
+		format      types.RelayFormat
+		path        string
+		request     dto.Request
+		requestBody string
+	}{
+		{
+			name: "responses", mode: relayconstant.RelayModeResponses, format: types.RelayFormatOpenAIResponses,
+			path: "/v1/responses", request: &dto.OpenAIResponsesRequest{Model: "other", Input: []byte(`[]`)},
+			requestBody: `{"model":"authorized","model":"other","input":[]}`,
+		},
+		{
+			name: "responses compact", mode: relayconstant.RelayModeResponsesCompact, format: types.RelayFormatOpenAIResponsesCompaction,
+			path: "/v1/responses/compact", request: &dto.OpenAIResponsesCompactionRequest{Model: "other", Input: []byte(`[]`)},
+			requestBody: `{"model":"authorized","model":"other","input":[]}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := relayRouteResolutionContext(t)
+			c.Request = httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(test.requestBody))
+			c.Request.Header.Set("Content-Type", "application/json")
+			defer common.CleanupBodyStorage(c)
+			spy := &relayRouteBillingSpy{}
+			info := &relaycommon.RelayInfo{
+				RelayMode: test.mode, RelayFormat: test.format, Request: test.request,
+				OriginModelName: "other", UserId: 99, TokenId: 7, UserGroup: "default", UsingGroup: "default", Billing: spy,
+				RouteCandidates: []relaycommon.RouteCandidate{{
+					RouteID: 1, TargetID: 201, ChannelID: 101, UpstreamModel: "upstream-a", BillingModel: "gpt-4o-mini",
+					SelectedWire: "responses", SelectedGroup: "default", ContextWindow: 128000,
+				}},
+			}
+
+			apiErr := prepareRouteCandidateForAttempt(c, info, 0, 10, &types.TokenCountMeta{})
+
+			require.NotNil(t, apiErr)
+			assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
+			assert.Equal(t, types.ErrorCodeInvalidRequest, apiErr.GetErrorCode())
+			assert.True(t, types.IsSkipRetryError(apiErr))
+			assert.Empty(t, spy.calls, "duplicate-key validation must fail before quota reservation")
+			assert.Zero(t, info.UpstreamRequestBodySize, "duplicate-key validation must fail before upstream body preparation or send")
+		})
+	}
 }
 
 func TestSelectRouteCandidateForAttemptRefreshesAuthoritativeIdentity(t *testing.T) {

@@ -137,7 +137,9 @@ func TestPrepareResponsesContinuityForAttemptRejectsInvalidTaskBeforeRelay(t *te
 	t.Cleanup(responsesstate.ResetForTest)
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"model-a","input":[],"client_metadata":{"task_id":"not allowed"}}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	defer common.CleanupBodyStorage(c)
 	info := &relaycommon.RelayInfo{
 		RelayMode: relayconstant.RelayModeResponses,
 		Request: &dto.OpenAIResponsesRequest{
@@ -154,6 +156,7 @@ func TestPrepareResponsesContinuityForAttemptRejectsInvalidTaskBeforeRelay(t *te
 	require.NotNil(t, apiErr)
 	assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
 	assert.Equal(t, types.ErrorCodeInvalidRequest, apiErr.GetErrorCode())
+	assert.ErrorIs(t, apiErr, responsesstate.ErrInvalidClientTaskID)
 }
 
 func TestResponsesHelperReturnsInvalidClientTaskID(t *testing.T) {
@@ -162,7 +165,9 @@ func TestResponsesHelperReturnsInvalidClientTaskID(t *testing.T) {
 	t.Cleanup(responsesstate.ResetForTest)
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"model-a","input":[],"client_metadata":{"task_id":"not allowed"}}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	defer common.CleanupBodyStorage(c)
 	info := &relaycommon.RelayInfo{
 		RelayMode: relayconstant.RelayModeResponses,
 		Request: &dto.OpenAIResponsesRequest{
@@ -177,6 +182,37 @@ func TestResponsesHelperReturnsInvalidClientTaskID(t *testing.T) {
 	require.NotNil(t, apiErr)
 	assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
 	assert.Equal(t, types.ErrorCodeInvalidRequest, apiErr.GetErrorCode())
+	assert.ErrorIs(t, apiErr, responsesstate.ErrInvalidClientTaskID)
+}
+
+func TestResponsesHelperRejectsDuplicateJSONBeforeNativePassthrough(t *testing.T) {
+	t.Setenv("RESPONSES_STATE_ENABLED", "0")
+	responsesstate.ResetForTest()
+	t.Cleanup(responsesstate.ResetForTest)
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"authorized","model":"other","input":[]}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	defer common.CleanupBodyStorage(c)
+	info := &relaycommon.RelayInfo{
+		RelayMode:    relayconstant.RelayModeResponses,
+		RelayFormat:  types.RelayFormatOpenAIResponses,
+		Request:      &dto.OpenAIResponsesRequest{Model: "other", Input: json.RawMessage(`[]`)},
+		SelectedWire: string(modelcatalog.WireResponses),
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelSetting: dto.ChannelSettings{PassThroughBodyEnabled: true},
+		},
+	}
+
+	apiErr := ResponsesHelper(c, info)
+
+	require.NotNil(t, apiErr)
+	assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
+	assert.Equal(t, types.ErrorCodeInvalidRequest, apiErr.GetErrorCode())
+	assert.True(t, types.IsSkipRetryError(apiErr))
+	var duplicateErr *common.DuplicateJSONKeyError
+	assert.ErrorAs(t, apiErr, &duplicateErr)
+	assert.Zero(t, info.UpstreamRequestBodySize)
 }
 
 func TestPrepareResponsesContinuationAlwaysExpandsBeforeTransportSelection(t *testing.T) {

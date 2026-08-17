@@ -214,16 +214,24 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	legacyPricingPrepared := false
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
+		attemptStart := time.Now()
 		relayInfo.RetryIndex = retryParam.GetRetry()
 		if len(relayInfo.RouteCandidates) > 0 {
 			if relayInfo.RouteCandidateIndex != preparedCandidateIndex {
-				if err := selectRouteCandidateForAttempt(c, relayInfo, relayInfo.RouteCandidateIndex); err != nil {
-					newAPIError = types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
-					break
-				}
-				UpdateRouteDecisionSelection(GetRequestId(c), relayInfo)
-				if billingErr := prepareAttemptBilling(c, relayInfo, tokens, meta); billingErr != nil {
-					newAPIError = billingErr
+				if candidateErr := prepareRouteCandidateForAttempt(c, relayInfo, relayInfo.RouteCandidateIndex, tokens, meta); candidateErr != nil {
+					newAPIError = candidateErr
+					if candidateErr.GetErrorCode() == types.ErrorCodeGetChannelFailed &&
+						relayInfo.RouteCandidateIndex >= 0 && relayInfo.RouteCandidateIndex < len(relayInfo.RouteCandidates) {
+						candidate := relayInfo.RouteCandidates[relayInfo.RouteCandidateIndex]
+						AppendRouteAttempt(GetRequestId(c), modelcatalog.Attempt{
+							RouteID: candidate.RouteID, TargetID: candidate.TargetID, ChannelID: candidate.ChannelID,
+							Wire: candidate.SelectedWire, Status: candidateErr.StatusCode, Reason: string(candidateErr.GetErrorCode()), RejectedReason: "channel_unavailable",
+							DurationMs: time.Since(attemptStart).Milliseconds(),
+						})
+						if shouldRetry(c, candidateErr, common.RetryTimes-retryParam.GetRetry()) && advanceRouteCandidate(relayInfo) {
+							continue
+						}
+					}
 					break
 				}
 				billingLifecycleStarted = true
@@ -238,7 +246,6 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			legacyPricingPrepared = true
 		}
 
-		attemptStart := time.Now()
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())
@@ -435,6 +442,51 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 	}
 	info.FinalPreConsumedQuota = info.Billing.GetPreConsumedQuota()
 	return nil
+}
+
+// prepareRouteCandidateForAttempt keeps the live authorization check ahead of
+// every quota reservation. Route candidates are immutable resolution
+// snapshots, while channels and abilities can change between resolution and
+// an attempt.
+func prepareRouteCandidateForAttempt(c *gin.Context, info *relaycommon.RelayInfo, index, promptTokens int, meta *types.TokenCountMeta) *types.NewAPIError {
+	if err := selectRouteCandidateForAttempt(c, info, index); err != nil {
+		return types.NewError(err, types.ErrorCodeGetChannelFailed)
+	}
+	UpdateRouteDecisionSelection(GetRequestId(c), info)
+	if err := revalidateRouteCandidateAbility(c, info.RouteCandidates[index]); err != nil {
+		return types.NewError(err, types.ErrorCodeGetChannelFailed)
+	}
+	return prepareAttemptBilling(c, info, promptTokens, meta)
+}
+
+func revalidateRouteCandidateAbility(c *gin.Context, candidate relaycommon.RouteCandidate) error {
+	if c == nil || c.Request == nil {
+		return errors.New("route candidate validation requires a request context")
+	}
+	sources := modelcatalog.NewGormRuntimeSources(model.DB)
+	channel, exists, err := sources.Channel(c.Request.Context(), candidate.ChannelID)
+	if err != nil {
+		return fmt.Errorf("load resolved route target %d channel %d: %w", candidate.TargetID, candidate.ChannelID, err)
+	}
+	if !exists || !channel.Enabled {
+		return fmt.Errorf("resolved route target %d channel %d is unavailable", candidate.TargetID, candidate.ChannelID)
+	}
+	abilities, err := sources.Abilities(c.Request.Context(), candidate.ChannelID, candidate.UpstreamModel)
+	if err != nil {
+		return fmt.Errorf("load resolved route target %d ability: %w", candidate.TargetID, err)
+	}
+	selectedGroup := strings.TrimSpace(candidate.SelectedGroup)
+	for _, ability := range abilities {
+		if ability.Enabled &&
+			strings.EqualFold(strings.TrimSpace(ability.Model), strings.TrimSpace(candidate.UpstreamModel)) &&
+			strings.EqualFold(strings.TrimSpace(ability.Group), selectedGroup) {
+			return nil
+		}
+	}
+	return fmt.Errorf(
+		"resolved route target %d channel %d no longer has enabled ability for model %s in group %s",
+		candidate.TargetID, candidate.ChannelID, candidate.UpstreamModel, candidate.SelectedGroup,
+	)
 }
 
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {

@@ -15,6 +15,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/modelcatalog"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -44,13 +45,19 @@ func configureAutoGroupRouteBilling(t *testing.T) {
 	t.Helper()
 	previousRatios := ratio_setting.ModelRatio2JSONString()
 	previousGroups := ratio_setting.GroupRatio2JSONString()
+	previousAutoGroups := setting.AutoGroups2JsonString()
+	previousUsableGroups := setting.UserUsableGroups2JSONString()
 	previousFreePreConsume := operation_setting.GetQuotaSetting().EnableFreeModelPreConsume
 	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"route-paid":1}`))
 	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"cheap":1,"higher":2,"lower":0.5,"free":0}`))
+	require.NoError(t, setting.UpdateAutoGroupsByJsonString(`["cheap","higher","lower","free"]`))
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"cheap":"cheap","higher":"higher","lower":"lower","free":"free"}`))
 	operation_setting.GetQuotaSetting().EnableFreeModelPreConsume = false
 	t.Cleanup(func() {
 		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousRatios))
 		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousGroups))
+		require.NoError(t, setting.UpdateAutoGroupsByJsonString(previousAutoGroups))
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(previousUsableGroups))
 		operation_setting.GetQuotaSetting().EnableFreeModelPreConsume = previousFreePreConsume
 	})
 }
@@ -106,6 +113,30 @@ func seedRelayRouteTargets(t *testing.T, db *gorm.DB, capacities ...int) {
 			Id: targetID, RouteId: 1, ChannelId: channelID, UpstreamModel: upstream,
 			BillingModel: "gpt-4o-mini", PreferredWires: `["responses"]`, Priority: i, Weight: 1,
 			Enabled: true, ContextWindow: capacity, ContextFitRequired: true,
+		}).Error)
+	}
+}
+
+func seedGroupedRelayRouteTargets(t *testing.T, db *gorm.DB, groups ...string) {
+	t.Helper()
+	require.NoError(t, db.Create(&model.ClientModelRoute{
+		Id: 1, PublicId: "public-coder", Client: "codex", Aliases: `["coder"]`, Enabled: true,
+	}).Error)
+	for i, group := range groups {
+		channelID := 301 + i
+		targetID := 401 + i
+		upstream := "grouped-upstream-" + string(rune('a'+i))
+		require.NoError(t, db.Create(&model.Channel{
+			Id: channelID, Name: upstream, Type: constant.ChannelTypeOpenAI, Key: "test-key",
+			Models: upstream, Group: group, Status: common.ChannelStatusEnabled,
+		}).Error)
+		require.NoError(t, db.Create(&model.Ability{
+			Group: group, Model: upstream, ChannelId: channelID, Enabled: true, Weight: 1,
+		}).Error)
+		require.NoError(t, db.Create(&model.ClientModelTarget{
+			Id: targetID, RouteId: 1, ChannelId: channelID, UpstreamModel: upstream,
+			BillingModel: "route-paid", PreferredWires: `["responses"]`, Priority: 0, Weight: 1,
+			Enabled: true, ContextWindow: 128000, ContextFitRequired: true,
 		}).Error)
 	}
 }
@@ -485,6 +516,72 @@ func TestAutoGroupRoutePaidHigherLowerFreeKeepsOneBillingSession(t *testing.T) {
 	assert.Equal(t, 2000, tokenUsed)
 	// The final free PriceData is intentionally left for the normal relay
 	// settlement path; no pre-refund occurs between candidate attempts.
+}
+
+func TestPrepareRouteCandidateRevalidatesAbilityBeforeBillingAndBoundedFallback(t *testing.T) {
+	for _, mutation := range []struct {
+		name string
+		run  func(*testing.T, *gorm.DB, relaycommon.RouteCandidate)
+	}{
+		{
+			name: "disabled",
+			run: func(t *testing.T, db *gorm.DB, candidate relaycommon.RouteCandidate) {
+				require.NoError(t, db.Model(&model.Ability{}).
+					Where("channel_id = ? AND model = ? AND `group` = ?", candidate.ChannelID, candidate.UpstreamModel, candidate.SelectedGroup).
+					Update("enabled", false).Error)
+			},
+		},
+		{
+			name: "deleted",
+			run: func(t *testing.T, db *gorm.DB, candidate relaycommon.RouteCandidate) {
+				require.NoError(t, db.Where("channel_id = ? AND model = ? AND `group` = ?", candidate.ChannelID, candidate.UpstreamModel, candidate.SelectedGroup).
+					Delete(&model.Ability{}).Error)
+			},
+		},
+		{
+			name: "regrouped",
+			run: func(t *testing.T, db *gorm.DB, candidate relaycommon.RouteCandidate) {
+				require.NoError(t, db.Model(&model.Ability{}).
+					Where("channel_id = ? AND model = ? AND `group` = ?", candidate.ChannelID, candidate.UpstreamModel, candidate.SelectedGroup).
+					Update("group", "other").Error)
+			},
+		},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			db := setupRelayRouteRuntimeDB(t)
+			configureAutoGroupRouteBilling(t)
+			seedGroupedRelayRouteTargets(t, db, "cheap", "higher")
+			c := relayRouteResolutionContext(t)
+			common.SetContextKey(c, constant.ContextKeyTokenGroup, "auto")
+			spy := &relayRouteBillingSpy{}
+			info := &relaycommon.RelayInfo{
+				OriginModelName: "coder", RelayFormat: types.RelayFormatOpenAIResponses,
+				UserGroup: "default", TokenGroup: "auto", Billing: spy,
+			}
+
+			require.Nil(t, resolveClientModelRoute(c, info, 1000))
+			require.Len(t, info.RouteCandidates, 2)
+			assert.Equal(t, "cheap", info.RouteCandidates[0].SelectedGroup)
+			assert.Equal(t, "higher", info.RouteCandidates[1].SelectedGroup)
+			mutation.run(t, db, info.RouteCandidates[0])
+
+			firstErr := prepareRouteCandidateForAttempt(c, info, 0, 1000, &types.TokenCountMeta{})
+
+			require.NotNil(t, firstErr)
+			assert.Equal(t, types.ErrorCodeGetChannelFailed, firstErr.GetErrorCode())
+			assert.Empty(t, spy.calls, "a stale ability must be rejected before quota reservation")
+			assert.Empty(t, c.GetStringSlice("use_channel"), "a stale ability must be rejected before any upstream send")
+			require.True(t, shouldRetry(c, firstErr, 1))
+			require.True(t, advanceRouteCandidate(info))
+
+			require.Nil(t, prepareRouteCandidateForAttempt(c, info, info.RouteCandidateIndex, 1000, &types.TokenCountMeta{}))
+			assert.Equal(t, "higher", info.UsingGroup)
+			assert.Equal(t, 2.0, info.PriceData.GroupRatioInfo.GroupRatio)
+			require.Len(t, spy.calls, 1, "only the fresh fallback candidate may reserve quota")
+			assert.Equal(t, info.PriceData.QuotaToPreConsume, spy.calls[0])
+			assert.False(t, advanceRouteCandidate(info), "explicit candidate exhaustion must remain bounded")
+		})
+	}
 }
 
 func TestGetChannelPinsExplicitTargetBeforeLegacyDistributor(t *testing.T) {

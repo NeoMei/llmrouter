@@ -14,34 +14,66 @@ import (
 )
 
 // ErrNotFound is returned when a replay record does not exist, has expired, or
-// belongs to a different tenant/token.
+// cannot be loaded from the configured store.
 var ErrNotFound = errors.New("responses state record not found")
 
 // ErrReplayRejected is returned when a replay request violates safety bounds
 // (cycle, too many hops, cross-model, oversized record, etc.).
 var ErrReplayRejected = errors.New("responses replay rejected")
 
-// Record is a normalized, bounded turn stored for stateful continuity.
-type Record struct {
-	TenantID   int
-	TokenID    int
-	ResponseID string
-	Model      string
-	Input      json.RawMessage
-	Output     json.RawMessage
-	ExpiresAt  time.Time
+// ErrLegacyScope is returned when only a legacy, incompletely scoped record
+// exists for a response ID. Legacy state is never replayed.
+var ErrLegacyScope = errors.New("responses state uses a legacy scope")
+
+// ErrScopeMismatch is returned when a v2 record exists but belongs to a
+// different continuity identity.
+var ErrScopeMismatch = errors.New("responses state scope mismatch")
+
+// CurrentVersion is the only record version accepted for new continuity
+// state. Version changes are fail-closed rather than implicitly migrated.
+const CurrentVersion = 2
+
+// Scope binds a continuity record to the complete routing and caller identity
+// that produced it.
+type Scope struct {
+	TenantID     int    `json:"tenant_id"`
+	UserID       int    `json:"user_id"`
+	TokenID      int    `json:"token_id"`
+	RouteID      int    `json:"route_id"`
+	TargetID     int    `json:"target_id"`
+	ChannelID    int    `json:"channel_id"`
+	ClientTaskID string `json:"client_task_id"`
+	Model        string `json:"model"`
 }
 
-// Store backs bounded Responses state continuity. Implementations must scope
-// records by tenant and token and enforce TTL and byte limits.
+// Record is a normalized, bounded turn stored for stateful continuity.
+type Record struct {
+	Version          int             `json:"version"`
+	Scope            Scope           `json:"scope"`
+	ResponseID       string          `json:"response_id"`
+	ParentResponseID string          `json:"parent_response_id,omitempty"`
+	Input            json.RawMessage `json:"input"`
+	Output           json.RawMessage `json:"output"`
+	ExpiresAt        time.Time       `json:"expires_at"`
+}
+
+// Store backs bounded Responses state continuity. Implementations enforce the
+// complete expected scope, TTL, and byte limits.
 type Store interface {
-	Load(ctx context.Context, tenantID, tokenID int, responseID string) (Record, error)
+	Load(ctx context.Context, expected Scope, responseID string) (Record, error)
 	Save(ctx context.Context, record Record) error
 }
 
 // Key returns a stable storage key for a record. It never embeds the raw
 // response ID to avoid collisions with Redis key namespaces.
-func Key(tenantID, tokenID int, responseID string) string {
+func Key(responseID string) string {
+	h := sha256.Sum256([]byte(responseID))
+	return "responses-state:v2:" + hex.EncodeToString(h[:])
+}
+
+// legacyKey reproduces the former tenant/token key solely so loads can detect
+// and explicitly reject old records instead of treating them as absent.
+func legacyKey(tenantID, tokenID int, responseID string) string {
 	h := sha256.Sum256([]byte(responseID))
 	return fmt.Sprintf("responses-state:%d:%d:%s", tenantID, tokenID, hex.EncodeToString(h[:]))
 }
@@ -58,11 +90,29 @@ const MaxReplayHops = 32
 
 // ValidateRecord checks invariants before saving or loading.
 func ValidateRecord(record Record) error {
-	if record.TenantID <= 0 {
-		return errors.New("tenant id is required")
+	if record.Version != CurrentVersion {
+		return fmt.Errorf("%w: unsupported record version %d", ErrLegacyScope, record.Version)
 	}
-	if record.TokenID <= 0 {
-		return errors.New("token id is required")
+	if record.Scope.TenantID <= 0 {
+		return fmt.Errorf("%w: tenant id is required", ErrScopeMismatch)
+	}
+	if record.Scope.UserID <= 0 {
+		return fmt.Errorf("%w: user id is required", ErrScopeMismatch)
+	}
+	if record.Scope.TokenID <= 0 {
+		return fmt.Errorf("%w: token id is required", ErrScopeMismatch)
+	}
+	if record.Scope.RouteID <= 0 {
+		return fmt.Errorf("%w: route id is required", ErrScopeMismatch)
+	}
+	if record.Scope.TargetID <= 0 {
+		return fmt.Errorf("%w: target id is required", ErrScopeMismatch)
+	}
+	if record.Scope.ChannelID <= 0 {
+		return fmt.Errorf("%w: channel id is required", ErrScopeMismatch)
+	}
+	if strings.TrimSpace(record.Scope.Model) == "" {
+		return fmt.Errorf("%w: model is required", ErrScopeMismatch)
 	}
 	if strings.TrimSpace(record.ResponseID) == "" {
 		return errors.New("response id is required")
@@ -70,16 +120,24 @@ func ValidateRecord(record Record) error {
 	if len(record.Input) > MaxRecordBytes || len(record.Output) > MaxRecordBytes {
 		return errors.New("responses state record exceeds maximum size")
 	}
-	if record.ExpiresAt.IsZero() {
-		record.ExpiresAt = time.Now().Add(DefaultRecordTTL)
-	}
 	return nil
+}
+
+func scopeMatches(expected, actual Scope) bool {
+	return expected.TenantID == actual.TenantID &&
+		expected.UserID == actual.UserID &&
+		expected.TokenID == actual.TokenID &&
+		expected.RouteID == actual.RouteID &&
+		expected.TargetID == actual.TargetID &&
+		expected.ChannelID == actual.ChannelID &&
+		expected.Model == actual.Model &&
+		(expected.ClientTaskID == "" || expected.ClientTaskID == actual.ClientTaskID)
 }
 
 // Expand prepends stored turns from previous_response_id chains into the request
 // input. It only expands when the selected wire cannot handle native state; the
 // caller is responsible for removing previous_response_id after expansion.
-func Expand(ctx context.Context, store Store, tenantID, tokenID int, request json.RawMessage) (json.RawMessage, error) {
+func Expand(ctx context.Context, store Store, expected Scope, request json.RawMessage) (json.RawMessage, error) {
 	if store == nil {
 		return request, nil
 	}
@@ -100,7 +158,7 @@ func Expand(ctx context.Context, store Store, tenantID, tokenID int, request jso
 		}
 		seen[previousID] = struct{}{}
 
-		record, err := store.Load(ctx, tenantID, tokenID, previousID)
+		record, err := store.Load(ctx, expected, previousID)
 		if err != nil {
 			return nil, err
 		}
@@ -176,19 +234,21 @@ func Expand(ctx context.Context, store Store, tenantID, tokenID int, request jso
 }
 
 // SaveTurn persists a completed Responses turn for later previous_response_id
-// replay. It is a best-effort helper: callers pass the response ID, the model,
-// the normalized input items, and the output items. The record is bounded by
-// ValidateRecord and silently ignored on validation failure so a bad turn never
-// breaks the relay path.
-func SaveTurn(ctx context.Context, store Store, tenantID, tokenID int, responseID, model string, input, output json.RawMessage) {
+// replay. It is a best-effort helper: callers pass the complete route scope,
+// response ID, normalized input items, and output items. The record is bounded
+// by ValidateRecord and silently ignored on validation failure so a bad turn
+// never breaks the relay path.
+func SaveTurn(ctx context.Context, store Store, scope Scope, responseID string, input, output json.RawMessage) {
 	if store == nil || responseID == "" {
 		return
 	}
+	if scope.ClientTaskID == "" {
+		scope.ClientTaskID = responseID
+	}
 	record := Record{
-		TenantID:   tenantID,
-		TokenID:    tokenID,
+		Version:    CurrentVersion,
+		Scope:      scope,
 		ResponseID: responseID,
-		Model:      model,
 		Input:      input,
 		Output:     output,
 		ExpiresAt:  time.Now().Add(DefaultRecordTTL),

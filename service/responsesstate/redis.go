@@ -5,7 +5,6 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -38,14 +37,19 @@ func NewRedis() (*RedisStore, error) {
 	return &RedisStore{key: key}, nil
 }
 
-func (s *RedisStore) Load(ctx context.Context, tenantID, tokenID int, responseID string) (Record, error) {
+func (s *RedisStore) Load(ctx context.Context, expected Scope, responseID string) (Record, error) {
 	if s == nil || common.RDB == nil {
 		return Record{}, ErrNotFound
 	}
-	key := Key(tenantID, tokenID, responseID)
+	key := Key(responseID)
 	val, err := common.RedisGet(key)
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
+			if _, legacyErr := common.RedisGet(legacyKey(expected.TenantID, expected.TokenID, responseID)); legacyErr == nil {
+				return Record{}, ErrLegacyScope
+			} else if !errors.Is(legacyErr, redis.Nil) {
+				return Record{}, legacyErr
+			}
 			return Record{}, ErrNotFound
 		}
 		return Record{}, err
@@ -55,12 +59,19 @@ func (s *RedisStore) Load(ctx context.Context, tenantID, tokenID int, responseID
 		return Record{}, err
 	}
 	var record Record
-	if err := json.Unmarshal(data, &record); err != nil {
+	if err := common.Unmarshal(data, &record); err != nil {
 		return Record{}, fmt.Errorf("decode record: %w", err)
+	}
+	if err := ValidateRecord(record); err != nil {
+		return Record{}, err
 	}
 	if time.Now().After(record.ExpiresAt) {
 		return Record{}, ErrNotFound
 	}
+	if record.ResponseID != responseID || !scopeMatches(expected, record.Scope) {
+		return Record{}, ErrScopeMismatch
+	}
+	_ = ctx
 	return record, nil
 }
 
@@ -68,10 +79,13 @@ func (s *RedisStore) Save(ctx context.Context, record Record) error {
 	if s == nil || common.RDB == nil {
 		return errors.New("Redis is not available")
 	}
+	if record.ExpiresAt.IsZero() {
+		record.ExpiresAt = time.Now().Add(DefaultRecordTTL)
+	}
 	if err := ValidateRecord(record); err != nil {
 		return err
 	}
-	data, err := json.Marshal(record)
+	data, err := common.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("serialize record: %w", err)
 	}
@@ -86,7 +100,7 @@ func (s *RedisStore) Save(ctx context.Context, record Record) error {
 	if ttl <= 0 {
 		ttl = DefaultRecordTTL
 	}
-	key := Key(record.TenantID, record.TokenID, record.ResponseID)
+	key := Key(record.ResponseID)
 	return common.RedisSet(key, string(encrypted), ttl)
 }
 

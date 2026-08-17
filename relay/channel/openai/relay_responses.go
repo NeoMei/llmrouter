@@ -177,17 +177,23 @@ func persistResponsesTurn(c *gin.Context, info *relaycommon.RelayInfo, responses
 	if !ok || len(input) == 0 {
 		return
 	}
-	output, err := json.Marshal(responsesResponse.Output)
+	output, err := common.Marshal(responsesResponse.Output)
 	if err != nil {
 		return
 	}
 	responsesstate.SaveTurn(
 		c.Request.Context(),
 		store,
-		info.UserId,
-		info.TokenId,
+		responsesstate.Scope{
+			TenantID:  info.UserId,
+			UserID:    info.UserId,
+			TokenID:   info.TokenId,
+			RouteID:   info.ModelRouteId,
+			TargetID:  info.ModelTargetId,
+			ChannelID: info.ResolvedChannelId,
+			Model:     info.ResolvedModelNameOrOrigin(),
+		},
 		responsesResponse.ID,
-		info.UpstreamModelName,
 		input,
 		output,
 	)

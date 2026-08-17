@@ -21,8 +21,12 @@ func TestPersistResponsesTurn(t *testing.T) {
 
 	store := responsesstate.NewMemory(time.Hour, 1<<20)
 	info := &relaycommon.RelayInfo{
-		UserId:  11,
-		TokenId: 7,
+		UserId:            11,
+		TokenId:           7,
+		ModelRouteId:      3,
+		ModelTargetId:     4,
+		ResolvedChannelId: 5,
+		ResolvedModelName: "model-a",
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: "model-a",
 		},
@@ -31,17 +35,22 @@ func TestPersistResponsesTurn(t *testing.T) {
 	responsesstate.SaveTurn(
 		c.Request.Context(),
 		store,
-		info.UserId,
-		info.TokenId,
+		responsesstate.Scope{
+			TenantID: info.UserId, UserID: info.UserId, TokenID: info.TokenId, RouteID: info.ModelRouteId,
+			TargetID: info.ModelTargetId, ChannelID: info.ResolvedChannelId, Model: info.ResolvedModelNameOrOrigin(),
+		},
 		"resp_1",
-		info.UpstreamModelName,
 		json.RawMessage(`[{"type":"message","role":"user","content":"hello"}]`),
 		json.RawMessage(`[{"type":"message","role":"assistant","content":"answer"}]`),
 	)
 
-	record, err := store.Load(c.Request.Context(), 11, 7, "resp_1")
+	expected := responsesstate.Scope{
+		TenantID: 11, UserID: 11, TokenID: 7, RouteID: 3,
+		TargetID: 4, ChannelID: 5, Model: "model-a",
+	}
+	record, err := store.Load(c.Request.Context(), expected, "resp_1")
 	require.NoError(t, err)
-	require.Equal(t, "model-a", record.Model)
+	require.Equal(t, "model-a", record.Scope.Model)
 	require.Contains(t, string(record.Input), "hello")
 	require.Contains(t, string(record.Output), "answer")
 }

@@ -16,18 +16,21 @@ import (
 // wire is chat conversion, and that the stored turn is prepended.
 func TestResponsesStateExpandOnChatWire(t *testing.T) {
 	store := responsesstate.NewMemory(time.Hour, 1<<20)
+	scope := responsesstate.Scope{
+		TenantID: 11, UserID: 11, TokenID: 7, RouteID: 3,
+		TargetID: 4, ChannelID: 5, ClientTaskID: "task-a", Model: "model-a",
+	}
 	require.NoError(t, store.Save(context.Background(), responsesstate.Record{
-		TenantID:   11,
-		TokenID:    7,
+		Version:    responsesstate.CurrentVersion,
+		Scope:      scope,
 		ResponseID: "resp_prev",
-		Model:      "model-a",
 		Input:      json.RawMessage(`[{"type":"message","role":"user","content":"first"}]`),
 		Output:     json.RawMessage(`[{"type":"message","role":"assistant","content":"answer"}]`),
 		ExpiresAt:  time.Now().Add(time.Hour),
 	}))
 
 	req := json.RawMessage(`{"model":"model-a","previous_response_id":"resp_prev","input":[{"type":"message","role":"user","content":"second"}]}`)
-	expanded, err := responsesstate.Expand(context.Background(), store, 11, 7, req)
+	expanded, err := responsesstate.Expand(context.Background(), store, scope, req)
 	require.NoError(t, err)
 
 	var payload map[string]any

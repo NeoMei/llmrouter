@@ -92,7 +92,16 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			if marshalErr != nil {
 				return types.NewError(fmt.Errorf("failed to marshal responses request for state expansion: %w", marshalErr), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 			}
-			expanded, expandErr := responsesstate.Expand(c.Request.Context(), store, info.UserId, info.TokenId, encoded)
+			expectedScope := responsesstate.Scope{
+				TenantID:  info.UserId,
+				UserID:    info.UserId,
+				TokenID:   info.TokenId,
+				RouteID:   info.ModelRouteId,
+				TargetID:  info.ModelTargetId,
+				ChannelID: info.ResolvedChannelId,
+				Model:     info.ResolvedModelNameOrOrigin(),
+			}
+			expanded, expandErr := responsesstate.Expand(c.Request.Context(), store, expectedScope, encoded)
 			if expandErr != nil {
 				common.SysLog("responses state expansion skipped: " + expandErr.Error())
 			} else if len(expanded) > 0 && string(expanded) != string(encoded) {

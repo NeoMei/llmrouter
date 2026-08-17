@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	appcommon "github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -21,6 +22,107 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return fn(req)
+}
+
+type getBodyAdaptor struct {
+	Adaptor
+	requestURL string
+}
+
+func (a *getBodyAdaptor) GetRequestURL(*relaycommon.RelayInfo) (string, error) {
+	return a.requestURL, nil
+}
+
+func (a *getBodyAdaptor) SetupRequestHeader(_ *gin.Context, _ *http.Header, _ *relaycommon.RelayInfo) error {
+	return nil
+}
+
+func installReplayInspectingTransport(t *testing.T, payload []byte) {
+	t.Helper()
+	service.InitHttpClient()
+	client := service.GetHttpClient()
+	previous := client.Transport
+	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		assert.Equal(t, int64(len(payload)), req.ContentLength)
+		primary, err := io.ReadAll(req.Body)
+		require.NoError(t, err)
+		assert.Equal(t, payload, primary)
+		require.NotNil(t, req.GetBody)
+		for range 2 {
+			replay, err := req.GetBody()
+			require.NoError(t, err)
+			got, err := io.ReadAll(replay)
+			require.NoError(t, err)
+			require.NoError(t, replay.Close())
+			assert.Equal(t, payload, got)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       http.NoBody,
+			Request:    req,
+		}, nil
+	})
+	t.Cleanup(func() {
+		client.Transport = previous
+	})
+}
+
+func TestDoApiRequestAppliesReplayMetadata(t *testing.T) {
+	payload := []byte(`{"model":"gpt-test","input":"api"}`)
+	body, size, getBody, closer, err := relaycommon.NewOutboundJSONBody(payload)
+	require.NoError(t, err)
+	defer closer.Close()
+	installReplayInspectingTransport(t, payload)
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", http.NoBody)
+	resp, err := DoApiRequest(&getBodyAdaptor{requestURL: "https://example.invalid/v1/responses"}, ctx, &relaycommon.RelayInfo{
+		ChannelMeta:             &relaycommon.ChannelMeta{},
+		UpstreamRequestBodySize: size,
+		UpstreamRequestGetBody:  getBody,
+	}, body)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+}
+
+func TestDoFormRequestAppliesDiskBackedReplayMetadata(t *testing.T) {
+	previousConfig := appcommon.GetDiskCacheConfig()
+	appcommon.SetDiskCacheConfig(appcommon.DiskCacheConfig{
+		Enabled:     true,
+		ThresholdMB: 0,
+		MaxSizeMB:   64,
+		Path:        t.TempDir(),
+	})
+	t.Cleanup(func() {
+		appcommon.SetDiskCacheConfig(previousConfig)
+	})
+
+	var payload bytes.Buffer
+	writer := multipart.NewWriter(&payload)
+	require.NoError(t, writer.WriteField("model", "whisper-1"))
+	part, err := writer.CreateFormFile("file", "audio.txt")
+	require.NoError(t, err)
+	_, err = io.WriteString(part, "disk-backed audio payload")
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	storage, err := appcommon.CreateBodyStorage(payload.Bytes())
+	require.NoError(t, err)
+	defer storage.Close()
+	require.True(t, storage.IsDisk())
+	installReplayInspectingTransport(t, payload.Bytes())
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", http.NoBody)
+	ctx.Request.Header.Set("Content-Type", writer.FormDataContentType())
+	resp, err := DoFormRequest(&getBodyAdaptor{requestURL: "https://example.invalid/v1/audio/transcriptions"}, ctx, &relaycommon.RelayInfo{
+		ChannelMeta:             &relaycommon.ChannelMeta{},
+		UpstreamRequestBodySize: storage.Size(),
+		UpstreamRequestGetBody:  storage.NewReader,
+	}, appcommon.ReaderOnly(storage))
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 }
 
 type getBodyTaskAdaptor struct {
@@ -147,9 +249,13 @@ func TestCanceledUpstreamRequestKeepsCompleteReplayBody(t *testing.T) {
 		UpstreamRequestBodySize: size,
 		UpstreamRequestGetBody:  getBody,
 	})
-	cancel()
 
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		prefix := make([]byte, len(payload)/2)
+		_, err := io.ReadFull(req.Body, prefix)
+		require.NoError(t, err)
+		assert.Equal(t, payload[:len(prefix)], prefix)
+		cancel()
 		return nil, req.Context().Err()
 	})}
 	_, err = client.Do(req)

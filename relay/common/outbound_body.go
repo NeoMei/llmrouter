@@ -22,10 +22,17 @@ import (
 // transport from prematurely closing the underlying BodyStorage. The returned
 // size is meant to be propagated to http.Request.ContentLength because the
 // type-erased io.Reader prevents net/http from auto-detecting it.
-func NewOutboundJSONBody(data []byte) (body io.Reader, size int64, closer io.Closer, err error) {
+// The returned getBody creates a fresh reader for every transport replay.
+func NewOutboundJSONBody(data []byte) (
+	body io.Reader,
+	size int64,
+	getBody func() (io.ReadCloser, error),
+	closer io.Closer,
+	err error,
+) {
 	storage, err := common.CreateBodyStorage(data)
 	if err != nil {
-		return nil, 0, nil, err
+		return nil, 0, nil, nil, err
 	}
-	return common.ReaderOnly(storage), storage.Size(), storage, nil
+	return common.ReaderOnly(storage), storage.Size(), storage.NewReader, storage, nil
 }

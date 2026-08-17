@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -167,6 +168,9 @@ type RelayInfo struct {
 	// http.Request.ContentLength manually (net/http only auto-detects it for
 	// *bytes.Reader/Buffer/strings.Reader). 0 means "let net/http decide".
 	UpstreamRequestBodySize int64
+	// UpstreamRequestGetBody returns a fresh reader over the complete upstream
+	// request body for transport-level retries. nil means no safe replay exists.
+	UpstreamRequestGetBody func() (io.ReadCloser, error)
 
 	PriceData types.PriceData
 
@@ -201,6 +205,11 @@ type RelayInfo struct {
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
+	// RelayInfo is reused across channel attempts, while body storage belongs to
+	// only the current attempt and may already have been closed.
+	info.UpstreamRequestBodySize = 0
+	info.UpstreamRequestGetBody = nil
+
 	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
 	paramOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride)
 	headerOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelHeaderOverride)

@@ -1,11 +1,30 @@
 package common
 
 import (
+	"io"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRelayInfoInitChannelMetaResetsUpstreamBodyMetadata(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &RelayInfo{
+		UpstreamRequestBodySize: 7,
+		UpstreamRequestGetBody: func() (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader("stale")), nil
+		},
+	}
+
+	info.InitChannelMeta(ctx)
+
+	require.Zero(t, info.UpstreamRequestBodySize)
+	require.Nil(t, info.UpstreamRequestGetBody)
+}
 
 func TestRelayInfoGetFinalRequestRelayFormatPrefersExplicitFinal(t *testing.T) {
 	info := &RelayInfo{

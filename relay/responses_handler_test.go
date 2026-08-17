@@ -15,7 +15,10 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/service/modelcatalog"
 	"github.com/QuantumNous/new-api/service/responsesstate"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -57,6 +60,153 @@ func mustJSON(t *testing.T, v any) string {
 	b, err := json.Marshal(v)
 	require.NoError(t, err)
 	return string(b)
+}
+
+func TestResponsesHelperDefaultsOmittedStoreToFalse(t *testing.T) {
+	request := &dto.OpenAIResponsesRequest{Model: "model-a", Input: json.RawMessage(`[]`)}
+	normalizeResponsesStore(request)
+	assert.JSONEq(t, `false`, string(request.Store))
+}
+
+func TestResponsesHelperPreservesExplicitStoreTrue(t *testing.T) {
+	request := &dto.OpenAIResponsesRequest{Model: "model-a", Store: json.RawMessage(`true`)}
+	normalizeResponsesStore(request)
+	assert.JSONEq(t, `true`, string(request.Store))
+}
+
+func TestPrepareResponsesContinuityUsesBoundedClientTaskID(t *testing.T) {
+	store := responsesstate.NewMemory(time.Hour, 1<<20)
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		UserId: 11, TokenId: 7, ModelRouteId: 3, ModelTargetId: 4,
+		ResolvedChannelId: 5, ResolvedModelName: "model-a",
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "model-a"},
+	}
+	request := &dto.OpenAIResponsesRequest{
+		Model: "model-a", Input: json.RawMessage(`[]`),
+		ClientMetadata: json.RawMessage(`{"task_id":" task.valid:1 "}`),
+	}
+
+	_, err := prepareResponsesContinuity(c, info, store, request)
+	require.NoError(t, err)
+	raw, exists := c.Get(string(appconstant.ContextKeyResponsesContinuity))
+	require.True(t, exists)
+	continuity, ok := raw.(responsesstate.ContinuityContext)
+	require.True(t, ok)
+	assert.Equal(t, "task.valid:1", continuity.Scope.ClientTaskID)
+}
+
+func TestPrepareResponsesContinuityRejectsInvalidClientTaskID(t *testing.T) {
+	store := responsesstate.NewMemory(time.Hour, 1<<20)
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		UserId: 11, TokenId: 7, ModelRouteId: 3, ModelTargetId: 4,
+		ResolvedChannelId: 5, ResolvedModelName: "model-a",
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "model-a"},
+	}
+	request := &dto.OpenAIResponsesRequest{
+		Model: "model-a", Input: json.RawMessage(`[]`),
+		ClientMetadata: json.RawMessage(`{"task_id":"bad task"}`),
+	}
+
+	_, err := prepareResponsesContinuity(c, info, store, request)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, responsesstate.ErrInvalidClientTaskID)
+	raw, _ := c.Get(string(appconstant.ContextKeyResponsesContinuity))
+	assert.Nil(t, raw)
+}
+
+func TestResponsesContinuityErrorMapsScopeFailuresToConflict(t *testing.T) {
+	for _, stateErr := range []error{responsesstate.ErrLegacyScope, responsesstate.ErrScopeMismatch} {
+		apiErr := responsesContinuityAPIError(stateErr)
+		require.NotNil(t, apiErr)
+		assert.Equal(t, http.StatusConflict, apiErr.StatusCode)
+		assert.Equal(t, types.ErrorCodeResponsesStateScopeInvalid, apiErr.GetErrorCode())
+		assert.True(t, types.IsSkipRetryError(apiErr))
+	}
+}
+
+func TestPrepareResponsesContinuityForAttemptRejectsInvalidTaskBeforeRelay(t *testing.T) {
+	t.Setenv("RESPONSES_STATE_ENABLED", "1")
+	responsesstate.ResetForTest()
+	t.Cleanup(responsesstate.ResetForTest)
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeResponses,
+		Request: &dto.OpenAIResponsesRequest{
+			Model:          "model-a",
+			Input:          json.RawMessage(`[]`),
+			ClientMetadata: json.RawMessage(`{"task_id":"not allowed"}`),
+		},
+		UserId: 11, TokenId: 7, ModelRouteId: 3, ModelTargetId: 4,
+		ResolvedChannelId: 5, ResolvedModelName: "model-a",
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "model-a"},
+	}
+
+	apiErr := PrepareResponsesContinuityForAttempt(c, info)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
+	assert.Equal(t, types.ErrorCodeInvalidRequest, apiErr.GetErrorCode())
+}
+
+func TestResponsesHelperReturnsInvalidClientTaskID(t *testing.T) {
+	t.Setenv("RESPONSES_STATE_ENABLED", "1")
+	responsesstate.ResetForTest()
+	t.Cleanup(responsesstate.ResetForTest)
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeResponses,
+		Request: &dto.OpenAIResponsesRequest{
+			Model: "model-a", Input: json.RawMessage(`[]`),
+			ClientMetadata: json.RawMessage(`{"task_id":"not allowed"}`),
+		},
+		UserId: 11, TokenId: 7, ModelRouteId: 3, ModelTargetId: 4,
+		ResolvedChannelId: 5, ResolvedModelName: "model-a", SelectedWire: string(modelcatalog.WireResponses),
+	}
+
+	apiErr := ResponsesHelper(c, info)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
+	assert.Equal(t, types.ErrorCodeInvalidRequest, apiErr.GetErrorCode())
+}
+
+func TestPrepareNativeResponsesContinuationAdoptsStoredTaskID(t *testing.T) {
+	store := responsesstate.NewMemory(time.Hour, 1<<20)
+	scope := responsesstate.Scope{
+		TenantID: 11, UserID: 11, TokenID: 7, RouteID: 3,
+		TargetID: 4, ChannelID: 5, ClientTaskID: "resp_parent", Model: "model-a",
+	}
+	require.NoError(t, store.Save(context.Background(), responsesstate.Record{
+		Version: responsesstate.CurrentVersion, Scope: scope, ResponseID: "resp_parent",
+		Input: json.RawMessage(`[]`), Output: json.RawMessage(`[]`), ExpiresAt: time.Now().Add(time.Hour),
+	}))
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		UserId: 11, TokenId: 7, ModelRouteId: 3, ModelTargetId: 4,
+		ResolvedChannelId: 5, ResolvedModelName: "model-a", SelectedWire: string(modelcatalog.WireResponses),
+		ResponsesViaChat: true, // stale from a prior attempt; explicit wire is authoritative
+		ChannelMeta:      &relaycommon.ChannelMeta{UpstreamModelName: "model-a"},
+	}
+	request := &dto.OpenAIResponsesRequest{Model: "model-a", PreviousResponseID: "resp_parent", Input: json.RawMessage(`[]`)}
+
+	prepared, err := prepareResponsesContinuity(c, info, store, request)
+	require.NoError(t, err)
+	assert.Equal(t, "resp_parent", prepared.PreviousResponseID, "native Responses keeps the upstream parent reference")
+	raw, exists := c.Get(string(appconstant.ContextKeyResponsesContinuity))
+	require.True(t, exists)
+	continuity, ok := raw.(responsesstate.ContinuityContext)
+	require.True(t, ok)
+	assert.Equal(t, "resp_parent", continuity.Scope.ClientTaskID)
 }
 
 func TestResponsesContinuityHandlerToPersistenceKeepsLinearChild(t *testing.T) {

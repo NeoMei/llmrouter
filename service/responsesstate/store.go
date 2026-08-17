@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 )
 
 // ErrNotFound is returned when a replay record does not exist, has expired, or
@@ -28,6 +29,10 @@ var ErrLegacyScope = errors.New("responses state uses a legacy scope")
 // ErrScopeMismatch is returned when a v2 record exists but belongs to a
 // different continuity identity.
 var ErrScopeMismatch = errors.New("responses state scope mismatch")
+
+// ErrInvalidClientTaskID is returned when client_metadata.task_id cannot be
+// used as a bounded continuity identity.
+var ErrInvalidClientTaskID = errors.New("invalid responses client task id")
 
 // CurrentVersion is the only record version accepted for new continuity
 // state. Version changes are fail-closed rather than implicitly migrated.
@@ -159,6 +164,61 @@ type ContinuityContext struct {
 	Scope            Scope
 	ParentResponseID string
 	CurrentInput     json.RawMessage
+}
+
+// ParseClientTaskID extracts the only client-controlled continuity identity.
+// Other client_metadata fields are deliberately ignored.
+func ParseClientTaskID(metadata json.RawMessage) (string, error) {
+	if len(metadata) == 0 {
+		return "", nil
+	}
+	var value struct {
+		TaskID *string `json:"task_id"`
+	}
+	if err := common.Unmarshal(metadata, &value); err != nil {
+		return "", fmt.Errorf("%w: %v", ErrInvalidClientTaskID, err)
+	}
+	if value.TaskID == nil {
+		return "", nil
+	}
+	taskID := strings.TrimSpace(*value.TaskID)
+	if taskID == "" {
+		return "", nil
+	}
+	if len(taskID) > 128 {
+		return "", fmt.Errorf("%w: task_id exceeds 128 bytes", ErrInvalidClientTaskID)
+	}
+	for _, ch := range []byte(taskID) {
+		if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+			(ch >= '0' && ch <= '9') || ch == '.' || ch == '_' || ch == ':' || ch == '-' {
+			continue
+		}
+		return "", fmt.Errorf("%w: task_id contains unsupported characters", ErrInvalidClientTaskID)
+	}
+	return taskID, nil
+}
+
+// EligibleCompletedResponse reports whether a response is safe to retain for
+// future continuity replay.
+func EligibleCompletedResponse(response *dto.OpenAIResponsesResponse) bool {
+	if response == nil || strings.TrimSpace(response.ID) == "" || response.Error != nil || response.IncompleteDetails != nil {
+		return false
+	}
+	var status string
+	if err := common.Unmarshal(response.Status, &status); err != nil || status != "completed" {
+		return false
+	}
+	for _, output := range response.Output {
+		if output.Type == "refusal" {
+			return false
+		}
+		for _, content := range output.Content {
+			if content.Type == "refusal" {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func materializedInputItems(raw json.RawMessage, label string) ([]any, error) {

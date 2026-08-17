@@ -83,6 +83,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	var usage = &dto.Usage{}
 	var responseTextBuilder strings.Builder
+	var completedResponse *dto.OpenAIResponsesResponse
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 
@@ -96,8 +97,11 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		sendResponsesStreamData(c, streamResponse, data)
 		switch streamResponse.Type {
 		case "response.completed":
+			completedResponse = nil
 			if streamResponse.Response != nil {
-				persistResponsesTurn(c, info, streamResponse.Response)
+				if responsesstate.EligibleCompletedResponse(streamResponse.Response) {
+					completedResponse = streamResponse.Response
+				}
 				if streamResponse.Response.Usage != nil {
 					if streamResponse.Response.Usage.InputTokens != 0 {
 						usage.PromptTokens = streamResponse.Response.Usage.InputTokens
@@ -119,6 +123,8 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					c.Set("image_generation_call_size", streamResponse.Response.GetSize())
 				}
 			}
+		case "response.failed", "response.incomplete", "error":
+			completedResponse = nil
 		case "response.output_text.delta":
 			// 处理输出文本
 			responseTextBuilder.WriteString(streamResponse.Delta)
@@ -136,6 +142,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 		}
 	})
+	if completedResponse != nil && info.StreamStatus != nil && info.StreamStatus.IsNormalEnd() && !info.StreamStatus.HasErrors() && c.Request.Context().Err() == nil {
+		persistResponsesTurn(c, info, completedResponse)
+	}
 
 	if usage.CompletionTokens == 0 {
 		// 计算输出文本的 token 数量
@@ -161,7 +170,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 // best-effort: a nil store, missing response ID, or validation failure simply
 // skips persistence without affecting the relay path.
 func persistResponsesTurn(c *gin.Context, info *relaycommon.RelayInfo, responsesResponse *dto.OpenAIResponsesResponse) {
-	if !responsesstate.Enabled() || info == nil || responsesResponse == nil || responsesResponse.ID == "" {
+	if !responsesstate.Enabled() || info == nil || !responsesstate.EligibleCompletedResponse(responsesResponse) {
 		return
 	}
 	store, err := responsesstate.Default()

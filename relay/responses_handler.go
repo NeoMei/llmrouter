@@ -83,17 +83,30 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	if err != nil {
 		return types.NewError(fmt.Errorf("failed to copy request to GeneralOpenAIRequest: %w", err), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
+	if info.RelayMode == relayconstant.RelayModeResponses {
+		normalizeResponsesStore(request)
+	}
 
 	if responsesstate.Enabled() {
-		if store, storeErr := responsesstate.Default(); storeErr == nil {
-			prepared, continuityErr := prepareResponsesContinuity(c, info, store, request)
-			if continuityErr != nil {
-				common.SysLog("responses state expansion skipped: " + continuityErr.Error())
-			} else {
-				request = prepared
+		if rawPrepared, exists := c.Get(string(appconstant.ContextKeyResponsesPreparedRequest)); exists {
+			prepared, ok := rawPrepared.(*dto.OpenAIResponsesRequest)
+			if !ok || prepared == nil {
+				return responsesContinuityAPIError(errors.New("responses continuity prepared request is invalid"))
+			}
+			request, err = common.DeepCopy(prepared)
+			if err != nil {
+				return responsesContinuityAPIError(fmt.Errorf("failed to copy prepared responses request: %w", err))
 			}
 		} else {
-			common.SysLog("responses state store unavailable: " + storeErr.Error())
+			store, storeErr := responsesstate.Default()
+			if storeErr != nil {
+				return responsesContinuityAPIError(fmt.Errorf("responses state store unavailable: %w", storeErr))
+			}
+			prepared, continuityErr := prepareResponsesContinuity(c, info, store, request)
+			if continuityErr != nil {
+				return responsesContinuityAPIError(continuityErr)
+			}
+			request = prepared
 		}
 	}
 
@@ -223,6 +236,73 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	return nil
 }
 
+func normalizeResponsesStore(request *dto.OpenAIResponsesRequest) {
+	if request != nil && len(request.Store) == 0 {
+		request.Store = json.RawMessage("false")
+	}
+}
+
+func responsesContinuityAPIError(err error) *types.NewAPIError {
+	if errors.Is(err, responsesstate.ErrInvalidClientTaskID) {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+	status := http.StatusInternalServerError
+	if errors.Is(err, responsesstate.ErrLegacyScope) ||
+		errors.Is(err, responsesstate.ErrScopeMismatch) ||
+		errors.Is(err, responsesstate.ErrNotFound) ||
+		errors.Is(err, responsesstate.ErrReplayRejected) {
+		status = http.StatusConflict
+	}
+	return types.NewErrorWithStatusCode(err, types.ErrorCodeResponsesStateScopeInvalid, status, types.ErrOptionWithSkipRetry())
+}
+
+// PrepareResponsesContinuityForAttempt validates and materializes Responses
+// continuity before billing mutates quota or an upstream request is sent.
+// ResponsesHelper consumes the prepared request for the same route attempt.
+func PrepareResponsesContinuityForAttempt(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIError {
+	if c != nil {
+		c.Set(string(appconstant.ContextKeyResponsesPreparedRequest), nil)
+	}
+	if !responsesstate.Enabled() || info == nil ||
+		(info.RelayMode != relayconstant.RelayModeResponses && info.RelayMode != relayconstant.RelayModeResponsesCompact) {
+		return nil
+	}
+	var request *dto.OpenAIResponsesRequest
+	switch req := info.Request.(type) {
+	case *dto.OpenAIResponsesRequest:
+		var err error
+		request, err = common.DeepCopy(req)
+		if err != nil {
+			return responsesContinuityAPIError(fmt.Errorf("failed to copy responses request: %w", err))
+		}
+	case *dto.OpenAIResponsesCompactionRequest:
+		request = &dto.OpenAIResponsesRequest{
+			Model: req.Model, Input: req.Input, Instructions: req.Instructions,
+			PreviousResponseID: req.PreviousResponseID, ParallelToolCalls: req.ParallelToolCalls,
+			ServiceTier: req.ServiceTier, PromptCacheKey: req.PromptCacheKey,
+			PromptCacheOptions: req.PromptCacheOptions, PromptCacheRetention: req.PromptCacheRetention,
+		}
+	default:
+		return types.NewErrorWithStatusCode(
+			fmt.Errorf("invalid responses request type %T", info.Request),
+			types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry(),
+		)
+	}
+	if info.RelayMode == relayconstant.RelayModeResponses {
+		normalizeResponsesStore(request)
+	}
+	store, err := responsesstate.Default()
+	if err != nil {
+		return responsesContinuityAPIError(fmt.Errorf("responses state store unavailable: %w", err))
+	}
+	prepared, err := prepareResponsesContinuity(c, info, store, request)
+	if err != nil {
+		return responsesContinuityAPIError(err)
+	}
+	c.Set(string(appconstant.ContextKeyResponsesPreparedRequest), prepared)
+	return nil
+}
+
 // prepareResponsesContinuity materializes a parent chain only for non-native
 // Responses wires and carries the original current turn to response handling.
 func prepareResponsesContinuity(c *gin.Context, info *relaycommon.RelayInfo, store responsesstate.Store, request *dto.OpenAIResponsesRequest) (*dto.OpenAIResponsesRequest, error) {
@@ -235,14 +315,19 @@ func prepareResponsesContinuity(c *gin.Context, info *relaycommon.RelayInfo, sto
 	if c == nil || info == nil || request == nil {
 		return nil, errors.New("responses continuity context is incomplete")
 	}
+	clientTaskID, err := responsesstate.ParseClientTaskID(request.ClientMetadata)
+	if err != nil {
+		return nil, err
+	}
 	expectedScope := responsesstate.Scope{
-		TenantID:  info.UserId,
-		UserID:    info.UserId,
-		TokenID:   info.TokenId,
-		RouteID:   info.ModelRouteId,
-		TargetID:  info.ModelTargetId,
-		ChannelID: info.ResolvedChannelId,
-		Model:     info.ResolvedModelNameOrOrigin(),
+		TenantID:     info.UserId,
+		UserID:       info.UserId,
+		TokenID:      info.TokenId,
+		RouteID:      info.ModelRouteId,
+		TargetID:     info.ModelTargetId,
+		ChannelID:    info.ResolvedChannelId,
+		ClientTaskID: clientTaskID,
+		Model:        info.ResolvedModelNameOrOrigin(),
 	}
 	continuity := responsesstate.ContinuityContext{
 		Scope:            expectedScope,
@@ -250,8 +335,11 @@ func prepareResponsesContinuity(c *gin.Context, info *relaycommon.RelayInfo, sto
 		CurrentInput:     append(json.RawMessage(nil), request.Input...),
 	}
 	prepared := request
-	shouldExpand := request.PreviousResponseID != "" &&
-		(info.ResponsesViaChat || (info.SelectedWire != "" && info.SelectedWire != string(modelcatalog.WireResponses)))
+	viaCompatibilityWire := info.ResponsesViaChat
+	if info.SelectedWire != "" {
+		viaCompatibilityWire = info.SelectedWire != string(modelcatalog.WireResponses)
+	}
+	shouldExpand := request.PreviousResponseID != "" && viaCompatibilityWire
 	if shouldExpand {
 		encoded, err := common.Marshal(request)
 		if err != nil {
@@ -271,6 +359,12 @@ func prepareResponsesContinuity(c *gin.Context, info *relaycommon.RelayInfo, sto
 			ParentResponseID: expansion.ParentResponseID,
 			CurrentInput:     append(json.RawMessage(nil), expansion.CurrentInput...),
 		}
+	} else if request.PreviousResponseID != "" {
+		record, err := store.Load(c.Request.Context(), expectedScope, request.PreviousResponseID)
+		if err != nil {
+			return nil, err
+		}
+		continuity.Scope = record.Scope
 	}
 	if len(continuity.CurrentInput) > 0 {
 		c.Set(string(appconstant.ContextKeyResponsesContinuity), continuity)

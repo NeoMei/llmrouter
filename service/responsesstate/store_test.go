@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
@@ -542,4 +543,74 @@ func TestSaveTurnReturnsValidationAndStorageErrors(t *testing.T) {
 
 	invalid := testRecord("")
 	require.Error(t, SaveTurn(context.Background(), store, invalid))
+}
+
+func TestParseClientTaskID(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata json.RawMessage
+		want     string
+		wantErr  bool
+	}{
+		{name: "omitted"},
+		{name: "only task id is read", metadata: json.RawMessage(`{"task_id":" task-1:_ok. ","thread_id":"ignored"}`), want: "task-1:_ok."},
+		{name: "unrelated metadata does not create identity", metadata: json.RawMessage(`{"thread_id":"not-a-task"}`)},
+		{name: "blank becomes omitted", metadata: json.RawMessage(`{"task_id":"   "}`)},
+		{name: "invalid character", metadata: json.RawMessage(`{"task_id":"bad task"}`), wantErr: true},
+		{name: "too long in bytes", metadata: json.RawMessage(`{"task_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`), wantErr: true},
+		{name: "non string", metadata: json.RawMessage(`{"task_id":12}`), wantErr: true},
+		{name: "malformed", metadata: json.RawMessage(`{"task_id":`), wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseClientTaskID(tt.metadata)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestEligibleCompletedResponse(t *testing.T) {
+	completed := func() *dto.OpenAIResponsesResponse {
+		return &dto.OpenAIResponsesResponse{
+			ID:     "resp_1",
+			Status: json.RawMessage(`"completed"`),
+			Output: []dto.ResponsesOutput{{
+				Type:    "message",
+				Content: []dto.ResponsesOutputContent{{Type: "output_text", Text: "ok"}},
+			}},
+		}
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*dto.OpenAIResponsesResponse)
+		want   bool
+	}{
+		{name: "eligible", want: true},
+		{name: "missing id", mutate: func(r *dto.OpenAIResponsesResponse) { r.ID = "" }},
+		{name: "incomplete status", mutate: func(r *dto.OpenAIResponsesResponse) { r.Status = json.RawMessage(`"incomplete"`) }},
+		{name: "malformed status", mutate: func(r *dto.OpenAIResponsesResponse) { r.Status = json.RawMessage(`completed`) }},
+		{name: "error", mutate: func(r *dto.OpenAIResponsesResponse) { r.Error = map[string]any{"message": "failed"} }},
+		{name: "incomplete details", mutate: func(r *dto.OpenAIResponsesResponse) {
+			r.IncompleteDetails = &dto.IncompleteDetails{Reason: "max_output_tokens"}
+		}},
+		{name: "output refusal", mutate: func(r *dto.OpenAIResponsesResponse) { r.Output[0].Type = "refusal" }},
+		{name: "content refusal", mutate: func(r *dto.OpenAIResponsesResponse) { r.Output[0].Content[0].Type = "refusal" }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response := completed()
+			if tt.mutate != nil {
+				tt.mutate(response)
+			}
+			assert.Equal(t, tt.want, EligibleCompletedResponse(response))
+		})
+	}
 }

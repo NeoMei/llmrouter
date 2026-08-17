@@ -238,6 +238,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				preparedCandidateIndex = relayInfo.RouteCandidateIndex
 			}
 		} else if !legacyPricingPrepared {
+			if continuityErr := relay.PrepareResponsesContinuityForAttempt(c, relayInfo); continuityErr != nil {
+				newAPIError = continuityErr
+				break
+			}
 			if billingErr := prepareAttemptBilling(c, relayInfo, tokens, meta); billingErr != nil {
 				newAPIError = billingErr
 				break
@@ -455,6 +459,9 @@ func prepareRouteCandidateForAttempt(c *gin.Context, info *relaycommon.RelayInfo
 	UpdateRouteDecisionSelection(GetRequestId(c), info)
 	if err := revalidateRouteCandidateAbility(c, info.RouteCandidates[index]); err != nil {
 		return types.NewError(err, types.ErrorCodeGetChannelFailed)
+	}
+	if err := relay.PrepareResponsesContinuityForAttempt(c, info); err != nil {
+		return err
 	}
 	return prepareAttemptBilling(c, info, promptTokens, meta)
 }

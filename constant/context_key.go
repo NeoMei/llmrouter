@@ -82,4 +82,8 @@ const (
 	// ContextKeyResponsesContinuity stores the scoped, unmaterialized Responses
 	// turn metadata shared by request expansion and response persistence.
 	ContextKeyResponsesContinuity ContextKey = "responses_continuity"
+
+	// ContextKeyResponsesPreparedRequest stores a continuity-validated request
+	// prepared before billing and upstream dispatch for the current attempt.
+	ContextKeyResponsesPreparedRequest ContextKey = "responses_prepared_request"
 )

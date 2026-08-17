@@ -50,14 +50,15 @@ const (
 	ErrorCodeViolationFeeGrokCSAM   ErrorCode = "violation_fee.grok.csam"
 
 	// new api error
-	ErrorCodeCountTokenFailed        ErrorCode = "count_token_failed"
-	ErrorCodeModelPriceError         ErrorCode = "model_price_error"
-	ErrorCodeInvalidApiType          ErrorCode = "invalid_api_type"
-	ErrorCodeJsonMarshalFailed       ErrorCode = "json_marshal_failed"
-	ErrorCodeDoRequestFailed         ErrorCode = "do_request_failed"
-	ErrorCodeGetChannelFailed        ErrorCode = "get_channel_failed"
-	ErrorCodeGenRelayInfoFailed      ErrorCode = "gen_relay_info_failed"
-	ErrorCodeContextCapacityExceeded ErrorCode = "context_capacity_exceeded"
+	ErrorCodeCountTokenFailed           ErrorCode = "count_token_failed"
+	ErrorCodeModelPriceError            ErrorCode = "model_price_error"
+	ErrorCodeInvalidApiType             ErrorCode = "invalid_api_type"
+	ErrorCodeJsonMarshalFailed          ErrorCode = "json_marshal_failed"
+	ErrorCodeDoRequestFailed            ErrorCode = "do_request_failed"
+	ErrorCodeGetChannelFailed           ErrorCode = "get_channel_failed"
+	ErrorCodeGenRelayInfoFailed         ErrorCode = "gen_relay_info_failed"
+	ErrorCodeContextCapacityExceeded    ErrorCode = "context_capacity_exceeded"
+	ErrorCodeResponsesStateScopeInvalid ErrorCode = "responses_state_scope_invalid"
 
 	// channel error
 	ErrorCodeChannelNoAvailableKey        ErrorCode = "channel:no_available_key"

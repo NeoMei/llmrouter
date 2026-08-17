@@ -1,6 +1,8 @@
 package relay
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -82,45 +84,17 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		return types.NewError(fmt.Errorf("failed to copy request to GeneralOpenAIRequest: %w", err), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
 
-	// Bounded Responses continuity: expand previous_response_id chains only when
-	// the selected upstream wire cannot handle native state (chat conversion).
-	// Native responses providers pass the ID through unchanged.
-	if responsesstate.Enabled() && request.PreviousResponseID != "" &&
-		(info.ResponsesViaChat || (info.SelectedWire != "" && info.SelectedWire != string(modelcatalog.WireResponses))) {
+	if responsesstate.Enabled() {
 		if store, storeErr := responsesstate.Default(); storeErr == nil {
-			encoded, marshalErr := common.Marshal(request)
-			if marshalErr != nil {
-				return types.NewError(fmt.Errorf("failed to marshal responses request for state expansion: %w", marshalErr), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
-			}
-			expectedScope := responsesstate.Scope{
-				TenantID:  info.UserId,
-				UserID:    info.UserId,
-				TokenID:   info.TokenId,
-				RouteID:   info.ModelRouteId,
-				TargetID:  info.ModelTargetId,
-				ChannelID: info.ResolvedChannelId,
-				Model:     info.ResolvedModelNameOrOrigin(),
-			}
-			expanded, expandErr := responsesstate.Expand(c.Request.Context(), store, expectedScope, encoded)
-			if expandErr != nil {
-				common.SysLog("responses state expansion skipped: " + expandErr.Error())
-			} else if len(expanded.Request) > 0 && string(expanded.Request) != string(encoded) {
-				var expandedReq dto.OpenAIResponsesRequest
-				if unmarshalErr := common.Unmarshal(expanded.Request, &expandedReq); unmarshalErr != nil {
-					common.SysLog("responses state expansion decode failed: " + unmarshalErr.Error())
-				} else {
-					request = &expandedReq
-				}
+			prepared, continuityErr := prepareResponsesContinuity(c, info, store, request)
+			if continuityErr != nil {
+				common.SysLog("responses state expansion skipped: " + continuityErr.Error())
+			} else {
+				request = prepared
 			}
 		} else {
 			common.SysLog("responses state store unavailable: " + storeErr.Error())
 		}
-	}
-
-	// Stash the normalized input so the response handler can persist a stateful
-	// turn for later previous_response_id replay.
-	if responsesstate.Enabled() && request.Input != nil {
-		c.Set(string(appconstant.ContextKeyResponsesInput), request.Input)
 	}
 
 	err = helper.ModelMappedHelper(c, info, request)
@@ -247,4 +221,53 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		service.PostTextConsumeQuota(c, info, usageDto, nil)
 	}
 	return nil
+}
+
+// prepareResponsesContinuity materializes a parent chain only for non-native
+// Responses wires and carries the original current turn to response handling.
+func prepareResponsesContinuity(c *gin.Context, info *relaycommon.RelayInfo, store responsesstate.Store, request *dto.OpenAIResponsesRequest) (*dto.OpenAIResponsesRequest, error) {
+	if c == nil || info == nil || request == nil {
+		return nil, errors.New("responses continuity context is incomplete")
+	}
+	expectedScope := responsesstate.Scope{
+		TenantID:  info.UserId,
+		UserID:    info.UserId,
+		TokenID:   info.TokenId,
+		RouteID:   info.ModelRouteId,
+		TargetID:  info.ModelTargetId,
+		ChannelID: info.ResolvedChannelId,
+		Model:     info.ResolvedModelNameOrOrigin(),
+	}
+	continuity := responsesstate.ContinuityContext{
+		Scope:            expectedScope,
+		ParentResponseID: request.PreviousResponseID,
+		CurrentInput:     append(json.RawMessage(nil), request.Input...),
+	}
+	prepared := request
+	shouldExpand := request.PreviousResponseID != "" &&
+		(info.ResponsesViaChat || (info.SelectedWire != "" && info.SelectedWire != string(modelcatalog.WireResponses)))
+	if shouldExpand {
+		encoded, err := common.Marshal(request)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal responses request for state expansion: %w", err)
+		}
+		expansion, err := responsesstate.Expand(c.Request.Context(), store, expectedScope, encoded)
+		if err != nil {
+			return nil, err
+		}
+		var expandedRequest dto.OpenAIResponsesRequest
+		if err := common.Unmarshal(expansion.Request, &expandedRequest); err != nil {
+			return nil, fmt.Errorf("responses state expansion decode failed: %w", err)
+		}
+		prepared = &expandedRequest
+		continuity = responsesstate.ContinuityContext{
+			Scope:            expansion.Scope,
+			ParentResponseID: expansion.ParentResponseID,
+			CurrentInput:     append(json.RawMessage(nil), expansion.CurrentInput...),
+		}
+	}
+	if len(continuity.CurrentInput) > 0 {
+		c.Set(string(appconstant.ContextKeyResponsesContinuity), continuity)
+	}
+	return prepared, nil
 }

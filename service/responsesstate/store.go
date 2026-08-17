@@ -153,6 +153,40 @@ type Expansion struct {
 	CurrentInput     json.RawMessage
 }
 
+// ContinuityContext is the request-scoped, unmaterialized turn state passed
+// from request expansion to response persistence.
+type ContinuityContext struct {
+	Scope            Scope
+	ParentResponseID string
+	CurrentInput     json.RawMessage
+}
+
+func materializedInputItems(raw json.RawMessage, label string) ([]any, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	switch common.GetJsonType(raw) {
+	case "array":
+		var items []any
+		if err := common.Unmarshal(raw, &items); err != nil {
+			return nil, fmt.Errorf("invalid %s input: %w", label, err)
+		}
+		return items, nil
+	case "string":
+		var text string
+		if err := common.Unmarshal(raw, &text); err != nil {
+			return nil, fmt.Errorf("invalid %s input: %w", label, err)
+		}
+		return []any{map[string]any{
+			"type":    "message",
+			"role":    "user",
+			"content": text,
+		}}, nil
+	default:
+		return nil, fmt.Errorf("invalid %s input: expected string or array", label)
+	}
+}
+
 // Expand prepends stored turns from a bounded ParentResponseID chain into the
 // request input. Stored turns contain only their own input and output, so
 // replay and persistence grow linearly with the number of retained turns.
@@ -213,18 +247,16 @@ func Expand(ctx context.Context, store Store, expected Scope, request json.RawMe
 		return Expansion{}, fmt.Errorf("%w: more than %d replay hops", ErrReplayRejected, MaxReplayHops)
 	}
 
-	var currentInput []any
-	if len(expansion.CurrentInput) > 0 {
-		if err := common.Unmarshal(expansion.CurrentInput, &currentInput); err != nil {
-			return Expansion{}, fmt.Errorf("invalid request input: %w", err)
-		}
+	currentInput, err := materializedInputItems(expansion.CurrentInput, "request")
+	if err != nil {
+		return Expansion{}, err
 	}
 
 	accumulated := make([]any, 0)
 	for i := len(records) - 1; i >= 0; i-- {
-		var priorInput []any
-		if err := common.Unmarshal(records[i].Input, &priorInput); err != nil {
-			return Expansion{}, fmt.Errorf("invalid stored input: %w", err)
+		priorInput, err := materializedInputItems(records[i].Input, "stored")
+		if err != nil {
+			return Expansion{}, err
 		}
 		var priorOutput []any
 		if err := common.Unmarshal(records[i].Output, &priorOutput); err != nil {

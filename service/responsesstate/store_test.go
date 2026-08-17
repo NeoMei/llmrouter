@@ -491,6 +491,33 @@ func TestExpandWithoutParentStillPreservesCurrentInput(t *testing.T) {
 	assert.Equal(t, json.RawMessage(`[ {"turn":"current"} ]`), expansion.CurrentInput)
 }
 
+func TestExpandNormalizesCurrentStringInputButPreservesOriginal(t *testing.T) {
+	store := seededStore(t, `[{"type":"message","role":"user","content":"first"}]`, `[{"type":"message","role":"assistant","content":"answer"}]`)
+	expansion, err := Expand(context.Background(), store, testScope(), json.RawMessage(`{"previous_response_id":"resp_1","input":"second"}`))
+	require.NoError(t, err)
+	assert.Equal(t, json.RawMessage(`"second"`), expansion.CurrentInput)
+
+	var payload struct {
+		Input []json.RawMessage `json:"input"`
+	}
+	require.NoError(t, common.Unmarshal(expansion.Request, &payload))
+	require.Len(t, payload.Input, 3)
+	assert.JSONEq(t, `{"type":"message","role":"user","content":"second"}`, string(payload.Input[2]))
+}
+
+func TestExpandNormalizesStoredStringInput(t *testing.T) {
+	store := seededStore(t, `"first"`, `[{"type":"message","role":"assistant","content":"answer"}]`)
+	expansion, err := Expand(context.Background(), store, testScope(), json.RawMessage(`{"previous_response_id":"resp_1","input":[{"type":"message","role":"user","content":"second"}]}`))
+	require.NoError(t, err)
+
+	var payload struct {
+		Input []json.RawMessage `json:"input"`
+	}
+	require.NoError(t, common.Unmarshal(expansion.Request, &payload))
+	require.Len(t, payload.Input, 3)
+	assert.JSONEq(t, `{"type":"message","role":"user","content":"first"}`, string(payload.Input[0]))
+}
+
 func TestExpandWithParentRejectsNilStore(t *testing.T) {
 	_, err := Expand(context.Background(), nil, testScope(), json.RawMessage(`{"previous_response_id":"resp_1","input":[]}`))
 	require.Error(t, err)

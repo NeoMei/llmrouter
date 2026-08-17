@@ -1,7 +1,6 @@
 package openai
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -169,12 +168,12 @@ func persistResponsesTurn(c *gin.Context, info *relaycommon.RelayInfo, responses
 	if err != nil {
 		return
 	}
-	rawInput, exists := c.Get(string(appconstant.ContextKeyResponsesInput))
+	rawContinuity, exists := c.Get(string(appconstant.ContextKeyResponsesContinuity))
 	if !exists {
 		return
 	}
-	input, ok := rawInput.(json.RawMessage)
-	if !ok || len(input) == 0 {
+	continuity, ok := rawContinuity.(responsesstate.ContinuityContext)
+	if !ok || len(continuity.CurrentInput) == 0 {
 		return
 	}
 	output, err := common.Marshal(responsesResponse.Output)
@@ -185,19 +184,12 @@ func persistResponsesTurn(c *gin.Context, info *relaycommon.RelayInfo, responses
 		c.Request.Context(),
 		store,
 		responsesstate.Record{
-			Version: responsesstate.CurrentVersion,
-			Scope: responsesstate.Scope{
-				TenantID:  info.UserId,
-				UserID:    info.UserId,
-				TokenID:   info.TokenId,
-				RouteID:   info.ModelRouteId,
-				TargetID:  info.ModelTargetId,
-				ChannelID: info.ResolvedChannelId,
-				Model:     info.ResolvedModelNameOrOrigin(),
-			},
-			ResponseID: responsesResponse.ID,
-			Input:      input,
-			Output:     output,
+			Version:          responsesstate.CurrentVersion,
+			Scope:            continuity.Scope,
+			ResponseID:       responsesResponse.ID,
+			ParentResponseID: continuity.ParentResponseID,
+			Input:            continuity.CurrentInput,
+			Output:           output,
 		},
 	); err != nil {
 		common.SysLog("responses state save skipped: " + err.Error())

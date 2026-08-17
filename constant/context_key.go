@@ -78,4 +78,8 @@ const (
 	// ContextKeyResponsesInput stores the normalized input items of the current
 	// Responses request so the response handler can persist a stateful turn.
 	ContextKeyResponsesInput ContextKey = "responses_input"
+
+	// ContextKeyResponsesContinuity stores the scoped, unmaterialized Responses
+	// turn metadata shared by request expansion and response persistence.
+	ContextKeyResponsesContinuity ContextKey = "responses_continuity"
 )

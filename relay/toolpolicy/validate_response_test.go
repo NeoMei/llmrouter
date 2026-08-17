@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -109,6 +110,20 @@ func TestValidateResponsesResponseChecksCallsAndAllowsRefusalOrIncompleteText(t 
 	require.NoError(t, ValidateResponsesResponse(policy, incompleteText))
 }
 
+func TestValidateResponsesResponseUsesCustomInputNotFunctionArguments(t *testing.T) {
+	policy, err := BuildFromResponses(
+		json.RawMessage(`[{"type":"custom","name":"apply_patch"}]`),
+		nil,
+	)
+	require.NoError(t, err)
+	require.NoError(t, ValidateResponsesResponse(policy, &dto.OpenAIResponsesResponse{Output: []dto.ResponsesOutput{{
+		Type: "custom_tool_call", CallId: "call_1", Name: "apply_patch", Input: json.RawMessage(`"patch body"`), Status: "completed",
+	}}}))
+	assert.ErrorIs(t, ValidateResponsesResponse(policy, &dto.OpenAIResponsesResponse{Output: []dto.ResponsesOutput{{
+		Type: "custom_tool_call", CallId: "call_2", Name: "apply_patch", Input: json.RawMessage(`[]`), Arguments: json.RawMessage(`{}`), Status: "completed",
+	}}}), ErrMalformedArguments)
+}
+
 func TestValidateResponsesResponseChecksBuiltInCallsExactly(t *testing.T) {
 	tools := json.RawMessage(`[{"type":"web_search_preview"}]`)
 	policy, err := BuildFromResponses(tools, nil)
@@ -169,4 +184,37 @@ func TestValidateResponseForcedChoiceMismatchAndErrorClassification(t *testing.T
 	assert.Equal(t, types.ErrorCodeUpstreamToolProtocolInvalid, protocolErr.GetErrorCode())
 	assert.False(t, types.IsSkipRetryError(protocolErr))
 	assert.True(t, errors.Is(protocolErr, ErrIncompleteToolCall))
+}
+
+func TestContextValidationFailsClosedForToolCallWhenPolicyIsMissing(t *testing.T) {
+	c, _ := gin.CreateTestContext(nil)
+	toolMessage := dto.Message{Role: "assistant"}
+	toolMessage.SetToolCalls([]dto.ToolCallResponse{{
+		ID: "call_1", Type: "function", Function: dto.FunctionResponse{Name: "lookup", Arguments: `{}`},
+	}})
+	err := ValidateChatResponseContext(c, &dto.OpenAITextResponse{Choices: []dto.OpenAITextResponseChoice{{Message: toolMessage}}})
+	require.ErrorIs(t, err, ErrMissingToolPolicy)
+	assert.Equal(t, types.ErrorCodeUpstreamToolProtocolInvalid, NewResponseValidationError(err).GetErrorCode())
+
+	text := &dto.OpenAITextResponse{Choices: []dto.OpenAITextResponseChoice{{Message: dto.Message{Role: "assistant", Content: "ok"}}}}
+	require.NoError(t, ValidateChatResponseContext(c, text))
+}
+
+func TestValidateRawResponseJSONRejectsDuplicateKeysAtAnyDepth(t *testing.T) {
+	err := ValidateRawResponseJSON([]byte(`{"choices":[{"message":{"tool_calls":[{"id":"call_1","id":"call_2"}]}}]}`))
+	require.Error(t, err)
+	assert.Equal(t, types.ErrorCodeUpstreamToolProtocolInvalid, NewResponseValidationError(err).GetErrorCode())
+	require.NoError(t, ValidateRawResponseJSON([]byte(`{"choices":[]}`)))
+}
+
+func TestResponsesForChatRejectsValidCustomCallAsProtocolIncompatible(t *testing.T) {
+	c, _ := gin.CreateTestContext(nil)
+	policy, err := BuildFromResponses(json.RawMessage(`[{"type":"custom","name":"apply_patch"}]`), nil)
+	require.NoError(t, err)
+	Set(c, policy)
+	err = ValidateResponsesResponseForChatContext(c, &dto.OpenAIResponsesResponse{Output: []dto.ResponsesOutput{{
+		Type: "custom_tool_call", CallId: "call_1", Name: "apply_patch", Input: json.RawMessage(`"patch"`), Status: "completed",
+	}}})
+	require.ErrorIs(t, err, ErrUnsupportedToolCallConversion)
+	assert.Equal(t, types.ErrorCodeUpstreamToolProtocolInvalid, NewResponseValidationError(err).GetErrorCode())
 }

@@ -196,6 +196,9 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 }
 
 func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo, httpResp *http.Response, data []byte) *types.NewAPIError {
+	if err := toolpolicy.ValidateRawResponseJSON(data); err != nil {
+		return toolpolicy.NewResponseValidationError(err)
+	}
 	var claudeResponse dto.ClaudeResponse
 	err := common.Unmarshal(data, &claudeResponse)
 	if err != nil {
@@ -204,10 +207,8 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	if claudeError := claudeResponse.GetClaudeError(); claudeError != nil && claudeError.Type != "" {
 		return types.WithClaudeError(*claudeError, http.StatusInternalServerError)
 	}
-	if policy, ok := toolpolicy.FromContext(c); ok {
-		if err := toolpolicy.ValidateClaudeResponse(policy, &claudeResponse); err != nil {
-			return toolpolicy.NewResponseValidationError(err)
-		}
+	if err := toolpolicy.ValidateClaudeResponseContext(c, &claudeResponse); err != nil {
+		return toolpolicy.NewResponseValidationError(err)
 	}
 	maybeMarkClaudeRefusal(c, claudeResponse.StopReason)
 	if claudeInfo.Usage == nil {

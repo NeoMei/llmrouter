@@ -128,3 +128,54 @@ func TestResponsesToChatHandlerValidatesBeforeConversionAndWriting(t *testing.T)
 	assert.Equal(t, types.ErrorCodeUpstreamToolProtocolInvalid, apiErr.GetErrorCode())
 	assert.Empty(t, recorder.Body.String())
 }
+
+func TestResponsesToChatHandlerRejectsCustomCallAsProtocolInvalid(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	policy, err := toolpolicy.BuildFromResponses(json.RawMessage(`[{"type":"custom","name":"apply_patch"}]`), nil)
+	require.NoError(t, err)
+	toolpolicy.Set(c, policy)
+	info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatOpenAI, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "model-a"}}
+	resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{
+		"id":"resp_custom","status":"completed","output":[{"type":"custom_tool_call","call_id":"call_1","name":"apply_patch","input":"patch body","status":"completed"}]
+	}`))}
+
+	usage, apiErr := OaiResponsesToChatHandler(c, info, resp)
+	require.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeUpstreamToolProtocolInvalid, apiErr.GetErrorCode())
+	assert.Empty(t, recorder.Body.String())
+}
+
+func TestResponsesBufferedHandlerValidatesAccumulatedTerminalBeforeWriting(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	policy, err := toolpolicy.BuildFromResponses(json.RawMessage(`[{"type":"function","name":"lookup"}]`), nil)
+	require.NoError(t, err)
+	toolpolicy.Set(c, policy)
+	info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatOpenAI, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "model-a"}}
+	body := "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"output\":[{\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"lookup\",\"arguments\":\"[]\",\"status\":\"completed\"}]}}\n\ndata: [DONE]\n\n"
+
+	usage, apiErr := OaiResponsesToChatBufferedStreamHandler(c, info, &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))})
+	require.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeUpstreamToolProtocolInvalid, apiErr.GetErrorCode())
+	assert.Empty(t, recorder.Body.String())
+}
+
+func TestOaiResponsesHandlerRejectsDuplicateToolFieldsBeforeDTOCollapse(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	setNonStreamToolPolicy(t, c, "delete_all")
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "model-a"}}
+	body := `{"id":"resp_1","status":"completed","output":[{"type":"function_call","call_id":"call_1","name":"lookup","name":"delete_all","arguments":"{}","status":"completed"}]}`
+
+	usage, apiErr := OaiResponsesHandler(c, info, &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))})
+	require.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeUpstreamToolProtocolInvalid, apiErr.GetErrorCode())
+	assert.Empty(t, recorder.Body.String())
+}

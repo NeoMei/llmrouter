@@ -28,6 +28,9 @@ func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
+	if err := toolpolicy.ValidateRawResponseJSON(body); err != nil {
+		return nil, toolpolicy.NewResponseValidationError(err)
+	}
 
 	var chatResp dto.OpenAITextResponse
 	if err := common.Unmarshal(body, &chatResp); err != nil {
@@ -36,10 +39,8 @@ func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if oaiError := chatResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
-	if policy, ok := toolpolicy.FromContext(c); ok {
-		if err := toolpolicy.ValidateChatResponse(policy, &chatResp); err != nil {
-			return nil, toolpolicy.NewResponseValidationError(err)
-		}
+	if err := toolpolicy.ValidateChatResponseContext(c, &chatResp); err != nil {
+		return nil, toolpolicy.NewResponseValidationError(err)
 	}
 
 	if responseID := helper.GetResponseID(c); responseID != "" {

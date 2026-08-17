@@ -303,16 +303,17 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	service.CloseResponseBodyGracefully(resp)
+	if err := toolpolicy.ValidateRawResponseJSON(responseBody); err != nil {
+		return nil, toolpolicy.NewResponseValidationError(err)
+	}
 	logger.LogDebug(c, "Gemini response body: %s", responseBody)
 	var geminiResponse dto.GeminiChatResponse
 	err = common.Unmarshal(responseBody, &geminiResponse)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
-	if policy, ok := toolpolicy.FromContext(c); ok {
-		if err := toolpolicy.ValidateGeminiResponse(policy, &geminiResponse); err != nil {
-			return nil, toolpolicy.NewResponseValidationError(err)
-		}
+	if err := toolpolicy.ValidateGeminiResponseContext(c, &geminiResponse); err != nil {
+		return nil, toolpolicy.NewResponseValidationError(err)
 	}
 	if len(geminiResponse.Candidates) == 0 {
 		usage := buildUsageFromGeminiResponse(c, info, &geminiResponse)

@@ -564,6 +564,7 @@ type ResponsesBufferedAccumulator struct {
 }
 
 type responsesBufferedTool struct {
+	Type      string
 	CallID    string
 	ItemID    string
 	Name      string
@@ -591,7 +592,11 @@ func (a *ResponsesBufferedAccumulator) ProcessEvent(event *dto.ResponsesStreamRe
 	case responsesEventOutputItemAdded, responsesEventOutputItemDone:
 		if event.Item != nil && isResponsesToolOutputType(event.Item.Type) {
 			tool := a.ensureTool(event)
-			if args := event.Item.ArgumentsString(); args != "" {
+			args := event.Item.ArgumentsString()
+			if event.Item.Type == responsesOutputTypeCustomToolCall {
+				args = dto.ResponsesArgumentsString(event.Item.Input)
+			}
+			if args != "" {
 				tool.Arguments.Reset()
 				tool.Arguments.WriteString(args)
 			}
@@ -643,13 +648,19 @@ func (a *ResponsesBufferedAccumulator) BuildOutput() []dto.ResponsesOutput {
 			continue
 		}
 		argsRaw, _ := common.Marshal(tool.Arguments.String())
-		out = append(out, dto.ResponsesOutput{
-			Type:      responsesOutputTypeFunctionCall,
-			ID:        tool.ItemID,
-			CallId:    tool.CallID,
-			Name:      tool.Name,
-			Arguments: argsRaw,
-		})
+		output := dto.ResponsesOutput{
+			Type:   tool.Type,
+			ID:     tool.ItemID,
+			CallId: tool.CallID,
+			Name:   tool.Name,
+		}
+		if output.Type == responsesOutputTypeCustomToolCall {
+			output.Input = argsRaw
+		} else {
+			output.Type = responsesOutputTypeFunctionCall
+			output.Arguments = argsRaw
+		}
+		out = append(out, output)
 	}
 	return out
 }
@@ -684,6 +695,9 @@ func (a *ResponsesBufferedAccumulator) ensureTool(event *dto.ResponsesStreamResp
 func (a *ResponsesBufferedAccumulator) applyToolMetadata(tool *responsesBufferedTool, event *dto.ResponsesStreamResponse) {
 	if tool == nil || event == nil || event.Item == nil {
 		return
+	}
+	if event.Item.Type == responsesOutputTypeFunctionCall || event.Item.Type == responsesOutputTypeCustomToolCall {
+		tool.Type = event.Item.Type
 	}
 	if itemID := strings.TrimSpace(event.Item.ID); itemID != "" {
 		tool.ItemID = itemID

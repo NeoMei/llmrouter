@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relay/toolpolicy"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/relayconvert"
 	"github.com/QuantumNous/new-api/types"
@@ -25,11 +26,17 @@ func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
+	if err := toolpolicy.ValidateRawResponseJSON(responseBody); err != nil {
+		return nil, toolpolicy.NewResponseValidationError(err)
+	}
 	logger.LogDebug(c, "Gemini responses response body: %s", responseBody)
 
 	var geminiResponse dto.GeminiChatResponse
 	if err := common.Unmarshal(responseBody, &geminiResponse); err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+	}
+	if err := toolpolicy.ValidateGeminiResponseContext(c, &geminiResponse); err != nil {
+		return nil, toolpolicy.NewResponseValidationError(err)
 	}
 	if len(geminiResponse.Candidates) == 0 {
 		usage := buildUsageFromGeminiResponse(c, info, &geminiResponse)

@@ -101,6 +101,7 @@ func TestOaiResponsesToChatBufferedStreamHandlerReturnsJSONFromSSE(t *testing.T)
 	}, "\n")
 
 	c, recorder, resp, info := newResponsesChatTestContext(t, body, false)
+	setNonStreamToolPolicy(t, c, "lookup")
 
 	usage, err := OaiResponsesToChatBufferedStreamHandler(c, info, resp)
 	require.Nil(t, err)

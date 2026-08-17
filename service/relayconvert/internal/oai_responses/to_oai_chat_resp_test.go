@@ -1,6 +1,7 @@
 package oairesponses
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/QuantumNous/new-api/dto"
@@ -431,6 +432,40 @@ func TestResponsesBufferedAccumulatorDoesNotDuplicatePendingArgsWithOutputIndexA
 	assert.Equal(t, `{"q":"x"}`, toolCalls[0].Function.Arguments)
 	assert.Empty(t, acc.pendingByOutputIndex)
 	assert.Empty(t, acc.pendingByItemID)
+}
+
+func TestResponsesResponseToChatRejectsCustomToolCallInsteadOfDisguisingItAsFunction(t *testing.T) {
+	response := &dto.OpenAIResponsesResponse{Output: []dto.ResponsesOutput{{
+		Type: "custom_tool_call", CallId: "call_custom", Name: "apply_patch", Input: json.RawMessage(`"patch body"`), Status: "completed",
+	}}}
+
+	converted, usage, err := ResponsesResponseToChatCompletionsResponse(response, "chat_1")
+
+	require.Error(t, err)
+	assert.Nil(t, converted)
+	assert.Nil(t, usage)
+}
+
+func TestResponsesBufferedAccumulatorPreservesCustomToolKindAndInput(t *testing.T) {
+	acc := NewResponsesBufferedAccumulator()
+	outputIndex := 1
+	acc.ProcessEvent(&dto.ResponsesStreamResponse{
+		Type:        responsesEventOutputItemAdded,
+		OutputIndex: &outputIndex,
+		Item: &dto.ResponsesOutput{
+			Type: responsesOutputTypeCustomToolCall, ID: "ct_1", CallId: "call_1", Name: "apply_patch",
+		},
+	})
+	acc.ProcessEvent(&dto.ResponsesStreamResponse{
+		Type: responsesEventCustomToolInputDelta, OutputIndex: &outputIndex, Delta: "patch body",
+	})
+	response := &dto.OpenAIResponsesResponse{}
+	acc.SupplementResponseOutput(response)
+
+	require.Len(t, response.Output, 1)
+	assert.Equal(t, responsesOutputTypeCustomToolCall, response.Output[0].Type)
+	assert.Equal(t, `"patch body"`, string(response.Output[0].Input))
+	assert.Empty(t, response.Output[0].Arguments)
 }
 
 func newTestResponsesStreamState() *ResponsesToChatStreamState {

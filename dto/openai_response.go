@@ -371,6 +371,7 @@ type ResponsesOutput struct {
 	CallId    string                   `json:"call_id,omitempty"`
 	Name      string                   `json:"name,omitempty"`
 	Arguments json.RawMessage          `json:"arguments,omitempty"`
+	Input     json.RawMessage          `json:"input,omitempty"`
 }
 
 // ArgumentsString returns function call arguments in the string form expected by Chat Completions.

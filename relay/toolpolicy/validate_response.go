@@ -11,9 +11,65 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 )
 
 var ErrIncompleteToolCall = errors.New("incomplete tool call")
+
+var (
+	ErrMissingToolPolicy             = errors.New("missing request tool policy")
+	ErrUnsupportedToolCallConversion = errors.New("unsupported tool call conversion")
+)
+
+// ValidateRawResponseJSON rejects duplicate object keys before provider DTOs
+// with interface/map fields can collapse them using last-key-wins semantics.
+func ValidateRawResponseJSON(data []byte) error {
+	var raw json.RawMessage
+	if err := common.UnmarshalUnique(data, &raw); err != nil {
+		return fmt.Errorf("%w: invalid upstream JSON: %v", ErrMalformedToolCall, err)
+	}
+	return nil
+}
+
+func validateFromContext(c *gin.Context, validate func(Policy) error) error {
+	policy, ok := FromContext(c)
+	err := validate(policy)
+	if err != nil && !ok {
+		return fmt.Errorf("%w: upstream emitted a tool call without a captured request policy: %v", ErrMissingToolPolicy, err)
+	}
+	return err
+}
+
+func ValidateChatResponseContext(c *gin.Context, response *dto.OpenAITextResponse) error {
+	return validateFromContext(c, func(policy Policy) error { return ValidateChatResponse(policy, response) })
+}
+
+func ValidateResponsesResponseContext(c *gin.Context, response *dto.OpenAIResponsesResponse) error {
+	return validateFromContext(c, func(policy Policy) error { return ValidateResponsesResponse(policy, response) })
+}
+
+func ValidateClaudeResponseContext(c *gin.Context, response *dto.ClaudeResponse) error {
+	return validateFromContext(c, func(policy Policy) error { return ValidateClaudeResponse(policy, response) })
+}
+
+func ValidateGeminiResponseContext(c *gin.Context, response *dto.GeminiChatResponse) error {
+	return validateFromContext(c, func(policy Policy) error { return ValidateGeminiResponse(policy, response) })
+}
+
+// ValidateResponsesResponseForChatContext additionally fails closed for valid
+// custom calls because Chat Completions has no protocol-correct custom-call
+// representation.
+func ValidateResponsesResponseForChatContext(c *gin.Context, response *dto.OpenAIResponsesResponse) error {
+	if err := ValidateResponsesResponseContext(c, response); err != nil {
+		return err
+	}
+	for index := range response.Output {
+		if response.Output[index].Type == "custom_tool_call" {
+			return fmt.Errorf("responses output %d: %w: Chat Completions cannot represent custom tool calls", index, ErrUnsupportedToolCallConversion)
+		}
+	}
+	return nil
+}
 
 // ValidateChatResponse validates every complete tool call in every choice of a
 // native Chat Completions response. ToolCalls remains raw on dto.Message, so
@@ -73,6 +129,7 @@ func ValidateResponsesResponse(policy Policy, response *dto.OpenAIResponsesRespo
 		case "custom_tool_call":
 			isCall = true
 			kind = ToolKindCustom
+			arguments = output.Input
 		default:
 			if strings.HasSuffix(output.Type, "_call") {
 				isCall = true

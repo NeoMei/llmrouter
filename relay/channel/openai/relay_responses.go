@@ -29,6 +29,9 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
+	if err := toolpolicy.ValidateRawResponseJSON(responseBody); err != nil {
+		return nil, toolpolicy.NewResponseValidationError(err)
+	}
 	err = common.Unmarshal(responseBody, &responsesResponse)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
@@ -36,10 +39,8 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	if oaiError := responsesResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
-	if policy, ok := toolpolicy.FromContext(c); ok {
-		if err := toolpolicy.ValidateResponsesResponse(policy, &responsesResponse); err != nil {
-			return nil, toolpolicy.NewResponseValidationError(err)
-		}
+	if err := toolpolicy.ValidateResponsesResponseContext(c, &responsesResponse); err != nil {
+		return nil, toolpolicy.NewResponseValidationError(err)
 	}
 
 	if responsesResponse.HasImageGenerationCall() {

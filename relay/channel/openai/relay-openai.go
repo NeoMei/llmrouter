@@ -196,6 +196,9 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
+	if err := toolpolicy.ValidateRawResponseJSON(responseBody); err != nil {
+		return nil, toolpolicy.NewResponseValidationError(err)
+	}
 	logger.LogDebug(c, "upstream response body: %s", responseBody)
 	// Unmarshal to simpleResponse
 	if info.ChannelType == constant.ChannelTypeOpenRouter && info.ChannelOtherSettings.IsOpenRouterEnterprise() {
@@ -221,10 +224,8 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	if oaiError := simpleResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
-	if policy, ok := toolpolicy.FromContext(c); ok {
-		if err := toolpolicy.ValidateChatResponse(policy, &simpleResponse); err != nil {
-			return nil, toolpolicy.NewResponseValidationError(err)
-		}
+	if err := toolpolicy.ValidateChatResponseContext(c, &simpleResponse); err != nil {
+		return nil, toolpolicy.NewResponseValidationError(err)
 	}
 
 	for _, choice := range simpleResponse.Choices {

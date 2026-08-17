@@ -73,6 +73,9 @@ func ResponsesResponseToChatCompletionsResponse(resp *dto.OpenAIResponsesRespons
 			if !isResponsesToolOutputType(out.Type) {
 				continue
 			}
+			if out.Type == responsesOutputTypeCustomToolCall {
+				return nil, nil, errors.New("custom tool calls cannot be represented by Chat Completions")
+			}
 			name := strings.TrimSpace(out.Name)
 			if name == "" {
 				continue

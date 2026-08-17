@@ -33,6 +33,9 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
+	if err := toolpolicy.ValidateRawResponseJSON(body); err != nil {
+		return nil, toolpolicy.NewResponseValidationError(err)
+	}
 
 	if err := common.Unmarshal(body, &responsesResp); err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
@@ -41,10 +44,8 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if oaiError := responsesResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
-	if policy, ok := toolpolicy.FromContext(c); ok {
-		if err := toolpolicy.ValidateResponsesResponse(policy, &responsesResp); err != nil {
-			return nil, toolpolicy.NewResponseValidationError(err)
-		}
+	if err := toolpolicy.ValidateResponsesResponseForChatContext(c, &responsesResp); err != nil {
+		return nil, toolpolicy.NewResponseValidationError(err)
 	}
 
 	chatResult, err := relayconvert.ConvertResponse(c, info, types.RelayFormatOpenAI, &responsesResp)
@@ -108,6 +109,10 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 			}
 			continue
 		}
+		if err := toolpolicy.ValidateRawResponseJSON([]byte(data)); err != nil {
+			streamErr = toolpolicy.NewResponseValidationError(err)
+			break
+		}
 
 		var streamResp dto.ResponsesStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResp); err != nil {
@@ -155,6 +160,9 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 		}
 	}
 	accumulator.SupplementResponseOutput(finalResponse)
+	if err := toolpolicy.ValidateResponsesResponseForChatContext(c, finalResponse); err != nil {
+		return nil, toolpolicy.NewResponseValidationError(err)
+	}
 
 	chatResult, err := relayconvert.ConvertResponse(c, info, types.RelayFormatOpenAI, finalResponse)
 	if err != nil {

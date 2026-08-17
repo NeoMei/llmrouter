@@ -226,3 +226,21 @@ var ChannelSpecialBases = map[string]ChannelSpecialBase{
 		OpenAIBaseURL: "https://ark.cn-beijing.volces.com/api/coding/v3",
 	},
 }
+
+func init() {
+	// Coding plans are keyed by alias, but a channel may store the concrete
+	// base URL instead of the alias. Register every plan under its own
+	// endpoint URLs so lookups succeed no matter which form the admin used.
+	for _, plan := range ChannelSpecialBases {
+		if plan.ClaudeBaseURL != "" {
+			if _, exists := ChannelSpecialBases[plan.ClaudeBaseURL]; !exists {
+				ChannelSpecialBases[plan.ClaudeBaseURL] = plan
+			}
+		}
+		if plan.OpenAIBaseURL != "" {
+			if _, exists := ChannelSpecialBases[plan.OpenAIBaseURL]; !exists {
+				ChannelSpecialBases[plan.OpenAIBaseURL] = plan
+			}
+		}
+	}
+}

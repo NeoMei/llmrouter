@@ -49,3 +49,27 @@ func TestGetRequestURLResponsesViaChatTargetsChatCompletions(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "https://api.kimi.com/coding/v1/chat/completions", url)
 }
+
+func TestGetRequestURLClaudeFullBaseURLUsesCodingPlanEndpoint(t *testing.T) {
+	for _, baseURL := range []string{
+		"kimi-coding-plan",
+		"https://api.kimi.com/coding",
+		"https://api.kimi.com/coding/v1",
+	} {
+		t.Run(baseURL, func(t *testing.T) {
+			info := &relaycommon.RelayInfo{
+				RelayMode:   relayconstant.RelayModeChatCompletions,
+				RelayFormat: types.RelayFormatClaude,
+				ChannelMeta: &relaycommon.ChannelMeta{
+					ChannelBaseUrl:    baseURL,
+					UpstreamModelName: "kimi-k2.7-code",
+				},
+			}
+
+			url, err := (&Adaptor{}).GetRequestURL(info)
+
+			require.NoError(t, err)
+			require.Equal(t, "https://api.kimi.com/coding/v1/messages", url)
+		})
+	}
+}

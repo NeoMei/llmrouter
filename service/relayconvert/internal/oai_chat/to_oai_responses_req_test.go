@@ -3,6 +3,7 @@ package oaichat
 import (
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
@@ -44,6 +45,71 @@ func TestChatCompletionsRequestToResponsesRequestRejectsMultipleChoices(t *testi
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "n>1")
+}
+
+func TestChatCompletionsRequestToResponsesRequestPreservesPenalties(t *testing.T) {
+	tests := []struct {
+		name          string
+		frequency     *float64
+		frequencyWant string
+		presence      *float64
+		presenceWant  string
+	}{
+		{name: "positive values", frequency: lo.ToPtr(0.5), frequencyWant: "0.5", presence: lo.ToPtr(1.5), presenceWant: "1.5"},
+		{name: "explicit zero values", frequency: lo.ToPtr(0.0), frequencyWant: "0", presence: lo.ToPtr(0.0), presenceWant: "0"},
+		{name: "unset stays nil"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ChatCompletionsRequestToResponsesRequest(&dto.GeneralOpenAIRequest{
+				Model:            "gpt-test",
+				Messages:         []dto.Message{{Role: "user", Content: "hello"}},
+				FrequencyPenalty: tt.frequency,
+				PresencePenalty:  tt.presence,
+			})
+			require.NoError(t, err)
+
+			encoded, err := common.Marshal(got)
+			require.NoError(t, err)
+			if tt.frequencyWant == "" {
+				assert.False(t, gjson.GetBytes(encoded, "frequency_penalty").Exists())
+			} else {
+				assert.Equal(t, tt.frequencyWant, gjson.GetBytes(encoded, "frequency_penalty").Raw)
+			}
+			if tt.presenceWant == "" {
+				assert.False(t, gjson.GetBytes(encoded, "presence_penalty").Exists())
+			} else {
+				assert.Equal(t, tt.presenceWant, gjson.GetBytes(encoded, "presence_penalty").Raw)
+			}
+		})
+	}
+}
+
+func TestChatCompletionsRequestToResponsesRequestPreservesPromptCacheKey(t *testing.T) {
+	t.Run("present", func(t *testing.T) {
+		key := "session-\"quoted\"\\path\n世界"
+		got, err := ChatCompletionsRequestToResponsesRequest(&dto.GeneralOpenAIRequest{
+			Model:          "gpt-test",
+			Messages:       []dto.Message{{Role: "user", Content: "hello"}},
+			PromptCacheKey: key,
+		})
+		require.NoError(t, err)
+
+		encoded, err := common.Marshal(got)
+		require.NoError(t, err)
+		assert.Equal(t, key, gjson.GetBytes(encoded, "prompt_cache_key").String())
+	})
+	t.Run("absent", func(t *testing.T) {
+		got, err := ChatCompletionsRequestToResponsesRequest(&dto.GeneralOpenAIRequest{
+			Model:    "gpt-test",
+			Messages: []dto.Message{{Role: "user", Content: "hello"}},
+		})
+		require.NoError(t, err)
+
+		encoded, err := common.Marshal(got)
+		require.NoError(t, err)
+		assert.False(t, gjson.GetBytes(encoded, "prompt_cache_key").Exists())
+	})
 }
 
 func assistantMessageWithTool(content string, id string, name string, args string) dto.Message {

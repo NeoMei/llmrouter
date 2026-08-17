@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
@@ -209,6 +210,211 @@ func TestPrepareTieredBillingForSelectedGroupStopsOnReservationFailure(t *testin
 	assert.Equal(t, []int{200}, spy.calls)
 	assert.Equal(t, 100, spy.reserved)
 	assert.Equal(t, 100, info.FinalPreConsumedQuota)
+}
+
+func TestPrepareTieredBillingForSelectedGroupRejectsInvalidRatioBeforeMutation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, testCase := range []struct {
+		name  string
+		ratio float64
+	}{
+		{name: "negative", ratio: -1},
+		{name: "nan", ratio: math.NaN()},
+		{name: "positive infinity", ratio: math.Inf(1)},
+		{name: "negative infinity", ratio: math.Inf(-1)},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			info, spy := newTieredGroupRefreshInfo(1, testCase.ratio, 100)
+			info.PriceData.FreeModel = true
+
+			apiErr := PrepareTieredBillingForSelectedGroup(c, info)
+
+			require.NotNil(t, apiErr)
+			assert.Equal(t, types.ErrorCodeModelPriceError, apiErr.GetErrorCode())
+			assert.True(t, types.IsSkipRetryError(apiErr))
+			assert.Empty(t, spy.calls)
+			assert.Equal(t, 100, spy.reserved)
+			assert.Equal(t, 100, info.FinalPreConsumedQuota)
+			assert.Equal(t, 1.0, info.TieredBillingSnapshot.GroupRatio)
+			assert.Equal(t, 100, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+			assert.True(t, info.PriceData.FreeModel)
+		})
+	}
+}
+
+func TestPrepareTieredBillingForSelectedGroupReservationFailureIsAtomicAndRetryable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	reserveErr := errors.New("reserve final group quota")
+	info, spy := newTieredGroupRefreshInfo(1, 2, 100)
+	info.PriceData.FreeModel = true
+	spy.err = reserveErr
+
+	firstErr := PrepareTieredBillingForSelectedGroup(c, info)
+	secondErr := PrepareTieredBillingForSelectedGroup(c, info)
+
+	require.NotNil(t, firstErr)
+	require.NotNil(t, secondErr)
+	assert.ErrorIs(t, firstErr, reserveErr)
+	assert.ErrorIs(t, secondErr, reserveErr)
+	assert.Equal(t, []int{200, 200}, spy.calls)
+	assert.Equal(t, 100, spy.reserved)
+	assert.Equal(t, 100, info.FinalPreConsumedQuota)
+	assert.Equal(t, 1.0, info.TieredBillingSnapshot.GroupRatio)
+	assert.Equal(t, 100, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+	assert.True(t, info.PriceData.FreeModel)
+
+	spy.err = nil
+	thirdErr := PrepareTieredBillingForSelectedGroup(c, info)
+	require.Nil(t, thirdErr)
+	assert.Equal(t, []int{200, 200, 200}, spy.calls)
+	assert.Equal(t, 200, spy.reserved)
+	assert.Equal(t, 200, info.FinalPreConsumedQuota)
+	assert.Equal(t, 2.0, info.TieredBillingSnapshot.GroupRatio)
+	assert.Equal(t, 200, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+	assert.False(t, info.PriceData.FreeModel)
+}
+
+func TestPrepareTieredBillingForSelectedGroupTrustedSessionChargesAtSettlement(t *testing.T) {
+	truncate(t)
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	const initialQuota = 6_000_000
+	seedUser(t, 311, initialQuota)
+	seedToken(t, 312, 311, "tiered-trusted", initialQuota)
+	c.Set("token_quota", initialQuota)
+	info := &relaycommon.RelayInfo{
+		UserId:          311,
+		TokenId:         312,
+		TokenKey:        "tiered-trusted",
+		OriginModelName: "tiered-model",
+		UserSetting:     dto.UserSetting{BillingPreference: "wallet_only"},
+		PriceData:       types.PriceData{GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 2}},
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode:               "tiered_expr",
+			EstimatedQuotaBeforeGroup: 100,
+			GroupRatio:                1,
+			EstimatedQuotaAfterGroup:  100,
+		},
+	}
+	require.Nil(t, PreConsumeBilling(c, 100, info))
+	require.NotNil(t, info.Billing)
+	assert.Zero(t, info.Billing.GetPreConsumedQuota())
+	assert.Equal(t, initialQuota, getUserQuota(t, 311))
+	assert.Equal(t, initialQuota, getTokenRemainQuota(t, 312))
+
+	apiErr := PrepareTieredBillingForSelectedGroup(c, info)
+
+	require.Nil(t, apiErr)
+	assert.Zero(t, info.FinalPreConsumedQuota)
+	assert.Equal(t, 2.0, info.TieredBillingSnapshot.GroupRatio)
+	assert.Equal(t, 200, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+	assert.Equal(t, initialQuota, getUserQuota(t, 311), "trusted reserve does not move wallet quota before send")
+	assert.Equal(t, initialQuota, getTokenRemainQuota(t, 312), "trusted reserve does not move token quota before send")
+
+	require.NoError(t, SettleBilling(c, info, 200))
+	assert.Equal(t, initialQuota-200, getUserQuota(t, 311))
+	assert.Equal(t, initialQuota-200, getTokenRemainQuota(t, 312))
+	assert.Equal(t, 200, getTokenUsedQuota(t, 312))
+}
+
+func TestPrepareTieredBillingForSelectedGroupReservesSubscriptionDelta(t *testing.T) {
+	truncate(t)
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	seedUser(t, 321, 1_000)
+	seedToken(t, 322, 321, "tiered-subscription", 1_000)
+	plan := &model.SubscriptionPlan{Id: 323, Title: "tiered-plan", Enabled: true, TotalAmount: 1_000, QuotaResetPeriod: model.SubscriptionResetNever}
+	require.NoError(t, model.DB.Create(plan).Error)
+	subscription := &model.UserSubscription{
+		Id:          324,
+		UserId:      321,
+		PlanId:      plan.Id,
+		AmountTotal: 1_000,
+		Status:      "active",
+		StartTime:   time.Now().Add(-time.Hour).Unix(),
+		EndTime:     time.Now().Add(time.Hour).Unix(),
+	}
+	require.NoError(t, model.DB.Create(subscription).Error)
+	info := &relaycommon.RelayInfo{
+		UserId:          321,
+		TokenId:         322,
+		TokenKey:        "tiered-subscription",
+		RequestId:       "tiered-subscription-reserve",
+		OriginModelName: "tiered-model",
+		ForcePreConsume: true,
+		UserSetting:     dto.UserSetting{BillingPreference: "subscription_only"},
+		PriceData:       types.PriceData{GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 2}},
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode:               "tiered_expr",
+			EstimatedQuotaBeforeGroup: 100,
+			GroupRatio:                1,
+			EstimatedQuotaAfterGroup:  100,
+		},
+	}
+	require.Nil(t, PreConsumeBilling(c, 100, info))
+	assert.Equal(t, int64(100), getSubscriptionUsed(t, subscription.Id))
+	assert.Equal(t, 900, getTokenRemainQuota(t, 322))
+
+	apiErr := PrepareTieredBillingForSelectedGroup(c, info)
+
+	require.Nil(t, apiErr)
+	assert.Equal(t, 200, info.FinalPreConsumedQuota)
+	assert.Equal(t, int64(200), info.SubscriptionPreConsumed)
+	assert.Equal(t, int64(200), getSubscriptionUsed(t, subscription.Id))
+	assert.Equal(t, 800, getTokenRemainQuota(t, 322))
+	assert.Equal(t, 200, getTokenUsedQuota(t, 322))
+	assert.GreaterOrEqual(t, getSubscriptionUsed(t, subscription.Id), int64(0))
+	require.NoError(t, info.Billing.Settle(200))
+}
+
+func TestPrepareTieredBillingForSelectedGroupExtraReserveRefundsAfterPreSendFailure(t *testing.T) {
+	truncate(t)
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	seedUser(t, 331, 1_000)
+	seedToken(t, 332, 331, "tiered-refund", 1_000)
+	info := &relaycommon.RelayInfo{
+		UserId:          331,
+		TokenId:         332,
+		TokenKey:        "tiered-refund",
+		OriginModelName: "tiered-model",
+		ForcePreConsume: true,
+		UserSetting:     dto.UserSetting{BillingPreference: "wallet_only"},
+		PriceData:       types.PriceData{GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 2}},
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode:               "tiered_expr",
+			EstimatedQuotaBeforeGroup: 100,
+			GroupRatio:                1,
+			EstimatedQuotaAfterGroup:  100,
+		},
+	}
+	require.Nil(t, PreConsumeBilling(c, 100, info))
+	require.Nil(t, PrepareTieredBillingForSelectedGroup(c, info))
+	assert.Equal(t, 800, getUserQuota(t, 331))
+	assert.Equal(t, 800, getTokenRemainQuota(t, 332))
+	assert.Equal(t, 200, getTokenUsedQuota(t, 332))
+	assert.Equal(t, 200, info.FinalPreConsumedQuota)
+	assert.True(t, info.Billing.NeedsRefund())
+
+	info.Billing.Refund(c)
+
+	require.Eventually(t, func() bool {
+		var user model.User
+		var token model.Token
+		if err := model.DB.Select("quota").First(&user, 331).Error; err != nil {
+			return false
+		}
+		if err := model.DB.Select("remain_quota", "used_quota").First(&token, 332).Error; err != nil {
+			return false
+		}
+		return user.Quota == 1_000 && token.RemainQuota == 1_000 && token.UsedQuota == 0
+	}, 2*time.Second, 10*time.Millisecond)
+	assert.False(t, info.Billing.NeedsRefund())
+	assert.Equal(t, 1_000, getUserQuota(t, 331))
+	assert.Equal(t, 1_000, getTokenRemainQuota(t, 332))
+	assert.Zero(t, getTokenUsedQuota(t, 332))
 }
 
 // ---------------------------------------------------------------------------

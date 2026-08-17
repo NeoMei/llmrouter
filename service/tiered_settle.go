@@ -1,6 +1,8 @@
 package service
 
 import (
+	"fmt"
+	"math"
 	"net/http"
 
 	"github.com/QuantumNous/new-api/dto"
@@ -19,6 +21,9 @@ func refreshTieredBillingGroup(relayInfo *relaycommon.RelayInfo) (*billingexpr.B
 	}
 	snapshot := relayInfo.TieredBillingSnapshot
 	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
+	if math.IsNaN(groupRatio) || math.IsInf(groupRatio, 0) || groupRatio < 0 {
+		return nil, false, fmt.Errorf("selected group ratio must be finite and non-negative: %v", groupRatio)
+	}
 	if snapshot.GroupRatio == groupRatio {
 		return snapshot, false, nil
 	}
@@ -26,9 +31,10 @@ func refreshTieredBillingGroup(relayInfo *relaycommon.RelayInfo) (*billingexpr.B
 	if err != nil {
 		return nil, false, err
 	}
-	snapshot.GroupRatio = groupRatio
-	snapshot.EstimatedQuotaAfterGroup = estimatedQuota
-	return snapshot, true, nil
+	refreshed := *snapshot
+	refreshed.GroupRatio = groupRatio
+	refreshed.EstimatedQuotaAfterGroup = estimatedQuota
+	return &refreshed, true, nil
 }
 
 // PrepareTieredBillingForSelectedGroup refreshes the frozen tiered-billing
@@ -39,18 +45,28 @@ func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon
 	if err != nil {
 		return types.NewErrorWithStatusCode(err, types.ErrorCodeModelPriceError, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 	}
-	if snapshot == nil || !changed || snapshot.GroupRatio == 0 {
+	if snapshot == nil || !changed {
 		return nil
 	}
 
-	relayInfo.PriceData.FreeModel = false
-	if relayInfo.Billing == nil {
-		return PreConsumeBilling(c, snapshot.EstimatedQuotaAfterGroup, relayInfo)
+	if snapshot.GroupRatio != 0 {
+		if relayInfo.Billing == nil {
+			if apiErr := PreConsumeBilling(c, snapshot.EstimatedQuotaAfterGroup, relayInfo); apiErr != nil {
+				return apiErr
+			}
+		} else if err := relayInfo.Billing.Reserve(snapshot.EstimatedQuotaAfterGroup); err != nil {
+			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+		}
 	}
-	if err := relayInfo.Billing.Reserve(snapshot.EstimatedQuotaAfterGroup); err != nil {
-		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+
+	relayInfo.TieredBillingSnapshot.GroupRatio = snapshot.GroupRatio
+	relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup = snapshot.EstimatedQuotaAfterGroup
+	if snapshot.GroupRatio != 0 {
+		relayInfo.PriceData.FreeModel = false
 	}
-	relayInfo.FinalPreConsumedQuota = relayInfo.Billing.GetPreConsumedQuota()
+	if relayInfo.Billing != nil {
+		relayInfo.FinalPreConsumedQuota = relayInfo.Billing.GetPreConsumedQuota()
+	}
 	return nil
 }
 

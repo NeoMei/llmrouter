@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -142,4 +143,69 @@ func TestGetChannelRefreshesRatioAfterSuccessfulSelection(t *testing.T) {
 	assert.Equal(t, "edit_this", info.UsingGroup)
 	assert.Equal(t, 0.9, info.PriceData.GroupRatioInfo.GroupRatio)
 	assert.True(t, info.PriceData.GroupRatioInfo.HasSpecialRatio)
+}
+
+func TestRelaySelectedChannelRejectsInvalidTieredRatioBeforeSend(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service.InitHttpClient()
+	for _, testCase := range []struct {
+		name  string
+		ratio float64
+	}{
+		{name: "negative", ratio: -1},
+		{name: "nan", ratio: math.NaN()},
+		{name: "positive infinity", ratio: math.Inf(1)},
+		{name: "negative infinity", ratio: math.Inf(-1)},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			var upstreamCalls atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				upstreamCalls.Add(1)
+				w.WriteHeader(http.StatusBadGateway)
+			}))
+			defer upstream.Close()
+
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-test","messages":[]}`))
+			c.Request.Header.Set("Content-Type", "application/json")
+			channel := &model.Channel{Id: 81, Type: constant.ChannelTypeOpenAI, Name: "invalid-ratio", Key: "test-key", BaseURL: &upstream.URL}
+			require.Nil(t, middleware.SetupContextForSelectedChannel(c, channel, "gpt-test"))
+			spy := &relayReserveFailureSpy{reserved: 100}
+			info := &relaycommon.RelayInfo{
+				Billing:               spy,
+				FinalPreConsumedQuota: 100,
+				OriginModelName:       "gpt-test",
+				RelayMode:             relayconstant.RelayModeChatCompletions,
+				RelayFormat:           types.RelayFormatOpenAI,
+				RequestURLPath:        "/v1/chat/completions",
+				Request:               &dto.GeneralOpenAIRequest{Model: "gpt-test"},
+				PriceData: types.PriceData{
+					FreeModel:      true,
+					GroupRatioInfo: types.GroupRatioInfo{GroupRatio: testCase.ratio},
+				},
+				TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+					BillingMode:               "tiered_expr",
+					ExprString:                `tier("default", p * 2 + c * 10)`,
+					EstimatedQuotaBeforeGroup: 100,
+					GroupRatio:                1,
+					EstimatedQuotaAfterGroup:  100,
+				},
+			}
+
+			apiErr, relayStarted := relaySelectedChannel(c, info, channel, types.RelayFormatOpenAI, nil)
+
+			require.NotNil(t, apiErr)
+			assert.False(t, relayStarted)
+			assert.Equal(t, types.ErrorCodeModelPriceError, apiErr.GetErrorCode())
+			assert.True(t, types.IsSkipRetryError(apiErr))
+			assert.Equal(t, []string{"81"}, c.GetStringSlice("use_channel"))
+			assert.Empty(t, spy.calls)
+			assert.Equal(t, 100, spy.reserved)
+			assert.Equal(t, 100, info.FinalPreConsumedQuota)
+			assert.Equal(t, 1.0, info.TieredBillingSnapshot.GroupRatio)
+			assert.Equal(t, 100, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+			assert.True(t, info.PriceData.FreeModel)
+			assert.Zero(t, upstreamCalls.Load())
+		})
+	}
 }

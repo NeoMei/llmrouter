@@ -41,38 +41,79 @@ func (s *RedisStore) Load(ctx context.Context, expected Scope, responseID string
 	if s == nil || common.RDB == nil {
 		return Record{}, ErrNotFound
 	}
-	key := Key(responseID)
-	val, err := common.RedisGet(key)
-	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			if _, legacyErr := common.RedisGet(legacyKey(expected.TenantID, expected.TokenID, responseID)); legacyErr == nil {
-				return Record{}, ErrLegacyScope
-			} else if !errors.Is(legacyErr, redis.Nil) {
-				return Record{}, legacyErr
+	bucketKey := Key(responseID)
+	values := make([]string, 0, 1)
+	bucketHasRecords := false
+	if expected.ClientTaskID != "" {
+		value, err := common.RDB.HGet(ctx, bucketKey, scopeDigest(expected)).Result()
+		if err == nil {
+			values = append(values, value)
+			bucketHasRecords = true
+		} else if errors.Is(err, redis.Nil) {
+			count, countErr := common.RDB.HLen(ctx, bucketKey).Result()
+			if countErr != nil {
+				return Record{}, countErr
 			}
-			return Record{}, ErrNotFound
+			bucketHasRecords = count > 0
+		} else {
+			return Record{}, err
 		}
-		return Record{}, err
+	} else {
+		entries, err := common.RDB.HGetAll(ctx, bucketKey).Result()
+		if err != nil {
+			return Record{}, err
+		}
+		bucketHasRecords = len(entries) > 0
+		for _, value := range entries {
+			values = append(values, value)
+		}
 	}
-	data, err := s.decrypt([]byte(val))
-	if err != nil {
-		return Record{}, err
-	}
-	var record Record
-	if err := common.Unmarshal(data, &record); err != nil {
-		return Record{}, fmt.Errorf("decode record: %w", err)
-	}
-	if err := ValidateRecord(record); err != nil {
-		return Record{}, err
-	}
-	if time.Now().After(record.ExpiresAt) {
+	if len(values) == 0 {
+		if bucketHasRecords {
+			return Record{}, ErrScopeMismatch
+		}
+		if _, legacyErr := common.RedisGet(legacyKey(expected.TenantID, expected.TokenID, responseID)); legacyErr == nil {
+			return Record{}, ErrLegacyScope
+		} else if !errors.Is(legacyErr, redis.Nil) {
+			return Record{}, legacyErr
+		}
 		return Record{}, ErrNotFound
 	}
-	if record.ResponseID != responseID || !scopeMatches(expected, record.Scope) {
+
+	now := time.Now()
+	matches := make([]Record, 0, 1)
+	hadScopeMatch := false
+	for _, value := range values {
+		data, err := s.decrypt([]byte(value))
+		if err != nil {
+			return Record{}, err
+		}
+		var record Record
+		if err := common.Unmarshal(data, &record); err != nil {
+			return Record{}, fmt.Errorf("decode record: %w", err)
+		}
+		if err := ValidateRecord(record); err != nil {
+			return Record{}, err
+		}
+		if record.ResponseID != responseID || !scopeMatches(expected, record.Scope) {
+			continue
+		}
+		hadScopeMatch = true
+		if now.After(record.ExpiresAt) {
+			continue
+		}
+		matches = append(matches, record)
+	}
+	if len(matches) == 0 {
+		if hadScopeMatch {
+			return Record{}, ErrNotFound
+		}
 		return Record{}, ErrScopeMismatch
 	}
-	_ = ctx
-	return record, nil
+	if len(matches) != 1 {
+		return Record{}, ErrScopeMismatch
+	}
+	return matches[0], nil
 }
 
 func (s *RedisStore) Save(ctx context.Context, record Record) error {
@@ -81,6 +122,9 @@ func (s *RedisStore) Save(ctx context.Context, record Record) error {
 	}
 	if record.ExpiresAt.IsZero() {
 		record.ExpiresAt = time.Now().Add(DefaultRecordTTL)
+	}
+	if !record.ExpiresAt.After(time.Now()) {
+		return errors.New("record is already expired")
 	}
 	if err := ValidateRecord(record); err != nil {
 		return err
@@ -98,10 +142,20 @@ func (s *RedisStore) Save(ctx context.Context, record Record) error {
 	}
 	ttl := time.Until(record.ExpiresAt)
 	if ttl <= 0 {
-		ttl = DefaultRecordTTL
+		return errors.New("record is already expired")
 	}
-	key := Key(record.ResponseID)
-	return common.RedisSet(key, string(encrypted), ttl)
+	ttlMillis := ttl.Milliseconds()
+	if ttlMillis < 1 {
+		ttlMillis = 1
+	}
+	const saveRecordScript = `
+local current_ttl = redis.call('PTTL', KEYS[1])
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+if current_ttl < 0 or current_ttl < tonumber(ARGV[3]) then
+  redis.call('PEXPIRE', KEYS[1], ARGV[3])
+end
+return 1`
+	return common.RDB.Eval(ctx, saveRecordScript, []string{Key(record.ResponseID)}, scopeDigest(record.Scope), string(encrypted), ttlMillis).Err()
 }
 
 func (s *RedisStore) encrypt(plaintext []byte) ([]byte, error) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -85,6 +86,73 @@ func TestStoreTaskIsolation(t *testing.T) {
 	expected.ClientTaskID = "task-b"
 	_, err = store.Load(context.Background(), expected, "resp_task")
 	require.ErrorIs(t, err, ErrScopeMismatch)
+}
+
+func assertScopedResponseIDCollisionsAreIsolated(t *testing.T, store Store) {
+	t.Helper()
+	base := testScope()
+	scopes := []Scope{base}
+	mutations := []func(*Scope){
+		func(scope *Scope) { scope.TenantID++ },
+		func(scope *Scope) { scope.UserID++ },
+		func(scope *Scope) { scope.TokenID++ },
+		func(scope *Scope) { scope.RouteID++ },
+		func(scope *Scope) { scope.TargetID++ },
+		func(scope *Scope) { scope.ChannelID++ },
+		func(scope *Scope) { scope.Model = "model-b" },
+	}
+	for _, mutate := range mutations {
+		scope := base
+		mutate(&scope)
+		scopes = append(scopes, scope)
+	}
+
+	for i, scope := range scopes {
+		record := testRecord("resp_collision")
+		record.Scope = scope
+		record.Output = json.RawMessage(fmt.Sprintf(`[{"scope":%d}]`, i))
+		require.NoError(t, store.Save(context.Background(), record))
+	}
+	for i, scope := range scopes {
+		record, err := store.Load(context.Background(), scope, "resp_collision")
+		require.NoError(t, err)
+		assert.Equal(t, json.RawMessage(fmt.Sprintf(`[{"scope":%d}]`, i)), record.Output)
+	}
+
+	expectedWithoutTask := base
+	expectedWithoutTask.ClientTaskID = ""
+	record, err := store.Load(context.Background(), expectedWithoutTask, "resp_collision")
+	require.NoError(t, err)
+	assert.Equal(t, base.ClientTaskID, record.Scope.ClientTaskID)
+
+	secondTask := base
+	secondTask.ClientTaskID = "task-b"
+	secondTaskRecord := testRecord("resp_collision")
+	secondTaskRecord.Scope = secondTask
+	secondTaskRecord.Output = json.RawMessage(`[{"task":"b"}]`)
+	require.NoError(t, store.Save(context.Background(), secondTaskRecord))
+
+	loadedSecondTask, err := store.Load(context.Background(), secondTask, "resp_collision")
+	require.NoError(t, err)
+	assert.Equal(t, secondTaskRecord.Output, loadedSecondTask.Output)
+	_, err = store.Load(context.Background(), expectedWithoutTask, "resp_collision")
+	require.ErrorIs(t, err, ErrScopeMismatch, "an omitted task ID must fail closed when adoption is ambiguous")
+}
+
+func TestMemoryStoreIsolatesScopedResponseIDCollisions(t *testing.T) {
+	assertScopedResponseIDCollisionsAreIsolated(t, NewMemory(time.Hour, 1<<20))
+}
+
+func TestRedisStoreIsolatesScopedResponseIDCollisions(t *testing.T) {
+	server := miniredis.RunT(t)
+	previousRDB := common.RDB
+	common.RDB = redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() {
+		require.NoError(t, common.RDB.Close())
+		common.RDB = previousRDB
+	})
+
+	assertScopedResponseIDCollisionsAreIsolated(t, &RedisStore{})
 }
 
 func TestStoreRejectsLegacyUnscopedRecord(t *testing.T) {
@@ -177,6 +245,54 @@ func TestMemoryStoreKeepsByteAccountingAfterRejectedReplacement(t *testing.T) {
 	assert.Equal(t, first.Output, loaded.Output)
 }
 
+func TestMemoryStoreCopiesRawMessagesOnSaveAndLoad(t *testing.T) {
+	store := NewMemory(time.Hour, 1<<20)
+	record := testRecord("resp_copy")
+	originalInput := append(json.RawMessage(nil), record.Input...)
+	originalOutput := append(json.RawMessage(nil), record.Output...)
+	require.NoError(t, store.Save(context.Background(), record))
+
+	record.Input[0] = '{'
+	record.Output[0] = '{'
+	loaded, err := store.Load(context.Background(), testScope(), "resp_copy")
+	require.NoError(t, err)
+	assert.Equal(t, originalInput, loaded.Input)
+	assert.Equal(t, originalOutput, loaded.Output)
+
+	loaded.Input[0] = '{'
+	loaded.Output[0] = '{'
+	reloaded, err := store.Load(context.Background(), testScope(), "resp_copy")
+	require.NoError(t, err)
+	assert.Equal(t, originalInput, reloaded.Input)
+	assert.Equal(t, originalOutput, reloaded.Output)
+}
+
+func TestMemoryStoreReturnsIndependentRawMessagesConcurrently(t *testing.T) {
+	store := NewMemory(time.Hour, 1<<20)
+	record := testRecord("resp_race_copy")
+	record.Input = json.RawMessage(`[1]`)
+	require.NoError(t, store.Save(context.Background(), record))
+
+	const readers = 32
+	var wg sync.WaitGroup
+	wg.Add(readers)
+	for i := 0; i < readers; i++ {
+		go func(marker byte) {
+			defer wg.Done()
+			loaded, err := store.Load(context.Background(), testScope(), record.ResponseID)
+			assert.NoError(t, err)
+			if err == nil {
+				loaded.Input[1] = marker
+			}
+		}(byte('a' + i%26))
+	}
+	wg.Wait()
+
+	loaded, err := store.Load(context.Background(), testScope(), record.ResponseID)
+	require.NoError(t, err)
+	assert.Equal(t, json.RawMessage(`[1]`), loaded.Input)
+}
+
 func TestRedisStoreAppliesDefaultTTL(t *testing.T) {
 	server := miniredis.RunT(t)
 	previousRDB := common.RDB
@@ -194,6 +310,20 @@ func TestRedisStoreAppliesDefaultTTL(t *testing.T) {
 	loaded, err := store.Load(context.Background(), testScope(), record.ResponseID)
 	require.NoError(t, err)
 	assert.WithinDuration(t, time.Now().Add(DefaultRecordTTL), loaded.ExpiresAt, time.Second)
+}
+
+func TestRedisStoreRejectsExplicitPastExpiry(t *testing.T) {
+	server := miniredis.RunT(t)
+	previousRDB := common.RDB
+	common.RDB = redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() {
+		require.NoError(t, common.RDB.Close())
+		common.RDB = previousRDB
+	})
+
+	record := testRecord("resp_redis_expired")
+	record.ExpiresAt = time.Now().Add(-time.Second)
+	require.Error(t, (&RedisStore{}).Save(context.Background(), record))
 }
 
 func seededStore(t *testing.T, input, output string) Store {

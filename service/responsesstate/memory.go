@@ -16,6 +16,7 @@ import (
 type MemoryStore struct {
 	mu           sync.RWMutex
 	records      map[string]Record
+	responseKeys map[string]map[string]struct{}
 	ttl          time.Duration
 	maxBytes     int
 	currentBytes int
@@ -31,9 +32,10 @@ func NewMemory(ttl time.Duration, maxBytes int) *MemoryStore {
 		maxBytes = 32 * 1024 * 1024
 	}
 	return &MemoryStore{
-		records:  make(map[string]Record),
-		ttl:      ttl,
-		maxBytes: maxBytes,
+		records:      make(map[string]Record),
+		responseKeys: make(map[string]map[string]struct{}),
+		ttl:          ttl,
+		maxBytes:     maxBytes,
 	}
 }
 
@@ -41,28 +43,65 @@ func (s *MemoryStore) Load(ctx context.Context, expected Scope, responseID strin
 	if s == nil {
 		return Record{}, ErrNotFound
 	}
-	key := Key(responseID)
+	bucketKey := Key(responseID)
 	s.mu.RLock()
-	record, ok := s.records[key]
+	keys := s.responseKeys[bucketKey]
+	candidates := make([]Record, 0, len(keys))
+	if expected.ClientTaskID != "" {
+		if record, ok := s.records[scopedKey(expected, responseID)]; ok {
+			candidates = append(candidates, record)
+		}
+	} else {
+		for key := range keys {
+			if record, ok := s.records[key]; ok {
+				candidates = append(candidates, record)
+			}
+		}
+	}
 	_, legacy := s.records[legacyKey(expected.TenantID, expected.TokenID, responseID)]
+	bucketHasRecords := len(keys) != 0
 	s.mu.RUnlock()
-	if !ok {
+	if len(candidates) == 0 {
+		if bucketHasRecords {
+			return Record{}, ErrScopeMismatch
+		}
 		if legacy {
 			return Record{}, ErrLegacyScope
 		}
 		return Record{}, ErrNotFound
 	}
-	if err := ValidateRecord(record); err != nil {
-		return Record{}, err
+
+	now := time.Now()
+	matches := make([]Record, 0, 1)
+	hadScopeMatch := false
+	for _, record := range candidates {
+		if err := ValidateRecord(record); err != nil {
+			return Record{}, err
+		}
+		if record.ResponseID != responseID || !scopeMatches(expected, record.Scope) {
+			continue
+		}
+		hadScopeMatch = true
+		if now.After(record.ExpiresAt) {
+			continue
+		}
+		matches = append(matches, record)
 	}
-	if time.Now().After(record.ExpiresAt) {
-		return Record{}, ErrNotFound
-	}
-	if record.ResponseID != responseID || !scopeMatches(expected, record.Scope) {
+	if len(matches) == 0 {
+		if hadScopeMatch {
+			return Record{}, ErrNotFound
+		}
 		return Record{}, ErrScopeMismatch
 	}
+	if len(matches) != 1 {
+		return Record{}, ErrScopeMismatch
+	}
+	cloned, err := cloneRecord(matches[0])
+	if err != nil {
+		return Record{}, fmt.Errorf("copy record: %w", err)
+	}
 	_ = ctx
-	return record, nil
+	return cloned, nil
 }
 
 func (s *MemoryStore) Save(ctx context.Context, record Record) error {
@@ -85,7 +124,12 @@ func (s *MemoryStore) Save(ctx context.Context, record Record) error {
 	if len(serialized) > MaxRecordBytes {
 		return errors.New("responses state record exceeds maximum size")
 	}
-	key := Key(record.ResponseID)
+	stored, err := cloneRecord(record)
+	if err != nil {
+		return fmt.Errorf("copy record: %w", err)
+	}
+	bucketKey := Key(record.ResponseID)
+	key := scopedKey(record.Scope, record.ResponseID)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -98,7 +142,11 @@ func (s *MemoryStore) Save(ctx context.Context, record Record) error {
 	if nextBytes > s.maxBytes {
 		return errors.New("memory store byte ceiling exceeded")
 	}
-	s.records[key] = record
+	s.records[key] = stored
+	if s.responseKeys[bucketKey] == nil {
+		s.responseKeys[bucketKey] = make(map[string]struct{})
+	}
+	s.responseKeys[bucketKey][key] = struct{}{}
 	s.currentBytes = nextBytes
 	_ = ctx
 	return nil
@@ -113,13 +161,32 @@ func (s *MemoryStore) Prune() int {
 	defer s.mu.Unlock()
 	now := time.Now()
 	removed := 0
-	for key, record := range s.records {
-		if now.After(record.ExpiresAt) {
-			serialized, _ := common.Marshal(record)
-			s.currentBytes -= len(serialized)
-			delete(s.records, key)
-			removed++
+	for bucketKey, keys := range s.responseKeys {
+		for key := range keys {
+			record, ok := s.records[key]
+			if ok && now.After(record.ExpiresAt) {
+				serialized, _ := common.Marshal(record)
+				s.currentBytes -= len(serialized)
+				delete(s.records, key)
+				delete(keys, key)
+				removed++
+			}
+		}
+		if len(keys) == 0 {
+			delete(s.responseKeys, bucketKey)
 		}
 	}
 	return removed
+}
+
+func cloneRecord(record Record) (Record, error) {
+	data, err := common.Marshal(record)
+	if err != nil {
+		return Record{}, err
+	}
+	var cloned Record
+	if err := common.Unmarshal(data, &cloned); err != nil {
+		return Record{}, err
+	}
+	return cloned, nil
 }

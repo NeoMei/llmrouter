@@ -78,6 +78,16 @@ func legacyKey(tenantID, tokenID int, responseID string) string {
 	return fmt.Sprintf("responses-state:%d:%d:%s", tenantID, tokenID, hex.EncodeToString(h[:]))
 }
 
+func scopeDigest(scope Scope) string {
+	data, _ := common.Marshal(scope)
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
+}
+
+func scopedKey(scope Scope, responseID string) string {
+	return Key(responseID) + ":" + scopeDigest(scope)
+}
+
 // DefaultRecordTTL is the default expiration for a stored turn.
 const DefaultRecordTTL = time.Hour
 

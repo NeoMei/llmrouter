@@ -226,6 +226,12 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 // prepareResponsesContinuity materializes a parent chain only for non-native
 // Responses wires and carries the original current turn to response handling.
 func prepareResponsesContinuity(c *gin.Context, info *relaycommon.RelayInfo, store responsesstate.Store, request *dto.OpenAIResponsesRequest) (*dto.OpenAIResponsesRequest, error) {
+	if c != nil {
+		// RelayInfo and Gin context survive ordered candidate retries. Clear the
+		// prior attempt before any validation or store access so an error cannot
+		// make response persistence reuse stale scope or input.
+		c.Set(string(appconstant.ContextKeyResponsesContinuity), nil)
+	}
 	if c == nil || info == nil || request == nil {
 		return nil, errors.New("responses continuity context is incomplete")
 	}

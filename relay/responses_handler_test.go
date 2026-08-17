@@ -147,3 +147,75 @@ func TestResponsesContinuityHandlerToPersistenceKeepsLinearChild(t *testing.T) {
 	assert.Contains(t, string(payload.Input[2]), "second")
 	assert.Contains(t, string(payload.Input[4]), "third")
 }
+
+func TestPrepareResponsesContinuityClearsStaleContextAfterRetryFailure(t *testing.T) {
+	t.Setenv("RESPONSES_STATE_ENABLED", "1")
+	responsesstate.ResetForTest()
+	t.Cleanup(responsesstate.ResetForTest)
+	store, err := responsesstate.Default()
+	require.NoError(t, err)
+
+	scope := responsesstate.Scope{
+		TenantID: 21, UserID: 21, TokenID: 8, RouteID: 6,
+		TargetID: 7, ChannelID: 9, ClientTaskID: "task-retry", Model: "model-retry",
+	}
+	require.NoError(t, store.Save(context.Background(), responsesstate.Record{
+		Version:    responsesstate.CurrentVersion,
+		Scope:      scope,
+		ResponseID: "resp_attempt_a_parent",
+		Input:      json.RawMessage(`[{"type":"message","role":"user","content":"a"}]`),
+		Output:     json.RawMessage(`[]`),
+		ExpiresAt:  time.Now().Add(time.Hour),
+	}))
+
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		UserId:            scope.UserID,
+		TokenId:           scope.TokenID,
+		ModelRouteId:      scope.RouteID,
+		ModelTargetId:     scope.TargetID,
+		ResolvedChannelId: scope.ChannelID,
+		ResolvedModelName: scope.Model,
+		ResponsesViaChat:  true,
+		ChannelMeta:       &relaycommon.ChannelMeta{UpstreamModelName: scope.Model},
+	}
+	attemptA := &dto.OpenAIResponsesRequest{
+		Model:              scope.Model,
+		PreviousResponseID: "resp_attempt_a_parent",
+		Input:              json.RawMessage(`[{"type":"message","role":"user","content":"attempt-a"}]`),
+	}
+	_, err = prepareResponsesContinuity(c, info, store, attemptA)
+	require.NoError(t, err)
+	raw, exists := c.Get(string(appconstant.ContextKeyResponsesContinuity))
+	require.True(t, exists)
+	_, ok := raw.(responsesstate.ContinuityContext)
+	require.True(t, ok)
+
+	attemptB := &dto.OpenAIResponsesRequest{
+		Model:              scope.Model,
+		PreviousResponseID: "resp_missing_for_attempt_b",
+		Input:              json.RawMessage(`[{"type":"message","role":"user","content":"attempt-b"}]`),
+	}
+	_, err = prepareResponsesContinuity(c, info, store, attemptB)
+	require.ErrorIs(t, err, responsesstate.ErrNotFound)
+	raw, _ = c.Get(string(appconstant.ContextKeyResponsesContinuity))
+	assert.Nil(t, raw, "a failed retry attempt must clear the previous attempt's continuity context")
+
+	upstream := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body: io.NopCloser(strings.NewReader(`{
+			"id":"resp_attempt_b",
+			"status":"completed",
+			"model":"model-retry",
+			"output":[],
+			"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
+		}`)),
+	}
+	_, apiErr := openai.OaiResponsesHandler(c, info, upstream)
+	require.Nil(t, apiErr)
+	_, err = store.Load(context.Background(), scope, "resp_attempt_b")
+	require.ErrorIs(t, err, responsesstate.ErrNotFound, "attempt B must not persist using attempt A's stale continuity context")
+}

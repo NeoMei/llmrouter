@@ -35,6 +35,21 @@ func TestRouteDecisionContainsNoSecrets(t *testing.T) {
 	require.NotContains(t, string(encoded), "Authorization")
 }
 
+func TestRouteDecisionAttemptPreservesTargetIdentityAndRejectedReason(t *testing.T) {
+	attempt := Attempt{
+		RouteID:        5,
+		TargetID:       8,
+		ChannelID:      13,
+		RejectedReason: "context_capacity_exceeded",
+	}
+
+	encoded, err := json.Marshal(attempt)
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), `"route_id":5`)
+	require.Contains(t, string(encoded), `"target_id":8`)
+	require.Contains(t, string(encoded), `"rejected_reason":"context_capacity_exceeded"`)
+}
+
 func TestRetryableConflictOnlyWhenExplicit(t *testing.T) {
 	policy := NewPolicy([]Target{{ChannelID: 1}, {ChannelID: 2}})
 	require.NotNil(t, policy.NextAfter(1, AttemptResult{Status: 409, Reason: "rate_limited"}))

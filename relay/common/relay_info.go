@@ -86,6 +86,19 @@ type TokenCountMeta struct {
 	estimatePromptTokens int
 }
 
+// RouteCandidate is the controller-owned, package-neutral state for one
+// authoritative public-model target attempt.
+type RouteCandidate struct {
+	RouteID              int
+	TargetID             int
+	ChannelID            int
+	UpstreamModel        string
+	BillingModel         string
+	SelectedWire         string
+	ContextWindow        int
+	RequiresKnownContext bool
+}
+
 type RelayInfo struct {
 	TokenId           int
 	TokenKey          string
@@ -98,38 +111,44 @@ type RelayInfo struct {
 	FirstResponseTime time.Time
 	isFirstResponse   bool
 	//SendLastReasoningResponse bool
-	IsStream               bool
-	IsGeminiBatchEmbedding bool
-	IsPlayground           bool
-	UsePrice               bool
-	RelayMode              int
-	OriginModelName        string          // 客户端请求中使用的原始模型别名
-	PublicModelName        string          // 解析后的公开模型 ID
-	ResolvedModelName      string          // 解析后的上游模型名称
-	BillingModelName       string          // 用于计费的规范模型名称
-	ModelRouteId           int             // 命中的公开模型路由目标 ID
-	SelectedWire           string          // 经 capability/probe 选择的 wire protocol
-	ResponsesViaChat       bool            // /v1/responses 需转换为 chat completions 发上游
-	RouteDecisionTrace     json.RawMessage // 序列化的路由决策 trace
-	RequestURLPath         string
-	RequestHeaders         map[string]string
-	ShouldIncludeUsage     bool
-	DisablePing            bool // 是否禁止向下游发送自定义 Ping
-	ClientWs               *websocket.Conn
-	TargetWs               *websocket.Conn
-	InputAudioFormat       string
-	OutputAudioFormat      string
-	RealtimeTools          []dto.RealTimeTool
-	IsFirstRequest         bool
-	AudioUsage             bool
-	ReasoningEffort        string
-	UserSetting            dto.UserSetting
-	UserEmail              string
-	UserQuota              int
-	RelayFormat            types.RelayFormat
-	SendResponseCount      int
-	ReceivedResponseCount  int
-	FinalPreConsumedQuota  int // 最终预消耗的配额
+	IsStream                bool
+	IsGeminiBatchEmbedding  bool
+	IsPlayground            bool
+	UsePrice                bool
+	RelayMode               int
+	OriginModelName         string // 客户端请求中使用的原始模型别名
+	PublicModelName         string // 解析后的公开模型 ID
+	ResolvedModelName       string // 解析后的上游模型名称
+	BillingModelName        string // 用于计费的规范模型名称
+	ModelRouteId            int    // 命中的公开模型路由目标 ID
+	ModelTargetId           int    // 当前显式路由目标 ID
+	ResolvedChannelId       int    // 当前显式路由渠道 ID
+	RouteContextWindow      int    // 当前目标的上下文容量
+	RouteCandidates         []RouteCandidate
+	RejectedRouteCandidates []RouteCandidate
+	RouteCandidateIndex     int
+	SelectedWire            string          // 经 capability/probe 选择的 wire protocol
+	ResponsesViaChat        bool            // /v1/responses 需转换为 chat completions 发上游
+	RouteDecisionTrace      json.RawMessage // 序列化的路由决策 trace
+	RequestURLPath          string
+	RequestHeaders          map[string]string
+	ShouldIncludeUsage      bool
+	DisablePing             bool // 是否禁止向下游发送自定义 Ping
+	ClientWs                *websocket.Conn
+	TargetWs                *websocket.Conn
+	InputAudioFormat        string
+	OutputAudioFormat       string
+	RealtimeTools           []dto.RealTimeTool
+	IsFirstRequest          bool
+	AudioUsage              bool
+	ReasoningEffort         string
+	UserSetting             dto.UserSetting
+	UserEmail               string
+	UserQuota               int
+	RelayFormat             types.RelayFormat
+	SendResponseCount       int
+	ReceivedResponseCount   int
+	FinalPreConsumedQuota   int // 最终预消耗的配额
 	// ForcePreConsume 为 true 时禁用 BillingSession 的信任额度旁路，
 	// 强制预扣全额。用于异步任务（视频/音乐生成等），因为请求返回后任务仍在运行，
 	// 必须在提交前锁定全额。

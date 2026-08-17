@@ -180,33 +180,19 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	relayInfo.SetEstimatePromptTokens(tokens)
 
-	// Resolve public client model routes before price lookup so billing uses the
-	// canonical billing model while audit logs retain the requested alias.
-	if err := resolveClientModelRoute(c, relayInfo); err != nil {
-		common.SysLog("client model route resolution failed: " + err.Error())
-	}
-	StartRouteDecision(GetRequestId(c), relayInfo)
-
-	priceData, err := helper.ModelPriceHelper(c, relayInfo, tokens, meta)
-	if err != nil {
-		newAPIError = types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest))
+	// Resolve public client model routes before price lookup so billing and
+	// channel selection use the same authoritative target identity.
+	routeErr := resolveClientModelRoute(c, relayInfo, tokens)
+	recordRouteAdmissionDecision(GetRequestId(c), relayInfo)
+	if routeErr != nil {
+		newAPIError = routeErr
 		return
 	}
 
-	// common.SetContextKey(c, constant.ContextKeyTokenCountMeta, meta)
-
-	if priceData.FreeModel {
-		logger.LogInfo(c, fmt.Sprintf("模型 %s 免费，跳过预扣费", relayInfo.OriginModelName))
-	} else {
-		newAPIError = service.PreConsumeBilling(c, priceData.QuotaToPreConsume, relayInfo)
-		if newAPIError != nil {
-			return
-		}
-	}
-
+	billingLifecycleStarted := false
 	defer func() {
 		// Only return quota if downstream failed and quota was actually pre-consumed
-		if newAPIError != nil {
+		if newAPIError != nil && billingLifecycleStarted {
 			newAPIError = service.NormalizeViolationFeeError(newAPIError)
 			if relayInfo.Billing != nil {
 				relayInfo.Billing.Refund(c)
@@ -224,26 +210,63 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
+	preparedCandidateIndex := -1
+	legacyPricingPrepared := false
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		relayInfo.RetryIndex = retryParam.GetRetry()
+		if len(relayInfo.RouteCandidates) > 0 {
+			if relayInfo.RouteCandidateIndex != preparedCandidateIndex {
+				if err := selectRouteCandidateForAttempt(relayInfo, relayInfo.RouteCandidateIndex); err != nil {
+					newAPIError = types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+					break
+				}
+				if billingErr := prepareAttemptBilling(c, relayInfo, tokens, meta); billingErr != nil {
+					newAPIError = billingErr
+					break
+				}
+				billingLifecycleStarted = true
+				preparedCandidateIndex = relayInfo.RouteCandidateIndex
+			}
+		} else if !legacyPricingPrepared {
+			if billingErr := prepareAttemptBilling(c, relayInfo, tokens, meta); billingErr != nil {
+				newAPIError = billingErr
+				break
+			}
+			billingLifecycleStarted = true
+			legacyPricingPrepared = true
+		}
+
 		attemptStart := time.Now()
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())
 			newAPIError = channelErr
+			if len(relayInfo.RouteCandidates) > 0 {
+				candidate := relayInfo.RouteCandidates[relayInfo.RouteCandidateIndex]
+				AppendRouteAttempt(GetRequestId(c), modelcatalog.Attempt{
+					RouteID: candidate.RouteID, TargetID: candidate.TargetID, ChannelID: candidate.ChannelID,
+					Wire: candidate.SelectedWire, Status: channelErr.StatusCode, Reason: string(channelErr.GetErrorCode()),
+					DurationMs: time.Since(attemptStart).Milliseconds(),
+				})
+			}
+			if len(relayInfo.RouteCandidates) > 0 && shouldRetry(c, channelErr, common.RetryTimes-retryParam.GetRetry()) && advanceRouteCandidate(relayInfo) {
+				continue
+			}
 			break
 		}
 
 		var relayStarted bool
 		newAPIError, relayStarted = relaySelectedChannel(c, relayInfo, channel, relayFormat, ws)
-		if !relayStarted {
-			break
-		}
-
-		AppendRouteAttempt(GetRequestId(c), modelcatalog.NewAttempt(channel.Id, relayInfo.SelectedWire, 0, "", attemptStart))
+		attempt := modelcatalog.NewAttempt(channel.Id, relayInfo.SelectedWire, 0, "", attemptStart)
+		attempt.RouteID = relayInfo.ModelRouteId
+		attempt.TargetID = relayInfo.ModelTargetId
+		AppendRouteAttempt(GetRequestId(c), attempt)
 		if newAPIError != nil {
 			UpdateLastAttempt(GetRequestId(c), newAPIError.StatusCode, string(newAPIError.GetErrorCode()))
+		}
+		if !relayStarted {
+			break
 		}
 
 		if newAPIError == nil {
@@ -260,6 +283,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) {
 			break
 		}
+		if len(relayInfo.RouteCandidates) > 0 {
+			if !advanceRouteCandidate(relayInfo) {
+				break
+			}
+		}
 	}
 
 	relayInfo.RouteDecisionTrace, _ = GetRouteDecisionTrace(GetRequestId(c))
@@ -272,6 +300,17 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	if newAPIError != nil {
 		gopool.Go(func() {
 			perfmetrics.RecordRelaySample(relayInfo, false, 0)
+		})
+	}
+}
+
+func recordRouteAdmissionDecision(requestID string, relayInfo *relaycommon.RelayInfo) {
+	StartRouteDecision(requestID, relayInfo)
+	for _, candidate := range relayInfo.RejectedRouteCandidates {
+		AppendRouteAttempt(requestID, modelcatalog.Attempt{
+			RouteID: candidate.RouteID, TargetID: candidate.TargetID, ChannelID: candidate.ChannelID,
+			Wire: candidate.SelectedWire, Status: http.StatusBadRequest,
+			Reason: string(types.ErrorCodeContextCapacityExceeded), RejectedReason: string(types.ErrorCodeContextCapacityExceeded),
 		})
 	}
 }
@@ -319,6 +358,21 @@ func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 }
 
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
+	if len(info.RouteCandidates) > 0 {
+		if info.RouteCandidateIndex < 0 || info.RouteCandidateIndex >= len(info.RouteCandidates) {
+			return nil, types.NewError(fmt.Errorf("resolved route candidate index %d is invalid", info.RouteCandidateIndex), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		}
+		candidate := info.RouteCandidates[info.RouteCandidateIndex]
+		channel, err := model.GetChannelById(candidate.ChannelID, true)
+		if err != nil || channel == nil {
+			return nil, types.NewError(fmt.Errorf("resolved route target %d channel %d is unavailable", candidate.TargetID, candidate.ChannelID), types.ErrorCodeGetChannelFailed)
+		}
+		if setupErr := middleware.SetupContextForSelectedChannel(c, channel, candidate.UpstreamModel); setupErr != nil {
+			return nil, setupErr
+		}
+		info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
+		return channel, nil
+	}
 	if info.ChannelMeta == nil {
 		autoBan := c.GetBool("auto_ban")
 		autoBanInt := 1
@@ -349,6 +403,25 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	}
 	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
 	return channel, nil
+}
+
+func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) *types.NewAPIError {
+	priceData, err := helper.ModelPriceHelper(c, info, promptTokens, meta)
+	if err != nil {
+		return types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest), types.ErrOptionWithSkipRetry())
+	}
+	if priceData.FreeModel {
+		logger.LogInfo(c, fmt.Sprintf("模型 %s 免费，跳过预扣费", info.OriginModelName))
+		return nil
+	}
+	if info.Billing == nil {
+		return service.PreConsumeBilling(c, priceData.QuotaToPreConsume, info)
+	}
+	if err := info.Billing.Reserve(priceData.QuotaToPreConsume); err != nil {
+		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+	}
+	info.FinalPreConsumedQuota = info.Billing.GetPreConsumedQuota()
+	return nil
 }
 
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
@@ -673,10 +746,9 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError,
 }
 
 // resolveClientModelRoute attempts to resolve the requested OriginModelName
-// into a public client model route before billing and channel selection. When no
-// route matches, it leaves RelayInfo unchanged and the request continues with
-// the legacy model name.
-func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo) error {
+// into an ordered public-model target list before billing and channel
+// selection. A catalog miss preserves the legacy distributor path.
+func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, estimatedInputTokens int) *types.NewAPIError {
 	if relayInfo == nil || strings.TrimSpace(relayInfo.OriginModelName) == "" {
 		return nil
 	}
@@ -686,17 +758,20 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo) e
 
 	groups, err := getModelListGroups(c)
 	if err != nil {
-		return err
+		return types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
 	}
 
 	client := clientForRequest(c, relayInfo)
 	var routes []model.ClientModelRoute
 	var targets []model.ClientModelTarget
 	if err := model.DB.Where("enabled = ?", true).Find(&routes).Error; err != nil {
-		return err
+		return types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
 	}
 	if err := model.DB.Where("enabled = ?", true).Find(&targets).Error; err != nil {
-		return err
+		return types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+	}
+	if !hasMatchingClientModelRoute(routes, relayInfo.OriginModelName, client) {
+		return nil
 	}
 
 	catalog, err := modelcatalog.AssembleRuntimeCatalog(c.Request.Context(), modelcatalog.RuntimeContext{
@@ -705,24 +780,123 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo) e
 		Client: client,
 	}, routes, targets, modelcatalog.NewGormRuntimeSources(model.DB), requestCatalogAuthorizer{})
 	if err != nil {
-		return err
+		return types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
 	}
 
-	resolved, err := catalog.Resolve(c.Request.Context(), c.GetInt("id"), groups.ownerGroups, relayInfo.OriginModelName, client)
+	resolved, err := catalog.ResolveCandidates(c.Request.Context(), c.GetInt("id"), groups.ownerGroups, relayInfo.OriginModelName, client)
 	if err != nil {
-		// No matching public route is a normal fallback, not a hard error.
-		return nil
+		return types.NewError(fmt.Errorf("configured model route %s has no available target: %w", relayInfo.OriginModelName, err), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+	}
+	eligible, rejected := filterRouteCandidatesByContext(resolved, estimatedInputTokens)
+	relayInfo.RejectedRouteCandidates = make([]relaycommon.RouteCandidate, 0, len(rejected))
+	for i := range rejected {
+		relayInfo.RejectedRouteCandidates = append(relayInfo.RejectedRouteCandidates, routeCandidateFromResolved(relayInfo, &rejected[i]))
+	}
+	if len(eligible) == 0 {
+		if len(resolved) > 0 {
+			relayInfo.PublicModelName = resolved[0].PublicID
+			relayInfo.ModelRouteId = resolved[0].RouteID
+		}
+		return types.NewErrorWithStatusCode(
+			fmt.Errorf("model %s has no route target that can fit %d input tokens", relayInfo.OriginModelName, estimatedInputTokens),
+			types.ErrorCodeContextCapacityExceeded,
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
 	}
 
-	relayInfo.PublicModelName = resolved.PublicID
-	relayInfo.ResolvedModelName = resolved.UpstreamModel
-	relayInfo.BillingModelName = resolved.BillingModel
-	relayInfo.ModelRouteId = resolved.RouteID
-
-	if decision, err := selectWireForRequest(relayInfo, resolved); err == nil {
-		relayInfo.SelectedWire = string(decision.Wire)
+	relayInfo.PublicModelName = eligible[0].PublicID
+	relayInfo.RouteCandidates = make([]relaycommon.RouteCandidate, 0, len(eligible))
+	for i := range eligible {
+		relayInfo.RouteCandidates = append(relayInfo.RouteCandidates, routeCandidateFromResolved(relayInfo, &eligible[i]))
+	}
+	if err := selectRouteCandidateForAttempt(relayInfo, 0); err != nil {
+		return types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 	return nil
+}
+
+func hasMatchingClientModelRoute(routes []model.ClientModelRoute, requestedModel, client string) bool {
+	requested := strings.ToLower(strings.TrimSpace(requestedModel))
+	client = strings.ToLower(strings.TrimSpace(client))
+	for _, route := range routes {
+		routeClient := strings.ToLower(strings.TrimSpace(route.Client))
+		if routeClient == "" {
+			routeClient = "all"
+		}
+		if routeClient != "all" && routeClient != client {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(route.PublicId), requested) {
+			return true
+		}
+		var aliases []string
+		if common.Unmarshal([]byte(route.Aliases), &aliases) != nil {
+			continue
+		}
+		for _, alias := range aliases {
+			if strings.EqualFold(strings.TrimSpace(alias), requested) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func filterRouteCandidatesByContext(candidates []modelcatalog.ResolvedModel, estimated int) ([]modelcatalog.ResolvedModel, []modelcatalog.ResolvedModel) {
+	eligible := make([]modelcatalog.ResolvedModel, 0, len(candidates))
+	rejected := make([]modelcatalog.ResolvedModel, 0)
+	for _, candidate := range candidates {
+		if candidate.ContextWindow > 0 && estimated > candidate.ContextWindow {
+			rejected = append(rejected, candidate)
+			continue
+		}
+		if candidate.ContextWindow == 0 && candidate.RequiresKnownContext {
+			rejected = append(rejected, candidate)
+			continue
+		}
+		eligible = append(eligible, candidate)
+	}
+	return eligible, rejected
+}
+
+func routeCandidateFromResolved(relayInfo *relaycommon.RelayInfo, resolved *modelcatalog.ResolvedModel) relaycommon.RouteCandidate {
+	candidate := relaycommon.RouteCandidate{
+		RouteID: resolved.RouteID, TargetID: resolved.TargetID, ChannelID: resolved.ChannelID,
+		UpstreamModel: resolved.UpstreamModel, BillingModel: resolved.BillingModel,
+		ContextWindow: resolved.ContextWindow, RequiresKnownContext: resolved.RequiresKnownContext,
+	}
+	if decision, err := selectWireForRequest(relayInfo, resolved); err == nil {
+		candidate.SelectedWire = string(decision.Wire)
+	}
+	return candidate
+}
+
+func selectRouteCandidateForAttempt(relayInfo *relaycommon.RelayInfo, index int) error {
+	if relayInfo == nil {
+		return errors.New("relay info is nil")
+	}
+	if index < 0 || index >= len(relayInfo.RouteCandidates) {
+		return fmt.Errorf("route candidate index %d is out of range", index)
+	}
+	candidate := relayInfo.RouteCandidates[index]
+	relayInfo.RouteCandidateIndex = index
+	relayInfo.ResolvedModelName = candidate.UpstreamModel
+	relayInfo.BillingModelName = candidate.BillingModel
+	relayInfo.ModelRouteId = candidate.RouteID
+	relayInfo.ModelTargetId = candidate.TargetID
+	relayInfo.ResolvedChannelId = candidate.ChannelID
+	relayInfo.SelectedWire = candidate.SelectedWire
+	relayInfo.RouteContextWindow = candidate.ContextWindow
+	return nil
+}
+
+func advanceRouteCandidate(relayInfo *relaycommon.RelayInfo) bool {
+	if relayInfo == nil || relayInfo.RouteCandidateIndex+1 >= len(relayInfo.RouteCandidates) {
+		return false
+	}
+	relayInfo.RouteCandidateIndex++
+	return true
 }
 
 func clientForRequest(c *gin.Context, relayInfo *relaycommon.RelayInfo) string {

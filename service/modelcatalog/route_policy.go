@@ -87,11 +87,14 @@ type RouteDecisionTrace struct {
 
 // Attempt records a single upstream attempt in the trace.
 type Attempt struct {
-	ChannelID  int    `json:"channel_id"`
-	Wire       string `json:"wire"`
-	Status     int    `json:"status"`
-	Reason     string `json:"reason"`
-	DurationMs int64  `json:"duration_ms"`
+	RouteID        int    `json:"route_id,omitempty"`
+	TargetID       int    `json:"target_id,omitempty"`
+	ChannelID      int    `json:"channel_id"`
+	Wire           string `json:"wire"`
+	Status         int    `json:"status"`
+	Reason         string `json:"reason"`
+	RejectedReason string `json:"rejected_reason,omitempty"`
+	DurationMs     int64  `json:"duration_ms"`
 }
 
 // NewAttempt builds an attempt with a duration computed from start time.

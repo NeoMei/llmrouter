@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/relayconvert"
+	"github.com/QuantumNous/new-api/service/responsesstate"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
@@ -58,6 +59,7 @@ func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 	}
 
+	persistResponsesTurn(c, info, responsesResp)
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 	return usage, nil
 }
@@ -77,8 +79,29 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	streamErr := (*types.NewAPIError)(nil)
+	terminalSeen := false
+	terminalValid := false
+	var terminalResponse *dto.OpenAIResponsesResponse
 
 	sendEvent := func(event relayconvert.ChatToResponsesStreamEvent) bool {
+		if terminalSeen {
+			terminalValid = false
+			terminalResponse = nil
+		}
+		switch event.Type {
+		case "response.completed":
+			if !terminalSeen {
+				terminalSeen = true
+				terminalValid = responsesstate.EligibleCompletedResponse(event.Payload.Response)
+				if terminalValid {
+					terminalResponse = event.Payload.Response
+				}
+			}
+		case "response.failed", "response.error", "response.incomplete", "error":
+			terminalSeen = true
+			terminalValid = false
+			terminalResponse = nil
+		}
 		data, err := common.Marshal(event.Payload)
 		if err != nil {
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
@@ -152,6 +175,9 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		if !sendEvent(event) {
 			return nil, streamErr
 		}
+	}
+	if terminalValid && terminalResponse != nil && info.StreamStatus != nil && info.StreamStatus.IsNormalEnd() && !info.StreamStatus.HasErrors() && c.Request.Context().Err() == nil {
+		persistResponsesTurn(c, info, terminalResponse)
 	}
 
 	return usage, nil

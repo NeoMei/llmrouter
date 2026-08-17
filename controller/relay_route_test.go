@@ -7,14 +7,17 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/modelcatalog"
+	"github.com/QuantumNous/new-api/service/responsesstate"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -289,6 +292,86 @@ func TestResolveClientModelRouteRejectsUnsupportedWireBeforeBilling(t *testing.T
 	require.Len(t, info.RejectedRouteCandidates, 1)
 	assert.Equal(t, "unsupported_wire", info.RejectedRouteCandidates[0].RejectedReason)
 	assert.Empty(t, spy.calls)
+}
+
+func TestPrepareRouteCandidateRejectsContinuityScopeBeforeBillingOrSend(t *testing.T) {
+	t.Setenv("RESPONSES_STATE_ENABLED", "1")
+	responsesstate.ResetForTest()
+	t.Cleanup(responsesstate.ResetForTest)
+	db := setupRelayRouteRuntimeDB(t)
+	seedRelayRouteTargets(t, db, 128000)
+	store, err := responsesstate.Default()
+	require.NoError(t, err)
+	require.NoError(t, store.Save(t.Context(), responsesstate.Record{
+		Version: responsesstate.CurrentVersion,
+		Scope: responsesstate.Scope{
+			TenantID: 99, UserID: 99, TokenID: 7, RouteID: 1,
+			TargetID: 999, ChannelID: 999, ClientTaskID: "task-a", Model: "upstream-a",
+		},
+		ResponseID: "resp_wrong_scope", Input: []byte(`[]`), Output: []byte(`[]`), ExpiresAt: time.Now().Add(time.Hour),
+	}))
+	c := relayRouteResolutionContext(t)
+	spy := &relayRouteBillingSpy{}
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeResponses, RelayFormat: types.RelayFormatOpenAIResponses,
+		Request:         &dto.OpenAIResponsesRequest{Model: "coder", PreviousResponseID: "resp_wrong_scope", Input: []byte(`[]`)},
+		OriginModelName: "coder", UserId: 99, TokenId: 7, UserGroup: "default", UsingGroup: "default", Billing: spy,
+		RouteCandidates: []relaycommon.RouteCandidate{{
+			RouteID: 1, TargetID: 201, ChannelID: 101, UpstreamModel: "upstream-a", BillingModel: "gpt-4o-mini",
+			SelectedWire: "responses", SelectedGroup: "default", ContextWindow: 128000,
+		}},
+	}
+
+	apiErr := prepareRouteCandidateForAttempt(c, info, 0, 10, &types.TokenCountMeta{})
+
+	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeResponsesStateScopeInvalid, apiErr.GetErrorCode())
+	assert.Equal(t, http.StatusConflict, apiErr.StatusCode)
+	assert.Empty(t, spy.calls, "scope validation must fail before quota reservation")
+	assert.Zero(t, info.UpstreamRequestBodySize, "scope validation must fail before an upstream body is prepared or sent")
+}
+
+func TestPrepareRouteCandidateExpandsContinuityBeforeReserve(t *testing.T) {
+	t.Setenv("RESPONSES_STATE_ENABLED", "1")
+	responsesstate.ResetForTest()
+	t.Cleanup(responsesstate.ResetForTest)
+	configureRouteBillingRatios(t)
+	db := setupRelayRouteRuntimeDB(t)
+	seedRelayRouteTargets(t, db, 128000)
+	store, err := responsesstate.Default()
+	require.NoError(t, err)
+	scope := responsesstate.Scope{
+		TenantID: 99, UserID: 99, TokenID: 7, RouteID: 1,
+		TargetID: 201, ChannelID: 101, ClientTaskID: "task-a", Model: "upstream-a",
+	}
+	require.NoError(t, store.Save(t.Context(), responsesstate.Record{
+		Version: responsesstate.CurrentVersion, Scope: scope, ResponseID: "resp_parent",
+		Input: []byte(`[{"type":"message","role":"user","content":"parent"}]`), Output: []byte(`[]`), ExpiresAt: time.Now().Add(time.Hour),
+	}))
+	c := relayRouteResolutionContext(t)
+	spy := &relayRouteBillingSpy{}
+	spy.beforeReserve = func() {
+		raw, exists := c.Get(string(constant.ContextKeyResponsesPreparedRequest))
+		require.True(t, exists)
+		prepared, ok := raw.(*dto.OpenAIResponsesRequest)
+		require.True(t, ok)
+		assert.Empty(t, prepared.PreviousResponseID)
+		assert.Contains(t, string(prepared.Input), "parent")
+	}
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeResponses, RelayFormat: types.RelayFormatOpenAIResponses,
+		Request:         &dto.OpenAIResponsesRequest{Model: "coder", PreviousResponseID: "resp_parent", Input: []byte(`[]`)},
+		OriginModelName: "coder", UserId: 99, TokenId: 7, UserGroup: "default", UsingGroup: "default", Billing: spy,
+		RouteCandidates: []relaycommon.RouteCandidate{{
+			RouteID: 1, TargetID: 201, ChannelID: 101, UpstreamModel: "upstream-a", BillingModel: "route-paid-a",
+			SelectedWire: "openai_chat", SelectedGroup: "default", ContextWindow: 128000,
+		}},
+	}
+
+	apiErr := prepareRouteCandidateForAttempt(c, info, 0, 10, &types.TokenCountMeta{})
+
+	require.Nil(t, apiErr)
+	require.Len(t, spy.calls, 1)
 }
 
 func TestSelectRouteCandidateForAttemptRefreshesAuthoritativeIdentity(t *testing.T) {
@@ -676,12 +759,16 @@ func TestUpdateRouteDecisionSelectionTracksFinalFallbackIdentity(t *testing.T) {
 }
 
 type relayRouteBillingSpy struct {
-	reserved   int
-	calls      []int
-	reserveErr error
+	reserved      int
+	calls         []int
+	reserveErr    error
+	beforeReserve func()
 }
 
 func (s *relayRouteBillingSpy) Reserve(target int) error {
+	if s.beforeReserve != nil {
+		s.beforeReserve()
+	}
 	s.calls = append(s.calls, target)
 	if s.reserveErr != nil {
 		return s.reserveErr

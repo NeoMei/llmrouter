@@ -83,7 +83,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	var usage = &dto.Usage{}
 	var responseTextBuilder strings.Builder
-	var completedResponse *dto.OpenAIResponsesResponse
+	terminalSeen := false
+	terminalValid := false
+	var terminalResponse *dto.OpenAIResponsesResponse
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 
@@ -94,13 +96,19 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			sr.Error(err)
 			return
 		}
+		wasTerminalSeen := terminalSeen
+		if wasTerminalSeen {
+			terminalValid = false
+			terminalResponse = nil
+		}
 		sendResponsesStreamData(c, streamResponse, data)
 		switch streamResponse.Type {
 		case "response.completed":
-			completedResponse = nil
+			terminalSeen = true
 			if streamResponse.Response != nil {
-				if responsesstate.EligibleCompletedResponse(streamResponse.Response) {
-					completedResponse = streamResponse.Response
+				if !wasTerminalSeen && responsesstate.EligibleCompletedResponse(streamResponse.Response) {
+					terminalValid = true
+					terminalResponse = streamResponse.Response
 				}
 				if streamResponse.Response.Usage != nil {
 					if streamResponse.Response.Usage.InputTokens != 0 {
@@ -123,8 +131,10 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					c.Set("image_generation_call_size", streamResponse.Response.GetSize())
 				}
 			}
-		case "response.failed", "response.incomplete", "error":
-			completedResponse = nil
+		case "response.failed", "response.error", "response.incomplete", "error":
+			terminalSeen = true
+			terminalValid = false
+			terminalResponse = nil
 		case "response.output_text.delta":
 			// 处理输出文本
 			responseTextBuilder.WriteString(streamResponse.Delta)
@@ -142,8 +152,8 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 		}
 	})
-	if completedResponse != nil && info.StreamStatus != nil && info.StreamStatus.IsNormalEnd() && !info.StreamStatus.HasErrors() && c.Request.Context().Err() == nil {
-		persistResponsesTurn(c, info, completedResponse)
+	if terminalValid && terminalResponse != nil && info.StreamStatus != nil && info.StreamStatus.IsNormalEnd() && !info.StreamStatus.HasErrors() && c.Request.Context().Err() == nil {
+		persistResponsesTurn(c, info, terminalResponse)
 	}
 
 	if usage.CompletionTokens == 0 {

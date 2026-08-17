@@ -17,7 +17,6 @@ import (
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relay/responsesprobe"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/service/modelcatalog"
 	"github.com/QuantumNous/new-api/service/responsesstate"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -140,13 +139,14 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	}
 	var requestBody io.Reader
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
-		storage, err := common.GetBodyStorage(c)
+		body, size, getBody, closer, err := newResponsesPassthroughBody(request)
 		if err != nil {
-			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
-		info.UpstreamRequestBodySize = storage.Size()
-		info.UpstreamRequestGetBody = storage.NewReader
-		requestBody = common.ReaderOnly(storage)
+		defer closer.Close()
+		info.UpstreamRequestBodySize = size
+		info.UpstreamRequestGetBody = getBody
+		requestBody = body
 	} else {
 		convertedRequest, err := adaptor.ConvertOpenAIResponsesRequest(c, info, *request)
 		if err != nil {
@@ -242,6 +242,20 @@ func normalizeResponsesStore(request *dto.OpenAIResponsesRequest) {
 	}
 }
 
+func newResponsesPassthroughBody(request *dto.OpenAIResponsesRequest) (
+	body io.Reader,
+	size int64,
+	getBody func() (io.ReadCloser, error),
+	closer io.Closer,
+	err error,
+) {
+	jsonData, err := common.Marshal(request)
+	if err != nil {
+		return nil, 0, nil, nil, err
+	}
+	return relaycommon.NewOutboundJSONBody(jsonData)
+}
+
 func responsesContinuityAPIError(err error) *types.NewAPIError {
 	if errors.Is(err, responsesstate.ErrInvalidClientTaskID) {
 		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
@@ -335,12 +349,7 @@ func prepareResponsesContinuity(c *gin.Context, info *relaycommon.RelayInfo, sto
 		CurrentInput:     append(json.RawMessage(nil), request.Input...),
 	}
 	prepared := request
-	viaCompatibilityWire := info.ResponsesViaChat
-	if info.SelectedWire != "" {
-		viaCompatibilityWire = info.SelectedWire != string(modelcatalog.WireResponses)
-	}
-	shouldExpand := request.PreviousResponseID != "" && viaCompatibilityWire
-	if shouldExpand {
+	if request.PreviousResponseID != "" {
 		encoded, err := common.Marshal(request)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal responses request for state expansion: %w", err)

@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relay/responsesprobe"
 	"github.com/QuantumNous/new-api/service/modelcatalog"
 	"github.com/QuantumNous/new-api/service/responsesstate"
 	"github.com/QuantumNous/new-api/types"
@@ -178,7 +179,7 @@ func TestResponsesHelperReturnsInvalidClientTaskID(t *testing.T) {
 	assert.Equal(t, types.ErrorCodeInvalidRequest, apiErr.GetErrorCode())
 }
 
-func TestPrepareNativeResponsesContinuationAdoptsStoredTaskID(t *testing.T) {
+func TestPrepareResponsesContinuationAlwaysExpandsBeforeTransportSelection(t *testing.T) {
 	store := responsesstate.NewMemory(time.Hour, 1<<20)
 	scope := responsesstate.Scope{
 		TenantID: 11, UserID: 11, TokenID: 7, RouteID: 3,
@@ -186,27 +187,93 @@ func TestPrepareNativeResponsesContinuationAdoptsStoredTaskID(t *testing.T) {
 	}
 	require.NoError(t, store.Save(context.Background(), responsesstate.Record{
 		Version: responsesstate.CurrentVersion, Scope: scope, ResponseID: "resp_parent",
-		Input: json.RawMessage(`[]`), Output: json.RawMessage(`[]`), ExpiresAt: time.Now().Add(time.Hour),
+		Input: json.RawMessage(`[{"type":"message","role":"user","content":"resp_parent-input"}]`), Output: json.RawMessage(`[]`), ExpiresAt: time.Now().Add(time.Hour),
 	}))
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	info := &relaycommon.RelayInfo{
-		UserId: 11, TokenId: 7, ModelRouteId: 3, ModelTargetId: 4,
-		ResolvedChannelId: 5, ResolvedModelName: "model-a", SelectedWire: string(modelcatalog.WireResponses),
-		ResponsesViaChat: true, // stale from a prior attempt; explicit wire is authoritative
-		ChannelMeta:      &relaycommon.ChannelMeta{UpstreamModelName: "model-a"},
-	}
-	request := &dto.OpenAIResponsesRequest{Model: "model-a", PreviousResponseID: "resp_parent", Input: json.RawMessage(`[]`)}
+	for _, tc := range []struct {
+		name             string
+		wire             string
+		responsesViaChat bool
+	}{
+		{name: "native responses", wire: string(modelcatalog.WireResponses)},
+		{name: "moonshot chat compatibility", wire: string(modelcatalog.WireOpenAIChat), responsesViaChat: true},
+		{name: "zhipu chat compatibility", responsesViaChat: true},
+		{name: "probed chat fallback", wire: string(modelcatalog.WireOpenAIChat)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			info := &relaycommon.RelayInfo{
+				UserId: 11, TokenId: 7, ModelRouteId: 3, ModelTargetId: 4,
+				ResolvedChannelId: 5, ResolvedModelName: "model-a", SelectedWire: tc.wire,
+				ResponsesViaChat: tc.responsesViaChat,
+				ChannelMeta:      &relaycommon.ChannelMeta{UpstreamModelName: "model-a"},
+			}
+			request := &dto.OpenAIResponsesRequest{Model: "model-a", PreviousResponseID: "resp_parent", Input: json.RawMessage(`[]`)}
 
-	prepared, err := prepareResponsesContinuity(c, info, store, request)
+			prepared, err := prepareResponsesContinuity(c, info, store, request)
+			require.NoError(t, err)
+			assert.Empty(t, prepared.PreviousResponseID)
+			assert.Contains(t, string(prepared.Input), "resp_parent-input")
+			if tc.responsesViaChat || tc.wire == string(modelcatalog.WireOpenAIChat) {
+				converted, convertErr := responsesprobe.ConvertResponsesRequestToChat(*prepared)
+				require.NoError(t, convertErr)
+				convertedJSON, marshalErr := common.Marshal(converted)
+				require.NoError(t, marshalErr)
+				assert.NotContains(t, string(convertedJSON), "previous_response_id")
+				assert.Contains(t, string(convertedJSON), "resp_parent-input")
+			}
+			raw, exists := c.Get(string(appconstant.ContextKeyResponsesContinuity))
+			require.True(t, exists)
+			continuity, ok := raw.(responsesstate.ContinuityContext)
+			require.True(t, ok)
+			assert.Equal(t, "resp_parent", continuity.Scope.ClientTaskID)
+		})
+	}
+}
+
+func TestNewResponsesPassthroughBodyUsesNormalizedPreparedRequest(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		store     json.RawMessage
+		wantStore json.RawMessage
+	}{
+		{name: "omitted becomes false", wantStore: json.RawMessage(`false`)},
+		{name: "explicit true", store: json.RawMessage(`true`), wantStore: json.RawMessage(`true`)},
+		{name: "explicit null", store: json.RawMessage(`null`), wantStore: json.RawMessage(`null`)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			request := &dto.OpenAIResponsesRequest{
+				Model: "model-a", Input: json.RawMessage(`[{"type":"message","role":"user","content":"materialized"}]`),
+				Store: tt.store,
+			}
+			normalizeResponsesStore(request)
+			body, _, getBody, closer, err := newResponsesPassthroughBody(request)
+			require.NoError(t, err)
+			defer closer.Close()
+			first, err := io.ReadAll(body)
+			require.NoError(t, err)
+			var captured map[string]any
+			require.NoError(t, common.Unmarshal(first, &captured))
+			assert.Contains(t, captured, "store")
+			assert.JSONEq(t, string(tt.wantStore), string(mustJSONBytes(t, captured["store"])))
+			assert.NotContains(t, string(first), "previous_response_id")
+			assert.Contains(t, string(first), "materialized")
+			replay, err := getBody()
+			require.NoError(t, err)
+			defer replay.Close()
+			second, err := io.ReadAll(replay)
+			require.NoError(t, err)
+			assert.Equal(t, first, second)
+		})
+	}
+}
+
+func mustJSONBytes(t *testing.T, value any) []byte {
+	t.Helper()
+	encoded, err := common.Marshal(value)
 	require.NoError(t, err)
-	assert.Equal(t, "resp_parent", prepared.PreviousResponseID, "native Responses keeps the upstream parent reference")
-	raw, exists := c.Get(string(appconstant.ContextKeyResponsesContinuity))
-	require.True(t, exists)
-	continuity, ok := raw.(responsesstate.ContinuityContext)
-	require.True(t, ok)
-	assert.Equal(t, "resp_parent", continuity.Scope.ClientTaskID)
+	return encoded
 }
 
 func TestResponsesContinuityHandlerToPersistenceKeepsLinearChild(t *testing.T) {

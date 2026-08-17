@@ -172,16 +172,19 @@ func ParseClientTaskID(metadata json.RawMessage) (string, error) {
 	if len(metadata) == 0 {
 		return "", nil
 	}
-	var value struct {
-		TaskID *string `json:"task_id"`
-	}
-	if err := common.Unmarshal(metadata, &value); err != nil {
+	var fields map[string]json.RawMessage
+	if err := common.Unmarshal(metadata, &fields); err != nil {
 		return "", fmt.Errorf("%w: %v", ErrInvalidClientTaskID, err)
 	}
-	if value.TaskID == nil {
+	rawTaskID, exists := fields["task_id"]
+	if !exists || string(rawTaskID) == "null" {
 		return "", nil
 	}
-	taskID := strings.TrimSpace(*value.TaskID)
+	var parsedTaskID string
+	if err := common.Unmarshal(rawTaskID, &parsedTaskID); err != nil {
+		return "", fmt.Errorf("%w: %v", ErrInvalidClientTaskID, err)
+	}
+	taskID := strings.TrimSpace(parsedTaskID)
 	if taskID == "" {
 		return "", nil
 	}

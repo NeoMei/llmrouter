@@ -235,7 +235,7 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 		}
 	default:
 		errorType := string(e.errorType)
-		if e.errorCode == ErrorCodeContextCapacityExceeded {
+		if e.errorCode == ErrorCodeContextCapacityExceeded || e.errorCode == ErrorCodeResponsesStateScopeInvalid {
 			errorType = string(e.errorCode)
 		}
 		result = ClaudeError{

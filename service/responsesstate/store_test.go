@@ -555,6 +555,7 @@ func TestParseClientTaskID(t *testing.T) {
 		{name: "omitted"},
 		{name: "only task id is read", metadata: json.RawMessage(`{"task_id":" task-1:_ok. ","thread_id":"ignored"}`), want: "task-1:_ok."},
 		{name: "unrelated metadata does not create identity", metadata: json.RawMessage(`{"thread_id":"not-a-task"}`)},
+		{name: "task id key is case sensitive", metadata: json.RawMessage(`{"TASK_ID":"must-not-be-used"}`)},
 		{name: "blank becomes omitted", metadata: json.RawMessage(`{"task_id":"   "}`)},
 		{name: "invalid character", metadata: json.RawMessage(`{"task_id":"bad task"}`), wantErr: true},
 		{name: "too long in bytes", metadata: json.RawMessage(`{"task_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`), wantErr: true},

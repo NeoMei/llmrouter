@@ -243,6 +243,65 @@ func (testAuthorizer) Authorize(_ context.Context, userID int, groups []string, 
 	return NewAuthorizedRuntimeSnapshot(userID, groups, client), nil
 }
 
+type countingAuthorizer struct {
+	calls int
+}
+
+func (a *countingAuthorizer) Authorize(_ context.Context, userID int, groups []string, client string) (AuthorizedRuntimeSnapshot, error) {
+	a.calls++
+	return NewAuthorizedRuntimeSnapshot(userID, groups, client), nil
+}
+
+func TestResolveCandidatesReturnsOrderedAuthorizedTargets(t *testing.T) {
+	catalog, err := NewCatalog(
+		[]ClientModelRoute{{
+			Id: 1, PublicId: "coder", Client: "all", Enabled: true,
+			Metadata: `{"context_window":32000,"context_fit_required":true}`,
+		}},
+		[]ClientModelTarget{
+			{Id: 30, RouteId: 1, ChannelId: 13, UpstreamModel: "model-c", BillingModel: "price-c", PreferredWires: `["responses","openai_chat"]`, Priority: 5, Weight: 1, Enabled: true},
+			{Id: 20, RouteId: 1, ChannelId: 12, UpstreamModel: "model-b", BillingModel: "price-b", PreferredWires: `["responses"]`, Priority: 5, Weight: 1, Enabled: true, ContextWindow: 200000, ContextFitRequired: true},
+			{Id: 10, RouteId: 1, ChannelId: 11, UpstreamModel: "model-a", BillingModel: "price-a", PreferredWires: `["responses"]`, Priority: 10, Weight: 1, Enabled: true, ContextWindow: 8000},
+			{Id: 40, RouteId: 1, ChannelId: 14, UpstreamModel: "model-d", BillingModel: "price-d", PreferredWires: `["responses"]`, Priority: 20, Weight: 1, Enabled: true, Groups: []string{"enterprise"}},
+		})
+	require.NoError(t, err)
+	authorizer := &countingAuthorizer{}
+	catalog = catalog.WithAuthorizer(authorizer)
+
+	got, err := catalog.ResolveCandidates(context.Background(), 11, []string{"default"}, "coder", "codex")
+	require.NoError(t, err)
+	require.Equal(t, 1, authorizer.calls)
+	require.Len(t, got, 3)
+	require.Equal(t, []int{10, 20, 30}, []int{got[0].TargetID, got[1].TargetID, got[2].TargetID})
+	require.Equal(t, []int{8000, 200000, 32000}, []int{got[0].ContextWindow, got[1].ContextWindow, got[2].ContextWindow})
+	require.True(t, got[0].RequiresKnownContext)
+	require.True(t, got[1].RequiresKnownContext)
+	require.True(t, got[2].RequiresKnownContext)
+
+	got[2].PreferredWires[0] = WireAnthropic
+	again, err := catalog.ResolveCandidates(context.Background(), 11, []string{"default"}, "coder", "codex")
+	require.NoError(t, err)
+	require.Equal(t, 2, authorizer.calls)
+	require.Equal(t, []WireProtocol{WireResponses, WireOpenAIChat}, again[2].PreferredWires)
+}
+
+func TestResolveCandidatesRequiresKnownContextWhenTargetRequiresIt(t *testing.T) {
+	catalog, err := NewCatalog(
+		[]ClientModelRoute{{Id: 1, PublicId: "coder", Client: "all", Enabled: true, Metadata: `{"context_window":32000}`}},
+		[]ClientModelTarget{{
+			Id: 10, RouteId: 1, ChannelId: 11, UpstreamModel: "model-a", BillingModel: "price-a",
+			PreferredWires: `["responses"]`, Weight: 1, Enabled: true, ContextFitRequired: true,
+		}},
+	)
+	require.NoError(t, err)
+	catalog = catalog.WithAuthorizer(testAuthorizer{})
+
+	got, err := catalog.ResolveCandidates(context.Background(), 11, []string{"default"}, "coder", "codex")
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.True(t, got[0].RequiresKnownContext)
+}
+
 func TestCatalogRejectsUnauthorizedTenantWithAuthorizer(t *testing.T) {
 	catalog := newTestCatalog(t, routeFixture{
 		PublicID: "deepseek/a", ChannelID: 7, UpstreamModel: "a", BillingModel: "a", PreferredWires: []WireProtocol{WireResponses}, Groups: []string{"paid"},

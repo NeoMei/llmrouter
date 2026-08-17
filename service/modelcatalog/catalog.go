@@ -45,6 +45,7 @@ type ClientModel struct {
 
 type routeMetadata struct {
 	ContextWindow            int      `json:"context_window"`
+	ContextFitRequired       bool     `json:"context_fit_required"`
 	ReasoningEfforts         []string `json:"reasoning_efforts"`
 	SupportsReasoningSummary bool     `json:"supports_reasoning_summary"`
 	SupportsTools            bool     `json:"supports_tools"`
@@ -54,17 +55,19 @@ type routeMetadata struct {
 // retained for telemetry, while BillingModel is always the canonical upstream
 // price key; callers must use this value before charging a request.
 type ResolvedModel struct {
-	RequestedModel string
-	PublicID       string
-	UpstreamModel  string
-	BillingModel   string
-	ChannelID      int
-	RouteID        int
-	TargetID       int
-	Priority       int
-	Weight         int
-	Client         string
-	PreferredWires []WireProtocol
+	RequestedModel       string
+	PublicID             string
+	UpstreamModel        string
+	BillingModel         string
+	ChannelID            int
+	RouteID              int
+	TargetID             int
+	Priority             int
+	Weight               int
+	Client               string
+	PreferredWires       []WireProtocol
+	ContextWindow        int
+	RequiresKnownContext bool
 }
 
 // AuthorizedRuntimeSnapshot is the immutable authorization result consumed by
@@ -87,9 +90,10 @@ type VisibilityAuthorizer interface {
 }
 
 type routeEntry struct {
-	model   ClientModel
-	targets []model.ClientModelTarget
-	enabled bool
+	model              ClientModel
+	targets            []model.ClientModelTarget
+	enabled            bool
+	contextFitRequired bool
 }
 
 // Catalog is an immutable in-memory snapshot. Build a new snapshot after a
@@ -137,7 +141,7 @@ func NewCatalog(routes []model.ClientModelRoute, targets []model.ClientModelTarg
 		if err != nil {
 			return nil, fmt.Errorf("route %q metadata: %w", publicID, err)
 		}
-		entries[i] = routeEntry{enabled: route.Enabled, model: ClientModel{
+		entries[i] = routeEntry{enabled: route.Enabled, contextFitRequired: capabilities.ContextFitRequired, model: ClientModel{
 			Id: route.Id, PublicID: publicID, DisplayName: display, Client: client,
 			Aliases: append([]string(nil), aliases...), Metadata: route.Metadata,
 			ContextWindow: capabilities.ContextWindow, ReasoningEfforts: append([]string(nil), capabilities.ReasoningEfforts...),
@@ -285,14 +289,28 @@ func (c *Catalog) listAuthorized(snapshot AuthorizedRuntimeSnapshot) []ClientMod
 }
 
 func (c *Catalog) Resolve(ctx context.Context, userID int, groups []string, requestedModel, client string) (*ResolvedModel, error) {
+	candidates, err := c.ResolveCandidates(ctx, userID, groups, requestedModel, client)
+	if err != nil {
+		return nil, err
+	}
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("model %q has no authorized targets", requestedModel)
+	}
+	resolved := candidates[0]
+	return &resolved, nil
+}
+
+// ResolveCandidates returns every authorized target in the stable priority/ID
+// order established when the immutable catalog snapshot is built.
+func (c *Catalog) ResolveCandidates(ctx context.Context, userID int, groups []string, requestedModel, client string) ([]ResolvedModel, error) {
 	snapshot, err := c.authorize(ctx, userID, groups, client)
 	if err != nil {
 		return nil, err
 	}
-	return c.resolveAuthorized(snapshot, requestedModel)
+	return c.resolveCandidatesAuthorized(snapshot, requestedModel)
 }
 
-func (c *Catalog) resolveAuthorized(snapshot AuthorizedRuntimeSnapshot, requestedModel string) (*ResolvedModel, error) {
+func (c *Catalog) resolveCandidatesAuthorized(snapshot AuthorizedRuntimeSnapshot, requestedModel string) ([]ResolvedModel, error) {
 	requested := strings.TrimSpace(requestedModel)
 	if requested == "" {
 		return nil, fmt.Errorf("model is required")
@@ -308,8 +326,9 @@ func (c *Catalog) resolveAuthorized(snapshot AuthorizedRuntimeSnapshot, requeste
 		return nil, fmt.Errorf("model %q is not available for client %q", requestedModel, client)
 	}
 	// Targets are ordered by priority/ID at snapshot build time. This core does
-	// not perform weighted selection; it returns the first authorized target and
-	// preserves its validated weight for a later selector/runtime layer.
+	// not perform weighted selection; it preserves each validated weight for a
+	// later selector/runtime layer.
+	resolved := make([]ResolvedModel, 0, len(entry.targets))
 	for _, target := range entry.targets {
 		if !entryTargetVisible(target, snapshot.Groups) {
 			continue
@@ -318,15 +337,24 @@ func (c *Catalog) resolveAuthorized(snapshot AuthorizedRuntimeSnapshot, requeste
 		if err != nil {
 			return nil, err
 		}
-		return &ResolvedModel{
+		contextWindow := entry.model.ContextWindow
+		if target.ContextWindow > 0 {
+			contextWindow = target.ContextWindow
+		}
+		resolved = append(resolved, ResolvedModel{
 			RequestedModel: requestedModel, PublicID: entry.model.PublicID,
 			UpstreamModel: target.UpstreamModel, BillingModel: target.BillingModel,
 			ChannelID: target.ChannelId, RouteID: entry.model.Id, TargetID: target.Id, Priority: target.Priority, Weight: target.Weight,
-			Client:         entry.model.Client,
-			PreferredWires: append([]WireProtocol(nil), wires...),
-		}, nil
+			Client:               entry.model.Client,
+			PreferredWires:       append([]WireProtocol(nil), wires...),
+			ContextWindow:        contextWindow,
+			RequiresKnownContext: target.ContextFitRequired || entry.contextFitRequired,
+		})
 	}
-	return nil, fmt.Errorf("model %q is not visible for the requested groups", requestedModel)
+	if len(resolved) == 0 {
+		return nil, fmt.Errorf("model %q is not visible for the requested groups", requestedModel)
+	}
+	return resolved, nil
 }
 
 func (c *Catalog) authorize(ctx context.Context, userID int, groups []string, client string) (AuthorizedRuntimeSnapshot, error) {

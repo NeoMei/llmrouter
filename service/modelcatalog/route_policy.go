@@ -82,6 +82,8 @@ type RouteDecisionTrace struct {
 	ResolvedModel  string    `json:"resolved_model"`
 	SelectedWire   string    `json:"selected_wire"`
 	RouteID        int       `json:"route_id"`
+	TargetID       int       `json:"target_id,omitempty"`
+	ChannelID      int       `json:"channel_id,omitempty"`
 	Attempts       []Attempt `json:"attempts"`
 }
 

@@ -285,6 +285,25 @@ func TestResolveCandidatesReturnsOrderedAuthorizedTargets(t *testing.T) {
 	require.Equal(t, []WireProtocol{WireResponses, WireOpenAIChat}, again[2].PreferredWires)
 }
 
+func TestResolveCandidatesBindsFirstAuthorizedGroupInRequestOrder(t *testing.T) {
+	catalog, err := NewCatalog(
+		[]ClientModelRoute{{Id: 1, PublicId: "coder", Client: "all", Enabled: true}},
+		[]ClientModelTarget{{
+			Id: 10, RouteId: 1, ChannelId: 11, UpstreamModel: "model-a", BillingModel: "price-a",
+			PreferredWires: `["responses"]`, Priority: 10, Weight: 1, Enabled: true,
+			Groups: []string{"cheap", "expensive"},
+		}},
+	)
+	require.NoError(t, err)
+	catalog = catalog.WithAuthorizer(testAuthorizer{})
+
+	got, err := catalog.ResolveCandidates(context.Background(), 11, []string{"expensive", "cheap"}, "coder", "codex")
+
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, "expensive", got[0].SelectedGroup)
+}
+
 func TestResolveCandidatesRequiresKnownContextWhenTargetRequiresIt(t *testing.T) {
 	catalog, err := NewCatalog(
 		[]ClientModelRoute{{Id: 1, PublicId: "coder", Client: "all", Enabled: true, Metadata: `{"context_window":32000}`}},

@@ -68,6 +68,7 @@ type ResolvedModel struct {
 	PreferredWires       []WireProtocol
 	ContextWindow        int
 	RequiresKnownContext bool
+	SelectedGroup        string
 }
 
 // AuthorizedRuntimeSnapshot is the immutable authorization result consumed by
@@ -349,12 +350,32 @@ func (c *Catalog) resolveCandidatesAuthorized(snapshot AuthorizedRuntimeSnapshot
 			PreferredWires:       append([]WireProtocol(nil), wires...),
 			ContextWindow:        contextWindow,
 			RequiresKnownContext: target.ContextFitRequired || entry.contextFitRequired,
+			SelectedGroup:        firstAuthorizedTargetGroup(target.Groups, snapshot.Groups),
 		})
 	}
 	if len(resolved) == 0 {
 		return nil, fmt.Errorf("model %q is not visible for the requested groups", requestedModel)
 	}
 	return resolved, nil
+}
+
+func firstAuthorizedTargetGroup(targetGroups, authorizedGroups []string) string {
+	if len(authorizedGroups) == 0 {
+		return ""
+	}
+	if len(targetGroups) == 0 {
+		return authorizedGroups[0]
+	}
+	allowed := make(map[string]struct{}, len(targetGroups))
+	for _, group := range targetGroups {
+		allowed[strings.ToLower(strings.TrimSpace(group))] = struct{}{}
+	}
+	for _, group := range authorizedGroups {
+		if _, ok := allowed[strings.ToLower(strings.TrimSpace(group))]; ok {
+			return group
+		}
+	}
+	return ""
 }
 
 func (c *Catalog) authorize(ctx context.Context, userID int, groups []string, client string) (AuthorizedRuntimeSnapshot, error) {

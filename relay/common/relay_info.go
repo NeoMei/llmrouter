@@ -95,8 +95,10 @@ type RouteCandidate struct {
 	UpstreamModel        string
 	BillingModel         string
 	SelectedWire         string
+	SelectedGroup        string
 	ContextWindow        int
 	RequiresKnownContext bool
+	RejectedReason       string
 }
 
 type RelayInfo struct {
@@ -279,6 +281,25 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	if info.Request != nil {
 		info.Request.SetModelName(info.ResolvedModelNameOrOrigin())
 	}
+}
+
+// ResetChannelAttemptState clears state derived from a previously selected
+// channel while deliberately retaining replayable request-body metadata.
+func (info *RelayInfo) ResetChannelAttemptState() {
+	if info == nil {
+		return
+	}
+	info.ResponsesViaChat = false
+	info.FinalRequestRelayFormat = ""
+	info.RequestConversionChain = nil
+	info.InitRequestConversionChain()
+	info.RuntimeHeadersOverride = nil
+	info.UseRuntimeHeadersOverride = false
+	info.ParamOverrideAudit = nil
+	info.ChannelMeta = nil
+	info.PriceData = types.PriceData{}
+	info.QuotaClamp = nil
+	info.TieredBillingSnapshot = nil
 }
 
 func (info *RelayInfo) ToString() string {

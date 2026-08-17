@@ -181,7 +181,17 @@ func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *rela
 	if !constant.CountToken {
 		return 0, nil
 	}
+	return estimateRequestToken(c, meta, info, true)
+}
 
+// EstimateRequestTokenForAdmission computes context-fit admission tokens even
+// when optional accounting token counting is disabled. It intentionally does
+// not mark the request as locally counted or populate accounting context.
+func EstimateRequestTokenForAdmission(c *gin.Context, meta *types.TokenCountMeta, info *relaycommon.RelayInfo) (int, error) {
+	return estimateRequestToken(c, meta, info, false)
+}
+
+func estimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *relaycommon.RelayInfo, recordAccountingContext bool) (int, error) {
 	if meta == nil {
 		return 0, errors.New("token count meta is nil")
 	}
@@ -296,7 +306,9 @@ func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *rela
 		}
 	}
 
-	common.SetContextKey(c, constant.ContextKeyPromptTokens, tkm)
+	if recordAccountingContext {
+		common.SetContextKey(c, constant.ContextKeyPromptTokens, tkm)
+	}
 	return tkm, nil
 }
 

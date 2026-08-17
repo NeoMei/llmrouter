@@ -37,7 +37,32 @@ func BuildRouteDecisionTrace(relayInfo *relaycommon.RelayInfo) modelcatalog.Rout
 		ResolvedModel:  relayInfo.ResolvedModelName,
 		SelectedWire:   relayInfo.SelectedWire,
 		RouteID:        relayInfo.ModelRouteId,
+		TargetID:       relayInfo.ModelTargetId,
+		ChannelID:      relayInfo.ResolvedChannelId,
 	}
+}
+
+// UpdateRouteDecisionSelection refreshes the top-level identity after an
+// ordered fallback selects another authoritative route target.
+func UpdateRouteDecisionSelection(requestID string, relayInfo *relaycommon.RelayInfo) bool {
+	if requestID == "" || relayInfo == nil {
+		return false
+	}
+	traceStoreMu.Lock()
+	defer traceStoreMu.Unlock()
+	entry, ok := traceStore[requestID]
+	if !ok {
+		return false
+	}
+	entry.Trace.PublicModel = relayInfo.PublicModelName
+	entry.Trace.ResolvedModel = relayInfo.ResolvedModelName
+	entry.Trace.SelectedWire = relayInfo.SelectedWire
+	entry.Trace.RouteID = relayInfo.ModelRouteId
+	entry.Trace.TargetID = relayInfo.ModelTargetId
+	entry.Trace.ChannelID = relayInfo.ResolvedChannelId
+	entry.RecordedAt = time.Now()
+	traceStore[requestID] = entry
+	return true
 }
 
 // StartRouteDecision records the initial trace for a request ID.

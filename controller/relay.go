@@ -217,10 +217,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		relayInfo.RetryIndex = retryParam.GetRetry()
 		if len(relayInfo.RouteCandidates) > 0 {
 			if relayInfo.RouteCandidateIndex != preparedCandidateIndex {
-				if err := selectRouteCandidateForAttempt(relayInfo, relayInfo.RouteCandidateIndex); err != nil {
+				if err := selectRouteCandidateForAttempt(c, relayInfo, relayInfo.RouteCandidateIndex); err != nil {
 					newAPIError = types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 					break
 				}
+				UpdateRouteDecisionSelection(GetRequestId(c), relayInfo)
 				if billingErr := prepareAttemptBilling(c, relayInfo, tokens, meta); billingErr != nil {
 					newAPIError = billingErr
 					break
@@ -246,7 +247,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				candidate := relayInfo.RouteCandidates[relayInfo.RouteCandidateIndex]
 				AppendRouteAttempt(GetRequestId(c), modelcatalog.Attempt{
 					RouteID: candidate.RouteID, TargetID: candidate.TargetID, ChannelID: candidate.ChannelID,
-					Wire: candidate.SelectedWire, Status: channelErr.StatusCode, Reason: string(channelErr.GetErrorCode()),
+					Wire: candidate.SelectedWire, Status: channelErr.StatusCode, Reason: string(channelErr.GetErrorCode()), RejectedReason: "channel_unavailable",
 					DurationMs: time.Since(attemptStart).Milliseconds(),
 				})
 			}
@@ -307,10 +308,14 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 func recordRouteAdmissionDecision(requestID string, relayInfo *relaycommon.RelayInfo) {
 	StartRouteDecision(requestID, relayInfo)
 	for _, candidate := range relayInfo.RejectedRouteCandidates {
+		reason := candidate.RejectedReason
+		if reason == "" {
+			reason = string(types.ErrorCodeContextCapacityExceeded)
+		}
 		AppendRouteAttempt(requestID, modelcatalog.Attempt{
 			RouteID: candidate.RouteID, TargetID: candidate.TargetID, ChannelID: candidate.ChannelID,
 			Wire: candidate.SelectedWire, Status: http.StatusBadRequest,
-			Reason: string(types.ErrorCodeContextCapacityExceeded), RejectedReason: string(types.ErrorCodeContextCapacityExceeded),
+			Reason: reason, RejectedReason: reason,
 		})
 	}
 }
@@ -364,9 +369,17 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		}
 		candidate := info.RouteCandidates[info.RouteCandidateIndex]
 		channel, err := model.GetChannelById(candidate.ChannelID, true)
-		if err != nil || channel == nil {
+		if err != nil || channel == nil || channel.Status != common.ChannelStatusEnabled {
 			return nil, types.NewError(fmt.Errorf("resolved route target %d channel %d is unavailable", candidate.TargetID, candidate.ChannelID), types.ErrorCodeGetChannelFailed)
 		}
+		// SetupContextForSelectedChannel overwrites common channel keys, but its
+		// provider-specific optional keys are conditional. Clear them so a retry
+		// cannot inherit organization/version/region/plugin state from the prior
+		// candidate.
+		c.Set("channel_organization", "")
+		c.Set("api_version", "")
+		c.Set("region", "")
+		c.Set("plugin", "")
 		if setupErr := middleware.SetupContextForSelectedChannel(c, channel, candidate.UpstreamModel); setupErr != nil {
 			return nil, setupErr
 		}
@@ -787,10 +800,20 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 	if err != nil {
 		return types.NewError(fmt.Errorf("configured model route %s has no available target: %w", relayInfo.OriginModelName, err), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
-	eligible, rejected := filterRouteCandidatesByContext(resolved, estimatedInputTokens)
+	admissionTokens := estimatedInputTokens
+	if !constant.CountToken && estimatedInputTokens == 0 {
+		admissionTokens = -1
+		if relayInfo.Request != nil {
+			admissionMeta := relayInfo.Request.GetTokenCountMeta()
+			if independentEstimate, estimateErr := service.EstimateRequestTokenForAdmission(c, admissionMeta, relayInfo); estimateErr == nil {
+				admissionTokens = independentEstimate
+			}
+		}
+	}
+	eligible, rejected := filterRouteCandidatesByContext(resolved, admissionTokens)
 	relayInfo.RejectedRouteCandidates = make([]relaycommon.RouteCandidate, 0, len(rejected))
 	for i := range rejected {
-		relayInfo.RejectedRouteCandidates = append(relayInfo.RejectedRouteCandidates, routeCandidateFromResolved(relayInfo, &rejected[i]))
+		relayInfo.RejectedRouteCandidates = append(relayInfo.RejectedRouteCandidates, rejectedRouteCandidate(&rejected[i], string(types.ErrorCodeContextCapacityExceeded)))
 	}
 	if len(eligible) == 0 {
 		if len(resolved) > 0 {
@@ -798,7 +821,7 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 			relayInfo.ModelRouteId = resolved[0].RouteID
 		}
 		return types.NewErrorWithStatusCode(
-			fmt.Errorf("model %s has no route target that can fit %d input tokens", relayInfo.OriginModelName, estimatedInputTokens),
+			fmt.Errorf("model %s has no route target that can fit the request context", relayInfo.OriginModelName),
 			types.ErrorCodeContextCapacityExceeded,
 			http.StatusBadRequest,
 			types.ErrOptionWithSkipRetry(),
@@ -808,9 +831,22 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 	relayInfo.PublicModelName = eligible[0].PublicID
 	relayInfo.RouteCandidates = make([]relaycommon.RouteCandidate, 0, len(eligible))
 	for i := range eligible {
-		relayInfo.RouteCandidates = append(relayInfo.RouteCandidates, routeCandidateFromResolved(relayInfo, &eligible[i]))
+		candidate, wireErr := routeCandidateFromResolved(relayInfo, &eligible[i])
+		if wireErr != nil {
+			relayInfo.RejectedRouteCandidates = append(relayInfo.RejectedRouteCandidates, rejectedRouteCandidate(&eligible[i], "unsupported_wire"))
+			continue
+		}
+		relayInfo.RouteCandidates = append(relayInfo.RouteCandidates, candidate)
 	}
-	if err := selectRouteCandidateForAttempt(relayInfo, 0); err != nil {
+	if len(relayInfo.RouteCandidates) == 0 {
+		return types.NewErrorWithStatusCode(
+			fmt.Errorf("model %s has no route target supporting request format %s", relayInfo.OriginModelName, relayInfo.RelayFormat),
+			types.ErrorCodeNoCapableChannel,
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+	if err := selectRouteCandidateForAttempt(c, relayInfo, 0); err != nil {
 		return types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 	return nil
@@ -847,6 +883,10 @@ func filterRouteCandidatesByContext(candidates []modelcatalog.ResolvedModel, est
 	eligible := make([]modelcatalog.ResolvedModel, 0, len(candidates))
 	rejected := make([]modelcatalog.ResolvedModel, 0)
 	for _, candidate := range candidates {
+		if estimated < 0 && (candidate.ContextWindow > 0 || candidate.RequiresKnownContext) {
+			rejected = append(rejected, candidate)
+			continue
+		}
 		if candidate.ContextWindow > 0 && estimated > candidate.ContextWindow {
 			rejected = append(rejected, candidate)
 			continue
@@ -860,19 +900,29 @@ func filterRouteCandidatesByContext(candidates []modelcatalog.ResolvedModel, est
 	return eligible, rejected
 }
 
-func routeCandidateFromResolved(relayInfo *relaycommon.RelayInfo, resolved *modelcatalog.ResolvedModel) relaycommon.RouteCandidate {
+func routeCandidateFromResolved(relayInfo *relaycommon.RelayInfo, resolved *modelcatalog.ResolvedModel) (relaycommon.RouteCandidate, error) {
 	candidate := relaycommon.RouteCandidate{
 		RouteID: resolved.RouteID, TargetID: resolved.TargetID, ChannelID: resolved.ChannelID,
 		UpstreamModel: resolved.UpstreamModel, BillingModel: resolved.BillingModel,
-		ContextWindow: resolved.ContextWindow, RequiresKnownContext: resolved.RequiresKnownContext,
+		SelectedGroup: resolved.SelectedGroup, ContextWindow: resolved.ContextWindow, RequiresKnownContext: resolved.RequiresKnownContext,
 	}
-	if decision, err := selectWireForRequest(relayInfo, resolved); err == nil {
-		candidate.SelectedWire = string(decision.Wire)
+	decision, err := selectWireForRequest(relayInfo, resolved)
+	if err != nil {
+		return relaycommon.RouteCandidate{}, err
 	}
-	return candidate
+	candidate.SelectedWire = string(decision.Wire)
+	return candidate, nil
 }
 
-func selectRouteCandidateForAttempt(relayInfo *relaycommon.RelayInfo, index int) error {
+func rejectedRouteCandidate(resolved *modelcatalog.ResolvedModel, reason string) relaycommon.RouteCandidate {
+	return relaycommon.RouteCandidate{
+		RouteID: resolved.RouteID, TargetID: resolved.TargetID, ChannelID: resolved.ChannelID,
+		UpstreamModel: resolved.UpstreamModel, BillingModel: resolved.BillingModel, SelectedGroup: resolved.SelectedGroup,
+		ContextWindow: resolved.ContextWindow, RequiresKnownContext: resolved.RequiresKnownContext, RejectedReason: reason,
+	}
+}
+
+func selectRouteCandidateForAttempt(c *gin.Context, relayInfo *relaycommon.RelayInfo, index int) error {
 	if relayInfo == nil {
 		return errors.New("relay info is nil")
 	}
@@ -880,6 +930,7 @@ func selectRouteCandidateForAttempt(relayInfo *relaycommon.RelayInfo, index int)
 		return fmt.Errorf("route candidate index %d is out of range", index)
 	}
 	candidate := relayInfo.RouteCandidates[index]
+	relayInfo.ResetChannelAttemptState()
 	relayInfo.RouteCandidateIndex = index
 	relayInfo.ResolvedModelName = candidate.UpstreamModel
 	relayInfo.BillingModelName = candidate.BillingModel
@@ -888,6 +939,13 @@ func selectRouteCandidateForAttempt(relayInfo *relaycommon.RelayInfo, index int)
 	relayInfo.ResolvedChannelId = candidate.ChannelID
 	relayInfo.SelectedWire = candidate.SelectedWire
 	relayInfo.RouteContextWindow = candidate.ContextWindow
+	if candidate.SelectedGroup != "" {
+		relayInfo.UsingGroup = candidate.SelectedGroup
+		if c != nil {
+			common.SetContextKey(c, constant.ContextKeyUsingGroup, candidate.SelectedGroup)
+			common.SetContextKey(c, constant.ContextKeyAutoGroup, candidate.SelectedGroup)
+		}
+	}
 	return nil
 }
 
@@ -936,7 +994,7 @@ func selectWireForRequest(relayInfo *relaycommon.RelayInfo, resolved *modelcatal
 
 func expectedWireForFormat(format types.RelayFormat) modelcatalog.WireProtocol {
 	switch format {
-	case types.RelayFormatOpenAIResponses:
+	case types.RelayFormatOpenAIResponses, types.RelayFormatOpenAIResponsesCompaction:
 		return modelcatalog.WireResponses
 	case types.RelayFormatClaude:
 		return modelcatalog.WireAnthropic

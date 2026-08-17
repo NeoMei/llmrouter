@@ -233,9 +233,13 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 			result = claudeError
 		}
 	default:
+		errorType := string(e.errorType)
+		if e.errorCode == ErrorCodeContextCapacityExceeded {
+			errorType = string(e.errorCode)
+		}
 		result = ClaudeError{
 			Message: e.Error(),
-			Type:    string(e.errorType),
+			Type:    errorType,
 		}
 	}
 	if e.errorCode != ErrorCodeCountTokenFailed {

@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -30,6 +32,21 @@ func configureRouteBillingRatios(t *testing.T) {
 	previousFreePreConsume := operation_setting.GetQuotaSetting().EnableFreeModelPreConsume
 	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"route-paid-a":1,"route-paid-b":2,"route-free":0}`))
 	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
+	operation_setting.GetQuotaSetting().EnableFreeModelPreConsume = false
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousRatios))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousGroups))
+		operation_setting.GetQuotaSetting().EnableFreeModelPreConsume = previousFreePreConsume
+	})
+}
+
+func configureAutoGroupRouteBilling(t *testing.T) {
+	t.Helper()
+	previousRatios := ratio_setting.ModelRatio2JSONString()
+	previousGroups := ratio_setting.GroupRatio2JSONString()
+	previousFreePreConsume := operation_setting.GetQuotaSetting().EnableFreeModelPreConsume
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"route-paid":1}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"cheap":1,"higher":2,"lower":0.5,"free":0}`))
 	operation_setting.GetQuotaSetting().EnableFreeModelPreConsume = false
 	t.Cleanup(func() {
 		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousRatios))
@@ -164,6 +181,25 @@ func TestResolveClientModelRouteRejectsWhenNoCandidateFitsWithoutBilling(t *test
 	assert.Empty(t, spy.calls, "context admission must happen before any reservation")
 }
 
+func TestResolveClientModelRouteCountsAdmissionWhenAccountingCountIsDisabled(t *testing.T) {
+	previousCountToken := constant.CountToken
+	constant.CountToken = false
+	t.Cleanup(func() { constant.CountToken = previousCountToken })
+	db := setupRelayRouteRuntimeDB(t)
+	seedRelayRouteTargets(t, db, 1)
+	c := relayRouteResolutionContext(t)
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "coder", RelayFormat: types.RelayFormatOpenAIResponses,
+		Request: &dto.OpenAIResponsesRequest{Model: "coder", Input: []byte(`"this request is definitely longer than one token"`)},
+	}
+
+	apiErr := resolveClientModelRoute(c, info, 0)
+
+	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeContextCapacityExceeded, apiErr.GetErrorCode())
+	assert.False(t, common.GetContextKeyBool(c, constant.ContextKeyLocalCountTokens), "admission counting must not change accounting provenance")
+}
+
 func TestRecordRouteAdmissionDecisionTracesRejectedTargetIdentity(t *testing.T) {
 	const requestID = "route-context-rejection"
 	info := &relaycommon.RelayInfo{
@@ -204,13 +240,34 @@ func TestResolveClientModelRouteFailsClosedWhenConfiguredChannelIsUnavailable(t 
 	assert.Empty(t, info.RouteCandidates)
 }
 
+func TestResolveClientModelRouteRejectsUnsupportedWireBeforeBilling(t *testing.T) {
+	db := setupRelayRouteRuntimeDB(t)
+	seedRelayRouteTargets(t, db, 128000)
+	require.NoError(t, db.Model(&model.ClientModelTarget{}).Where("id = ?", 201).Update("preferred_wires", `["anthropic"]`).Error)
+	c := relayRouteResolutionContext(t)
+	spy := &relayRouteBillingSpy{reserved: 500}
+	info := &relaycommon.RelayInfo{OriginModelName: "coder", RelayFormat: types.RelayFormatOpenAIResponses, Billing: spy}
+
+	apiErr := resolveClientModelRoute(c, info, 12000)
+
+	require.NotNil(t, apiErr)
+	assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
+	assert.Equal(t, types.ErrorCodeNoCapableChannel, apiErr.GetErrorCode())
+	assert.True(t, types.IsSkipRetryError(apiErr))
+	assert.Empty(t, info.RouteCandidates)
+	require.Len(t, info.RejectedRouteCandidates, 1)
+	assert.Equal(t, "unsupported_wire", info.RejectedRouteCandidates[0].RejectedReason)
+	assert.Empty(t, spy.calls)
+}
+
 func TestSelectRouteCandidateForAttemptRefreshesAuthoritativeIdentity(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	info := &relaycommon.RelayInfo{RouteCandidates: []relaycommon.RouteCandidate{
-		{RouteID: 7, TargetID: 70, ChannelID: 700, UpstreamModel: "wire-model-a", BillingModel: "price-a", SelectedWire: "responses", ContextWindow: 8000},
-		{RouteID: 7, TargetID: 71, ChannelID: 701, UpstreamModel: "wire-model-b", BillingModel: "price-b", SelectedWire: "openai_chat", ContextWindow: 128000},
+		{RouteID: 7, TargetID: 70, ChannelID: 700, UpstreamModel: "wire-model-a", BillingModel: "price-a", SelectedWire: "responses", SelectedGroup: "cheap", ContextWindow: 8000},
+		{RouteID: 7, TargetID: 71, ChannelID: 701, UpstreamModel: "wire-model-b", BillingModel: "price-b", SelectedWire: "openai_chat", SelectedGroup: "expensive", ContextWindow: 128000},
 	}}
 
-	require.NoError(t, selectRouteCandidateForAttempt(info, 1))
+	require.NoError(t, selectRouteCandidateForAttempt(c, info, 1))
 	assert.Equal(t, 1, info.RouteCandidateIndex)
 	assert.Equal(t, 7, info.ModelRouteId)
 	assert.Equal(t, 71, info.ModelTargetId)
@@ -219,6 +276,49 @@ func TestSelectRouteCandidateForAttemptRefreshesAuthoritativeIdentity(t *testing
 	assert.Equal(t, "price-b", info.BillingModelName)
 	assert.Equal(t, "openai_chat", info.SelectedWire)
 	assert.Equal(t, 128000, info.RouteContextWindow)
+	assert.Equal(t, "expensive", info.UsingGroup)
+	assert.Equal(t, "expensive", common.GetContextKeyString(c, constant.ContextKeyUsingGroup))
+	assert.Equal(t, "expensive", common.GetContextKeyString(c, constant.ContextKeyAutoGroup))
+}
+
+func TestSelectRouteCandidateResetsChannelDerivedStateButPreservesBodyReplay(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	bodyGetter := func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader("body")), nil }
+	info := &relaycommon.RelayInfo{
+		RelayFormat:               types.RelayFormatOpenAIResponses,
+		ResponsesViaChat:          true,
+		FinalRequestRelayFormat:   types.RelayFormatClaude,
+		RequestConversionChain:    []types.RelayFormat{types.RelayFormatOpenAIResponses, types.RelayFormatClaude},
+		RuntimeHeadersOverride:    map[string]interface{}{"x-moonshot": "stale"},
+		UseRuntimeHeadersOverride: true,
+		ParamOverrideAudit:        []string{"stale override"},
+		PriceData:                 types.PriceData{FreeModel: true, QuotaToPreConsume: 999},
+		UpstreamRequestBodySize:   4,
+		UpstreamRequestGetBody:    bodyGetter,
+		RouteCandidates: []relaycommon.RouteCandidate{
+			{TargetID: 1, ChannelID: 11, UpstreamModel: "moonshot", BillingModel: "price-a", SelectedWire: "openai_chat", SelectedGroup: "cheap"},
+			{TargetID: 2, ChannelID: 12, UpstreamModel: "azure", BillingModel: "price-b", SelectedWire: "responses", SelectedGroup: "expensive"},
+		},
+	}
+
+	require.NoError(t, selectRouteCandidateForAttempt(c, info, 1))
+
+	assert.False(t, info.ResponsesViaChat)
+	assert.Empty(t, info.FinalRequestRelayFormat)
+	assert.Equal(t, []types.RelayFormat{types.RelayFormatOpenAIResponses}, info.RequestConversionChain)
+	assert.Nil(t, info.RuntimeHeadersOverride)
+	assert.False(t, info.UseRuntimeHeadersOverride)
+	assert.Nil(t, info.ParamOverrideAudit)
+	assert.False(t, info.PriceData.FreeModel)
+	assert.Zero(t, info.PriceData.QuotaToPreConsume)
+	assert.Equal(t, int64(4), info.UpstreamRequestBodySize)
+	require.NotNil(t, info.UpstreamRequestGetBody)
+	reader, err := info.UpstreamRequestGetBody()
+	require.NoError(t, err)
+	defer reader.Close()
+	data, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, "body", string(data))
 }
 
 func TestOrderedFallbackAdvancesOnceAndStopsAtExplicitCandidateExhaustion(t *testing.T) {
@@ -247,24 +347,52 @@ func TestPrepareAttemptBillingUsesEachCandidateBillingIdentity(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, selectRouteCandidateForAttempt(info, 0))
+	require.NoError(t, selectRouteCandidateForAttempt(c, info, 0))
 	require.Nil(t, prepareAttemptBilling(c, info, 1000, &types.TokenCountMeta{}))
 	firstTarget := info.PriceData.QuotaToPreConsume
 	require.Positive(t, firstTarget)
 	assert.Equal(t, "route-paid-a", info.BillingModelName)
 
-	require.NoError(t, selectRouteCandidateForAttempt(info, 1))
+	require.NoError(t, selectRouteCandidateForAttempt(c, info, 1))
 	require.Nil(t, prepareAttemptBilling(c, info, 1000, &types.TokenCountMeta{}))
 	secondTarget := info.PriceData.QuotaToPreConsume
 	assert.Greater(t, secondTarget, firstTarget)
 	assert.Equal(t, "route-paid-b", info.BillingModelName)
 	assert.Equal(t, secondTarget, info.FinalPreConsumedQuota)
 
-	require.NoError(t, selectRouteCandidateForAttempt(info, 2))
+	require.NoError(t, selectRouteCandidateForAttempt(c, info, 2))
 	require.Nil(t, prepareAttemptBilling(c, info, 1000, &types.TokenCountMeta{}))
 	assert.Equal(t, "route-free", info.BillingModelName)
 	assert.True(t, info.PriceData.FreeModel)
 	assert.Equal(t, []int{firstTarget, secondTarget}, spy.calls, "free fallback must retain the session without reserving again")
+}
+
+func TestPrepareAttemptBillingPreservesInsufficientQuotaAPIError(t *testing.T) {
+	configureRouteBillingRatios(t)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	insufficient := types.NewErrorWithStatusCode(errors.New("insufficient"), types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry())
+	spy := &relayRouteBillingSpy{reserveErr: insufficient}
+	info := &relaycommon.RelayInfo{OriginModelName: "coder", BillingModelName: "route-paid-a", UserGroup: "default", UsingGroup: "default", Billing: spy}
+
+	apiErr := prepareAttemptBilling(c, info, 1000, &types.TokenCountMeta{})
+
+	require.NotNil(t, apiErr)
+	assert.Equal(t, http.StatusForbidden, apiErr.StatusCode)
+	assert.Equal(t, types.ErrorCodeInsufficientUserQuota, apiErr.GetErrorCode())
+}
+
+func TestExpectedWireMapsResponsesCompactAndFailsClosedForGemini(t *testing.T) {
+	assert.Equal(t, modelcatalog.WireResponses, expectedWireForFormat(types.RelayFormatOpenAIResponsesCompaction))
+	assert.Empty(t, expectedWireForFormat(types.RelayFormatGemini))
+}
+
+func TestRouteCandidateFromResolvedReturnsUnsupportedWireError(t *testing.T) {
+	info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatOpenAIResponses}
+	resolved := &modelcatalog.ResolvedModel{TargetID: 1, PreferredWires: []modelcatalog.WireProtocol{modelcatalog.WireAnthropic}}
+
+	_, err := routeCandidateFromResolved(info, resolved)
+
+	require.Error(t, err)
 }
 
 func TestPrepareAttemptBillingCreatesSessionForFirstPaidCandidate(t *testing.T) {
@@ -292,6 +420,73 @@ func TestPrepareAttemptBillingCreatesSessionForFirstPaidCandidate(t *testing.T) 
 	require.NoError(t, info.Billing.Settle(info.PriceData.QuotaToPreConsume))
 }
 
+func TestAutoGroupRouteHigherCandidateCannotUseCheaperReservation(t *testing.T) {
+	configureAutoGroupRouteBilling(t)
+	db := setupTieredRelayBillingDB(t)
+	createTieredRelayWalletFixtures(t, db, 821, 822, 1500, 5000, "route-auto-insufficient")
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	common.SetContextKey(c, constant.ContextKeyTokenGroup, "auto")
+	info := &relaycommon.RelayInfo{
+		UserId: 821, TokenId: 822, TokenKey: "route-auto-insufficient", UserGroup: "default", TokenGroup: "auto",
+		OriginModelName: "coder", ForcePreConsume: true, UserSetting: dto.UserSetting{BillingPreference: "wallet_only"},
+		RouteCandidates: []relaycommon.RouteCandidate{
+			{TargetID: 1, ChannelID: 11, UpstreamModel: "a", BillingModel: "route-paid", SelectedWire: "responses", SelectedGroup: "cheap"},
+			{TargetID: 2, ChannelID: 12, UpstreamModel: "b", BillingModel: "route-paid", SelectedWire: "responses", SelectedGroup: "higher"},
+		},
+	}
+
+	require.NoError(t, selectRouteCandidateForAttempt(c, info, 0))
+	require.Nil(t, prepareAttemptBilling(c, info, 1000, &types.TokenCountMeta{}))
+	assert.Equal(t, 1000, info.FinalPreConsumedQuota)
+	require.NoError(t, selectRouteCandidateForAttempt(c, info, 1))
+	apiErr := prepareAttemptBilling(c, info, 1000, &types.TokenCountMeta{})
+
+	require.NotNil(t, apiErr)
+	assert.Equal(t, http.StatusForbidden, apiErr.StatusCode)
+	assert.Equal(t, types.ErrorCodeInsufficientUserQuota, apiErr.GetErrorCode())
+	assert.Equal(t, "higher", info.UsingGroup)
+	assert.Equal(t, 2.0, info.PriceData.GroupRatioInfo.GroupRatio)
+	userQuota, tokenRemain, tokenUsed := tieredRelayQuotaState(t, db, 821, 822)
+	assert.Equal(t, 500, userQuota)
+	assert.Equal(t, 4000, tokenRemain)
+	assert.Equal(t, 1000, tokenUsed)
+	require.NoError(t, info.Billing.Settle(1000))
+}
+
+func TestAutoGroupRoutePaidHigherLowerFreeKeepsOneBillingSession(t *testing.T) {
+	configureAutoGroupRouteBilling(t)
+	db := setupTieredRelayBillingDB(t)
+	createTieredRelayWalletFixtures(t, db, 831, 832, 10000, 10000, "route-auto-transitions")
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	common.SetContextKey(c, constant.ContextKeyTokenGroup, "auto")
+	info := &relaycommon.RelayInfo{
+		UserId: 831, TokenId: 832, TokenKey: "route-auto-transitions", UserGroup: "default", TokenGroup: "auto",
+		OriginModelName: "coder", ForcePreConsume: true, UserSetting: dto.UserSetting{BillingPreference: "wallet_only"},
+		RouteCandidates: []relaycommon.RouteCandidate{
+			{TargetID: 1, ChannelID: 11, UpstreamModel: "a", BillingModel: "route-paid", SelectedWire: "responses", SelectedGroup: "cheap"},
+			{TargetID: 2, ChannelID: 12, UpstreamModel: "b", BillingModel: "route-paid", SelectedWire: "responses", SelectedGroup: "higher"},
+			{TargetID: 3, ChannelID: 13, UpstreamModel: "c", BillingModel: "route-paid", SelectedWire: "responses", SelectedGroup: "lower"},
+			{TargetID: 4, ChannelID: 14, UpstreamModel: "d", BillingModel: "route-paid", SelectedWire: "responses", SelectedGroup: "free"},
+		},
+	}
+
+	for index, wantGroup := range []string{"cheap", "higher", "lower", "free"} {
+		require.NoError(t, selectRouteCandidateForAttempt(c, info, index))
+		require.Nil(t, prepareAttemptBilling(c, info, 1000, &types.TokenCountMeta{}))
+		assert.Equal(t, wantGroup, info.UsingGroup)
+	}
+	assert.Equal(t, 2000, info.Billing.GetPreConsumedQuota())
+	assert.True(t, info.PriceData.FreeModel)
+	userQuota, tokenRemain, tokenUsed := tieredRelayQuotaState(t, db, 831, 832)
+	assert.Equal(t, 8000, userQuota)
+	assert.Equal(t, 8000, tokenRemain)
+	assert.Equal(t, 2000, tokenUsed)
+	// The final free PriceData is intentionally left for the normal relay
+	// settlement path; no pre-refund occurs between candidate attempts.
+}
+
 func TestGetChannelPinsExplicitTargetBeforeLegacyDistributor(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	previousDB := model.DB
@@ -312,6 +507,10 @@ func TestGetChannelPinsExplicitTargetBeforeLegacyDistributor(t *testing.T) {
 
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Set("channel_organization", "stale-org")
+	c.Set("api_version", "stale-version")
+	c.Set("region", "stale-region")
+	c.Set("plugin", "stale-plugin")
 	info := &relaycommon.RelayInfo{
 		ResolvedModelName: "wire-model-b",
 		RouteCandidates: []relaycommon.RouteCandidate{{
@@ -327,6 +526,10 @@ func TestGetChannelPinsExplicitTargetBeforeLegacyDistributor(t *testing.T) {
 	assert.Equal(t, 701, channel.Id)
 	assert.Equal(t, 701, common.GetContextKeyInt(c, constant.ContextKeyChannelId))
 	assert.Equal(t, "wire-model-b", common.GetContextKeyString(c, constant.ContextKeyOriginalModel))
+	assert.Empty(t, c.GetString("channel_organization"))
+	assert.Empty(t, c.GetString("api_version"))
+	assert.Empty(t, c.GetString("region"))
+	assert.Empty(t, c.GetString("plugin"))
 }
 
 func TestGetChannelDoesNotFallBackWhenExplicitTargetIsUnavailable(t *testing.T) {
@@ -345,13 +548,47 @@ func TestGetChannelDoesNotFallBackWhenExplicitTargetIsUnavailable(t *testing.T) 
 	assert.True(t, advanceRouteCandidate(info), "a retryable unavailable channel advances to the next explicit target")
 }
 
+func TestGetChannelRejectsDisabledExplicitTarget(t *testing.T) {
+	db := setupRelayRouteRuntimeDB(t)
+	require.NoError(t, db.Create(&model.Channel{Id: 711, Name: "disabled", Type: constant.ChannelTypeOpenAI, Key: "test", Status: common.ChannelStatusManuallyDisabled}).Error)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{RouteCandidates: []relaycommon.RouteCandidate{{TargetID: 81, ChannelID: 711, UpstreamModel: "disabled"}}}
+
+	channel, apiErr := getChannel(c, info, &service.RetryParam{Ctx: c, Retry: common.GetPointer(0)})
+
+	assert.Nil(t, channel)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeGetChannelFailed, apiErr.GetErrorCode())
+}
+
+func TestUpdateRouteDecisionSelectionTracksFinalFallbackIdentity(t *testing.T) {
+	const requestID = "route-final-fallback"
+	first := &relaycommon.RelayInfo{OriginModelName: "coder", ResolvedModelName: "first", SelectedWire: "responses", ModelRouteId: 1, ModelTargetId: 10, ResolvedChannelId: 100}
+	StartRouteDecision(requestID, first)
+	final := &relaycommon.RelayInfo{OriginModelName: "coder", ResolvedModelName: "final", SelectedWire: "openai_chat", ModelRouteId: 1, ModelTargetId: 20, ResolvedChannelId: 200}
+
+	UpdateRouteDecisionSelection(requestID, final)
+
+	trace, ok := GetRouteDecision(requestID)
+	require.True(t, ok)
+	assert.Equal(t, "final", trace.ResolvedModel)
+	assert.Equal(t, "openai_chat", trace.SelectedWire)
+	assert.Equal(t, 20, trace.TargetID)
+	assert.Equal(t, 200, trace.ChannelID)
+}
+
 type relayRouteBillingSpy struct {
-	reserved int
-	calls    []int
+	reserved   int
+	calls      []int
+	reserveErr error
 }
 
 func (s *relayRouteBillingSpy) Reserve(target int) error {
 	s.calls = append(s.calls, target)
+	if s.reserveErr != nil {
+		return s.reserveErr
+	}
 	if target > s.reserved {
 		s.reserved = target
 	}

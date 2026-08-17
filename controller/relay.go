@@ -67,6 +67,34 @@ func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewA
 	return err
 }
 
+func relaySelectedChannel(c *gin.Context, relayInfo *relaycommon.RelayInfo, channel *model.Channel, relayFormat types.RelayFormat, ws *websocket.Conn) (*types.NewAPIError, bool) {
+	addUsedChannel(c, channel.Id)
+	if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
+		return billingErr, false
+	}
+
+	bodyStorage, bodyErr := common.GetBodyStorage(c)
+	if bodyErr != nil {
+		// Ensure consistent 413 for oversized bodies even when error occurs later (e.g., retry path)
+		if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {
+			return types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, types.ErrOptionWithSkipRetry()), false
+		}
+		return types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry()), false
+	}
+	c.Request.Body = io.NopCloser(bodyStorage)
+
+	switch relayFormat {
+	case types.RelayFormatOpenAIRealtime:
+		return relay.WssHelper(c, relayInfo), true
+	case types.RelayFormatClaude:
+		return relay.ClaudeHelper(c, relayInfo), true
+	case types.RelayFormatGemini:
+		return geminiRelayHandler(c, relayInfo), true
+	default:
+		return relayHandler(c, relayInfo), true
+	}
+}
+
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	requestId := c.GetString(common.RequestIdKey)
@@ -207,28 +235,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 
-		addUsedChannel(c, channel.Id)
-		bodyStorage, bodyErr := common.GetBodyStorage(c)
-		if bodyErr != nil {
-			// Ensure consistent 413 for oversized bodies even when error occurs later (e.g., retry path)
-			if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {
-				newAPIError = types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, types.ErrOptionWithSkipRetry())
-			} else {
-				newAPIError = types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
-			}
+		var relayStarted bool
+		newAPIError, relayStarted = relaySelectedChannel(c, relayInfo, channel, relayFormat, ws)
+		if !relayStarted {
 			break
-		}
-		c.Request.Body = io.NopCloser(bodyStorage)
-
-		switch relayFormat {
-		case types.RelayFormatOpenAIRealtime:
-			newAPIError = relay.WssHelper(c, relayInfo)
-		case types.RelayFormatClaude:
-			newAPIError = relay.ClaudeHelper(c, relayInfo)
-		case types.RelayFormatGemini:
-			newAPIError = geminiRelayHandler(c, relayInfo)
-		default:
-			newAPIError = relayHandler(c, relayInfo)
 		}
 
 		AppendRouteAttempt(GetRequestId(c), modelcatalog.NewAttempt(channel.Id, relayInfo.SelectedWire, 0, "", attemptStart))
@@ -315,16 +325,16 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		if !autoBan {
 			autoBanInt = 0
 		}
-		return &model.Channel{
+		channel := &model.Channel{
 			Id:      c.GetInt("channel_id"),
 			Type:    c.GetInt("channel_type"),
 			Name:    c.GetString("channel_name"),
 			AutoBan: &autoBanInt,
-		}, nil
+		}
+		info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
+		return channel, nil
 	}
 	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
-
-	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
 
 	if err != nil {
 		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, info.ResolvedModelNameOrOrigin(), err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
@@ -337,6 +347,7 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	if newAPIError != nil {
 		return nil, newAPIError
 	}
+	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
 	return channel, nil
 }
 

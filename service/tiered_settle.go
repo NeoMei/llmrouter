@@ -1,13 +1,58 @@
 package service
 
 import (
+	"net/http"
+
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 )
 
 // TieredResultWrapper wraps billingexpr.TieredResult for use at the service layer.
 type TieredResultWrapper = billingexpr.TieredResult
+
+func refreshTieredBillingGroup(relayInfo *relaycommon.RelayInfo) (*billingexpr.BillingSnapshot, bool, error) {
+	if relayInfo == nil || relayInfo.TieredBillingSnapshot == nil || relayInfo.TieredBillingSnapshot.BillingMode != "tiered_expr" {
+		return nil, false, nil
+	}
+	snapshot := relayInfo.TieredBillingSnapshot
+	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
+	if snapshot.GroupRatio == groupRatio {
+		return snapshot, false, nil
+	}
+	estimatedQuota, err := billingexpr.QuotaRoundStrict(snapshot.EstimatedQuotaBeforeGroup * groupRatio)
+	if err != nil {
+		return nil, false, err
+	}
+	snapshot.GroupRatio = groupRatio
+	snapshot.EstimatedQuotaAfterGroup = estimatedQuota
+	return snapshot, true, nil
+}
+
+// PrepareTieredBillingForSelectedGroup refreshes the frozen tiered-billing
+// snapshot after channel selection and reserves any additional quota before
+// the request can be sent upstream.
+func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
+	snapshot, changed, err := refreshTieredBillingGroup(relayInfo)
+	if err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeModelPriceError, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+	if snapshot == nil || !changed || snapshot.GroupRatio == 0 {
+		return nil
+	}
+
+	relayInfo.PriceData.FreeModel = false
+	if relayInfo.Billing == nil {
+		return PreConsumeBilling(c, snapshot.EstimatedQuotaAfterGroup, relayInfo)
+	}
+	if err := relayInfo.Billing.Reserve(snapshot.EstimatedQuotaAfterGroup); err != nil {
+		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+	}
+	relayInfo.FinalPreConsumedQuota = relayInfo.Billing.GetPreConsumedQuota()
+	return nil
+}
 
 // BuildTieredTokenParams constructs billingexpr.TokenParams from a dto.Usage,
 // normalizing P and C so they mean "tokens not separately priced by the

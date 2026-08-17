@@ -1,14 +1,21 @@
 package service
 
 import (
+	"errors"
 	"math"
 	"math/rand"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Claude Sonnet-style tiered expression: standard vs long-context
@@ -48,6 +55,160 @@ func makeRelayInfo(expr string, groupRatio float64, estPrompt, estCompletion int
 		TieredBillingSnapshot: snap,
 		FinalPreConsumedQuota: snap.EstimatedQuotaAfterGroup,
 	}
+}
+
+type reserveSpy struct {
+	reserved int
+	err      error
+	calls    []int
+	settled  []int
+}
+
+func (s *reserveSpy) Reserve(target int) error {
+	s.calls = append(s.calls, target)
+	if s.err != nil {
+		return s.err
+	}
+	if target > s.reserved {
+		s.reserved = target
+	}
+	return nil
+}
+
+func (s *reserveSpy) GetPreConsumedQuota() int { return s.reserved }
+func (s *reserveSpy) Settle(actual int) error {
+	s.settled = append(s.settled, actual)
+	return nil
+}
+func (s *reserveSpy) Refund(*gin.Context) {}
+func (s *reserveSpy) NeedsRefund() bool   { return false }
+
+func newTieredGroupRefreshInfo(currentRatio, selectedRatio float64, reserved int) (*relaycommon.RelayInfo, *reserveSpy) {
+	spy := &reserveSpy{reserved: reserved}
+	return &relaycommon.RelayInfo{
+		Billing:               spy,
+		FinalPreConsumedQuota: reserved,
+		PriceData:             types.PriceData{GroupRatioInfo: types.GroupRatioInfo{GroupRatio: selectedRatio}},
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode:               "tiered_expr",
+			ExprString:                flatExpr,
+			ExprHash:                  billingexpr.ExprHashString(flatExpr),
+			EstimatedQuotaBeforeGroup: 100,
+			GroupRatio:                currentRatio,
+			EstimatedQuotaAfterGroup:  billingexpr.QuotaRound(100 * currentRatio),
+			QuotaPerUnit:              testQuotaPerUnit,
+		},
+	}, spy
+}
+
+func TestPrepareTieredBillingForSelectedGroupEqualRatioIsNoOp(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info, spy := newTieredGroupRefreshInfo(1, 1, 100)
+
+	apiErr := PrepareTieredBillingForSelectedGroup(c, info)
+
+	require.Nil(t, apiErr)
+	assert.Empty(t, spy.calls)
+	assert.Equal(t, 100, spy.reserved)
+	assert.Equal(t, 100, info.FinalPreConsumedQuota)
+	assert.Equal(t, 1.0, info.TieredBillingSnapshot.GroupRatio)
+	assert.Equal(t, 100, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+}
+
+func TestPrepareTieredBillingForSelectedGroupReservesHigherFinalGroup(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info, spy := newTieredGroupRefreshInfo(1, 2, 100)
+
+	apiErr := PrepareTieredBillingForSelectedGroup(c, info)
+
+	require.Nil(t, apiErr)
+	assert.Equal(t, []int{200}, spy.calls)
+	assert.Equal(t, 200, spy.reserved)
+	assert.Equal(t, 200, info.FinalPreConsumedQuota)
+	assert.Equal(t, 2.0, info.TieredBillingSnapshot.GroupRatio)
+	assert.Equal(t, 200, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+}
+
+func TestPrepareTieredBillingForSelectedGroupCreatesSessionFromFreeToPaid(t *testing.T) {
+	truncate(t)
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	seedUser(t, 301, 1_000)
+	seedToken(t, 302, 301, "tiered-free-to-paid", 1_000)
+	info := &relaycommon.RelayInfo{
+		UserId:          301,
+		TokenId:         302,
+		TokenKey:        "tiered-free-to-paid",
+		OriginModelName: "tiered-model",
+		ForcePreConsume: true,
+		UserSetting:     dto.UserSetting{BillingPreference: "wallet_only"},
+		PriceData: types.PriceData{
+			FreeModel:      true,
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 2},
+		},
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode:               "tiered_expr",
+			EstimatedQuotaBeforeGroup: 100,
+			GroupRatio:                0,
+			EstimatedQuotaAfterGroup:  0,
+		},
+	}
+
+	apiErr := PrepareTieredBillingForSelectedGroup(c, info)
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, info.Billing)
+	assert.False(t, info.PriceData.FreeModel)
+	assert.Equal(t, 200, info.Billing.GetPreConsumedQuota())
+	assert.Equal(t, 200, info.FinalPreConsumedQuota)
+	userQuota, err := model.GetUserQuota(301, false)
+	require.NoError(t, err)
+	assert.Equal(t, 800, userQuota)
+	var token model.Token
+	require.NoError(t, model.DB.First(&token, 302).Error)
+	assert.Equal(t, 800, token.RemainQuota)
+	require.NoError(t, info.Billing.Settle(200))
+}
+
+func TestPrepareTieredBillingForSelectedGroupPaidToFreeSettlesToZero(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info, spy := newTieredGroupRefreshInfo(1, 0, 100)
+
+	apiErr := PrepareTieredBillingForSelectedGroup(c, info)
+
+	require.Nil(t, apiErr)
+	assert.Empty(t, spy.calls)
+	assert.Equal(t, 100, spy.reserved, "paid reservation remains available for settlement refund")
+	assert.Equal(t, 100, info.FinalPreConsumedQuota)
+	assert.Equal(t, 0.0, info.TieredBillingSnapshot.GroupRatio)
+	assert.Equal(t, 0, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+	ok, quota, result := TryTieredSettle(info, billingexpr.TokenParams{P: 1_000, C: 500})
+	require.True(t, ok)
+	require.NotNil(t, result)
+	assert.Zero(t, quota)
+	require.NoError(t, SettleBilling(c, info, quota))
+	assert.Equal(t, []int{0}, spy.settled)
+}
+
+func TestPrepareTieredBillingForSelectedGroupStopsOnReservationFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	reserveErr := errors.New("reserve final group quota")
+	info, spy := newTieredGroupRefreshInfo(1, 2, 100)
+	spy.err = reserveErr
+
+	apiErr := PrepareTieredBillingForSelectedGroup(c, info)
+
+	require.NotNil(t, apiErr)
+	assert.ErrorIs(t, apiErr, reserveErr)
+	assert.Equal(t, types.ErrorCodeUpdateDataError, apiErr.GetErrorCode())
+	assert.True(t, types.IsSkipRetryError(apiErr))
+	assert.Equal(t, []int{200}, spy.calls)
+	assert.Equal(t, 100, spy.reserved)
+	assert.Equal(t, 100, info.FinalPreConsumedQuota)
 }
 
 // ---------------------------------------------------------------------------

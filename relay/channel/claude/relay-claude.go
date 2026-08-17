@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relay/toolpolicy"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/relayconvert"
 	"github.com/QuantumNous/new-api/setting/model_setting"
@@ -202,6 +203,11 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	}
 	if claudeError := claudeResponse.GetClaudeError(); claudeError != nil && claudeError.Type != "" {
 		return types.WithClaudeError(*claudeError, http.StatusInternalServerError)
+	}
+	if policy, ok := toolpolicy.FromContext(c); ok {
+		if err := toolpolicy.ValidateClaudeResponse(policy, &claudeResponse); err != nil {
+			return toolpolicy.NewResponseValidationError(err)
+		}
 	}
 	maybeMarkClaudeRefusal(c, claudeResponse.StopReason)
 	if claudeInfo.Usage == nil {

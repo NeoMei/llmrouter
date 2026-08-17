@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relay/toolpolicy"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/relayconvert"
 	"github.com/QuantumNous/new-api/types"
@@ -307,6 +308,11 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	err = common.Unmarshal(responseBody, &geminiResponse)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+	}
+	if policy, ok := toolpolicy.FromContext(c); ok {
+		if err := toolpolicy.ValidateGeminiResponse(policy, &geminiResponse); err != nil {
+			return nil, toolpolicy.NewResponseValidationError(err)
+		}
 	}
 	if len(geminiResponse.Candidates) == 0 {
 		usage := buildUsageFromGeminiResponse(c, info, &geminiResponse)

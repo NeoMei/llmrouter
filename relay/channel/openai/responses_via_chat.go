@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relay/toolpolicy"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/relayconvert"
 	"github.com/QuantumNous/new-api/service/responsesstate"
@@ -34,6 +35,11 @@ func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	}
 	if oaiError := chatResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
+	}
+	if policy, ok := toolpolicy.FromContext(c); ok {
+		if err := toolpolicy.ValidateChatResponse(policy, &chatResp); err != nil {
+			return nil, toolpolicy.NewResponseValidationError(err)
+		}
 	}
 
 	if responseID := helper.GetResponseID(c); responseID != "" {

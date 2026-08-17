@@ -216,7 +216,7 @@ func EligibleCompletedResponse(response *dto.OpenAIResponsesResponse) bool {
 			return false
 		}
 		for _, content := range output.Content {
-			if content.Type == "refusal" {
+			if content.Type == "refusal" || strings.TrimSpace(content.Refusal) != "" {
 				return false
 			}
 		}

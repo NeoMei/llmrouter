@@ -638,6 +638,7 @@ func TestEligibleCompletedResponse(t *testing.T) {
 		}},
 		{name: "output refusal", mutate: func(r *dto.OpenAIResponsesResponse) { r.Output[0].Type = "refusal" }},
 		{name: "content refusal", mutate: func(r *dto.OpenAIResponsesResponse) { r.Output[0].Content[0].Type = "refusal" }},
+		{name: "content refusal payload", mutate: func(r *dto.OpenAIResponsesResponse) { r.Output[0].Content[0].Refusal = "not allowed" }},
 	}
 
 	for _, tt := range tests {

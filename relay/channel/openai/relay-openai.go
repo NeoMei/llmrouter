@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/openrouter"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relay/toolpolicy"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/relayconvert"
 	"github.com/QuantumNous/new-api/types"
@@ -219,6 +220,11 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 
 	if oaiError := simpleResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
+	}
+	if policy, ok := toolpolicy.FromContext(c); ok {
+		if err := toolpolicy.ValidateChatResponse(policy, &simpleResponse); err != nil {
+			return nil, toolpolicy.NewResponseValidationError(err)
+		}
 	}
 
 	for _, choice := range simpleResponse.Choices {

@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relay/toolpolicy"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 
@@ -214,28 +215,18 @@ func ollamaChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		println("ollama non-stream raw resp:", raw)
 	}
 
-	lines := strings.Split(raw, "\n")
+	chunks, err := decodeOllamaNonStreamChunks(body)
+	if err != nil {
+		return nil, toolpolicy.NewResponseValidationError(err)
+	}
 	var (
 		aggContent       strings.Builder
 		reasoningBuilder strings.Builder
 		lastChunk        ollamaChatStreamChunk
-		parsedAny        bool
 		toolCallIndex    int
 		toolCalls        []dto.ToolCallResponse
 	)
-	for _, ln := range lines {
-		ln = strings.TrimSpace(ln)
-		if ln == "" {
-			continue
-		}
-		var ck ollamaChatStreamChunk
-		if err := common.Unmarshal([]byte(ln), &ck); err != nil {
-			if len(lines) == 1 {
-				return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
-			}
-			continue
-		}
-		parsedAny = true
+	for _, ck := range chunks {
 		lastChunk = ck
 		if ck.Message != nil && len(ck.Message.Thinking) > 0 {
 			raw := strings.TrimSpace(string(ck.Message.Thinking))
@@ -262,37 +253,6 @@ func ollamaChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		}
 	}
 
-	if !parsedAny {
-		var single ollamaChatStreamChunk
-		if err := common.Unmarshal(body, &single); err != nil {
-			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
-		}
-		lastChunk = single
-		if single.Message != nil {
-			if len(single.Message.Thinking) > 0 {
-				raw := strings.TrimSpace(string(single.Message.Thinking))
-				if raw != "" && raw != "null" {
-					// Unmarshal the JSON string to get the actual content without quotes
-					var thinkingContent string
-					if err := common.Unmarshal(single.Message.Thinking, &thinkingContent); err == nil {
-						reasoningBuilder.WriteString(thinkingContent)
-					} else {
-						// Fallback to raw string if it's not a JSON string
-						reasoningBuilder.WriteString(raw)
-					}
-				}
-			}
-			aggContent.WriteString(single.Message.Content)
-			if len(single.Message.ToolCalls) > 0 {
-				var converted []dto.ToolCallResponse
-				converted, toolCallIndex = ollamaToolCallsToOpenAI(single.Message.ToolCalls, toolCallIndex, false)
-				toolCalls = append(toolCalls, converted...)
-			}
-		} else {
-			aggContent.WriteString(single.Response)
-		}
-	}
-
 	model := lastChunk.Model
 	if model == "" {
 		model = info.UpstreamModelName
@@ -310,9 +270,11 @@ func ollamaChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 
 	msg := dto.Message{Role: "assistant", Content: contentPtr(content)}
 	if len(toolCalls) > 0 {
-		if rawToolCalls, err := common.Marshal(toolCalls); err == nil {
-			msg.ToolCalls = rawToolCalls
+		rawToolCalls, err := common.Marshal(toolCalls)
+		if err != nil {
+			return nil, toolpolicy.NewResponseValidationError(err)
 		}
+		msg.ToolCalls = rawToolCalls
 	}
 	if rc := reasoningBuilder.String(); rc != "" {
 		msg.ReasoningContent = &rc
@@ -329,9 +291,55 @@ func ollamaChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		}},
 		Usage: *usage,
 	}
-	out, _ := common.Marshal(full)
+	if err := toolpolicy.ValidateChatResponseContext(c, &full); err != nil {
+		return nil, toolpolicy.NewResponseValidationError(err)
+	}
+	out, err := common.Marshal(full)
+	if err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+	}
 	service.IOCopyBytesGracefully(c, resp, out)
 	return usage, nil
+}
+
+// decodeOllamaNonStreamChunks accepts Ollama's single JSON response (compact or
+// pretty-printed) and its compact NDJSON response variant. Duplicate keys must
+// be rejected before decoding into interface fields can collapse them.
+func decodeOllamaNonStreamChunks(body []byte) ([]ollamaChatStreamChunk, error) {
+	wholeErr := toolpolicy.ValidateRawResponseJSON(body)
+	if wholeErr == nil {
+		var chunk ollamaChatStreamChunk
+		if err := common.Unmarshal(body, &chunk); err != nil {
+			return nil, err
+		}
+		return []ollamaChatStreamChunk{chunk}, nil
+	}
+
+	lines := strings.Split(string(body), "\n")
+	nonEmptyLines := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			nonEmptyLines = append(nonEmptyLines, line)
+		}
+	}
+	if len(nonEmptyLines) <= 1 {
+		return nil, wholeErr
+	}
+
+	chunks := make([]ollamaChatStreamChunk, 0, len(nonEmptyLines))
+	for _, line := range nonEmptyLines {
+		lineBytes := []byte(line)
+		if err := toolpolicy.ValidateRawResponseJSON(lineBytes); err != nil {
+			return nil, err
+		}
+		var chunk ollamaChatStreamChunk
+		if err := common.Unmarshal(lineBytes, &chunk); err != nil {
+			return nil, err
+		}
+		chunks = append(chunks, chunk)
+	}
+	return chunks, nil
 }
 
 func contentPtr(s string) *string {

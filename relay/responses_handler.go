@@ -139,7 +139,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	}
 	var requestBody io.Reader
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
-		body, size, getBody, closer, err := newResponsesPassthroughBody(request)
+		body, size, getBody, closer, err := newResponsesPassthroughBody(c, request, info.RelayMode == relayconstant.RelayModeResponses)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
@@ -242,18 +242,66 @@ func normalizeResponsesStore(request *dto.OpenAIResponsesRequest) {
 	}
 }
 
-func newResponsesPassthroughBody(request *dto.OpenAIResponsesRequest) (
+func newResponsesPassthroughBody(c *gin.Context, request *dto.OpenAIResponsesRequest, normalizeStore bool) (
 	body io.Reader,
 	size int64,
 	getBody func() (io.ReadCloser, error),
 	closer io.Closer,
 	err error,
 ) {
-	jsonData, err := common.Marshal(request)
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return nil, 0, nil, nil, err
+	}
+	reader, err := storage.NewReader()
+	if err != nil {
+		return nil, 0, nil, nil, err
+	}
+	rawRequest, readErr := io.ReadAll(reader)
+	closeErr := reader.Close()
+	if readErr != nil {
+		return nil, 0, nil, nil, readErr
+	}
+	if closeErr != nil {
+		return nil, 0, nil, nil, closeErr
+	}
+	jsonData, err := patchResponsesPassthroughBody(rawRequest, request, normalizeStore)
 	if err != nil {
 		return nil, 0, nil, nil, err
 	}
 	return relaycommon.NewOutboundJSONBody(jsonData)
+}
+
+// patchResponsesPassthroughBody keeps pass-through extensions byte-precise at
+// the JSON value level while applying only router-owned Responses mutations.
+func patchResponsesPassthroughBody(rawRequest []byte, request *dto.OpenAIResponsesRequest, normalizeStore bool) ([]byte, error) {
+	if request == nil {
+		return nil, errors.New("prepared responses request is nil")
+	}
+	var payload map[string]json.RawMessage
+	if err := common.Unmarshal(rawRequest, &payload); err != nil {
+		return nil, fmt.Errorf("invalid responses pass-through request: %w", err)
+	}
+	if normalizeStore {
+		if _, exists := payload["store"]; !exists {
+			payload["store"] = json.RawMessage("false")
+		}
+	}
+	if rawPrevious, exists := payload["previous_response_id"]; exists && request.PreviousResponseID == "" {
+		var previousID string
+		if err := common.Unmarshal(rawPrevious, &previousID); err != nil {
+			return nil, fmt.Errorf("invalid previous_response_id in pass-through request: %w", err)
+		}
+		if previousID != "" {
+			payload["input"] = append(json.RawMessage(nil), request.Input...)
+			delete(payload, "previous_response_id")
+		}
+	}
+	patched, err := common.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("encode responses pass-through request: %w", err)
+	}
+	return patched, nil
 }
 
 func responsesContinuityAPIError(err error) *types.NewAPIError {

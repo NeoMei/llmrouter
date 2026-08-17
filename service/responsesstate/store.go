@@ -224,13 +224,13 @@ func EligibleCompletedResponse(response *dto.OpenAIResponsesResponse) bool {
 	return true
 }
 
-func materializedInputItems(raw json.RawMessage, label string) ([]any, error) {
+func materializedInputItems(raw json.RawMessage, label string) ([]json.RawMessage, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
 	switch common.GetJsonType(raw) {
 	case "array":
-		var items []any
+		var items []json.RawMessage
 		if err := common.Unmarshal(raw, &items); err != nil {
 			return nil, fmt.Errorf("invalid %s input: %w", label, err)
 		}
@@ -240,11 +240,15 @@ func materializedInputItems(raw json.RawMessage, label string) ([]any, error) {
 		if err := common.Unmarshal(raw, &text); err != nil {
 			return nil, fmt.Errorf("invalid %s input: %w", label, err)
 		}
-		return []any{map[string]any{
-			"type":    "message",
-			"role":    "user",
-			"content": text,
-		}}, nil
+		item, err := common.Marshal(struct {
+			Type    string `json:"type"`
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		}{Type: "message", Role: "user", Content: text})
+		if err != nil {
+			return nil, fmt.Errorf("encode %s string input: %w", label, err)
+		}
+		return []json.RawMessage{item}, nil
 	default:
 		return nil, fmt.Errorf("invalid %s input: expected string or array", label)
 	}
@@ -254,7 +258,7 @@ func materializedInputItems(raw json.RawMessage, label string) ([]any, error) {
 // request input. Stored turns contain only their own input and output, so
 // replay and persistence grow linearly with the number of retained turns.
 func Expand(ctx context.Context, store Store, expected Scope, request json.RawMessage) (Expansion, error) {
-	var payload map[string]any
+	var payload map[string]json.RawMessage
 	if err := common.Unmarshal(request, &payload); err != nil {
 		return Expansion{}, fmt.Errorf("invalid responses request: %w", err)
 	}
@@ -315,13 +319,13 @@ func Expand(ctx context.Context, store Store, expected Scope, request json.RawMe
 		return Expansion{}, err
 	}
 
-	accumulated := make([]any, 0)
+	accumulated := make([]json.RawMessage, 0)
 	for i := len(records) - 1; i >= 0; i-- {
 		priorInput, err := materializedInputItems(records[i].Input, "stored")
 		if err != nil {
 			return Expansion{}, err
 		}
-		var priorOutput []any
+		var priorOutput []json.RawMessage
 		if err := common.Unmarshal(records[i].Output, &priorOutput); err != nil {
 			return Expansion{}, fmt.Errorf("invalid stored output: %w", err)
 		}

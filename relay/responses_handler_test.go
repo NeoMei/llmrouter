@@ -243,28 +243,59 @@ func TestNewResponsesPassthroughBodyUsesNormalizedPreparedRequest(t *testing.T) 
 		{name: "explicit null", store: json.RawMessage(`null`), wantStore: json.RawMessage(`null`)},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			rawRequest := `{
+				"model":"model-a",
+				"previous_response_id":"resp_parent",
+				"input":[{"type":"message","role":"user","content":"unexpanded"}],
+				"background":true,
+				"vendor_extension":{"large":9007199254740993}`
+			if len(tt.store) > 0 {
+				rawRequest += `,"store":` + string(tt.store)
+			}
+			rawRequest += `}`
+			gin.SetMode(gin.TestMode)
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(rawRequest))
+			c.Request.Header.Set("Content-Type", "application/json")
+			defer common.CleanupBodyStorage(c)
+
 			request := &dto.OpenAIResponsesRequest{
-				Model: "model-a", Input: json.RawMessage(`[{"type":"message","role":"user","content":"materialized"}]`),
+				Model: "model-a", Input: json.RawMessage(`[{"type":"message","role":"user","content":"materialized","large":9007199254740993}]`),
 				Store: tt.store,
 			}
 			normalizeResponsesStore(request)
-			body, _, getBody, closer, err := newResponsesPassthroughBody(request)
+			body, _, getBody, closer, err := newResponsesPassthroughBody(c, request, true)
 			require.NoError(t, err)
 			defer closer.Close()
 			first, err := io.ReadAll(body)
 			require.NoError(t, err)
-			var captured map[string]any
+			var captured map[string]json.RawMessage
 			require.NoError(t, common.Unmarshal(first, &captured))
 			assert.Contains(t, captured, "store")
-			assert.JSONEq(t, string(tt.wantStore), string(mustJSONBytes(t, captured["store"])))
+			assert.JSONEq(t, string(tt.wantStore), string(captured["store"]))
 			assert.NotContains(t, string(first), "previous_response_id")
 			assert.Contains(t, string(first), "materialized")
+			assert.NotContains(t, string(first), "unexpanded")
+			assert.JSONEq(t, `true`, string(captured["background"]))
+			assert.JSONEq(t, `{"large":9007199254740993}`, string(captured["vendor_extension"]))
+			assert.Equal(t, 2, strings.Count(string(first), "9007199254740993"),
+				"vendor and materialized input integers must remain exact")
 			replay, err := getBody()
 			require.NoError(t, err)
 			defer replay.Close()
 			second, err := io.ReadAll(replay)
 			require.NoError(t, err)
 			assert.Equal(t, first, second)
+
+			originalStorage, err := common.GetBodyStorage(c)
+			require.NoError(t, err)
+			originalReader, err := originalStorage.NewReader()
+			require.NoError(t, err)
+			defer originalReader.Close()
+			originalAfterPatch, err := io.ReadAll(originalReader)
+			require.NoError(t, err)
+			assert.JSONEq(t, rawRequest, string(originalAfterPatch),
+				"building the outbound replay body must not consume or rewrite BodyStorage")
 		})
 	}
 }

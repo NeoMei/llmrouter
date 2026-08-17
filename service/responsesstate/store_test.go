@@ -519,6 +519,41 @@ func TestExpandNormalizesStoredStringInput(t *testing.T) {
 	assert.JSONEq(t, `{"type":"message","role":"user","content":"first"}`, string(payload.Input[0]))
 }
 
+func TestExpandPreservesLargeIntegersAcrossRequestAndStoredItems(t *testing.T) {
+	store := seededStore(t,
+		`[{"type":"message","role":"user","content":[{"type":"input_text","metadata":{"turn":9007199254740993}}]}]`,
+		`[{"type":"function_call","name":"lookup","arguments":{"turn":9007199254740993}}]`,
+	)
+	request := json.RawMessage(`{
+		"model":"model-a",
+		"previous_response_id":"resp_1",
+		"metadata":{"request":9007199254740993},
+		"client_metadata":{"task_id":"task-a","request":9007199254740993},
+		"instructions":{"request":9007199254740993},
+		"input":[{"type":"function_call_output","call_id":"call_1","output":{"request":9007199254740993}}]
+	}`)
+
+	expansion, err := Expand(context.Background(), store, testScope(), request)
+	require.NoError(t, err)
+	require.NotContains(t, string(expansion.Request), `"previous_response_id"`)
+	assert.Equal(t, 6, strings.Count(string(expansion.Request), "9007199254740993"),
+		"every large integer must survive without float64 rounding")
+
+	var payload map[string]json.RawMessage
+	require.NoError(t, common.Unmarshal(expansion.Request, &payload))
+	assert.JSONEq(t, `{"request":9007199254740993}`, string(payload["metadata"]))
+	assert.JSONEq(t, `{"task_id":"task-a","request":9007199254740993}`, string(payload["client_metadata"]))
+	assert.JSONEq(t, `{"request":9007199254740993}`, string(payload["instructions"]))
+
+	var input []json.RawMessage
+	require.NoError(t, common.Unmarshal(payload["input"], &input))
+	require.Len(t, input, 3)
+	assert.Contains(t, string(input[0]), "9007199254740993")
+	assert.Contains(t, string(input[1]), "9007199254740993")
+	assert.Contains(t, string(input[2]), "9007199254740993")
+	assert.Contains(t, string(expansion.CurrentInput), "9007199254740993")
+}
+
 func TestExpandWithParentRejectsNilStore(t *testing.T) {
 	_, err := Expand(context.Background(), nil, testScope(), json.RawMessage(`{"previous_response_id":"resp_1","input":[]}`))
 	require.Error(t, err)

@@ -20,6 +20,8 @@ type BodyStorage interface {
 	Size() int64
 	// IsDisk 是否是磁盘存储
 	IsDisk() bool
+	// NewReader 返回从头开始的独立读取器
+	NewReader() (io.ReadCloser, error)
 }
 
 // ErrStorageClosed 存储已关闭错误
@@ -86,6 +88,15 @@ func (m *memoryStorage) Size() int64 {
 
 func (m *memoryStorage) IsDisk() bool {
 	return false
+}
+
+func (m *memoryStorage) NewReader() (io.ReadCloser, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if atomic.LoadInt32(&m.closed) == 1 {
+		return nil, ErrStorageClosed
+	}
+	return io.NopCloser(bytes.NewReader(m.data)), nil
 }
 
 // diskStorage 磁盘存储实现
@@ -235,6 +246,19 @@ func (d *diskStorage) Size() int64 {
 
 func (d *diskStorage) IsDisk() bool {
 	return true
+}
+
+func (d *diskStorage) NewReader() (io.ReadCloser, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if atomic.LoadInt32(&d.closed) == 1 {
+		return nil, ErrStorageClosed
+	}
+	file, err := os.Open(d.filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open body cache file for replay: %w", err)
+	}
+	return file, nil
 }
 
 // CreateBodyStorage 根据数据大小创建合适的存储

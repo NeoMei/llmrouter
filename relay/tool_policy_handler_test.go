@@ -103,3 +103,150 @@ func TestRelayHelpersRejectInvalidToolDefinitionsBeforeAdaptorAndClearOldPolicy(
 		})
 	}
 }
+
+func TestFinalOutboundPolicyMatchesOverriddenBodyAcrossProtocols(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name       string
+		format     types.RelayFormat
+		request    any
+		body       string
+		override   map[string]any
+		allowed    *toolpolicy.Call
+		disallowed toolpolicy.Call
+		wantNoTool bool
+	}{
+		{
+			name: "chat auto to none", format: types.RelayFormatOpenAI,
+			request:    &dto.GeneralOpenAIRequest{},
+			body:       `{"tools":[{"type":"function","function":{"name":"lookup"}}],"tool_choice":"auto"}`,
+			override:   map[string]any{"tool_choice": "none"},
+			disallowed: toolpolicy.Call{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{}`)},
+		},
+		{
+			name: "responses none to named with replacement", format: types.RelayFormatOpenAIResponses,
+			request: &dto.OpenAIResponsesRequest{},
+			body:    `{"tools":[{"type":"function","name":"lookup"}],"tool_choice":"none"}`,
+			override: map[string]any{
+				"tools":       []any{map[string]any{"type": "function", "name": "save"}},
+				"tool_choice": map[string]any{"type": "function", "name": "save"},
+			},
+			allowed:    &toolpolicy.Call{ID: "call_1", Name: "save", Arguments: json.RawMessage(`{}`)},
+			disallowed: toolpolicy.Call{ID: "call_2", Name: "lookup", Arguments: json.RawMessage(`{}`)},
+		},
+		{
+			name: "claude none to auto", format: types.RelayFormatClaude,
+			request:    &dto.ClaudeRequest{},
+			body:       `{"tools":[{"name":"lookup","input_schema":{"type":"object"}}],"tool_choice":{"type":"none"}}`,
+			override:   map[string]any{"tool_choice": map[string]any{"type": "auto"}},
+			allowed:    &toolpolicy.Call{ID: "toolu_1", Name: "lookup", Arguments: json.RawMessage(`{}`)},
+			disallowed: toolpolicy.Call{ID: "toolu_2", Name: "missing", Arguments: json.RawMessage(`{}`)},
+		},
+		{
+			name: "gemini none to any with replacement", format: types.RelayFormatGemini,
+			request: &dto.GeminiChatRequest{},
+			body: `{"contents":[],"tools":[{"functionDeclarations":[{"name":"lookup"}]}],` +
+				`"toolConfig":{"functionCallingConfig":{"mode":"NONE"}}}`,
+			override: map[string]any{
+				"tools": []any{map[string]any{"functionDeclarations": []any{map[string]any{"name": "save"}}}},
+				"toolConfig": map[string]any{
+					"functionCallingConfig": map[string]any{
+						"mode": "ANY", "allowedFunctionNames": []string{"save"},
+					},
+				},
+			},
+			allowed:    &toolpolicy.Call{ID: "call_1", Name: "save", Arguments: json.RawMessage(`{}`)},
+			disallowed: toolpolicy.Call{ID: "call_2", Name: "lookup", Arguments: json.RawMessage(`{}`)},
+		},
+		{
+			name: "responses tool deletion", format: types.RelayFormatOpenAIResponses,
+			request: &dto.OpenAIResponsesRequest{},
+			body:    `{"tools":[{"type":"function","name":"lookup"}],"tool_choice":"auto"}`,
+			override: map[string]any{
+				"operations": []any{map[string]any{"path": "tools", "mode": "delete"}},
+			},
+			disallowed: toolpolicy.Call{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{}`)},
+			wantNoTool: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/test", nil)
+			info := &relaycommon.RelayInfo{
+				RelayFormat: tc.format,
+				ChannelMeta: &relaycommon.ChannelMeta{ParamOverride: tc.override},
+			}
+
+			outbound, apiErr := finalizeOutboundToolPolicy(c, info, tc.request, []byte(tc.body))
+			require.Nil(t, apiErr)
+			require.NotEqual(t, []byte(tc.body), outbound, "the fixture must exercise an effective override")
+			policy, ok := toolpolicy.FromContext(c)
+			require.True(t, ok)
+			bodyPolicy, err := toolpolicy.BuildFromOutboundJSON(tc.format, outbound)
+			require.NoError(t, err)
+			assert.Equal(t, bodyPolicy.HasCatalog(), policy.HasCatalog())
+			assert.Equal(t, tc.wantNoTool, !policy.HasCatalog())
+			if tc.allowed != nil {
+				require.NoError(t, policy.ValidateCall(*tc.allowed))
+				require.NoError(t, bodyPolicy.ValidateCall(*tc.allowed))
+			}
+			assert.Error(t, policy.ValidateCall(tc.disallowed))
+			assert.Error(t, bodyPolicy.ValidateCall(tc.disallowed))
+		})
+	}
+}
+
+func TestInvalidParamOverrideFailsBeforePolicyCaptureAndClearsOldAttempt(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	old, err := toolpolicy.BuildFromResponses(json.RawMessage(`[{"type":"function","name":"old"}]`), nil)
+	require.NoError(t, err)
+	toolpolicy.Set(c, old)
+
+	info := &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatOpenAI,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ParamOverride: map[string]any{
+				"operations": []any{map[string]any{"path": "tool_choice", "mode": "trim_prefix"}},
+			},
+		},
+	}
+	body, apiErr := finalizeOutboundToolPolicy(
+		c, info, &dto.GeneralOpenAIRequest{},
+		[]byte(`{"tools":[{"type":"function","function":{"name":"lookup"}}],"tool_choice":"auto"}`),
+	)
+
+	require.NotNil(t, apiErr)
+	assert.Nil(t, body)
+	assert.Equal(t, types.ErrorCodeChannelParamOverrideInvalid, apiErr.GetErrorCode())
+	assert.True(t, types.IsSkipRetryError(apiErr))
+	_, ok := toolpolicy.FromContext(c)
+	assert.False(t, ok)
+}
+
+func TestSemanticallyInvalidOverrideFailsBeforePolicyCapture(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatOpenAIResponses,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ParamOverride: map[string]any{"tool_choice": "sometimes"},
+		},
+	}
+
+	body, apiErr := finalizeOutboundToolPolicy(
+		c, info, &dto.OpenAIResponsesRequest{},
+		[]byte(`{"tools":[{"type":"function","name":"lookup"}],"tool_choice":"auto"}`),
+	)
+
+	require.NotNil(t, apiErr)
+	assert.Nil(t, body)
+	assert.Equal(t, types.ErrorCodeChannelParamOverrideInvalid, apiErr.GetErrorCode())
+	assert.True(t, types.IsSkipRetryError(apiErr))
+	_, ok := toolpolicy.FromContext(c)
+	assert.False(t, ok)
+}

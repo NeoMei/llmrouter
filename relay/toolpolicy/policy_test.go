@@ -64,6 +64,73 @@ func TestPolicyValidatesCallShapeAndKind(t *testing.T) {
 	}
 }
 
+func TestPolicyRejectsDuplicateArgumentKeysRecursivelyWithoutLosingBigIntegers(t *testing.T) {
+	policy, err := BuildFromResponses(json.RawMessage(`[
+		{"type":"function","name":"lookup"},
+		{"type":"custom","name":"shell"}
+	]`), nil)
+	require.NoError(t, err)
+
+	require.NoError(t, policy.ValidateCall(Call{
+		ID: "call_1", Name: "lookup",
+		Arguments: json.RawMessage(`{"n":184467440737095516160,"nested":{"n":184467440737095516161}}`),
+	}))
+	require.NoError(t, policy.ValidateCall(Call{
+		ID: "call_2", Name: "shell", Kind: ToolKindCustom,
+		Arguments: json.RawMessage(`{"n":184467440737095516160}`),
+	}))
+	require.NoError(t, policy.ValidateCall(Call{
+		ID: "call_3", Name: "shell", Kind: ToolKindCustom,
+		Arguments: json.RawMessage(`"echo 184467440737095516160"`),
+	}))
+
+	assert.ErrorIs(t, policy.ValidateCall(Call{
+		ID: "call_4", Name: "lookup",
+		Arguments: json.RawMessage(`{"nested":{"x":1,"x":2}}`),
+	}), ErrMalformedArguments)
+	assert.ErrorIs(t, policy.ValidateCall(Call{
+		ID: "call_5", Name: "shell", Kind: ToolKindCustom,
+		Arguments: json.RawMessage(`{"nested":{"x":1,"x":2}}`),
+	}), ErrMalformedArguments)
+}
+
+func TestBuildFromOutboundJSONUsesFinalProtocolShape(t *testing.T) {
+	tests := []struct {
+		name   string
+		format types.RelayFormat
+		body   string
+		call   Call
+	}{
+		{
+			name: "chat", format: types.RelayFormatOpenAI,
+			body: `{"tools":[{"type":"function","function":{"name":"lookup"}}],"tool_choice":"auto"}`,
+			call: Call{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{}`)},
+		},
+		{
+			name: "responses", format: types.RelayFormatOpenAIResponses,
+			body: `{"tools":[{"type":"function","name":"lookup"}],"tool_choice":"auto"}`,
+			call: Call{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{}`)},
+		},
+		{
+			name: "claude", format: types.RelayFormatClaude,
+			body: `{"tools":[{"name":"lookup","input_schema":{"type":"object"}}],"tool_choice":{"type":"auto"}}`,
+			call: Call{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{}`)},
+		},
+		{
+			name: "gemini", format: types.RelayFormatGemini,
+			body: `{"contents":[],"tools":[{"functionDeclarations":[{"name":"lookup"}]}],"toolConfig":{"functionCallingConfig":{"mode":"AUTO"}}}`,
+			call: Call{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{}`)},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			policy, err := BuildFromOutboundJSON(tc.format, []byte(tc.body))
+			require.NoError(t, err)
+			require.NoError(t, policy.ValidateCall(tc.call))
+		})
+	}
+}
+
 func TestPolicyChoiceNoneRejectsEveryCall(t *testing.T) {
 	policy, err := BuildFromChat([]dto.ToolCallRequest{{Type: "function", Function: dto.FunctionRequest{Name: "lookup"}}}, "none")
 	require.NoError(t, err)

@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -127,6 +128,40 @@ func BuildFromGemini(tools json.RawMessage, toolConfig *dto.ToolConfig) (Policy,
 	return newPolicy(declarations, choice)
 }
 
+// BuildFromOutboundJSON reconstructs the effective policy from the exact JSON
+// body that will be sent upstream. It is intentionally called after request
+// conversion, disabled-field filtering, and parameter overrides.
+func BuildFromOutboundJSON(format types.RelayFormat, body []byte) (Policy, error) {
+	switch format {
+	case types.RelayFormatOpenAI:
+		var request dto.GeneralOpenAIRequest
+		if err := common.UnmarshalUnique(body, &request); err != nil {
+			return Policy{}, invalidPolicyf("invalid final chat request: %v", err)
+		}
+		return BuildFromChat(request.Tools, request.ToolChoice)
+	case types.RelayFormatOpenAIResponses, types.RelayFormatOpenAIResponsesCompaction:
+		var request dto.OpenAIResponsesRequest
+		if err := common.UnmarshalUnique(body, &request); err != nil {
+			return Policy{}, invalidPolicyf("invalid final responses request: %v", err)
+		}
+		return BuildFromResponses(request.Tools, request.ToolChoice)
+	case types.RelayFormatClaude:
+		var request dto.ClaudeRequest
+		if err := common.UnmarshalUnique(body, &request); err != nil {
+			return Policy{}, invalidPolicyf("invalid final claude request: %v", err)
+		}
+		return BuildFromClaude(request.Tools, request.ToolChoice)
+	case types.RelayFormatGemini:
+		var request dto.GeminiChatRequest
+		if err := common.UnmarshalUnique(body, &request); err != nil {
+			return Policy{}, invalidPolicyf("invalid final gemini request: %v", err)
+		}
+		return BuildFromGemini(request.Tools, request.ToolConfig)
+	default:
+		return Policy{}, invalidPolicyf("unsupported final relay format %q", format)
+	}
+}
+
 func (p Policy) HasCatalog() bool {
 	return len(p.allowed) > 0
 }
@@ -162,14 +197,22 @@ func (p Policy) ValidateCall(call Call) error {
 			return fmt.Errorf("%w: %q is outside the effective tool choice", ErrDisallowedTool, name)
 		}
 	}
-	if !common.ValidJSON(call.Arguments) {
-		return fmt.Errorf("%w: arguments are not valid JSON", ErrMalformedArguments)
-	}
 	argumentType := common.GetJsonType(call.Arguments)
-	if kind == ToolKindFunction && argumentType != "object" {
+	switch {
+	case kind == ToolKindFunction && argumentType == "object",
+		kind == ToolKindCustom && argumentType == "object":
+		var object map[string]json.RawMessage
+		if err := common.UnmarshalUnique(call.Arguments, &object); err != nil {
+			return fmt.Errorf("%w: %v", ErrMalformedArguments, err)
+		}
+	case kind == ToolKindCustom && argumentType == "string":
+		var input string
+		if err := common.UnmarshalUnique(call.Arguments, &input); err != nil {
+			return fmt.Errorf("%w: %v", ErrMalformedArguments, err)
+		}
+	case kind == ToolKindFunction:
 		return fmt.Errorf("%w: function arguments must be an object", ErrMalformedArguments)
-	}
-	if kind == ToolKindCustom && argumentType != "object" && argumentType != "string" {
+	default:
 		return fmt.Errorf("%w: custom input must be a string or object", ErrMalformedArguments)
 	}
 	return nil

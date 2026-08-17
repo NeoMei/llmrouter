@@ -127,6 +127,12 @@ func chatCompletionsViaResponses(c *gin.Context, info *relaycommon.RelayInfo, ad
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
+	if err := captureOutboundToolPolicy(c, info, convertedRequest, jsonData); err != nil {
+		if len(info.ParamOverride) > 0 {
+			return nil, newAPIErrorFromParamOverride(err)
+		}
+		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+	}
 
 	body, size, getBody, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 	if err != nil {

@@ -118,11 +118,10 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
-	policy, err := toolpolicy.BuildFromResponses(request.Tools, request.ToolChoice)
+	requestPolicy, err := toolpolicy.BuildFromResponses(request.Tools, request.ToolChoice)
 	if err != nil {
 		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 	}
-	toolpolicy.Set(c, policy)
 
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {
@@ -149,6 +148,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	}
 	var requestBody io.Reader
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
+		toolpolicy.Set(c, requestPolicy)
 		body, size, getBody, closer, err := newResponsesPassthroughBody(c, request, info.RelayMode == relayconstant.RelayModeResponses)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
@@ -174,12 +174,9 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 
-		// apply param override
-		if len(info.ParamOverride) > 0 {
-			jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
-			if err != nil {
-				return newAPIErrorFromParamOverride(err)
-			}
+		jsonData, policyErr := finalizeOutboundToolPolicy(c, info, convertedRequest, jsonData)
+		if policyErr != nil {
+			return policyErr
 		}
 
 		logger.LogDebug(c, "requestBody: %s", jsonData)

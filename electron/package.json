@@ -126,6 +126,7 @@
     },
     "linux": {
       "icon": "icon.png",
+      "maintainer": "QuantumNous <support@quantumnous.com>",
       "target": [
         "AppImage",
         "deb"

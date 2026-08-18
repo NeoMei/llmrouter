@@ -146,6 +146,13 @@ func (v *StreamValidator) Accept(event json.RawMessage) ([]json.RawMessage, erro
 	if err := ValidateRawResponseJSON(raw); err != nil {
 		return nil, v.fail(err)
 	}
+	hasError, err := validateStreamFieldTypes(raw)
+	if err != nil {
+		return nil, v.fail(err)
+	}
+	if hasError {
+		return nil, v.fail(fmt.Errorf("%w: upstream stream returned an error terminal", ErrMalformedToolCall))
+	}
 
 	var envelope streamEnvelope
 	if err := common.UnmarshalUnique(raw, &envelope); err != nil {
@@ -155,7 +162,7 @@ func (v *StreamValidator) Accept(event json.RawMessage) ([]json.RawMessage, erro
 	sequence := v.sequence
 	owners := make(map[*pendingStreamCall]struct{})
 	toolRelated := false
-	if v.responseGate != nil || v.responseEnded {
+	if v.responseEnded {
 		return nil, v.fail(fmt.Errorf("%w: frame arrived after responses terminal", ErrMalformedToolCall))
 	}
 	if v.chatGate != nil && len(envelope.Choices) == 0 && envelope.Type == "" {
@@ -243,7 +250,10 @@ func (v *StreamValidator) acceptChatFrame(sequence uint64, envelope *streamEnvel
 				toolIndex = *delta.Index
 			}
 			alias := "chat:" + strconv.Itoa(choice.Index) + ":" + strconv.Itoa(toolIndex)
-			call := v.resolveCall([]string{alias}, "chat", choice.Index, sequence)
+			call, err := v.resolveCall([]string{alias}, "chat", choice.Index, sequence, false)
+			if err != nil {
+				return false, err
+			}
 			owners[call] = struct{}{}
 			call.id += delta.ID
 			call.name += delta.Function.Name
@@ -299,8 +309,14 @@ func (v *StreamValidator) acceptResponsesFrame(sequence uint64, envelope *stream
 		if envelope.Item == nil || !isStreamToolItem(envelope.Item.Type) {
 			return false, nil
 		}
-		call := v.resolveResponsesCall(sequence, envelope.OutputIndex, envelope.ItemID, envelope.CallID, envelope.Item)
+		call, err := v.resolveResponsesCall(sequence, envelope.OutputIndex, envelope.ItemID, envelope.CallID, envelope.Item, false)
+		if err != nil {
+			return false, err
+		}
 		owners[call] = struct{}{}
+		gate := v.ensureTerminalGate("responses-terminal", sequence)
+		v.responseGate = gate
+		owners[gate] = struct{}{}
 		if err := v.applyResponsesItem(call, envelope.Item); err != nil {
 			return false, err
 		}
@@ -319,12 +335,18 @@ func (v *StreamValidator) acceptResponsesFrame(sequence uint64, envelope *stream
 		if strings.Contains(eventType, "custom_tool_call_input") {
 			kind = ToolKindCustom
 		}
-		call := v.resolveResponsesCall(sequence, envelope.OutputIndex, envelope.ItemID, envelope.CallID, nil)
+		call, err := v.resolveResponsesCall(sequence, envelope.OutputIndex, envelope.ItemID, envelope.CallID, nil, false)
+		if err != nil {
+			return false, err
+		}
 		if call.kind != "" && call.kind != kind {
 			return false, fmt.Errorf("%w: stream changed tool kind", ErrMalformedToolCall)
 		}
 		call.kind = kind
 		owners[call] = struct{}{}
+		gate := v.ensureTerminalGate("responses-terminal", sequence)
+		v.responseGate = gate
+		owners[gate] = struct{}{}
 		if delta, err := rawJSONString(envelope.Delta); err != nil {
 			return false, fmt.Errorf("%w: invalid tool argument delta: %v", ErrMalformedToolCall, err)
 		} else if delta != "" {
@@ -358,6 +380,7 @@ func (v *StreamValidator) acceptResponsesFrame(sequence uint64, envelope *stream
 		}
 		gate := v.ensureTerminalGate("responses-terminal", sequence)
 		v.responseGate = gate
+		v.responseEnded = true
 		owners[gate] = struct{}{}
 		return true, nil
 	case "response.failed", "response.error", "response.incomplete", "error":
@@ -367,7 +390,7 @@ func (v *StreamValidator) acceptResponsesFrame(sequence uint64, envelope *stream
 			}
 		}
 		v.responseEnded = true
-		return false, nil
+		return false, fmt.Errorf("%w: upstream responses stream ended with %s", ErrMalformedToolCall, eventType)
 	default:
 		return false, nil
 	}
@@ -390,7 +413,10 @@ func (v *StreamValidator) validateResponsesTerminal(sequence uint64, response *d
 			continue
 		}
 		index := outputIndex
-		call := v.resolveResponsesCall(sequence, &index, item.ID, "", item)
+		call, err := v.resolveResponsesCall(sequence, &index, item.ID, "", item, true)
+		if err != nil {
+			return err
+		}
 		owners[call] = struct{}{}
 		if err := v.applyResponsesItem(call, item); err != nil {
 			return err
@@ -463,32 +489,32 @@ func (v *StreamValidator) validatePolicy(validate func(Policy) error) error {
 	return err
 }
 
-func (v *StreamValidator) resolveResponsesCall(sequence uint64, outputIndex *int, itemID, callID string, item *dto.ResponsesOutput) *pendingStreamCall {
-	aliases := make([]string, 0, 3)
+func (v *StreamValidator) resolveResponsesCall(sequence uint64, outputIndex *int, itemID, callID string, item *dto.ResponsesOutput, allowCompleted bool) (*pendingStreamCall, error) {
+	aliases := make([]string, 0, 8)
 	if outputIndex != nil {
 		aliases = append(aliases, "responses:output:"+strconv.Itoa(*outputIndex))
 	}
 	if itemID = strings.TrimSpace(itemID); itemID != "" {
-		aliases = append(aliases, "responses:item:"+itemID)
+		aliases = append(aliases, "responses:item:"+itemID, "responses:raw:"+itemID)
 	}
 	if callID = strings.TrimSpace(callID); callID != "" {
-		aliases = append(aliases, "responses:call:"+callID)
+		aliases = append(aliases, "responses:call:"+callID, "responses:raw:"+callID)
 	}
 	if item != nil {
 		if id := strings.TrimSpace(item.ID); id != "" {
-			aliases = append(aliases, "responses:item:"+id)
+			aliases = append(aliases, "responses:item:"+id, "responses:raw:"+id)
 		}
 		if callID := strings.TrimSpace(item.CallId); callID != "" {
-			aliases = append(aliases, "responses:call:"+callID)
+			aliases = append(aliases, "responses:call:"+callID, "responses:raw:"+callID)
 		}
 	}
 	if len(aliases) == 0 {
 		aliases = append(aliases, "responses:anonymous:"+strconv.FormatUint(sequence, 10))
 	}
-	return v.resolveCall(aliases, "responses", 0, sequence)
+	return v.resolveCall(aliases, "responses", 0, sequence, allowCompleted)
 }
 
-func (v *StreamValidator) resolveCall(aliases []string, protocol string, chatChoice int, sequence uint64) *pendingStreamCall {
+func (v *StreamValidator) resolveCall(aliases []string, protocol string, chatChoice int, sequence uint64, allowCompleted bool) (*pendingStreamCall, error) {
 	var call *pendingStreamCall
 	for _, alias := range aliases {
 		candidate := v.aliases[alias]
@@ -498,8 +524,15 @@ func (v *StreamValidator) resolveCall(aliases []string, protocol string, chatCho
 		if call == nil {
 			call = candidate
 		} else if call != candidate {
-			call = v.mergeCalls(call, candidate)
+			var err error
+			call, err = v.mergeCalls(call, candidate)
+			if err != nil {
+				return nil, err
+			}
 		}
+	}
+	if call != nil && call.completed && !allowCompleted {
+		return nil, fmt.Errorf("%w: frame referenced completed tool call", ErrMalformedToolCall)
 	}
 	if call == nil {
 		call = &pendingStreamCall{protocol: protocol, chatChoice: chatChoice, createdAt: sequence}
@@ -508,7 +541,7 @@ func (v *StreamValidator) resolveCall(aliases []string, protocol string, chatCho
 	for _, alias := range aliases {
 		v.aliases[alias] = call
 	}
-	return call
+	return call, nil
 }
 
 func (v *StreamValidator) ensureTerminalGate(protocol string, sequence uint64) *pendingStreamCall {
@@ -532,24 +565,42 @@ func (v *StreamValidator) holdBufferedFramesUntil(gate *pendingStreamCall) {
 	}
 }
 
-func (v *StreamValidator) mergeCalls(left, right *pendingStreamCall) *pendingStreamCall {
+func (v *StreamValidator) mergeCalls(left, right *pendingStreamCall) (*pendingStreamCall, error) {
 	if left == right || right == nil {
-		return left
+		return left, nil
+	}
+	if left.completed || right.completed {
+		return nil, fmt.Errorf("%w: alias attempted to reopen a completed tool call", ErrMalformedToolCall)
 	}
 	if left == nil || right.createdAt < left.createdAt {
 		left, right = right, left
 	}
-	left.id += right.id
-	left.name += right.name
-	left.typeName += right.typeName
+	if left.protocol != right.protocol || (left.protocol == "chat" && left.chatChoice != right.chatChoice) {
+		return nil, fmt.Errorf("%w: conflicting tool call aliases", ErrMalformedToolCall)
+	}
+	if err := mergeStableString(&left.id, right.id, "id"); err != nil {
+		return nil, err
+	}
+	if err := mergeStableString(&left.name, right.name, "name"); err != nil {
+		return nil, err
+	}
+	if err := mergeStableString(&left.typeName, right.typeName, "type"); err != nil {
+		return nil, err
+	}
+	if err := mergeStableString(&left.nativeType, right.nativeType, "native type"); err != nil {
+		return nil, err
+	}
 	if left.kind == "" {
 		left.kind = right.kind
+	} else if right.kind != "" && left.kind != right.kind {
+		return nil, fmt.Errorf("%w: conflicting tool call kinds", ErrMalformedToolCall)
 	}
 	left.arguments = append(left.arguments, right.arguments...)
 	if len(left.finalArgs) == 0 {
 		left.finalArgs = right.finalArgs
+	} else if len(right.finalArgs) > 0 && !bytes.Equal(bytes.TrimSpace(left.finalArgs), bytes.TrimSpace(right.finalArgs)) {
+		return nil, fmt.Errorf("%w: conflicting terminal tool arguments", ErrMalformedToolCall)
 	}
-	left.completed = left.completed || right.completed
 	for alias, call := range v.aliases {
 		if call == right {
 			v.aliases[alias] = left
@@ -562,7 +613,18 @@ func (v *StreamValidator) mergeCalls(left, right *pendingStreamCall) *pendingStr
 		}
 	}
 	delete(v.calls, right)
-	return left
+	return left, nil
+}
+
+func mergeStableString(target *string, value, field string) error {
+	if value == "" {
+		return nil
+	}
+	if *target != "" && *target != value {
+		return fmt.Errorf("%w: conflicting tool call %s", ErrMalformedToolCall, field)
+	}
+	*target = value
+	return nil
 }
 
 func (v *StreamValidator) applyResponsesItem(call *pendingStreamCall, item *dto.ResponsesOutput) error {
@@ -708,6 +770,166 @@ func rawJSONString(raw json.RawMessage) (string, error) {
 		return "", err
 	}
 	return value, nil
+}
+
+// validateStreamFieldTypes runs before DTO decoding so JSON null cannot be
+// collapsed into a Go zero value and mistaken for an absent fragment.
+func validateStreamFieldTypes(raw json.RawMessage) (bool, error) {
+	object, err := rawObject(raw, "stream event")
+	if err != nil {
+		return false, err
+	}
+	for _, field := range []string{"type", "item_id", "call_id"} {
+		if value, ok := object[field]; ok {
+			if err := requireRawString(value, field); err != nil {
+				return false, err
+			}
+		}
+	}
+	if value, ok := object["error"]; ok {
+		if !isRawNull(value) {
+			return true, nil
+		}
+	}
+	if value, ok := object["choices"]; ok {
+		var choices []json.RawMessage
+		if isRawNull(value) || common.UnmarshalUnique(value, &choices) != nil {
+			return false, fmt.Errorf("%w: choices must be an array", ErrMalformedToolCall)
+		}
+		for index, choiceRaw := range choices {
+			choice, err := rawObject(choiceRaw, fmt.Sprintf("choices[%d]", index))
+			if err != nil {
+				return false, err
+			}
+			if value, ok := choice["delta"]; ok {
+				delta, err := rawObject(value, fmt.Sprintf("choices[%d].delta", index))
+				if err != nil {
+					return false, err
+				}
+				if toolCallsRaw, ok := delta["tool_calls"]; ok {
+					var toolCalls []json.RawMessage
+					if isRawNull(toolCallsRaw) || common.UnmarshalUnique(toolCallsRaw, &toolCalls) != nil {
+						return false, fmt.Errorf("%w: choices[%d].delta.tool_calls must be an array", ErrMalformedToolCall, index)
+					}
+					for callIndex, callRaw := range toolCalls {
+						call, err := rawObject(callRaw, fmt.Sprintf("choices[%d].delta.tool_calls[%d]", index, callIndex))
+						if err != nil {
+							return false, err
+						}
+						for _, field := range []string{"id", "type"} {
+							if value, ok := call[field]; ok {
+								if err := requireRawString(value, field); err != nil {
+									return false, err
+								}
+							}
+						}
+						if functionRaw, ok := call["function"]; ok {
+							function, err := rawObject(functionRaw, "tool call function")
+							if err != nil {
+								return false, err
+							}
+							for _, field := range []string{"name", "arguments"} {
+								if value, ok := function[field]; ok {
+									if err := requireRawString(value, field); err != nil {
+										return false, err
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		return false, nil
+	}
+	if value, ok := object["delta"]; ok {
+		if err := requireRawString(value, "delta"); err != nil {
+			return false, err
+		}
+	}
+	for _, field := range []string{"arguments", "input"} {
+		if value, ok := object[field]; ok {
+			if err := requireRawString(value, field); err != nil {
+				return false, err
+			}
+		}
+	}
+	if itemRaw, ok := object["item"]; ok {
+		if err := validateRawResponsesItem(itemRaw, "item"); err != nil {
+			return false, err
+		}
+	}
+	if responseRaw, ok := object["response"]; ok {
+		response, err := rawObject(responseRaw, "response")
+		if err != nil {
+			return false, err
+		}
+		if value, ok := response["status"]; ok {
+			if err := requireRawString(value, "response.status"); err != nil {
+				return false, err
+			}
+		}
+		if outputRaw, ok := response["output"]; ok {
+			var output []json.RawMessage
+			if isRawNull(outputRaw) || common.UnmarshalUnique(outputRaw, &output) != nil {
+				return false, fmt.Errorf("%w: response.output must be an array", ErrMalformedToolCall)
+			}
+			for index, itemRaw := range output {
+				if err := validateRawResponsesItem(itemRaw, fmt.Sprintf("response.output[%d]", index)); err != nil {
+					return false, err
+				}
+			}
+		}
+	}
+	return false, nil
+}
+
+func validateRawResponsesItem(raw json.RawMessage, path string) error {
+	item, err := rawObject(raw, path)
+	if err != nil {
+		return err
+	}
+	for _, field := range []string{"type", "id", "call_id", "name", "status"} {
+		if value, ok := item[field]; ok {
+			if err := requireRawString(value, path+"."+field); err != nil {
+				return err
+			}
+		}
+	}
+	for _, field := range []string{"arguments", "input"} {
+		if value, ok := item[field]; ok {
+			if err := requireRawString(value, path+"."+field); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func rawObject(raw json.RawMessage, field string) (map[string]json.RawMessage, error) {
+	if isRawNull(raw) {
+		return nil, fmt.Errorf("%w: %s must be an object", ErrMalformedToolCall, field)
+	}
+	var object map[string]json.RawMessage
+	if err := common.UnmarshalUnique(raw, &object); err != nil || object == nil {
+		return nil, fmt.Errorf("%w: %s must be an object", ErrMalformedToolCall, field)
+	}
+	return object, nil
+}
+
+func requireRawString(raw json.RawMessage, field string) error {
+	if isRawNull(raw) {
+		return fmt.Errorf("%w: %s must be a string", ErrMalformedToolCall, field)
+	}
+	var value string
+	if err := common.UnmarshalUnique(raw, &value); err != nil {
+		return fmt.Errorf("%w: %s must be a string", ErrMalformedToolCall, field)
+	}
+	return nil
+}
+
+func isRawNull(raw json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 }
 
 func isStreamToolItem(itemType string) bool {

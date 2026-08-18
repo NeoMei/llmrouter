@@ -132,6 +132,34 @@ func TestChatCompletionsStreamToResponsesEventsAggregatesUsageAndToolArgs(t *tes
 	assert.Equal(t, `"{\"q\":\"x\"}"`, string(events[9].Payload.Response.Output[1].Arguments))
 }
 
+func TestChatCompletionsStreamToResponsesEventsPreservesCustomToolKind(t *testing.T) {
+	state := NewChatToResponsesStreamState("resp_custom", "gpt-test")
+	toolIndex := 0
+	finishReason := "tool_calls"
+	events := mustResponsesEventsFromChatChunk(t, state, &dto.ChatCompletionsStreamResponse{
+		Choices: []dto.ChatCompletionsStreamResponseChoice{{Index: 0, Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+			ToolCalls: []dto.ToolCallResponse{{Index: &toolIndex, ID: "call_1", Type: "custom", Function: dto.FunctionResponse{Name: "shell", Arguments: "echo ok"}}},
+		}}},
+	})
+	events = append(events, mustResponsesEventsFromChatChunk(t, state, &dto.ChatCompletionsStreamResponse{
+		Choices: []dto.ChatCompletionsStreamResponseChoice{{Index: 0, FinishReason: &finishReason}},
+	})...)
+	events = append(events, FinalizeChatCompletionsStreamToResponses(state)...)
+
+	var types []string
+	for _, event := range events {
+		types = append(types, event.Type)
+	}
+	assert.Contains(t, types, responsesEventCustomToolInputDelta)
+	assert.Contains(t, types, responsesEventCustomToolInputDone)
+	assert.NotContains(t, types, responsesEventFunctionArgsDelta)
+	terminal := events[len(events)-1].Payload.Response
+	require.NotNil(t, terminal)
+	require.Len(t, terminal.Output, 1)
+	assert.Equal(t, responsesOutputTypeCustomToolCall, terminal.Output[0].Type)
+	assert.JSONEq(t, `"echo ok"`, string(terminal.Output[0].Input))
+}
+
 func mustResponsesEventsFromChatChunk(t *testing.T, state *ChatToResponsesStreamState, chunk *dto.ChatCompletionsStreamResponse) []ChatToResponsesStreamEvent {
 	t.Helper()
 	events, err := ChatCompletionsStreamChunkToResponsesEvents(chunk, state)

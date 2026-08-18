@@ -52,6 +52,9 @@ func TestStreamValidatorBuffersInterleavedResponsesCallsInOriginalToolOrder(t *t
 		require.NoError(t, err)
 		flushed = append(flushed, emitted...)
 	}
+	assert.Empty(t, flushed)
+	flushed, err = validator.Finish()
+	require.NoError(t, err)
 	require.Len(t, flushed, 7)
 	assert.JSONEq(t, string(frames[0]), string(flushed[0]))
 	assert.JSONEq(t, string(frames[1]), string(flushed[1]))
@@ -138,15 +141,14 @@ func TestStreamValidatorSupportsCustomResponsesInput(t *testing.T) {
 		json.RawMessage(`{"type":"response.custom_tool_call_input.delta","output_index":0,"delta":"ok"}`),
 		json.RawMessage(`{"type":"response.output_item.done","output_index":0,"item":{"type":"custom_tool_call","id":"item_1","call_id":"call_1","name":"shell","input":"printf ok","status":"completed"}}`),
 	}
-	for index, frame := range frames {
+	for _, frame := range frames {
 		emitted, err := validator.Accept(frame)
 		require.NoError(t, err)
-		if index < len(frames)-1 {
-			assert.Empty(t, emitted)
-		} else {
-			require.Len(t, emitted, len(frames))
-		}
+		assert.Empty(t, emitted)
 	}
+	emitted, err := validator.Finish()
+	require.NoError(t, err)
+	require.Len(t, emitted, len(frames))
 }
 
 func TestStreamValidatorLinksResponsesOutputItemAndCallIDAliases(t *testing.T) {
@@ -163,9 +165,117 @@ func TestStreamValidatorLinksResponsesOutputItemAndCallIDAliases(t *testing.T) {
 		emitted, err = validator.Accept(frame)
 		require.NoError(t, err)
 	}
-	require.Len(t, emitted, len(frames))
-	_, err := validator.Finish()
+	assert.Empty(t, emitted)
+	emitted, err := validator.Finish()
 	require.NoError(t, err)
+	require.Len(t, emitted, len(frames))
+}
+
+func TestStreamValidatorLinksDirectEqualItemAndCallIDAliases(t *testing.T) {
+	validator := NewStreamValidator(streamTestPolicy(t))
+	frames := []json.RawMessage{
+		json.RawMessage(`{"type":"response.function_call_arguments.delta","item_id":"call_1","delta":"{\"q\":"}`),
+		json.RawMessage(`{"type":"response.function_call_arguments.delta","call_id":"call_1","delta":"null}"}`),
+		json.RawMessage(`{"type":"response.output_item.done","item":{"type":"function_call","id":"item_1","call_id":"call_1","name":"lookup","arguments":"{\"q\":null}","status":"completed"}}`),
+	}
+	var emitted []json.RawMessage
+	for _, frame := range frames {
+		var err error
+		emitted, err = validator.Accept(frame)
+		require.NoError(t, err)
+	}
+	assert.Empty(t, emitted)
+	emitted, err := validator.Finish()
+	require.NoError(t, err)
+	require.Len(t, emitted, len(frames))
+}
+
+func TestStreamValidatorRejectsLateOrDuplicateFramesForCompletedCall(t *testing.T) {
+	tests := []struct {
+		name string
+		late json.RawMessage
+	}{
+		{name: "late delta", late: json.RawMessage(`{"type":"response.function_call_arguments.delta","call_id":"call_1","delta":"late"}`)},
+		{name: "duplicate done", late: json.RawMessage(`{"type":"response.output_item.done","item":{"type":"function_call","id":"item_1","call_id":"call_1","name":"lookup","arguments":"{}","status":"completed"}}`)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			validator := NewStreamValidator(streamTestPolicy(t))
+			doneEmitted, err := validator.Accept(json.RawMessage(`{"type":"response.output_item.done","item":{"type":"function_call","id":"item_1","call_id":"call_1","name":"lookup","arguments":"{}","status":"completed"}}`))
+			require.NoError(t, err)
+			assert.Empty(t, doneEmitted)
+			emitted, err := validator.Accept(test.late)
+			require.ErrorIs(t, err, ErrMalformedToolCall)
+			assert.Empty(t, emitted)
+		})
+	}
+}
+
+func TestStreamValidatorAllowsCompletedCallToBeReconciledByResponseTerminal(t *testing.T) {
+	validator := NewStreamValidator(streamTestPolicy(t))
+	done := json.RawMessage(`{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"item_1","call_id":"call_1","name":"lookup","arguments":"{}","status":"completed"}}`)
+	completed := json.RawMessage(`{"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"type":"function_call","id":"item_1","call_id":"call_1","name":"lookup","arguments":"{}","status":"completed"}]}}`)
+	for _, frame := range []json.RawMessage{done, completed} {
+		emitted, err := validator.Accept(frame)
+		require.NoError(t, err)
+		assert.Empty(t, emitted)
+	}
+	emitted, err := validator.Finish()
+	require.NoError(t, err)
+	require.Len(t, emitted, 2)
+}
+
+func TestStreamValidatorRejectsConflictingCrossNamespaceAliases(t *testing.T) {
+	validator := NewStreamValidator(streamTestPolicy(t))
+	_, err := validator.Accept(json.RawMessage(`{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"item_a","delta":"{}"}`))
+	require.NoError(t, err)
+	_, err = validator.Accept(json.RawMessage(`{"type":"response.custom_tool_call_input.delta","output_index":1,"call_id":"call_b","delta":"echo"}`))
+	require.NoError(t, err)
+	emitted, err := validator.Accept(json.RawMessage(`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"item_a","call_id":"call_b","name":"lookup","status":"in_progress"}}`))
+	require.ErrorIs(t, err, ErrMalformedToolCall)
+	assert.Empty(t, emitted)
+}
+
+func TestStreamValidatorRejectsResponsesErrorTerminals(t *testing.T) {
+	for _, eventType := range []string{"response.failed", "response.error", "response.incomplete", "error"} {
+		t.Run(eventType, func(t *testing.T) {
+			validator := NewStreamValidator(streamTestPolicy(t))
+			emitted, err := validator.Accept(json.RawMessage(`{"type":"` + eventType + `","error":{"message":"upstream failed"}}`))
+			require.Error(t, err)
+			assert.Empty(t, emitted)
+			_, finishErr := validator.Finish()
+			require.Error(t, finishErr)
+		})
+	}
+}
+
+func TestStreamValidatorRejectsNativeChatErrorObject(t *testing.T) {
+	validator := NewStreamValidator(streamTestPolicy(t))
+	emitted, err := validator.Accept(json.RawMessage(`{"error":{"message":"upstream failed","type":"server_error"}}`))
+	require.Error(t, err)
+	assert.Empty(t, emitted)
+}
+
+func TestStreamValidatorRejectsNullOrWrongTypedProtocolFields(t *testing.T) {
+	frames := []json.RawMessage{
+		json.RawMessage(`{"type":"response.function_call_arguments.delta","call_id":"call_1","delta":null}`),
+		json.RawMessage(`{"type":"response.function_call_arguments.delta","call_id":7,"delta":"{}"}`),
+		json.RawMessage(`{"type":"response.function_call_arguments.done","call_id":"call_1","arguments":null}`),
+		json.RawMessage(`{"type":"response.function_call_arguments.done","call_id":"call_1","arguments":{}}`),
+		json.RawMessage(`{"type":"response.output_item.added","item":{"type":"function_call","id":null,"call_id":"call_1","name":"lookup"}}`),
+		json.RawMessage(`{"type":"response.output_item.done","item":{"type":"function_call","id":"item_1","call_id":"call_1","name":"lookup","arguments":null}}`),
+		json.RawMessage(`{"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"type":"function_call","id":"item_1","call_id":"call_1","name":"lookup","arguments":{}}]}}`),
+		json.RawMessage(`{"choices":[{"index":0,"delta":null,"finish_reason":null}]}`),
+		json.RawMessage(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":null,"type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":null}]}`),
+		json.RawMessage(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":null,"arguments":"{}"}}]},"finish_reason":null}]}`),
+		json.RawMessage(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":null}}]},"finish_reason":null}]}`),
+	}
+	for _, frame := range frames {
+		validator := NewStreamValidator(streamTestPolicy(t))
+		emitted, err := validator.Accept(frame)
+		require.ErrorIs(t, err, ErrMalformedToolCall, "frame: %s", frame)
+		assert.Empty(t, emitted)
+	}
 }
 
 func TestStreamValidatorFailClosedCases(t *testing.T) {
@@ -269,6 +379,9 @@ func TestStreamValidatorWholeNullFrameIsPaddingNotArgumentNull(t *testing.T) {
 	terminal := json.RawMessage(`{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"item_1","call_id":"call_1","name":"lookup","arguments":"{\"value\":null}","status":"completed"}}`)
 	emitted, err = validator.Accept(terminal)
 	require.NoError(t, err)
+	assert.Empty(t, emitted)
+	emitted, err = validator.Finish()
+	require.NoError(t, err)
 	assert.Len(t, emitted, 4)
 }
 
@@ -335,15 +448,14 @@ func TestStreamValidatorAcceptsDeclaredBuiltInResponsesCall(t *testing.T) {
 		json.RawMessage(`{"type":"response.output_item.added","output_index":0,"item":{"type":"web_search_call","id":"ws_1","status":"in_progress"}}`),
 		json.RawMessage(`{"type":"response.output_item.done","output_index":0,"item":{"type":"web_search_call","id":"ws_1","status":"completed"}}`),
 	}
-	for index, frame := range frames {
+	for _, frame := range frames {
 		emitted, err := validator.Accept(frame)
 		require.NoError(t, err)
-		if index == 0 {
-			assert.Empty(t, emitted)
-		} else {
-			assert.Len(t, emitted, 2)
-		}
+		assert.Empty(t, emitted)
 	}
+	emitted, err := validator.Finish()
+	require.NoError(t, err)
+	assert.Len(t, emitted, 2)
 }
 
 func TestChatTargetStreamValidatorRejectsCustomToolConversion(t *testing.T) {

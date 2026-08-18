@@ -62,7 +62,7 @@ clear_extra_acls() {
     linux)
       if command -v setfacl >/dev/null 2>&1; then setfacl -b -- "$path" || fail "cannot remove ACLs: $path"; fi
       if command -v getfacl >/dev/null 2>&1; then
-        getfacl -cp -- "$path" | awk '/^#/ { next } /^user::/ || /^group::---$/ || /^other::---$/ { next } { exit 1 }' || fail "non-owner ACL access remains: $path"
+        getfacl -cp -- "$path" | awk 'NF == 0 || /^#/ { next } /^user::/ || /^group::---$/ || /^other::---$/ { next } { exit 1 }' || fail "non-owner ACL access remains: $path"
       fi
       ;;
   esac

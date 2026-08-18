@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -51,25 +52,43 @@ func (s *S3Store) Put(ctx context.Context, key string, body io.Reader, opts PutO
 	if _, err := validateS3Key(key); err != nil {
 		return ObjectInfo{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		return ObjectInfo{}, err
+	}
+	staged, err := os.CreateTemp("", "llmrouter-object-upload-*")
+	if err != nil {
+		return ObjectInfo{}, err
+	}
+	stagedName := staged.Name()
+	defer os.Remove(stagedName)
+	defer staged.Close()
+
 	hash := sha256.New()
+	written, err := io.Copy(io.MultiWriter(staged, hash), body)
+	if err != nil {
+		return ObjectInfo{}, err
+	}
+	if opts.Size >= 0 && written != opts.Size {
+		return ObjectInfo{}, fmt.Errorf("object size mismatch: declared %d, received %d", opts.Size, written)
+	}
+	checksum := hex.EncodeToString(hash.Sum(nil))
+	if opts.ChecksumSHA256 != "" && !strings.EqualFold(opts.ChecksumSHA256, checksum) {
+		return ObjectInfo{}, fmt.Errorf("object checksum mismatch")
+	}
+	if _, err := staged.Seek(0, io.SeekStart); err != nil {
+		return ObjectInfo{}, err
+	}
 	input := &s3.PutObjectInput{
-		Bucket: aws.String(s.bucket), Key: aws.String(key), Body: io.TeeReader(body, hash),
+		Bucket: aws.String(s.bucket), Key: aws.String(key), Body: staged,
 		ContentType: aws.String(opts.ContentType),
-		Metadata:    map[string]string{"sha256": opts.ChecksumSHA256},
+		Metadata:    map[string]string{"sha256": checksum},
 	}
-	if opts.Size >= 0 {
-		input.ContentLength = aws.Int64(opts.Size)
-	}
+	input.ContentLength = aws.Int64(written)
 	output, err := s.client.PutObject(ctx, input)
 	if err != nil {
 		return ObjectInfo{}, err
 	}
-	checksum := hex.EncodeToString(hash.Sum(nil))
-	if opts.ChecksumSHA256 != "" && !strings.EqualFold(opts.ChecksumSHA256, checksum) {
-		_, _ = s.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)})
-		return ObjectInfo{}, fmt.Errorf("object checksum mismatch")
-	}
-	return ObjectInfo{Key: key, ContentType: opts.ContentType, ETag: aws.ToString(output.ETag), Size: opts.Size}, nil
+	return ObjectInfo{Key: key, ContentType: opts.ContentType, ETag: aws.ToString(output.ETag), Size: written}, nil
 }
 
 func (s *S3Store) Open(ctx context.Context, key string) (io.ReadCloser, ObjectInfo, error) {

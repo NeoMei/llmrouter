@@ -1,6 +1,7 @@
 package ollama
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,6 +20,34 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestOllamaTextOnlyTruncatedAndCancelledStreamsDoNotSucceed(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		cancelled bool
+	}{
+		{name: "truncated EOF", body: `{"model":"llama3.1","message":{"role":"assistant","content":"partial"},"done":false}`},
+		{name: "cancelled before terminal", cancelled: true, body: `{"model":"llama3.1","message":{"role":"assistant","content":"done"},"done":true,"done_reason":"stop"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			if test.cancelled {
+				ctx, cancel := context.WithCancel(c.Request.Context())
+				cancel()
+				c.Request = c.Request.WithContext(ctx)
+			}
+			info := &relaycommon.RelayInfo{IsStream: true, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "llama3.1"}}
+			usage, apiErr := ollamaStreamHandler(c, info, &http.Response{Body: io.NopCloser(strings.NewReader(test.body))})
+			require.Nil(t, usage)
+			require.NotNil(t, apiErr)
+			assert.NotContains(t, recorder.Body.String(), "data: [DONE]")
+		})
+	}
+}
 
 func TestOllamaChatHandlerNonStreamToolCalls(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -175,6 +204,57 @@ func TestOllamaChatHandlerRejectsInvalidNonStreamToolCalls(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestOllamaHandlersRejectMissingNullWrongAndDuplicateArguments(t *testing.T) {
+	tests := []struct {
+		name     string
+		function string
+	}{
+		{name: "missing", function: `{"name":"get_weather"}`},
+		{name: "null", function: `{"name":"get_weather","arguments":null}`},
+		{name: "wrong type", function: `{"name":"get_weather","arguments":[]}`},
+		{name: "duplicate key", function: `{"name":"get_weather","arguments":{"city":"Paris","city":"London"}}`},
+	}
+	for _, stream := range []bool{false, true} {
+		mode := "nonstream"
+		if stream {
+			mode = "stream"
+		}
+		for _, test := range tests {
+			t.Run(mode+"/"+test.name, func(t *testing.T) {
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+				setOllamaToolPolicy(t, c, "get_weather")
+				body := `{"model":"llama3.1","message":{"role":"assistant","tool_calls":[{"function":` + test.function + `}]},"done":false}` + "\n" +
+					`{"model":"llama3.1","message":{"role":"assistant"},"done":true,"done_reason":"stop"}`
+				info := &relaycommon.RelayInfo{IsStream: stream, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "llama3.1"}}
+				resp := &http.Response{Body: io.NopCloser(strings.NewReader(body))}
+				var usage *dto.Usage
+				var apiErr *types.NewAPIError
+				if stream {
+					usage, apiErr = ollamaStreamHandler(c, info, resp)
+				} else {
+					usage, apiErr = ollamaChatHandler(c, info, resp)
+				}
+				require.Nil(t, usage)
+				require.NotNil(t, apiErr)
+				assert.Equal(t, types.ErrorCodeUpstreamToolProtocolInvalid, apiErr.GetErrorCode())
+				assert.Empty(t, recorder.Body.String())
+				assert.Zero(t, info.SendResponseCount)
+			})
+		}
+	}
+}
+
+func TestOllamaToolCallConversionRejectsUnmarshalableArguments(t *testing.T) {
+	var call OllamaToolCall
+	call.Function.Name = "get_weather"
+	call.Function.Arguments = make(chan int)
+	converted, _, err := ollamaToolCallsToOpenAI([]OllamaToolCall{call}, 0, false)
+	require.Error(t, err)
+	assert.Nil(t, converted)
 }
 
 func TestOllamaNativeStreamToolFailuresDoNotReachWriter(t *testing.T) {

@@ -304,6 +304,29 @@ func TestRedisStoreBoundsScopeCardinalityAndAvoidsUnboundedRecovery(t *testing.T
 	}
 	_, err = store.Load(context.Background(), expected, "resp_corrupt_bucket")
 	require.ErrorIs(t, err, ErrRetentionLimit)
+
+	overwrite := testRecord("resp_overlimit_overwrite")
+	overwriteKey := Key(overwrite.ResponseID)
+	require.NoError(t, common.RDB.HSet(context.Background(), overwriteKey, scopeDigest(overwrite.Scope), "existing").Err())
+	for i := 0; i < MaxScopeVariantsPerResponse; i++ {
+		require.NoError(t, common.RDB.HSet(context.Background(), overwriteKey, fmt.Sprintf("extra-%d", i), "value").Err())
+	}
+	require.ErrorIs(t, store.Save(context.Background(), overwrite), ErrRetentionLimit,
+		"an existing field overwrite must fail before HVALS when the bucket is already over limit")
+}
+
+func TestRedisSaveScriptRejectsOverLimitBeforeLookupOrScan(t *testing.T) {
+	overLimit := strings.Index(redisSaveRecordScript, "if count > tonumber(ARGV[4])")
+	lookup := strings.Index(redisSaveRecordScript, "local existing = redis.call('HGET'")
+	atLimit := strings.Index(redisSaveRecordScript, "if count == tonumber(ARGV[4]) and not existing")
+	scan := strings.Index(redisSaveRecordScript, "redis.call('HVALS'")
+	require.NotEqual(t, -1, overLimit)
+	require.NotEqual(t, -1, lookup)
+	require.NotEqual(t, -1, atLimit)
+	require.NotEqual(t, -1, scan)
+	require.Less(t, overLimit, lookup)
+	require.Less(t, lookup, atLimit)
+	require.Less(t, atLimit, scan)
 }
 
 func TestMemoryStoreCopiesRawMessagesOnSaveAndLoad(t *testing.T) {

@@ -83,9 +83,11 @@ func TestGeminiStreamHandlerCompletionTokensExcludeToolUsePromptTokens(t *testin
 		},
 	}
 
+	stop := "STOP"
 	chunk := dto.GeminiChatResponse{
 		Candidates: []dto.GeminiChatCandidate{
 			{
+				FinishReason: &stop,
 				Content: dto.GeminiChatContent{
 					Role: "model",
 					Parts: []dto.GeminiPart{
@@ -239,9 +241,11 @@ func TestGeminiStreamHandlerUsesEstimatedPromptTokensWhenUsagePromptMissing(t *t
 	}
 	info.SetEstimatePromptTokens(20)
 
+	stop := "STOP"
 	chunk := dto.GeminiChatResponse{
 		Candidates: []dto.GeminiChatCandidate{
 			{
+				FinishReason: &stop,
 				Content: dto.GeminiChatContent{
 					Role: "model",
 					Parts: []dto.GeminiPart{
@@ -360,7 +364,7 @@ func TestGeminiChatHandlerMissingUsageMetadataBuildsEstimatedBillingUsage(t *tes
 	require.True(t, common.GetContextKeyBool(c, constant.ContextKeyLocalCountTokens))
 }
 
-func TestGeminiStreamHandlerPromptOnlyUsageMetadataEstimatesCompletionTokens(t *testing.T) {
+func TestGeminiStreamHandlerPromptOnlyUsageWithoutProviderTerminalFailsClosed(t *testing.T) {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
@@ -408,15 +412,9 @@ func TestGeminiStreamHandlerPromptOnlyUsageMetadataEstimatesCompletionTokens(t *
 	usage, newAPIError := geminiStreamHandler(c, info, resp, func(_ string, _ *dto.GeminiChatResponse) bool {
 		return true
 	})
-	require.Nil(t, newAPIError)
-	require.NotNil(t, usage)
-	require.Equal(t, 151, usage.PromptTokens)
-	require.Greater(t, usage.CompletionTokens, 0)
-	require.Equal(t, usage.PromptTokens+usage.CompletionTokens, usage.TotalTokens)
-	require.NotNil(t, usage.BillingUsage)
-	require.True(t, usage.BillingUsage.Estimated)
-	require.NotNil(t, usage.BillingUsage.GeminiUsageMetadata)
-	require.Equal(t, usage.CompletionTokens, usage.BillingUsage.GeminiUsageMetadata.CandidatesTokenCount)
+	require.Nil(t, usage)
+	require.NotNil(t, newAPIError)
+	require.Equal(t, types.ErrorCodeUpstreamToolProtocolInvalid, newAPIError.GetErrorCode())
 }
 
 func TestGeminiChatHandlerPromptOnlyUsageMetadataEstimatesCompletionTokens(t *testing.T) {
@@ -485,7 +483,7 @@ func TestGeminiStreamHandlerEmptyUsageMetadataBuildsEstimatedBillingUsage(t *tes
 	}
 	info.SetEstimatePromptTokens(20)
 
-	streamBody := []byte("data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"partial\"}]}}],\"usageMetadata\":{}}\n" + "data: [DONE]\n")
+	streamBody := []byte("data: {\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"partial\"}]}}],\"usageMetadata\":{}}\n" + "data: [DONE]\n")
 	resp := &http.Response{
 		Body: io.NopCloser(bytes.NewReader(streamBody)),
 	}

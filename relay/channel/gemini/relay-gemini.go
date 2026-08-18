@@ -104,6 +104,12 @@ func geminiResponseInlineImageCount(response *dto.GeminiChatResponse) int {
 	return count
 }
 
+func geminiPromptBlockedError(c *gin.Context, reason string) *types.NewAPIError {
+	reason = strings.TrimSpace(reason)
+	common.SetContextKey(c, constant.ContextKeyAdminRejectReason, fmt.Sprintf("gemini_block_reason=%s", reason))
+	return types.NewOpenAIError(errors.New("request blocked by Gemini API: "+reason), types.ErrorCodePromptBlocked, http.StatusBadRequest)
+}
+
 func responseGeminiChat2OpenAI(c *gin.Context, response *dto.GeminiChatResponse) *dto.OpenAITextResponse {
 	return relayconvert.ResponseGeminiChat2OpenAI(helper.GetResponseID(c), common.GetTimestamp(), response)
 }
@@ -191,7 +197,12 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		}
 		emitted, err := validator.Accept(common.StringToByteSlice(data))
 		if err != nil {
-			streamErr = toolpolicy.NewResponseValidationError(err)
+			var rejection *toolpolicy.ProviderRejectionError
+			if errors.As(err, &rejection) && errors.Is(err, toolpolicy.ErrProviderRejected) {
+				streamErr = geminiPromptBlockedError(c, rejection.Reason)
+			} else {
+				streamErr = toolpolicy.NewResponseValidationError(err)
+			}
 			sr.Stop(streamErr)
 			return
 		}
@@ -204,8 +215,15 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	if streamErr != nil {
 		return nil, streamErr
 	}
-	if info != nil && info.StreamStatus != nil && (!info.StreamStatus.IsNormalEnd() || info.StreamStatus.HasErrors()) {
-		return nil, toolpolicy.NewResponseValidationError(validator.Abort(fmt.Errorf("%s", info.StreamStatus.Summary())))
+	if c == nil || c.Request == nil || c.Request.Context().Err() != nil ||
+		info != nil && info.StreamStatus != nil && (!info.StreamStatus.IsNormalEnd() || info.StreamStatus.HasErrors()) {
+		reason := "request context unavailable"
+		if c != nil && c.Request != nil && c.Request.Context().Err() != nil {
+			reason = c.Request.Context().Err().Error()
+		} else if info != nil && info.StreamStatus != nil {
+			reason = info.StreamStatus.Summary()
+		}
+		return nil, toolpolicy.NewResponseValidationError(validator.Abort(fmt.Errorf("%s", reason)))
 	}
 	flushed, err := validator.Finish()
 	if err != nil {
@@ -355,28 +373,22 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
+	if len(geminiResponse.Candidates) == 0 {
+		if geminiResponse.PromptFeedback != nil && geminiResponse.PromptFeedback.BlockReason != nil {
+			return nil, geminiPromptBlockedError(c, *geminiResponse.PromptFeedback.BlockReason)
+		}
+	}
 	if err := toolpolicy.ValidateGeminiResponseContext(c, &geminiResponse); err != nil {
 		return nil, toolpolicy.NewResponseValidationError(err)
 	}
 	if len(geminiResponse.Candidates) == 0 {
 		usage := buildUsageFromGeminiResponse(c, info, &geminiResponse)
-
-		var newAPIError *types.NewAPIError
-		if geminiResponse.PromptFeedback != nil && geminiResponse.PromptFeedback.BlockReason != nil {
-			common.SetContextKey(c, constant.ContextKeyAdminRejectReason, fmt.Sprintf("gemini_block_reason=%s", *geminiResponse.PromptFeedback.BlockReason))
-			newAPIError = types.NewOpenAIError(
-				errors.New("request blocked by Gemini API: "+*geminiResponse.PromptFeedback.BlockReason),
-				types.ErrorCodePromptBlocked,
-				http.StatusBadRequest,
-			)
-		} else {
-			common.SetContextKey(c, constant.ContextKeyAdminRejectReason, "gemini_empty_candidates")
-			newAPIError = types.NewOpenAIError(
-				errors.New("empty response from Gemini API"),
-				types.ErrorCodeEmptyResponse,
-				http.StatusInternalServerError,
-			)
-		}
+		common.SetContextKey(c, constant.ContextKeyAdminRejectReason, "gemini_empty_candidates")
+		newAPIError := types.NewOpenAIError(
+			errors.New("empty response from Gemini API"),
+			types.ErrorCodeEmptyResponse,
+			http.StatusInternalServerError,
+		)
 
 		service.ResetStatusCode(newAPIError, c.GetString("status_code_mapping"))
 

@@ -204,8 +204,15 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 	if err != nil {
 		return nil, err
 	}
-	if info != nil && info.StreamStatus != nil && (!info.StreamStatus.IsNormalEnd() || info.StreamStatus.HasErrors()) {
-		return nil, toolpolicy.NewResponseValidationError(validator.Abort(fmt.Errorf("%s", info.StreamStatus.Summary())))
+	if c == nil || c.Request == nil || c.Request.Context().Err() != nil ||
+		info != nil && info.StreamStatus != nil && (!info.StreamStatus.IsNormalEnd() || info.StreamStatus.HasErrors()) {
+		reason := "request context unavailable"
+		if c != nil && c.Request != nil && c.Request.Context().Err() != nil {
+			reason = c.Request.Context().Err().Error()
+		} else if info != nil && info.StreamStatus != nil {
+			reason = info.StreamStatus.Summary()
+		}
+		return nil, toolpolicy.NewResponseValidationError(validator.Abort(fmt.Errorf("%s", reason)))
 	}
 	flushed, validateErr := validator.Finish()
 	if validateErr != nil {

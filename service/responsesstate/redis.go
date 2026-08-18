@@ -23,6 +23,33 @@ type RedisStore struct {
 	key []byte
 }
 
+const redisSaveRecordScript = `
+local count = redis.call('HLEN', KEYS[1])
+if count > tonumber(ARGV[4]) then
+  return -1
+end
+local existing = redis.call('HGET', KEYS[1], ARGV[1])
+if count == tonumber(ARGV[4]) and not existing then
+  return -1
+end
+local total = 0
+for _, value in ipairs(redis.call('HVALS', KEYS[1])) do
+  total = total + string.len(value)
+end
+if existing then
+  total = total - string.len(existing)
+end
+total = total + string.len(ARGV[2])
+if total > tonumber(ARGV[5]) then
+  return -2
+end
+local current_ttl = redis.call('PTTL', KEYS[1])
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+if current_ttl < 0 or current_ttl < tonumber(ARGV[3]) then
+  redis.call('PEXPIRE', KEYS[1], ARGV[3])
+end
+return 1`
+
 // NewRedis creates a Redis-backed store. It returns an error if encryption is
 // requested but no key is configured.
 func NewRedis() (*RedisStore, error) {
@@ -165,30 +192,7 @@ func (s *RedisStore) Save(ctx context.Context, record Record) error {
 	if ttlMillis < 1 {
 		ttlMillis = 1
 	}
-	const saveRecordScript = `
-local count = redis.call('HLEN', KEYS[1])
-local existing = redis.call('HGET', KEYS[1], ARGV[1])
-if not existing and count >= tonumber(ARGV[4]) then
-  return -1
-end
-local total = 0
-for _, value in ipairs(redis.call('HVALS', KEYS[1])) do
-  total = total + string.len(value)
-end
-if existing then
-  total = total - string.len(existing)
-end
-total = total + string.len(ARGV[2])
-if total > tonumber(ARGV[5]) then
-  return -2
-end
-local current_ttl = redis.call('PTTL', KEYS[1])
-redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
-if current_ttl < 0 or current_ttl < tonumber(ARGV[3]) then
-  redis.call('PEXPIRE', KEYS[1], ARGV[3])
-end
-return 1`
-	result, err := common.RDB.Eval(ctx, saveRecordScript, []string{Key(record.ResponseID)}, scopeDigest(record.Scope), string(encrypted), ttlMillis, MaxScopeVariantsPerResponse, MaxResponseBucketBytes).Int64()
+	result, err := common.RDB.Eval(ctx, redisSaveRecordScript, []string{Key(record.ResponseID)}, scopeDigest(record.Scope), string(encrypted), ttlMillis, MaxScopeVariantsPerResponse, MaxResponseBucketBytes).Int64()
 	if err != nil {
 		return err
 	}

@@ -3,6 +3,7 @@ package toolpolicy
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -11,6 +12,19 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/gin-gonic/gin"
 )
+
+var ErrProviderRejected = errors.New("upstream provider rejected response")
+
+type ProviderRejectionError struct {
+	Provider string
+	Reason   string
+}
+
+func (e *ProviderRejectionError) Error() string {
+	return fmt.Sprintf("%s: %s rejected the response: %s", ErrProviderRejected, e.Provider, e.Reason)
+}
+
+func (e *ProviderRejectionError) Unwrap() error { return ErrProviderRejected }
 
 type NativeStreamKind string
 
@@ -120,7 +134,7 @@ func (v *NativeStreamValidator) Finish() ([]json.RawMessage, error) {
 	if v.failed != nil {
 		return nil, v.failed
 	}
-	if (v.toolSeen || v.policy.RequiresToolCall()) && !v.success {
+	if !v.success {
 		return nil, v.fail(fmt.Errorf("%w: native stream ended without provider success terminal", ErrIncompleteToolCall))
 	}
 	if err := v.validateTerminal(); err != nil {
@@ -217,6 +231,9 @@ func (v *NativeStreamValidator) acceptGemini(raw json.RawMessage) (bool, bool, e
 	if err := common.UnmarshalUnique(raw, &response); err != nil {
 		return false, false, fmt.Errorf("%w: invalid Gemini stream frame: %v", ErrMalformedToolCall, err)
 	}
+	if len(response.Candidates) == 0 && response.PromptFeedback != nil && response.PromptFeedback.BlockReason != nil {
+		return false, false, &ProviderRejectionError{Provider: "Gemini", Reason: strings.TrimSpace(*response.PromptFeedback.BlockReason)}
+	}
 	toolRelated := false
 	terminal := len(response.Candidates) > 0
 	for candidateIndex := range response.Candidates {
@@ -258,9 +275,6 @@ func (v *NativeStreamValidator) acceptGemini(raw json.RawMessage) (bool, bool, e
 			v.callCount++
 		}
 	}
-	if len(response.Candidates) == 0 && response.PromptFeedback != nil && response.PromptFeedback.BlockReason != nil {
-		terminal = true
-	}
 	return toolRelated, terminal, nil
 }
 
@@ -289,7 +303,7 @@ func (v *NativeStreamValidator) acceptOllama(raw json.RawMessage) (bool, bool, e
 			}
 			arguments := tool.Function.Arguments
 			if len(bytes.TrimSpace(arguments)) == 0 || bytes.Equal(bytes.TrimSpace(arguments), []byte("null")) {
-				arguments = json.RawMessage(`{}`)
+				return false, false, fmt.Errorf("%w: Ollama tool arguments are required", ErrMalformedArguments)
 			}
 			id := "ollama_call_" + strconv.Itoa(v.ollamaCalls)
 			if err := v.validateCall(Call{ID: id, Name: tool.Function.Name, Kind: ToolKindFunction, Arguments: arguments}); err != nil {

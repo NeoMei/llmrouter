@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -93,6 +94,45 @@ func TestClaudeNativeStreamToolFailuresDoNotReachWriter(t *testing.T) {
 			assert.Nil(t, usage)
 			assert.Empty(t, recorder.Body.String())
 			assert.Zero(t, info.SendResponseCount)
+		})
+	}
+}
+
+func TestClaudeTextOnlyTruncatedStreamReturnsNilUsageWithoutSuccessTerminal(t *testing.T) {
+	previousTimeout := appconstant.StreamingTimeout
+	appconstant.StreamingTimeout = 30
+	t.Cleanup(func() { appconstant.StreamingTimeout = previousTimeout })
+	tests := []struct {
+		name      string
+		cancelled bool
+		body      string
+	}{
+		{name: "EOF", body: claudeSSE(
+			`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`,
+			`{"type":"content_block_stop","index":0}`,
+		)},
+		{name: "cancelled", cancelled: true, body: claudeSSE(
+			`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"done"}}`,
+			`{"type":"content_block_stop","index":0}`,
+			`{"type":"message_stop"}`,
+		)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			if test.cancelled {
+				ctx, cancel := context.WithCancel(c.Request.Context())
+				cancel()
+				c.Request = c.Request.WithContext(ctx)
+			}
+			info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatClaude, DisablePing: true, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "claude-test"}}
+			usage, apiErr := ClaudeStreamHandler(c, &http.Response{Body: io.NopCloser(strings.NewReader(test.body))}, info)
+			require.Nil(t, usage)
+			require.NotNil(t, apiErr)
+			assert.NotContains(t, recorder.Body.String(), "message_stop")
 		})
 	}
 }

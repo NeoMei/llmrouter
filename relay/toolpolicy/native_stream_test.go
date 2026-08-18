@@ -65,6 +65,38 @@ func TestNativeStreamValidatorsRequireProviderSuccessTerminal(t *testing.T) {
 	}
 }
 
+func TestNativeStreamValidatorsRequireProviderSuccessTerminalForTextOnly(t *testing.T) {
+	tests := []struct {
+		name  string
+		kind  NativeStreamKind
+		frame json.RawMessage
+	}{
+		{name: "claude", kind: NativeStreamClaude, frame: json.RawMessage(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`)},
+		{name: "gemini", kind: NativeStreamGemini, frame: json.RawMessage(`{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"partial"}]}}]}`)},
+		{name: "ollama", kind: NativeStreamOllama, frame: json.RawMessage(`{"message":{"role":"assistant","content":"partial"},"done":false}`)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			validator := NewNativeStreamValidator(test.kind, streamTestPolicy(t), true)
+			_, err := validator.Accept(test.frame)
+			require.NoError(t, err)
+			emitted, err := validator.Finish()
+			require.ErrorIs(t, err, ErrIncompleteToolCall)
+			assert.Empty(t, emitted)
+		})
+	}
+}
+
+func TestNativeGeminiPromptFeedbackIsProviderRejectionNotSuccess(t *testing.T) {
+	validator := NewNativeStreamValidator(NativeStreamGemini, streamTestPolicy(t), true)
+	emitted, err := validator.Accept(json.RawMessage(`{"promptFeedback":{"blockReason":"SAFETY"}}`))
+	require.ErrorIs(t, err, ErrProviderRejected)
+	assert.Empty(t, emitted)
+	emitted, err = validator.Finish()
+	require.ErrorIs(t, err, ErrProviderRejected)
+	assert.Empty(t, emitted)
+}
+
 func TestNativeStreamValidatorsFlushValidToolsOnlyAfterSuccessTerminal(t *testing.T) {
 	tests := []struct {
 		name   string

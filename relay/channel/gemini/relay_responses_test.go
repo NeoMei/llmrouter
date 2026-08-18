@@ -115,6 +115,49 @@ func TestGeminiResponsesFailuresDoNotPersist(t *testing.T) {
 	}
 }
 
+func TestGeminiResponsesTextOnlyTruncatedStreamDoesNotCompleteOrPersist(t *testing.T) {
+	previousTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = previousTimeout })
+	t.Setenv("RESPONSES_STATE_ENABLED", "1")
+	responsesstate.ResetForTest()
+	t.Cleanup(responsesstate.ResetForTest)
+	store, err := responsesstate.Default()
+	require.NoError(t, err)
+	scope := responsesstate.Scope{TenantID: 11, UserID: 11, TokenID: 7, RouteID: 3, TargetID: 4, ChannelID: 5, Model: "gemini-test"}
+
+	tests := []struct {
+		name      string
+		cancelled bool
+		body      string
+	}{
+		{name: "EOF", body: "data: {\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"partial\"}]}}]}\n\n"},
+		{name: "cancelled", cancelled: true, body: geminiSSE(`{"candidates":[{"index":0,"finishReason":"STOP","content":{"role":"model","parts":[{"text":"done"}]}}]}`)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			if test.cancelled {
+				ctx, cancel := context.WithCancel(c.Request.Context())
+				cancel()
+				c.Request = c.Request.WithContext(ctx)
+			}
+			requestID := "gemini_truncated_" + test.name
+			c.Set(common.RequestIdKey, requestID)
+			c.Set(string(constant.ContextKeyResponsesContinuity), responsesstate.ContinuityContext{Scope: scope, CurrentInput: json.RawMessage(`[]`)})
+			info := newGeminiResponsesRelayInfo(true)
+			usage, apiErr := GeminiResponsesStreamHandler(c, info, &http.Response{Body: io.NopCloser(strings.NewReader(test.body))})
+			require.Nil(t, usage)
+			require.NotNil(t, apiErr)
+			assert.NotContains(t, recorder.Body.String(), "response.completed")
+			_, loadErr := store.Load(context.Background(), scope, "chatcmpl-"+requestID)
+			require.ErrorIs(t, loadErr, responsesstate.ErrNotFound)
+		})
+	}
+}
+
 func TestGeminiResponsesHandlerReturnsOpenAIResponsesJSON(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)

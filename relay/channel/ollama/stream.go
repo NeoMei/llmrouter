@@ -42,21 +42,21 @@ type ollamaChatStreamChunk struct {
 	EvalDuration       int64  `json:"eval_duration"`
 }
 
-func ollamaToolCallsToOpenAI(toolCalls []OllamaToolCall, startIndex int, includeIndex bool) ([]dto.ToolCallResponse, int) {
+func ollamaToolCallsToOpenAI(toolCalls []OllamaToolCall, startIndex int, includeIndex bool) ([]dto.ToolCallResponse, int, error) {
 	if len(toolCalls) == 0 {
-		return nil, startIndex
+		return nil, startIndex, nil
 	}
 	result := make([]dto.ToolCallResponse, 0, len(toolCalls))
 	for _, tc := range toolCalls {
-		var argBytes []byte
-		var err error
 		if tc.Function.Arguments == nil {
-			argBytes = []byte("{}")
-		} else {
-			argBytes, err = common.Marshal(tc.Function.Arguments)
-			if err != nil || len(argBytes) == 0 {
-				argBytes = []byte("{}")
-			}
+			return nil, startIndex, fmt.Errorf("%w: Ollama tool arguments are required", toolpolicy.ErrMalformedArguments)
+		}
+		argBytes, err := common.Marshal(tc.Function.Arguments)
+		if err != nil {
+			return nil, startIndex, fmt.Errorf("%w: Ollama tool arguments: %v", toolpolicy.ErrMalformedArguments, err)
+		}
+		if common.GetJsonType(argBytes) != "object" {
+			return nil, startIndex, fmt.Errorf("%w: Ollama tool arguments must be an object", toolpolicy.ErrMalformedArguments)
 		}
 		tr := dto.ToolCallResponse{
 			ID:   fmt.Sprintf("call_%d", startIndex),
@@ -72,7 +72,7 @@ func ollamaToolCallsToOpenAI(toolCalls []OllamaToolCall, startIndex int, include
 		startIndex++
 		result = append(result, tr)
 	}
-	return result, startIndex
+	return result, startIndex, nil
 }
 
 func toUnix(ts string) int64 {
@@ -159,7 +159,11 @@ func ollamaStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			}
 			// tool calls
 			if chunk.Message != nil && len(chunk.Message.ToolCalls) > 0 {
-				delta.Choices[0].Delta.ToolCalls, toolCallIndex = ollamaToolCallsToOpenAI(chunk.Message.ToolCalls, toolCallIndex, true)
+				var conversionErr error
+				delta.Choices[0].Delta.ToolCalls, toolCallIndex, conversionErr = ollamaToolCallsToOpenAI(chunk.Message.ToolCalls, toolCallIndex, true)
+				if conversionErr != nil {
+					return toolpolicy.NewResponseValidationError(conversionErr)
+				}
 			}
 			if data, err := common.Marshal(delta); err == nil {
 				_ = helper.StringData(c, string(data))
@@ -198,6 +202,13 @@ func ollamaStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	}
 
 	for {
+		if c == nil || c.Request == nil || c.Request.Context().Err() != nil {
+			var contextErr error
+			if c != nil && c.Request != nil {
+				contextErr = c.Request.Context().Err()
+			}
+			return nil, toolpolicy.NewResponseValidationError(validator.Abort(contextErr))
+		}
 		var raw json.RawMessage
 		decodeErr := decoder.Decode(&raw)
 		if decodeErr == io.EOF {
@@ -216,6 +227,13 @@ func ollamaStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 				return nil, apiErr
 			}
 		}
+	}
+	if c == nil || c.Request == nil || c.Request.Context().Err() != nil {
+		var contextErr error
+		if c != nil && c.Request != nil {
+			contextErr = c.Request.Context().Err()
+		}
+		return nil, toolpolicy.NewResponseValidationError(validator.Abort(contextErr))
 	}
 	flushed, validateErr := validator.Finish()
 	if validateErr != nil {
@@ -274,7 +292,10 @@ func ollamaChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		}
 		if ck.Message != nil && len(ck.Message.ToolCalls) > 0 {
 			var converted []dto.ToolCallResponse
-			converted, toolCallIndex = ollamaToolCallsToOpenAI(ck.Message.ToolCalls, toolCallIndex, false)
+			converted, toolCallIndex, err = ollamaToolCallsToOpenAI(ck.Message.ToolCalls, toolCallIndex, false)
+			if err != nil {
+				return nil, toolpolicy.NewResponseValidationError(err)
+			}
 			toolCalls = append(toolCalls, converted...)
 		}
 	}

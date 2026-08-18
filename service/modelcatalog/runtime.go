@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 )
 
 // RuntimeContext is the caller identity used when assembling a client catalog.
@@ -102,8 +103,7 @@ func AssembleRuntimeCatalog(
 			return nil, err
 		}
 		groups := make([]string, 0, len(abilities))
-		var maxPriority int64
-		var maxWeight uint
+		groupPolicies := make(map[string]model.ClientModelTargetPolicy, len(abilities))
 		for _, ability := range abilities {
 			if !ability.Enabled || !strings.EqualFold(strings.TrimSpace(ability.Model), upstream) {
 				continue
@@ -111,12 +111,16 @@ func AssembleRuntimeCatalog(
 			group := strings.TrimSpace(ability.Group)
 			if group != "" {
 				groups = append(groups, group)
-			}
-			if ability.Priority > maxPriority {
-				maxPriority = ability.Priority
-			}
-			if ability.Weight > maxWeight {
-				maxWeight = ability.Weight
+				weight := int(ability.Weight)
+				if weight <= 0 {
+					weight = 1
+				}
+				key := strings.ToLower(group)
+				candidate := model.ClientModelTargetPolicy{Priority: int(ability.Priority), Weight: weight}
+				current, exists := groupPolicies[key]
+				if !exists || candidate.Priority > current.Priority || candidate.Priority == current.Priority && candidate.Weight > current.Weight {
+					groupPolicies[key] = candidate
+				}
 			}
 		}
 		if len(groups) == 0 {
@@ -136,12 +140,7 @@ func AssembleRuntimeCatalog(
 		raw.UpstreamModel = upstream
 		raw.BillingModel = strings.TrimSpace(canonical)
 		raw.Groups = normalizeIDs(groups)
-		if maxPriority > 0 {
-			raw.Priority = int(maxPriority)
-		}
-		if maxWeight > 0 {
-			raw.Weight = int(maxWeight)
-		}
+		raw.GroupPolicies = groupPolicies
 		if raw.Weight <= 0 {
 			raw.Weight = 1
 		}

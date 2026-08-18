@@ -1,6 +1,7 @@
 package responsesstate
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sync"
@@ -25,10 +26,9 @@ func Enabled() bool {
 	return os.Getenv(stateEnabledEnv) != ""
 }
 
-// Default returns the process-wide Responses state store. It prefers a Redis
-// store when one can be built and Redis is available; otherwise it falls back
-// to the bounded in-memory store for single-instance/development use. The
-// result is cached so callers on the hot relay path do not rebuild the store.
+// Default returns the process-wide Responses state store. Configured Redis is
+// authoritative and construction errors fail closed; memory is selected only
+// when Redis is absent. The result is cached for the relay hot path.
 func Default() (Store, error) {
 	mu.RLock()
 	if defaultSrv != nil || defaultErr != nil {
@@ -45,12 +45,13 @@ func Default() (Store, error) {
 	}
 
 	if common.RDB != nil {
-		if store, err := NewRedis(); err == nil {
-			defaultSrv = store
-			return store, nil
+		store, err := NewRedis()
+		if err != nil {
+			defaultErr = fmt.Errorf("construct Redis responses state store: %w", err)
+			return nil, defaultErr
 		}
-		// Redis is configured but encryption is not; fall through to memory so
-		// single-instance development still works. Readiness can surface this.
+		defaultSrv = store
+		return store, nil
 	}
 	store := NewMemory(DefaultRecordTTL, 32*1024*1024)
 	defaultSrv = store
@@ -76,6 +77,16 @@ func ReadinessCheck() error {
 		return nil
 	}
 	if common.RDB != nil {
+		store, err := Default()
+		if err != nil {
+			return err
+		}
+		if _, ok := store.(*RedisStore); !ok {
+			return fmt.Errorf("responses state selected a non-Redis store while Redis is configured")
+		}
+		if err := common.RDB.Ping(context.Background()).Err(); err != nil {
+			return fmt.Errorf("responses state Redis connectivity check failed: %w", err)
+		}
 		return nil
 	}
 	return errStatefulWithoutRedis

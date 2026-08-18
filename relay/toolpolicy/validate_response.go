@@ -78,6 +78,7 @@ func ValidateChatResponse(policy Policy, response *dto.OpenAITextResponse) error
 	if response == nil {
 		return fmt.Errorf("%w: chat response is nil", ErrMalformedToolCall)
 	}
+	callCount := 0
 	for choiceIndex := range response.Choices {
 		raw := bytes.TrimSpace(response.Choices[choiceIndex].Message.ToolCalls)
 		if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
@@ -92,6 +93,7 @@ func ValidateChatResponse(policy Policy, response *dto.OpenAITextResponse) error
 			return fmt.Errorf("%w: chat choice %d tool_calls: %v", ErrMalformedToolCall, choiceIndex, err)
 		}
 		for callIndex, call := range calls {
+			callCount++
 			kind := ToolKind(strings.TrimSpace(call.Type))
 			if kind != ToolKindFunction && kind != ToolKindCustom {
 				return fmt.Errorf("%w: chat choice %d call %d has unsupported type %q", ErrMalformedToolCall, choiceIndex, callIndex, call.Type)
@@ -104,7 +106,7 @@ func ValidateChatResponse(policy Policy, response *dto.OpenAITextResponse) error
 			}
 		}
 	}
-	return nil
+	return policy.ValidateTerminal(callCount)
 }
 
 // ValidateResponsesResponse validates function/custom calls plus explicit
@@ -114,6 +116,7 @@ func ValidateResponsesResponse(policy Policy, response *dto.OpenAIResponsesRespo
 	if response == nil {
 		return fmt.Errorf("%w: responses response is nil", ErrMalformedToolCall)
 	}
+	callCount := 0
 	for outputIndex := range response.Output {
 		output := &response.Output[outputIndex]
 		kind := ToolKindFunction
@@ -148,6 +151,7 @@ func ValidateResponsesResponse(policy Policy, response *dto.OpenAIResponsesRespo
 		if !isCall {
 			continue
 		}
+		callCount++
 		if output.Status != "" && output.Status != "completed" {
 			return fmt.Errorf("responses output %d: %w: status %q", outputIndex, ErrIncompleteToolCall, output.Status)
 		}
@@ -155,7 +159,7 @@ func ValidateResponsesResponse(policy Policy, response *dto.OpenAIResponsesRespo
 			return fmt.Errorf("responses output %d: %w", outputIndex, err)
 		}
 	}
-	return nil
+	return policy.ValidateTerminal(callCount)
 }
 
 func responsesBuiltInDeclarationName(policy Policy, outputType string) string {
@@ -191,6 +195,7 @@ func ValidateClaudeResponse(policy Policy, response *dto.ClaudeResponse) error {
 	if response == nil {
 		return fmt.Errorf("%w: claude response is nil", ErrMalformedToolCall)
 	}
+	callCount := 0
 	for contentIndex := range response.Content {
 		content := &response.Content[contentIndex]
 		kind := ToolKindFunction
@@ -202,6 +207,7 @@ func ValidateClaudeResponse(policy Policy, response *dto.ClaudeResponse) error {
 		if !isCall {
 			continue
 		}
+		callCount++
 		arguments, err := common.Marshal(content.Input)
 		if err != nil {
 			return fmt.Errorf("%w: claude content %d input: %v", ErrMalformedArguments, contentIndex, err)
@@ -210,7 +216,7 @@ func ValidateClaudeResponse(policy Policy, response *dto.ClaudeResponse) error {
 			return fmt.Errorf("claude content %d: %w", contentIndex, err)
 		}
 	}
-	return nil
+	return policy.ValidateTerminal(callCount)
 }
 
 // ValidateGeminiResponse validates every functionCall in every candidate. The
@@ -221,6 +227,7 @@ func ValidateGeminiResponse(policy Policy, response *dto.GeminiChatResponse) err
 	if response == nil {
 		return fmt.Errorf("%w: gemini response is nil", ErrMalformedToolCall)
 	}
+	callCount := 0
 	for candidateIndex := range response.Candidates {
 		candidate := &response.Candidates[candidateIndex]
 		for partIndex := range candidate.Content.Parts {
@@ -228,6 +235,7 @@ func ValidateGeminiResponse(policy Policy, response *dto.GeminiChatResponse) err
 			if functionCall == nil {
 				continue
 			}
+			callCount++
 			arguments, err := common.Marshal(functionCall.Arguments)
 			if err != nil {
 				return fmt.Errorf("%w: gemini candidate %d part %d arguments: %v", ErrMalformedArguments, candidateIndex, partIndex, err)
@@ -238,7 +246,7 @@ func ValidateGeminiResponse(policy Policy, response *dto.GeminiChatResponse) err
 			}
 		}
 	}
-	return nil
+	return policy.ValidateTerminal(callCount)
 }
 
 func IsPolicyViolation(err error) bool {

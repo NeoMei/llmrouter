@@ -194,6 +194,7 @@ func TestPrepareTieredBillingForSelectedGroupPaidToFreeSettlesToZero(t *testing.
 	assert.Equal(t, 100, info.FinalPreConsumedQuota)
 	assert.Equal(t, 0.0, info.TieredBillingSnapshot.GroupRatio)
 	assert.Equal(t, 0, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+	assert.True(t, info.PriceData.FreeModel)
 	ok, quota, result := TryTieredSettle(info, billingexpr.TokenParams{P: 1_000, C: 500})
 	require.True(t, ok)
 	require.NotNil(t, result)

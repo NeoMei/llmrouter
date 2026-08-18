@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -181,14 +182,39 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		Usage:        &dto.Usage{},
 	}
 	var err *types.NewAPIError
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	validator := toolpolicy.NewNativeStreamValidatorFromContext(c, toolpolicy.NativeStreamClaude)
+	process := func(data string) bool {
 		err = HandleStreamResponseData(c, info, claudeInfo, data)
-		if err != nil {
+		return err == nil
+	}
+	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		emitted, validateErr := validator.Accept(common.StringToByteSlice(data))
+		if validateErr != nil {
+			err = toolpolicy.NewResponseValidationError(validateErr)
 			sr.Stop(err)
+			return
+		}
+		for _, frame := range emitted {
+			if !process(string(frame)) {
+				sr.Stop(err)
+				return
+			}
 		}
 	})
 	if err != nil {
 		return nil, err
+	}
+	if info != nil && info.StreamStatus != nil && (!info.StreamStatus.IsNormalEnd() || info.StreamStatus.HasErrors()) {
+		return nil, toolpolicy.NewResponseValidationError(validator.Abort(fmt.Errorf("%s", info.StreamStatus.Summary())))
+	}
+	flushed, validateErr := validator.Finish()
+	if validateErr != nil {
+		return nil, toolpolicy.NewResponseValidationError(validateErr)
+	}
+	for _, frame := range flushed {
+		if !process(string(frame)) {
+			return nil, err
+		}
 	}
 
 	HandleStreamFinalResponse(c, info, claudeInfo)

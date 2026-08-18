@@ -138,12 +138,17 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	var imageCount int
 	var hasBillableUsageMetadata bool
 	responseText := strings.Builder{}
+	validator := toolpolicy.NewNativeStreamValidatorFromContext(c, toolpolicy.NativeStreamGemini)
+	var streamErr *types.NewAPIError
 
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	process := func(data string, sr *helper.StreamResult) bool {
 		var geminiResponse dto.GeminiChatResponse
 		if err := common.UnmarshalJsonStr(data, &geminiResponse); err != nil {
-			sr.Stop(fmt.Errorf("unmarshal: %w", err))
-			return
+			streamErr = toolpolicy.NewResponseValidationError(fmt.Errorf("%w: Gemini stream unmarshal: %v", toolpolicy.ErrMalformedToolCall, err))
+			if sr != nil {
+				sr.Stop(streamErr)
+			}
+			return false
 		}
 
 		if len(geminiResponse.Candidates) == 0 && geminiResponse.PromptFeedback != nil && geminiResponse.PromptFeedback.BlockReason != nil {
@@ -170,9 +175,47 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		}
 
 		if !callback(data, &geminiResponse) {
-			sr.Stop(fmt.Errorf("gemini callback stopped"))
+			streamErr = types.NewOpenAIError(fmt.Errorf("gemini callback stopped"), types.ErrorCodeBadResponse, http.StatusBadGateway)
+			if sr != nil {
+				sr.Stop(streamErr)
+			}
+			return false
+		}
+		return true
+	}
+
+	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		if streamErr != nil {
+			sr.Stop(streamErr)
+			return
+		}
+		emitted, err := validator.Accept(common.StringToByteSlice(data))
+		if err != nil {
+			streamErr = toolpolicy.NewResponseValidationError(err)
+			sr.Stop(streamErr)
+			return
+		}
+		for _, frame := range emitted {
+			if !process(string(frame), sr) {
+				return
+			}
 		}
 	})
+	if streamErr != nil {
+		return nil, streamErr
+	}
+	if info != nil && info.StreamStatus != nil && (!info.StreamStatus.IsNormalEnd() || info.StreamStatus.HasErrors()) {
+		return nil, toolpolicy.NewResponseValidationError(validator.Abort(fmt.Errorf("%s", info.StreamStatus.Summary())))
+	}
+	flushed, err := validator.Finish()
+	if err != nil {
+		return nil, toolpolicy.NewResponseValidationError(err)
+	}
+	for _, frame := range flushed {
+		if !process(string(frame), nil) {
+			return nil, streamErr
+		}
+	}
 
 	if !hasBillableUsageMetadata {
 		if info.ReceivedResponseCount > 0 {

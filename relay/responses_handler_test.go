@@ -432,6 +432,46 @@ func TestResponsesContinuityHandlerToPersistenceKeepsLinearChild(t *testing.T) {
 	assert.Contains(t, string(payload.Input[4]), "third")
 }
 
+func TestLegacyDistributorContinuityBindsSelectedChannelIdentityAcrossTurns(t *testing.T) {
+	store := responsesstate.NewMemory(time.Hour, 1<<20)
+	gin.SetMode(gin.TestMode)
+	firstContext, _ := gin.CreateTestContext(httptest.NewRecorder())
+	firstContext.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		UserId: 11, TokenId: 7, ResolvedChannelId: 9, ResolvedModelName: "model-a",
+		RelayMode: relayconstant.RelayModeResponses,
+	}
+	firstRequest := &dto.OpenAIResponsesRequest{Model: "model-a", Input: json.RawMessage(`[{"type":"message","role":"user","content":"first"}]`)}
+	_, err := prepareResponsesContinuity(firstContext, info, store, firstRequest)
+	require.NoError(t, err)
+	raw, exists := firstContext.Get(string(appconstant.ContextKeyResponsesContinuity))
+	require.True(t, exists)
+	first := raw.(responsesstate.ContinuityContext)
+	require.Equal(t, "legacy_distributor", first.Scope.RouteKind)
+	require.Equal(t, 9, first.Scope.RouteID)
+	require.Equal(t, 9, first.Scope.TargetID)
+	require.Equal(t, 9, first.Scope.ChannelID)
+	require.NoError(t, responsesstate.SaveTurn(context.Background(), store, responsesstate.Record{
+		Version: responsesstate.CurrentVersion, Scope: first.Scope, ResponseID: "resp_legacy_first",
+		Input: first.CurrentInput, Output: json.RawMessage(`[{"type":"message","role":"assistant","content":"answer"}]`),
+	}))
+
+	secondContext, _ := gin.CreateTestContext(httptest.NewRecorder())
+	secondContext.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	secondRequest := &dto.OpenAIResponsesRequest{Model: "model-a", PreviousResponseID: "resp_legacy_first", Input: json.RawMessage(`[{"type":"message","role":"user","content":"second"}]`)}
+	prepared, err := prepareResponsesContinuity(secondContext, info, store, secondRequest)
+	require.NoError(t, err)
+	require.Empty(t, prepared.PreviousResponseID)
+	require.Contains(t, string(prepared.Input), "first")
+	require.Contains(t, string(prepared.Input), "answer")
+	require.Contains(t, string(prepared.Input), "second")
+
+	explicit := first.Scope
+	explicit.RouteKind = ""
+	_, err = store.Load(context.Background(), explicit, "resp_legacy_first")
+	require.ErrorIs(t, err, responsesstate.ErrScopeMismatch)
+}
+
 func TestPrepareResponsesContinuityClearsStaleContextAfterRetryFailure(t *testing.T) {
 	t.Setenv("RESPONSES_STATE_ENABLED", "1")
 	responsesstate.ResetForTest()

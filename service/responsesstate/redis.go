@@ -18,7 +18,7 @@ import (
 )
 
 // RedisStore is a multi-instance Responses state store backed by Redis. Records
-// are encrypted at rest with AES-GCM using GATEWAY_AES_KEY when set.
+// are encrypted at rest with AES-GCM using the required GATEWAY_AES_KEY.
 type RedisStore struct {
 	key []byte
 }
@@ -43,29 +43,46 @@ func (s *RedisStore) Load(ctx context.Context, expected Scope, responseID string
 	}
 	bucketKey := Key(responseID)
 	values := make([]string, 0, 1)
-	bucketHasRecords := false
+	bucketCount, err := common.RDB.HLen(ctx, bucketKey).Result()
+	if err != nil {
+		return Record{}, err
+	}
+	if bucketCount > MaxScopeVariantsPerResponse {
+		return Record{}, ErrRetentionLimit
+	}
+	bucketHasRecords := bucketCount > 0
+	wantedField := ""
 	if expected.ClientTaskID != "" {
-		value, err := common.RDB.HGet(ctx, bucketKey, scopeDigest(expected)).Result()
-		if err == nil {
-			values = append(values, value)
-			bucketHasRecords = true
-		} else if errors.Is(err, redis.Nil) {
-			count, countErr := common.RDB.HLen(ctx, bucketKey).Result()
-			if countErr != nil {
-				return Record{}, countErr
-			}
-			bucketHasRecords = count > 0
-		} else {
-			return Record{}, err
-		}
-	} else {
-		entries, err := common.RDB.HGetAll(ctx, bucketKey).Result()
+		wantedField = scopeDigest(expected)
+	}
+	var cursor uint64
+	totalBytes := 0
+	scannedFields := 0
+	for {
+		entries, next, err := common.RDB.HScan(ctx, bucketKey, cursor, "*", MaxScopeVariantsPerResponse).Result()
 		if err != nil {
 			return Record{}, err
 		}
-		bucketHasRecords = len(entries) > 0
-		for _, value := range entries {
-			values = append(values, value)
+		if len(entries)%2 != 0 {
+			return Record{}, fmt.Errorf("%w: malformed Redis hash scan", ErrRetentionLimit)
+		}
+		for i := 0; i < len(entries); i += 2 {
+			scannedFields++
+			if scannedFields > MaxScopeVariantsPerResponse {
+				return Record{}, ErrRetentionLimit
+			}
+			value := entries[i+1]
+			totalBytes += len(value)
+			if totalBytes > MaxResponseBucketBytes {
+				return Record{}, ErrRetentionLimit
+			}
+			if wantedField == "" || entries[i] == wantedField {
+				values = append(values, value)
+			}
+		}
+		cursor = next
+		if cursor == 0 {
+			break
 		}
 	}
 	if len(values) == 0 {
@@ -149,13 +166,36 @@ func (s *RedisStore) Save(ctx context.Context, record Record) error {
 		ttlMillis = 1
 	}
 	const saveRecordScript = `
+local count = redis.call('HLEN', KEYS[1])
+local existing = redis.call('HGET', KEYS[1], ARGV[1])
+if not existing and count >= tonumber(ARGV[4]) then
+  return -1
+end
+local total = 0
+for _, value in ipairs(redis.call('HVALS', KEYS[1])) do
+  total = total + string.len(value)
+end
+if existing then
+  total = total - string.len(existing)
+end
+total = total + string.len(ARGV[2])
+if total > tonumber(ARGV[5]) then
+  return -2
+end
 local current_ttl = redis.call('PTTL', KEYS[1])
 redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
 if current_ttl < 0 or current_ttl < tonumber(ARGV[3]) then
   redis.call('PEXPIRE', KEYS[1], ARGV[3])
 end
 return 1`
-	return common.RDB.Eval(ctx, saveRecordScript, []string{Key(record.ResponseID)}, scopeDigest(record.Scope), string(encrypted), ttlMillis).Err()
+	result, err := common.RDB.Eval(ctx, saveRecordScript, []string{Key(record.ResponseID)}, scopeDigest(record.Scope), string(encrypted), ttlMillis, MaxScopeVariantsPerResponse, MaxResponseBucketBytes).Int64()
+	if err != nil {
+		return err
+	}
+	if result < 0 {
+		return ErrRetentionLimit
+	}
+	return nil
 }
 
 func (s *RedisStore) encrypt(plaintext []byte) ([]byte, error) {

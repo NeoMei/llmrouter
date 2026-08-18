@@ -393,6 +393,36 @@ func TestRuntimeAssemblyAppliesMappingAndFiltersUnavailableTargets(t *testing.T)
 	require.Equal(t, 3, resolved.Weight)
 }
 
+func TestRuntimeAssemblyUsesAuthorizedGroupAbilityForPriorityAndWeight(t *testing.T) {
+	routes := []ClientModelRoute{{Id: 1, PublicId: "coder", Client: "codex", Enabled: true}}
+	targets := []ClientModelTarget{
+		{Id: 10, RouteId: 1, ChannelId: 7, UpstreamModel: "model-a", BillingModel: "model-a", PreferredWires: `["responses"]`, Weight: 1, Enabled: true},
+		{Id: 20, RouteId: 1, ChannelId: 8, UpstreamModel: "model-b", BillingModel: "model-b", PreferredWires: `["responses"]`, Weight: 1, Enabled: true},
+	}
+	sources := runtimeFixtureSources{
+		channels: map[int]RuntimeChannel{7: {ID: 7, Enabled: true}, 8: {ID: 8, Enabled: true}},
+		abilities: map[int][]RuntimeAbility{
+			7: {
+				{Group: "default", Model: "model-a", Enabled: true, Priority: 1, Weight: 2},
+				{Group: "enterprise", Model: "model-a", Enabled: true, Priority: 100, Weight: 99},
+			},
+			8: {{Group: "default", Model: "model-b", Enabled: true, Priority: 5, Weight: 3}},
+		},
+		priced: map[string]string{"model-a": "model-a", "model-b": "model-b"},
+	}
+	catalog, err := AssembleRuntimeCatalog(context.Background(), RuntimeContext{UserID: 11, Groups: []string{"default"}, Client: "codex"}, routes, targets, sources, testAuthorizer{})
+	require.NoError(t, err)
+
+	resolved, err := catalog.ResolveCandidates(context.Background(), 11, []string{"default"}, "coder", "codex")
+	require.NoError(t, err)
+	require.Len(t, resolved, 2)
+	require.Equal(t, []int{20, 10}, []int{resolved[0].TargetID, resolved[1].TargetID})
+	require.Equal(t, []int{5, 1}, []int{resolved[0].Priority, resolved[1].Priority})
+	require.Equal(t, []int{3, 2}, []int{resolved[0].Weight, resolved[1].Weight})
+	require.Equal(t, "default", resolved[0].SelectedGroup)
+	require.Equal(t, "default", resolved[1].SelectedGroup)
+}
+
 func TestRuntimeAssemblyRequiresAuthorizer(t *testing.T) {
 	sources := runtimeFixtureSources{}
 	_, err := AssembleRuntimeCatalog(context.Background(), RuntimeContext{UserID: 11}, nil, nil, sources, nil)

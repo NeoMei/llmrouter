@@ -45,7 +45,7 @@ func newGormLogger(w io.Writer) logger.Interface {
 		SlowThreshold:             time.Duration(slowThresholdMs) * time.Millisecond,
 		LogLevel:                  logger.Warn,
 		IgnoreRecordNotFoundError: true,
-		ParameterizedQueries:      !common.DebugEnabled,
+		ParameterizedQueries:      true,
 		Colorful:                  true,
 	})
 }
@@ -55,11 +55,9 @@ type sanitizedLogWriter struct {
 }
 
 func (w *sanitizedLogWriter) Printf(format string, args ...interface{}) {
-	if !common.DebugEnabled {
-		for i, arg := range args {
-			if err, ok := arg.(error); ok {
-				args[i] = sanitizeDBError(err)
-			}
+	for i, arg := range args {
+		if err, ok := arg.(error); ok {
+			args[i] = sanitizeDBError(err)
 		}
 	}
 	w.delegate.Printf(format, args...)

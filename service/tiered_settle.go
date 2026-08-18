@@ -61,9 +61,7 @@ func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon
 
 	relayInfo.TieredBillingSnapshot.GroupRatio = snapshot.GroupRatio
 	relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup = snapshot.EstimatedQuotaAfterGroup
-	if snapshot.GroupRatio != 0 {
-		relayInfo.PriceData.FreeModel = false
-	}
+	relayInfo.PriceData.FreeModel = snapshot.GroupRatio == 0
 	if relayInfo.Billing != nil {
 		relayInfo.FinalPreConsumedQuota = relayInfo.Billing.GetPreConsumedQuota()
 	}

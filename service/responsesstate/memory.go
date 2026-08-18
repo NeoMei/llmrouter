@@ -44,7 +44,8 @@ func (s *MemoryStore) Load(ctx context.Context, expected Scope, responseID strin
 		return Record{}, ErrNotFound
 	}
 	bucketKey := Key(responseID)
-	s.mu.RLock()
+	s.mu.Lock()
+	s.pruneExpiredLocked(time.Now())
 	keys := s.responseKeys[bucketKey]
 	candidates := make([]Record, 0, len(keys))
 	if expected.ClientTaskID != "" {
@@ -60,7 +61,7 @@ func (s *MemoryStore) Load(ctx context.Context, expected Scope, responseID strin
 	}
 	_, legacy := s.records[legacyKey(expected.TenantID, expected.TokenID, responseID)]
 	bucketHasRecords := len(keys) != 0
-	s.mu.RUnlock()
+	s.mu.Unlock()
 	if len(candidates) == 0 {
 		if bucketHasRecords {
 			return Record{}, ErrScopeMismatch
@@ -133,6 +134,7 @@ func (s *MemoryStore) Save(ctx context.Context, record Record) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.pruneExpiredLocked(time.Now())
 	existingSize := 0
 	if existing, ok := s.records[key]; ok {
 		existingBytes, _ := common.Marshal(existing)
@@ -159,7 +161,10 @@ func (s *MemoryStore) Prune() int {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := time.Now()
+	return s.pruneExpiredLocked(time.Now())
+}
+
+func (s *MemoryStore) pruneExpiredLocked(now time.Time) int {
 	removed := 0
 	for bucketKey, keys := range s.responseKeys {
 		for key := range keys {

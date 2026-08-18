@@ -13,6 +13,21 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const (
+	// streamMaxActiveCalls bounds simultaneously tracked tool-call state.
+	streamMaxActiveCalls = 64
+	// streamMaxAliases bounds protocol identifiers pointing at call state.
+	streamMaxAliases = 512
+	// streamMaxBufferedFrames bounds frames withheld before atomic release.
+	streamMaxBufferedFrames = 2048
+	// streamMaxFrameBytes is checked before JSON decoding or call allocation.
+	streamMaxFrameBytes = 256 << 10
+	// streamMaxCallArgumentBytes bounds accumulated arguments/input per call.
+	streamMaxCallArgumentBytes = 128 << 10
+	// streamMaxBufferedBytes bounds all withheld frame bytes per request.
+	streamMaxBufferedBytes = 512 << 10
+)
+
 // StreamValidator validates one upstream Chat Completions or Responses stream.
 // Text-only frames are returned immediately. Frames that contribute to a tool
 // call remain request-local until that call reaches a complete, valid state.
@@ -26,7 +41,11 @@ type StreamValidator struct {
 	failed                 error
 	chatGate               *pendingStreamCall
 	responseGate           *pendingStreamCall
+	policyGate             *pendingStreamCall
 	responseEnded          bool
+	responseSeen           bool
+	responseSuccess        bool
+	bufferedBytes          int
 	rejectCustomConversion bool
 	chatSeen               map[int]struct{}
 	chatFinished           map[int]struct{}
@@ -41,6 +60,7 @@ type pendingStreamCall struct {
 	typeName        string
 	nativeType      string
 	arguments       []streamFragment
+	argumentBytes   int
 	finalArgs       json.RawMessage
 	argumentsDoneAt uint64
 	inputDoneAt     uint64
@@ -145,6 +165,9 @@ func (v *StreamValidator) Accept(event json.RawMessage) ([]json.RawMessage, erro
 	if len(raw) == 0 {
 		return nil, v.fail(fmt.Errorf("%w: empty stream event", ErrMalformedToolCall))
 	}
+	if len(raw) > streamMaxFrameBytes {
+		return nil, v.fail(fmt.Errorf("%w: stream frame exceeds %d bytes", ErrMalformedToolCall, streamMaxFrameBytes))
+	}
 	if err := ValidateRawResponseJSON(raw); err != nil {
 		return nil, v.fail(err)
 	}
@@ -175,19 +198,26 @@ func (v *StreamValidator) Accept(event json.RawMessage) ([]json.RawMessage, erro
 			return nil, v.fail(fmt.Errorf("%w: chat usage arrived before every choice completed", ErrIncompleteToolCall))
 		}
 	}
+	if v.policy.RequiresToolCall() {
+		gate := v.ensureTerminalGate("policy-terminal", sequence)
+		v.policyGate = gate
+		toolRelated = true
+		owners[gate] = struct{}{}
+	}
 
 	if len(envelope.Choices) > 0 {
-		var err error
-		toolRelated, err = v.acceptChatFrame(sequence, &envelope, owners)
+		frameToolRelated, err := v.acceptChatFrame(sequence, &envelope, owners)
 		if err != nil {
 			return nil, v.fail(err)
 		}
+		toolRelated = toolRelated || frameToolRelated
 	} else if envelope.Type != "" {
-		var err error
-		toolRelated, err = v.acceptResponsesFrame(sequence, &envelope, owners)
+		v.responseSeen = true
+		frameToolRelated, err := v.acceptResponsesFrame(sequence, &envelope, owners)
 		if err != nil {
 			return nil, v.fail(err)
 		}
+		toolRelated = toolRelated || frameToolRelated
 	}
 	if v.chatGate != nil && len(envelope.Choices) > 0 {
 		toolRelated = true
@@ -198,12 +228,19 @@ func (v *StreamValidator) Accept(event json.RawMessage) ([]json.RawMessage, erro
 		owners[v.chatGate] = struct{}{}
 	}
 
-	cloned := append(json.RawMessage(nil), raw...)
 	if toolRelated {
+		if len(v.frames) >= streamMaxBufferedFrames {
+			return nil, v.fail(fmt.Errorf("%w: too many buffered stream frames", ErrMalformedToolCall))
+		}
+		if v.bufferedBytes+len(raw) > streamMaxBufferedBytes {
+			return nil, v.fail(fmt.Errorf("%w: buffered stream data exceeds %d bytes", ErrMalformedToolCall, streamMaxBufferedBytes))
+		}
+		cloned := append(json.RawMessage(nil), raw...)
 		v.frames = append(v.frames, &pendingStreamFrame{sequence: sequence, raw: cloned, owners: owners})
+		v.bufferedBytes += len(cloned)
 		return v.flushReady(), nil
 	}
-	return []json.RawMessage{cloned}, nil
+	return []json.RawMessage{append(json.RawMessage(nil), raw...)}, nil
 }
 
 // Finish must be called for every termination path: [DONE], terminal EOF,
@@ -216,8 +253,11 @@ func (v *StreamValidator) Finish() ([]json.RawMessage, error) {
 	if v.failed != nil {
 		return nil, v.failed
 	}
+	if v.responseSeen && !v.responseSuccess {
+		return nil, v.fail(fmt.Errorf("%w: responses stream ended without a validated success terminal", ErrIncompleteToolCall))
+	}
 	for call := range v.calls {
-		if call == v.chatGate || call == v.responseGate {
+		if call == v.chatGate || call == v.responseGate || call == v.policyGate {
 			continue
 		}
 		if !call.completed {
@@ -227,13 +267,37 @@ func (v *StreamValidator) Finish() ([]json.RawMessage, error) {
 	if v.chatGate != nil && !v.allSeenChatChoicesFinished() {
 		return nil, v.fail(fmt.Errorf("%w: stream ended before every chat choice completed", ErrIncompleteToolCall))
 	}
+	if err := v.validatePolicy(func(policy Policy) error { return policy.ValidateTerminal(v.completedToolCount()) }); err != nil {
+		return nil, v.fail(err)
+	}
 	if v.chatGate != nil {
 		v.chatGate.completed = true
 	}
 	if v.responseGate != nil {
 		v.responseGate.completed = true
 	}
+	if v.policyGate != nil {
+		v.policyGate.completed = true
+	}
 	return v.flushReady(), nil
+}
+
+// Abort permanently discards buffered frames. It is used for transport EOF,
+// scanner failure, timeout, or cancellation and can never unlock a terminal
+// gate, even if a success-looking provider frame was seen earlier.
+func (v *StreamValidator) Abort(cause error) error {
+	if v == nil {
+		return fmt.Errorf("%w: stream validator is nil", ErrMalformedToolCall)
+	}
+	if v.failed != nil {
+		return v.failed
+	}
+	v.frames = nil
+	v.bufferedBytes = 0
+	if cause == nil {
+		cause = fmt.Errorf("stream transport aborted")
+	}
+	return v.fail(fmt.Errorf("%w: %v", ErrIncompleteToolCall, cause))
 }
 
 func (v *StreamValidator) acceptChatFrame(sequence uint64, envelope *streamEnvelope, owners map[*pendingStreamCall]struct{}) (bool, error) {
@@ -265,7 +329,9 @@ func (v *StreamValidator) acceptChatFrame(sequence uint64, envelope *streamEnvel
 				call.typeName += typeName
 			}
 			if delta.Function.Arguments != "" {
-				call.arguments = append(call.arguments, streamFragment{sequence: sequence, value: delta.Function.Arguments})
+				if err := appendStreamArgument(call, sequence, delta.Function.Arguments); err != nil {
+					return false, err
+				}
 			}
 		}
 
@@ -358,12 +424,20 @@ func (v *StreamValidator) acceptResponsesFrame(sequence uint64, envelope *stream
 		if delta, err := rawJSONString(envelope.Delta); err != nil {
 			return false, fmt.Errorf("%w: invalid tool argument delta: %v", ErrMalformedToolCall, err)
 		} else if delta != "" {
-			call.arguments = append(call.arguments, streamFragment{sequence: sequence, value: delta})
+			if err := appendStreamArgument(call, sequence, delta); err != nil {
+				return false, err
+			}
 		}
 		if len(bytes.TrimSpace(envelope.Arguments)) > 0 {
+			if len(envelope.Arguments) > streamMaxCallArgumentBytes {
+				return false, fmt.Errorf("%w: terminal function arguments exceed limit", ErrMalformedToolCall)
+			}
 			call.finalArgs = append(json.RawMessage(nil), envelope.Arguments...)
 		}
 		if len(bytes.TrimSpace(envelope.Input)) > 0 {
+			if len(envelope.Input) > streamMaxCallArgumentBytes {
+				return false, fmt.Errorf("%w: terminal custom input exceeds limit", ErrMalformedToolCall)
+			}
 			call.finalArgs = append(json.RawMessage(nil), envelope.Input...)
 		}
 		if strings.HasSuffix(eventType, ".done") {
@@ -396,6 +470,7 @@ func (v *StreamValidator) acceptResponsesFrame(sequence uint64, envelope *stream
 		gate := v.ensureTerminalGate("responses-terminal", sequence)
 		v.responseGate = gate
 		v.responseEnded = true
+		v.responseSuccess = true
 		owners[gate] = struct{}{}
 		return true, nil
 	case "response.failed", "response.error", "response.incomplete", "error":
@@ -581,6 +656,7 @@ func responsesCallAliases(outputIndex *int, itemID, callID string, item *dto.Res
 }
 
 func (v *StreamValidator) resolveCall(aliases []string, protocol string, chatChoice int, sequence uint64, allowCompleted bool) (*pendingStreamCall, error) {
+	aliases = uniqueStrings(aliases)
 	var call *pendingStreamCall
 	for _, alias := range aliases {
 		candidate := v.aliases[alias]
@@ -601,8 +677,20 @@ func (v *StreamValidator) resolveCall(aliases []string, protocol string, chatCho
 		return nil, fmt.Errorf("%w: frame referenced completed tool call", ErrMalformedToolCall)
 	}
 	if call == nil {
+		if v.activeToolCallCount() >= streamMaxActiveCalls {
+			return nil, fmt.Errorf("%w: too many active streamed tool calls", ErrMalformedToolCall)
+		}
 		call = &pendingStreamCall{protocol: protocol, chatChoice: chatChoice, createdAt: sequence}
 		v.calls[call] = struct{}{}
+	}
+	newAliases := 0
+	for _, alias := range aliases {
+		if _, ok := v.aliases[alias]; !ok {
+			newAliases++
+		}
+	}
+	if len(v.aliases)+newAliases > streamMaxAliases {
+		return nil, fmt.Errorf("%w: too many streamed tool aliases", ErrMalformedToolCall)
 	}
 	for _, alias := range aliases {
 		v.aliases[alias] = call
@@ -616,6 +704,9 @@ func (v *StreamValidator) ensureTerminalGate(protocol string, sequence uint64) *
 	}
 	if protocol == "responses-terminal" && v.responseGate != nil {
 		return v.responseGate
+	}
+	if protocol == "policy-terminal" && v.policyGate != nil {
+		return v.policyGate
 	}
 	gate := &pendingStreamCall{protocol: protocol, createdAt: sequence}
 	v.calls[gate] = struct{}{}
@@ -662,6 +753,10 @@ func (v *StreamValidator) mergeCalls(left, right *pendingStreamCall) (*pendingSt
 		return nil, fmt.Errorf("%w: conflicting tool call kinds", ErrMalformedToolCall)
 	}
 	left.arguments = append(left.arguments, right.arguments...)
+	left.argumentBytes += right.argumentBytes
+	if left.argumentBytes > streamMaxCallArgumentBytes {
+		return nil, fmt.Errorf("%w: merged streamed tool arguments exceed limit", ErrMalformedToolCall)
+	}
 	if left.argumentsDoneAt != 0 && right.argumentsDoneAt != 0 {
 		return nil, fmt.Errorf("%w: duplicate function arguments.done aliases", ErrMalformedToolCall)
 	}
@@ -763,6 +858,19 @@ func (v *StreamValidator) applyResponsesItem(call *pendingStreamCall, item *dto.
 		}
 	}
 	if len(bytes.TrimSpace(finalArgs)) > 0 {
+		argumentBytes := len(finalArgs)
+		if call.kind == ToolKindFunction {
+			argumentBytes = len(unwrapFunctionArguments(finalArgs))
+		} else if common.GetJsonType(finalArgs) == "string" {
+			var input string
+			if err := common.UnmarshalUnique(finalArgs, &input); err != nil {
+				return fmt.Errorf("%w: malformed terminal tool input", ErrMalformedArguments)
+			}
+			argumentBytes = len(input)
+		}
+		if argumentBytes > streamMaxCallArgumentBytes {
+			return fmt.Errorf("%w: terminal tool arguments exceed limit", ErrMalformedToolCall)
+		}
 		if len(bytes.TrimSpace(call.finalArgs)) > 0 && !bytes.Equal(bytes.TrimSpace(call.finalArgs), bytes.TrimSpace(finalArgs)) {
 			return fmt.Errorf("%w: responses stream changed terminal tool arguments", ErrMalformedToolCall)
 		}
@@ -833,9 +941,57 @@ func (v *StreamValidator) flushReady() []json.RawMessage {
 		consumed++
 	}
 	if consumed > 0 {
+		for _, frame := range v.frames[:consumed] {
+			v.bufferedBytes -= len(frame.raw)
+		}
 		v.frames = append([]*pendingStreamFrame(nil), v.frames[consumed:]...)
 	}
 	return emitted
+}
+
+func appendStreamArgument(call *pendingStreamCall, sequence uint64, value string) error {
+	if call == nil {
+		return fmt.Errorf("%w: missing streamed tool call", ErrMalformedToolCall)
+	}
+	if call.argumentBytes+len(value) > streamMaxCallArgumentBytes {
+		return fmt.Errorf("%w: streamed tool arguments exceed %d bytes", ErrMalformedToolCall, streamMaxCallArgumentBytes)
+	}
+	call.arguments = append(call.arguments, streamFragment{sequence: sequence, value: value})
+	call.argumentBytes += len(value)
+	return nil
+}
+
+func (v *StreamValidator) activeToolCallCount() int {
+	count := 0
+	for call := range v.calls {
+		if call.protocol == "chat" || call.protocol == "responses" {
+			count++
+		}
+	}
+	return count
+}
+
+func (v *StreamValidator) completedToolCount() int {
+	count := 0
+	for call := range v.calls {
+		if (call.protocol == "chat" || call.protocol == "responses") && call.completed {
+			count++
+		}
+	}
+	return count
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func (v *StreamValidator) fail(err error) error {

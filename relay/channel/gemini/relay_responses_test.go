@@ -2,6 +2,8 @@ package gemini
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -14,11 +16,104 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/service/responsesstate"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGeminiResponsesHandlersPersistEligibleCompletedTurns(t *testing.T) {
+	previousTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = previousTimeout })
+	t.Setenv("RESPONSES_STATE_ENABLED", "1")
+	responsesstate.ResetForTest()
+	t.Cleanup(responsesstate.ResetForTest)
+	store, err := responsesstate.Default()
+	require.NoError(t, err)
+	scope := responsesstate.Scope{TenantID: 11, UserID: 11, TokenID: 7, RouteID: 3, TargetID: 4, ChannelID: 5, Model: "gemini-test"}
+
+	for _, stream := range []bool{false, true} {
+		name := "nonstream"
+		if stream {
+			name = "stream"
+		}
+		t.Run(name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			requestID := "resp_gemini_" + name
+			responseID := "chatcmpl-" + requestID
+			c.Set(common.RequestIdKey, requestID)
+			c.Set(string(constant.ContextKeyResponsesContinuity), responsesstate.ContinuityContext{Scope: scope, CurrentInput: json.RawMessage(`[{"type":"message","role":"user","content":"question"}]`)})
+			info := newGeminiResponsesRelayInfo(stream)
+			payload := `{"candidates":[{"index":0,"finishReason":"STOP","content":{"role":"model","parts":[{"text":"answer"}]}}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":3,"totalTokenCount":5}}`
+			var body string
+			if stream {
+				body = "data: " + payload + "\n\ndata: [DONE]\n\n"
+			} else {
+				body = payload
+			}
+			var apiErr *types.NewAPIError
+			if stream {
+				_, apiErr = GeminiResponsesStreamHandler(c, info, &http.Response{Body: io.NopCloser(strings.NewReader(body))})
+			} else {
+				_, apiErr = GeminiResponsesHandler(c, info, &http.Response{Body: io.NopCloser(strings.NewReader(body))})
+			}
+			require.Nil(t, apiErr)
+			record, loadErr := store.Load(context.Background(), scope, responseID)
+			require.NoError(t, loadErr)
+			require.Contains(t, string(record.Output), "answer")
+		})
+	}
+}
+
+func TestGeminiResponsesFailuresDoNotPersist(t *testing.T) {
+	previousTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = previousTimeout })
+	t.Setenv("RESPONSES_STATE_ENABLED", "1")
+	responsesstate.ResetForTest()
+	t.Cleanup(responsesstate.ResetForTest)
+	store, err := responsesstate.Default()
+	require.NoError(t, err)
+	scope := responsesstate.Scope{TenantID: 11, UserID: 11, TokenID: 7, RouteID: 3, TargetID: 4, ChannelID: 5, Model: "gemini-test"}
+
+	tests := []struct {
+		name      string
+		stream    bool
+		cancelled bool
+		body      string
+	}{
+		{name: "blocked", body: `{"promptFeedback":{"blockReason":"SAFETY"}}`},
+		{name: "incomplete", stream: true, body: geminiSSE(`{"candidates":[{"index":0,"finishReason":"MAX_TOKENS","content":{"role":"model","parts":[{"text":"partial"}]}}]}`)},
+		{name: "cancelled", cancelled: true, body: `{"candidates":[{"index":0,"finishReason":"STOP","content":{"role":"model","parts":[{"text":"answer"}]}}]}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			if test.cancelled {
+				ctx, cancel := context.WithCancel(c.Request.Context())
+				cancel()
+				c.Request = c.Request.WithContext(ctx)
+			}
+			requestID := "gemini_failure_" + test.name
+			responseID := "chatcmpl-" + requestID
+			c.Set(common.RequestIdKey, requestID)
+			c.Set(string(constant.ContextKeyResponsesContinuity), responsesstate.ContinuityContext{Scope: scope, CurrentInput: json.RawMessage(`[]`)})
+			info := newGeminiResponsesRelayInfo(test.stream)
+			if test.stream {
+				_, _ = GeminiResponsesStreamHandler(c, info, &http.Response{Body: io.NopCloser(strings.NewReader(test.body))})
+			} else {
+				_, _ = GeminiResponsesHandler(c, info, &http.Response{Body: io.NopCloser(strings.NewReader(test.body))})
+			}
+			_, loadErr := store.Load(context.Background(), scope, responseID)
+			require.ErrorIs(t, loadErr, responsesstate.ErrNotFound)
+		})
+	}
+}
 
 func TestGeminiResponsesHandlerReturnsOpenAIResponsesJSON(t *testing.T) {
 	recorder := httptest.NewRecorder()

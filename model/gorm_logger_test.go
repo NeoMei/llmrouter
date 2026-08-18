@@ -117,7 +117,7 @@ func TestGormLoggerParameterizesSQLAndSanitizesDriverErrors(t *testing.T) {
 	assert.NotContains(t, logged, "no such table")
 }
 
-func TestGormLoggerDebugModeKeepsDiagnosticValues(t *testing.T) {
+func TestGormLoggerDebugModeStillRedactsDiagnosticValues(t *testing.T) {
 	preserveGormLoggerGlobals(t)
 	common.DebugEnabled = true
 
@@ -127,8 +127,10 @@ func TestGormLoggerDebugModeKeepsDiagnosticValues(t *testing.T) {
 	require.Error(t, db.Exec("SELECT * FROM missing_table WHERE secret = ?", "super-secret").Error)
 
 	logged := output.String()
-	assert.Contains(t, logged, "super-secret")
-	assert.Contains(t, logged, "no such table")
+	assert.Contains(t, logged, "secret = ?")
+	assert.Contains(t, logged, "sqlite error 1")
+	assert.NotContains(t, logged, "super-secret")
+	assert.NotContains(t, logged, "no such table")
 }
 
 func TestNewGormConfigSetsPrepareStatementPolicy(t *testing.T) {

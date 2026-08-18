@@ -350,6 +350,9 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	if streamErr != nil {
 		return nil, streamErr
 	}
+	if abortErr := abortInvalidStreamTransport(c, info, streamValidator); abortErr != nil {
+		return nil, abortErr
+	}
 	flushed, err := streamValidator.Finish()
 	if err != nil {
 		return nil, toolpolicy.NewResponseValidationError(err)

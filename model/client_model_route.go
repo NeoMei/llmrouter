@@ -34,7 +34,14 @@ type ClientModelTarget struct {
 	ContextWindow      int    `json:"context_window"`
 	ContextFitRequired bool   `json:"context_fit_required"`
 
-	Groups []string `json:"-" gorm:"-"`
+	Groups        []string                           `json:"-" gorm:"-"`
+	GroupPolicies map[string]ClientModelTargetPolicy `json:"-" gorm:"-"`
+}
+
+// ClientModelTargetPolicy preserves priority and weight from one ability row.
+type ClientModelTargetPolicy struct {
+	Priority int
+	Weight   int
 }
 
 func (ClientModelTarget) TableName() string { return "client_model_targets" }

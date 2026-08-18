@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
-	appconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -188,6 +187,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if streamErr != nil {
 		return nil, streamErr
 	}
+	if abortErr := abortInvalidStreamTransport(c, info, streamValidator); abortErr != nil {
+		return nil, abortErr
+	}
 	flushed, err := streamValidator.Finish()
 	if err != nil {
 		return nil, toolpolicy.NewResponseValidationError(err)
@@ -225,37 +227,5 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 // best-effort: a nil store, missing response ID, or validation failure simply
 // skips persistence without affecting the relay path.
 func persistResponsesTurn(c *gin.Context, info *relaycommon.RelayInfo, responsesResponse *dto.OpenAIResponsesResponse) {
-	if !responsesstate.Enabled() || info == nil || !responsesstate.EligibleCompletedResponse(responsesResponse) {
-		return
-	}
-	store, err := responsesstate.Default()
-	if err != nil {
-		return
-	}
-	rawContinuity, exists := c.Get(string(appconstant.ContextKeyResponsesContinuity))
-	if !exists {
-		return
-	}
-	continuity, ok := rawContinuity.(responsesstate.ContinuityContext)
-	if !ok || len(continuity.CurrentInput) == 0 {
-		return
-	}
-	output, err := common.Marshal(responsesResponse.Output)
-	if err != nil {
-		return
-	}
-	if err := responsesstate.SaveTurn(
-		c.Request.Context(),
-		store,
-		responsesstate.Record{
-			Version:          responsesstate.CurrentVersion,
-			Scope:            continuity.Scope,
-			ResponseID:       responsesResponse.ID,
-			ParentResponseID: continuity.ParentResponseID,
-			Input:            continuity.CurrentInput,
-			Output:           output,
-		},
-	); err != nil {
-		common.SysLog("responses state save skipped: " + err.Error())
-	}
+	relaycommon.PersistResponsesTurn(c, info, responsesResponse)
 }

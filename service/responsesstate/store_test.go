@@ -246,6 +246,66 @@ func TestMemoryStoreKeepsByteAccountingAfterRejectedReplacement(t *testing.T) {
 	assert.Equal(t, first.Output, loaded.Output)
 }
 
+func TestMemoryStoreAutomaticallyPrunesExpiredCapacityOnLoadAndSave(t *testing.T) {
+	first := testRecord("resp_expired_capacity")
+	first.ExpiresAt = time.Now().Add(time.Hour)
+	serialized, err := common.Marshal(first)
+	require.NoError(t, err)
+	store := NewMemory(time.Hour, len(serialized)+32)
+	require.NoError(t, store.Save(context.Background(), first))
+	store.mu.Lock()
+	key := scopedKey(first.Scope, first.ResponseID)
+	expired := store.records[key]
+	expired.ExpiresAt = time.Now().Add(-time.Second)
+	store.records[key] = expired
+	expiredBytes, err := common.Marshal(expired)
+	require.NoError(t, err)
+	store.currentBytes = len(expiredBytes)
+	store.mu.Unlock()
+
+	_, err = store.Load(context.Background(), testScope(), first.ResponseID)
+	require.ErrorIs(t, err, ErrNotFound)
+	require.Zero(t, store.currentBytes)
+	require.NotContains(t, store.responseKeys, Key(first.ResponseID))
+
+	second := testRecord("resp_reclaimed_capacity")
+	require.NoError(t, store.Save(context.Background(), second))
+	loaded, err := store.Load(context.Background(), testScope(), second.ResponseID)
+	require.NoError(t, err)
+	require.Equal(t, second.ResponseID, loaded.ResponseID)
+}
+
+func TestRedisStoreBoundsScopeCardinalityAndAvoidsUnboundedRecovery(t *testing.T) {
+	server := miniredis.RunT(t)
+	previousRDB := common.RDB
+	common.RDB = redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() {
+		require.NoError(t, common.RDB.Close())
+		common.RDB = previousRDB
+	})
+	store := &RedisStore{}
+	for i := 0; i < MaxScopeVariantsPerResponse; i++ {
+		record := testRecord("resp_bounded_bucket")
+		record.Scope.ClientTaskID = fmt.Sprintf("task-%d", i)
+		require.NoError(t, store.Save(context.Background(), record))
+	}
+	overflow := testRecord("resp_bounded_bucket")
+	overflow.Scope.ClientTaskID = "task-overflow"
+	require.ErrorIs(t, store.Save(context.Background(), overflow), ErrRetentionLimit)
+
+	expected := testScope()
+	expected.ClientTaskID = ""
+	_, err := store.Load(context.Background(), expected, overflow.ResponseID)
+	require.ErrorIs(t, err, ErrScopeMismatch)
+
+	key := Key("resp_corrupt_bucket")
+	for i := 0; i <= MaxScopeVariantsPerResponse; i++ {
+		require.NoError(t, common.RDB.HSet(context.Background(), key, fmt.Sprintf("field-%d", i), "value").Err())
+	}
+	_, err = store.Load(context.Background(), expected, "resp_corrupt_bucket")
+	require.ErrorIs(t, err, ErrRetentionLimit)
+}
+
 func TestMemoryStoreCopiesRawMessagesOnSaveAndLoad(t *testing.T) {
 	store := NewMemory(time.Hour, 1<<20)
 	record := testRecord("resp_copy")

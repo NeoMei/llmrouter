@@ -166,6 +166,25 @@ func (p Policy) HasCatalog() bool {
 	return len(p.allowed) > 0
 }
 
+func (p Policy) RequiresToolCall() bool {
+	return p.choice == ChoiceRequired || p.choice == ChoiceNamed
+}
+
+// ValidateTerminal enforces response-wide choice requirements after every
+// emitted call has individually passed ValidateCall.
+func (p Policy) ValidateTerminal(callCount int) error {
+	if callCount < 0 {
+		return fmt.Errorf("%w: negative tool call count", ErrMalformedToolCall)
+	}
+	if p.RequiresToolCall() && callCount == 0 {
+		if p.choice == ChoiceNamed {
+			return fmt.Errorf("%w: tool choice requires %q", ErrDisallowedTool, p.forcedName)
+		}
+		return fmt.Errorf("%w: tool choice requires at least one tool call", ErrDisallowedTool)
+	}
+	return nil
+}
+
 func (p Policy) ValidateCall(call Call) error {
 	id := strings.TrimSpace(call.ID)
 	name := strings.TrimSpace(call.Name)

@@ -212,6 +212,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	relayInfo.LastError = nil
 	preparedCandidateIndex := -1
 	legacyPricingPrepared := false
+	legacyContinuityChannelID := 0
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		attemptStart := time.Now()
@@ -237,17 +238,6 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				billingLifecycleStarted = true
 				preparedCandidateIndex = relayInfo.RouteCandidateIndex
 			}
-		} else if !legacyPricingPrepared {
-			if continuityErr := relay.PrepareResponsesContinuityForAttempt(c, relayInfo); continuityErr != nil {
-				newAPIError = continuityErr
-				break
-			}
-			if billingErr := prepareAttemptBilling(c, relayInfo, tokens, meta); billingErr != nil {
-				newAPIError = billingErr
-				break
-			}
-			billingLifecycleStarted = true
-			legacyPricingPrepared = true
 		}
 
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
@@ -266,6 +256,24 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				continue
 			}
 			break
+		}
+		if len(relayInfo.RouteCandidates) == 0 {
+			relayInfo.ResolvedChannelId = channel.Id
+			if legacyContinuityChannelID != channel.Id {
+				if continuityErr := relay.PrepareResponsesContinuityForAttempt(c, relayInfo); continuityErr != nil {
+					newAPIError = continuityErr
+					break
+				}
+				legacyContinuityChannelID = channel.Id
+			}
+			if !legacyPricingPrepared {
+				if billingErr := prepareAttemptBilling(c, relayInfo, tokens, meta); billingErr != nil {
+					newAPIError = billingErr
+					break
+				}
+				billingLifecycleStarted = true
+				legacyPricingPrepared = true
+			}
 		}
 
 		var relayStarted bool

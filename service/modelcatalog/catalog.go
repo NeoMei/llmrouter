@@ -178,6 +178,13 @@ func NewCatalog(routes []model.ClientModelRoute, targets []model.ClientModelTarg
 		target.UpstreamModel = strings.TrimSpace(target.UpstreamModel)
 		target.BillingModel = strings.TrimSpace(target.BillingModel)
 		target.Groups = normalizeIDs(target.Groups)
+		if len(target.GroupPolicies) > 0 {
+			policies := make(map[string]model.ClientModelTargetPolicy, len(target.GroupPolicies))
+			for group, policy := range target.GroupPolicies {
+				policies[strings.ToLower(strings.TrimSpace(group))] = policy
+			}
+			target.GroupPolicies = policies
+		}
 		target.PreferredWires = encodeWires(wires)
 		entries[i].targets = append(entries[i].targets, target)
 	}
@@ -342,20 +349,31 @@ func (c *Catalog) resolveCandidatesAuthorized(snapshot AuthorizedRuntimeSnapshot
 		if target.ContextWindow > 0 {
 			contextWindow = target.ContextWindow
 		}
+		selectedGroup := firstAuthorizedTargetGroup(target.Groups, snapshot.Groups)
+		priority, weight := target.Priority, target.Weight
+		if policy, ok := target.GroupPolicies[strings.ToLower(strings.TrimSpace(selectedGroup))]; ok {
+			priority, weight = policy.Priority, policy.Weight
+		}
 		resolved = append(resolved, ResolvedModel{
 			RequestedModel: requestedModel, PublicID: entry.model.PublicID,
 			UpstreamModel: target.UpstreamModel, BillingModel: target.BillingModel,
-			ChannelID: target.ChannelId, RouteID: entry.model.Id, TargetID: target.Id, Priority: target.Priority, Weight: target.Weight,
+			ChannelID: target.ChannelId, RouteID: entry.model.Id, TargetID: target.Id, Priority: priority, Weight: weight,
 			Client:               entry.model.Client,
 			PreferredWires:       append([]WireProtocol(nil), wires...),
 			ContextWindow:        contextWindow,
 			RequiresKnownContext: target.ContextFitRequired || entry.contextFitRequired,
-			SelectedGroup:        firstAuthorizedTargetGroup(target.Groups, snapshot.Groups),
+			SelectedGroup:        selectedGroup,
 		})
 	}
 	if len(resolved) == 0 {
 		return nil, fmt.Errorf("model %q is not visible for the requested groups", requestedModel)
 	}
+	sort.SliceStable(resolved, func(i, j int) bool {
+		if resolved[i].Priority != resolved[j].Priority {
+			return resolved[i].Priority > resolved[j].Priority
+		}
+		return resolved[i].TargetID < resolved[j].TargetID
+	})
 	return resolved, nil
 }
 

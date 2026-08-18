@@ -34,6 +34,8 @@ var ErrScopeMismatch = errors.New("responses state scope mismatch")
 // used as a bounded continuity identity.
 var ErrInvalidClientTaskID = errors.New("invalid responses client task id")
 
+var ErrRetentionLimit = errors.New("responses state retention limit exceeded")
+
 // CurrentVersion is the only record version accepted for new continuity
 // state. Version changes are fail-closed rather than implicitly migrated.
 const CurrentVersion = 2
@@ -49,6 +51,7 @@ type Scope struct {
 	ChannelID    int    `json:"channel_id"`
 	ClientTaskID string `json:"client_task_id"`
 	Model        string `json:"model"`
+	RouteKind    string `json:"route_kind,omitempty"`
 }
 
 // Record is a normalized, bounded turn stored for stateful continuity.
@@ -99,6 +102,12 @@ const DefaultRecordTTL = time.Hour
 // MaxRecordBytes is the maximum serialized JSON size for a single record.
 const MaxRecordBytes = 2 * 1024 * 1024
 
+// MaxScopeVariantsPerResponse bounds collision buckets for one response ID.
+const MaxScopeVariantsPerResponse = 64
+
+// MaxResponseBucketBytes bounds all encrypted values for one response ID.
+const MaxResponseBucketBytes = 8 * 1024 * 1024
+
 // MaxReplayHops is the maximum number of chained previous_response_id replays
 // allowed for a single request.
 const MaxReplayHops = 32
@@ -145,6 +154,7 @@ func scopeMatches(expected, actual Scope) bool {
 		expected.RouteID == actual.RouteID &&
 		expected.TargetID == actual.TargetID &&
 		expected.ChannelID == actual.ChannelID &&
+		expected.RouteKind == actual.RouteKind &&
 		expected.Model == actual.Model &&
 		(expected.ClientTaskID == "" || expected.ClientTaskID == actual.ClientTaskID)
 }

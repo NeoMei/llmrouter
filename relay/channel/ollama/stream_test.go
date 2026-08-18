@@ -177,6 +177,53 @@ func TestOllamaChatHandlerRejectsInvalidNonStreamToolCalls(t *testing.T) {
 	}
 }
 
+func TestOllamaNativeStreamToolFailuresDoNotReachWriter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name       string
+		body       string
+		setPolicy  bool
+		toolChoice any
+	}{
+		{name: "compact undeclared", setPolicy: true, body: ollamaToolResponseJSON("delete_all", `{}`, false)},
+		{name: "pretty missing policy", body: ollamaToolResponseJSON("get_weather", `{}`, true)},
+		{name: "compact truncated", setPolicy: true, body: `{"model":"llama3.1","message":{"role":"assistant","tool_calls":[{"function":{"name":"get_weather","arguments":{}}}]},"done":false}`},
+		{name: "required text only", setPolicy: true, toolChoice: "required", body: `{"model":"llama3.1","message":{"role":"assistant","content":"hello"},"done":true,"done_reason":"stop"}`},
+		{name: "named text only", setPolicy: true, toolChoice: map[string]any{"type": "function", "function": map[string]any{"name": "get_weather"}}, body: `{"model":"llama3.1","message":{"role":"assistant","content":"hello"},"done":true,"done_reason":"stop"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			if test.setPolicy {
+				policy, err := toolpolicy.BuildFromChat([]dto.ToolCallRequest{{Type: "function", Function: dto.FunctionRequest{Name: "get_weather"}}}, test.toolChoice)
+				require.NoError(t, err)
+				toolpolicy.Set(c, policy)
+			}
+			info := &relaycommon.RelayInfo{IsStream: true, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "llama3.1"}}
+			usage, apiErr := ollamaStreamHandler(c, info, &http.Response{Body: io.NopCloser(strings.NewReader(test.body))})
+			require.NotNil(t, apiErr)
+			assert.Nil(t, usage)
+			assert.Empty(t, recorder.Body.String())
+			assert.Zero(t, info.SendResponseCount)
+		})
+	}
+}
+
+func TestOllamaAdaptorDispatchesPrettyNativeToolStream(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	setOllamaToolPolicy(t, c, "get_weather")
+	info := &relaycommon.RelayInfo{IsStream: true, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "llama3.1"}}
+	usage, apiErr := (&Adaptor{}).DoResponse(c, &http.Response{Body: io.NopCloser(strings.NewReader(ollamaToolResponseJSON("get_weather", `{}`, true)))}, info)
+	require.Nil(t, apiErr)
+	require.IsType(t, &dto.Usage{}, usage)
+	assert.Contains(t, recorder.Body.String(), `"name":"get_weather"`)
+	assert.Contains(t, recorder.Body.String(), "data: [DONE]")
+}
+
 func setOllamaToolPolicy(t *testing.T, c *gin.Context, name string) {
 	t.Helper()
 	policy, err := toolpolicy.BuildFromChat([]dto.ToolCallRequest{{

@@ -11,7 +11,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relay/toolpolicy"
@@ -99,34 +98,32 @@ func ollamaStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	defer service.CloseResponseBodyGracefully(resp)
 
 	helper.SetEventStreamHeaders(c)
-	scanner := helper.NewStreamScanner(resp.Body)
+	decoder := json.NewDecoder(resp.Body)
+	validator := toolpolicy.NewNativeStreamValidatorFromContext(c, toolpolicy.NativeStreamOllama)
 	usage := &dto.Usage{}
 	var model = info.UpstreamModelName
 	var responseId = common.GetUUID()
 	var created = time.Now().Unix()
 	var toolCallIndex int
-	start := helper.GenerateStartEmptyResponse(responseId, created, model, nil)
-	if data, err := common.Marshal(start); err == nil {
-		_ = helper.StringData(c, string(data))
-	}
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
+	startSent := false
+	process := func(raw json.RawMessage) *types.NewAPIError {
 		var chunk ollamaChatStreamChunk
-		if err := common.Unmarshal([]byte(line), &chunk); err != nil {
-			logger.LogError(c, "ollama stream json decode error: "+err.Error()+" line="+line)
-			return usage, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		if err := common.Unmarshal(raw, &chunk); err != nil {
+			return toolpolicy.NewResponseValidationError(fmt.Errorf("%w: Ollama stream decode: %v", toolpolicy.ErrMalformedToolCall, err))
 		}
 		if chunk.Model != "" {
 			model = chunk.Model
 		}
 		created = toUnix(chunk.CreatedAt)
+		if !startSent {
+			startSent = true
+			start := helper.GenerateStartEmptyResponse(responseId, created, model, nil)
+			if data, err := common.Marshal(start); err == nil {
+				_ = helper.StringData(c, string(data))
+			}
+		}
 
-		if !chunk.Done {
+		if !chunk.Done || chunk.Message != nil && len(chunk.Message.ToolCalls) > 0 {
 			// delta content
 			var content string
 			if chunk.Message != nil {
@@ -167,7 +164,9 @@ func ollamaStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			if data, err := common.Marshal(delta); err == nil {
 				_ = helper.StringData(c, string(data))
 			}
-			continue
+			if !chunk.Done {
+				return nil
+			}
 		}
 		// done frame
 		// finalize once and break loop
@@ -195,10 +194,37 @@ func ollamaStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		}
 		// send [DONE]
 		helper.Done(c)
-		break
+		return nil
 	}
-	if err := scanner.Err(); err != nil && err != io.EOF {
-		logger.LogError(c, "ollama stream scan error: "+err.Error())
+
+	for {
+		var raw json.RawMessage
+		decodeErr := decoder.Decode(&raw)
+		if decodeErr == io.EOF {
+			break
+		}
+		if decodeErr != nil {
+			_ = validator.Abort(decodeErr)
+			return nil, toolpolicy.NewResponseValidationError(fmt.Errorf("%w: Ollama stream read: %v", toolpolicy.ErrIncompleteToolCall, decodeErr))
+		}
+		emitted, validateErr := validator.Accept(raw)
+		if validateErr != nil {
+			return nil, toolpolicy.NewResponseValidationError(validateErr)
+		}
+		for _, frame := range emitted {
+			if apiErr := process(frame); apiErr != nil {
+				return nil, apiErr
+			}
+		}
+	}
+	flushed, validateErr := validator.Finish()
+	if validateErr != nil {
+		return nil, toolpolicy.NewResponseValidationError(validateErr)
+	}
+	for _, frame := range flushed {
+		if apiErr := process(frame); apiErr != nil {
+			return nil, apiErr
+		}
 	}
 	return usage, nil
 }

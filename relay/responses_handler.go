@@ -404,6 +404,11 @@ func prepareResponsesContinuity(c *gin.Context, info *relaycommon.RelayInfo, sto
 		ClientTaskID: clientTaskID,
 		Model:        info.ResolvedModelNameOrOrigin(),
 	}
+	if expectedScope.RouteID == 0 && expectedScope.TargetID == 0 && expectedScope.ChannelID > 0 {
+		expectedScope.RouteKind = "legacy_distributor"
+		expectedScope.RouteID = expectedScope.ChannelID
+		expectedScope.TargetID = expectedScope.ChannelID
+	}
 	continuity := responsesstate.ContinuityContext{
 		Scope:            expectedScope,
 		ParentResponseID: request.PreviousResponseID,
@@ -429,12 +434,6 @@ func prepareResponsesContinuity(c *gin.Context, info *relaycommon.RelayInfo, sto
 			ParentResponseID: expansion.ParentResponseID,
 			CurrentInput:     append(json.RawMessage(nil), expansion.CurrentInput...),
 		}
-	} else if request.PreviousResponseID != "" {
-		record, err := store.Load(c.Request.Context(), expectedScope, request.PreviousResponseID)
-		if err != nil {
-			return nil, err
-		}
-		continuity.Scope = record.Scope
 	}
 	if len(continuity.CurrentInput) > 0 {
 		c.Set(string(appconstant.ContextKeyResponsesContinuity), continuity)

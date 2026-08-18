@@ -169,6 +169,35 @@ func TestValidateClaudeAndGeminiResponses(t *testing.T) {
 	}}), ErrUndeclaredTool)
 }
 
+func TestRequiredAndNamedPoliciesRejectTextOnlyTerminalResponses(t *testing.T) {
+	required, err := BuildFromChat([]dto.ToolCallRequest{{Type: "function", Function: dto.FunctionRequest{Name: "lookup"}}}, "required")
+	require.NoError(t, err)
+	named, err := BuildFromChat([]dto.ToolCallRequest{{Type: "function", Function: dto.FunctionRequest{Name: "lookup"}}}, map[string]any{"type": "function", "function": map[string]any{"name": "lookup"}})
+	require.NoError(t, err)
+	auto, err := BuildFromChat([]dto.ToolCallRequest{{Type: "function", Function: dto.FunctionRequest{Name: "lookup"}}}, nil)
+	require.NoError(t, err)
+
+	validators := []func(Policy) error{
+		func(policy Policy) error {
+			return ValidateChatResponse(policy, &dto.OpenAITextResponse{Choices: []dto.OpenAITextResponseChoice{{Message: dto.Message{Role: "assistant", Content: "text"}}}})
+		},
+		func(policy Policy) error {
+			return ValidateResponsesResponse(policy, &dto.OpenAIResponsesResponse{Output: []dto.ResponsesOutput{{Type: "message"}}})
+		},
+		func(policy Policy) error {
+			return ValidateClaudeResponse(policy, &dto.ClaudeResponse{Content: []dto.ClaudeMediaMessage{{Type: "text"}}})
+		},
+		func(policy Policy) error {
+			return ValidateGeminiResponse(policy, &dto.GeminiChatResponse{Candidates: []dto.GeminiChatCandidate{{Content: dto.GeminiChatContent{Parts: []dto.GeminiPart{{Text: "text"}}}}}})
+		},
+	}
+	for _, validate := range validators {
+		require.ErrorIs(t, validate(required), ErrDisallowedTool)
+		require.ErrorIs(t, validate(named), ErrDisallowedTool)
+		require.NoError(t, validate(auto))
+	}
+}
+
 func TestValidateResponseForcedChoiceMismatchAndErrorClassification(t *testing.T) {
 	policy := forcedResponsePolicy(t, "lookup", "lookup", "save")
 	response := &dto.OpenAIResponsesResponse{Output: []dto.ResponsesOutput{{

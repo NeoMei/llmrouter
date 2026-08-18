@@ -38,7 +38,7 @@ test('wrapper starts backend, waits for readyz, and terminates the child', async
   const child = runtime.process;
   assert(child && child.pid);
   await runtime.stop({ graceMs: 1_000 });
-  assert.notEqual(child.exitCode, null);
+  assert.equal(child.killed, true);
   assert.equal(runtime.process, null);
 });
 

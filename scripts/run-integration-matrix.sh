@@ -22,10 +22,12 @@ fi
 
 cleanup() {
   docker compose -f "$compose_file" down --volumes --remove-orphans
+  docker image rm llmrouter-test-gateway:local >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
 
-docker compose -f "$compose_file" up --detach --build --wait
+docker compose -f "$compose_file" build gateway-a
+docker compose -f "$compose_file" up --detach --no-build --wait
 
 export TEST_MYSQL_DSN='gateway:test-only-mysql-secret@tcp(127.0.0.1:53306)/gateway?parseTime=true'
 export TEST_POSTGRES_DSN='postgresql://gateway:test-only-postgres-secret@127.0.0.1:55432/gateway?sslmode=disable'

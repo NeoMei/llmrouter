@@ -190,9 +190,10 @@ class OnboardingAssetsTest(unittest.TestCase):
 
     def test_page_is_token_free_and_explains_all_client_modes(self):
         html = (INSTALL / "index.html").read_text()
+        visible_text = " ".join(html.split())
         self.assertIn("window.location.origin", html)
         self.assertIn("MCP tool access", html)
-        self.assertIn("does not replace Claude Desktop", html)
+        self.assertIn("does not replace Claude Desktop", visible_text)
         self.assertIn("/v1/models", html)
         self.assertIn("fallback", html.lower())
         self.assertIn("navigator.clipboard.writeText", html)

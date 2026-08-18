@@ -27,7 +27,11 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 docker compose -f "$compose_file" build gateway-a
-docker compose -f "$compose_file" up --detach --no-build --wait
+if ! docker compose -f "$compose_file" up --detach --no-build --wait; then
+  docker compose -f "$compose_file" ps --all || true
+  docker compose -f "$compose_file" logs --no-color || true
+  exit 1
+fi
 
 export TEST_MYSQL_DSN='gateway:test-only-mysql-secret@tcp(127.0.0.1:53306)/gateway?parseTime=true'
 export TEST_POSTGRES_DSN='postgresql://gateway:test-only-postgres-secret@127.0.0.1:55432/gateway?sslmode=disable'

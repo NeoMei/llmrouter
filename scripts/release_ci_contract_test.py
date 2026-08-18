@@ -58,6 +58,12 @@ class ReleaseCIContractTest(unittest.TestCase):
         self.assertIn("build: .", gateway_a)
         self.assertNotIn("build: .", gateway_b)
 
+    def test_integration_startup_failure_prints_container_diagnostics(self) -> None:
+        script = read_repo_file("scripts/run-integration-matrix.sh")
+
+        self.assertIn('docker compose -f "$compose_file" ps --all', script)
+        self.assertIn('docker compose -f "$compose_file" logs --no-color', script)
+
     def test_nightly_runs_docker_matrix_before_installing_chromium(self) -> None:
         workflow = read_repo_file(".github/workflows/nightly.yml")
 

@@ -119,16 +119,26 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var toolCount int
 	var usage = &dto.Usage{}
 	var lastStreamData string
+	var lastStreamDataSent bool
 	var secondLastStreamData string // 存储倒数第二个stream data，用于音频模型
+	streamValidator := toolpolicy.NewStreamValidatorFromContext(c)
+	var streamErr *types.NewAPIError
+	stopStream := func(sr *helper.StreamResult) {
+		if sr != nil {
+			sr.Stop(streamErr)
+		}
+	}
 
 	// 检查是否为音频模型
 	isAudioModel := strings.Contains(strings.ToLower(model), "audio")
 
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
-		if lastStreamData != "" {
+	consumeValidatedData := func(data string, sr *helper.StreamResult) bool {
+		if lastStreamData != "" && !lastStreamDataSent {
 			if err := HandleStreamFormat(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
 				common.SysLog("error handling stream format: " + err.Error())
-				sr.Error(err)
+				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway)
+				stopStream(sr)
+				return false
 			}
 		}
 		if len(data) > 0 {
@@ -138,12 +148,67 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			}
 
 			lastStreamData = data
+			lastStreamDataSent = false
 			if err := processTokenData(info.RelayMode, data, &responseTextBuilder, &toolCount); err != nil {
 				logger.LogError(c, "error processing stream token data: "+err.Error())
-				sr.Error(err)
+				streamErr = toolpolicy.NewResponseValidationError(fmt.Errorf("%w: invalid chat stream frame: %v", toolpolicy.ErrMalformedToolCall, err))
+				stopStream(sr)
+				return false
+			}
+
+			// Preserve the existing one-frame look-behind for terminal/usage
+			// chunks, but do not delay unrelated text behind a pending tool call.
+			var chunk dto.ChatCompletionsStreamResponse
+			if err := common.UnmarshalJsonStr(data, &chunk); err == nil {
+				immediateText := false
+				for _, choice := range chunk.Choices {
+					if choice.FinishReason == nil && len(choice.Delta.ToolCalls) == 0 &&
+						(choice.Delta.GetContentString() != "" || choice.Delta.GetReasoningContent() != "") {
+						immediateText = true
+					}
+				}
+				if immediateText {
+					if err := HandleStreamFormat(c, info, data, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
+						streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway)
+						stopStream(sr)
+						return false
+					}
+					lastStreamDataSent = true
+				}
+			}
+		}
+		return true
+	}
+
+	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		if streamErr != nil {
+			sr.Stop(streamErr)
+			return
+		}
+		emitted, err := streamValidator.Accept(common.StringToByteSlice(data))
+		if err != nil {
+			streamErr = toolpolicy.NewResponseValidationError(err)
+			sr.Stop(streamErr)
+			return
+		}
+		for _, frame := range emitted {
+			if !consumeValidatedData(string(frame), sr) {
+				return
 			}
 		}
 	})
+	if streamErr != nil {
+		return nil, streamErr
+	}
+	flushed, err := streamValidator.Finish()
+	if err != nil {
+		return nil, toolpolicy.NewResponseValidationError(err)
+	}
+	for _, frame := range flushed {
+		if !consumeValidatedData(string(frame), nil) {
+			return nil, streamErr
+		}
+	}
 
 	// 对音频模型，从倒数第二个stream data中提取usage信息
 	if isAudioModel && secondLastStreamData != "" {
@@ -171,7 +236,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	}
 
 	if info.RelayFormat == types.RelayFormatOpenAI {
-		if shouldSendLastResp {
+		if shouldSendLastResp && !lastStreamDataSent {
 			_ = sendStreamData(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent)
 		}
 	}

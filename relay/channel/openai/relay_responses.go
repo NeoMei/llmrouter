@@ -93,15 +93,22 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	terminalSeen := false
 	terminalValid := false
 	var terminalResponse *dto.OpenAIResponsesResponse
+	streamValidator := toolpolicy.NewStreamValidatorFromContext(c)
+	var streamErr *types.NewAPIError
+	stopStream := func(sr *helper.StreamResult) {
+		if sr != nil {
+			sr.Stop(streamErr)
+		}
+	}
 
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
-
+	handleValidatedData := func(data string, sr *helper.StreamResult) bool {
 		// 检查当前数据是否包含 completed 状态和 usage 信息
 		var streamResponse dto.ResponsesStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
 			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
-			sr.Error(err)
-			return
+			streamErr = toolpolicy.NewResponseValidationError(fmt.Errorf("%w: invalid responses stream frame: %v", toolpolicy.ErrMalformedToolCall, err))
+			stopStream(sr)
+			return false
 		}
 		wasTerminalSeen := terminalSeen
 		if wasTerminalSeen {
@@ -158,7 +165,38 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				}
 			}
 		}
+		return true
+	}
+
+	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		if streamErr != nil {
+			sr.Stop(streamErr)
+			return
+		}
+		emitted, err := streamValidator.Accept(common.StringToByteSlice(data))
+		if err != nil {
+			streamErr = toolpolicy.NewResponseValidationError(err)
+			sr.Stop(streamErr)
+			return
+		}
+		for _, frame := range emitted {
+			if !handleValidatedData(string(frame), sr) {
+				return
+			}
+		}
 	})
+	if streamErr != nil {
+		return nil, streamErr
+	}
+	flushed, err := streamValidator.Finish()
+	if err != nil {
+		return nil, toolpolicy.NewResponseValidationError(err)
+	}
+	for _, frame := range flushed {
+		if !handleValidatedData(string(frame), nil) {
+			return nil, streamErr
+		}
+	}
 	if terminalValid && terminalResponse != nil && info.StreamStatus != nil && info.StreamStatus.IsNormalEnd() && !info.StreamStatus.HasErrors() && c.Request.Context().Err() == nil {
 		persistResponsesTurn(c, info, terminalResponse)
 	}

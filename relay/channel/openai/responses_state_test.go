@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service/responsesstate"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -151,7 +152,7 @@ func TestResponsesStreamCancelledAfterCompletedEventDoesNotPersist(t *testing.T)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	wrote := make(chan struct{})
-	c.Writer = &notifyingResponseWriter{ResponseWriter: c.Writer, wrote: wrote}
+	c.Writer = &notifyingResponseWriter{ResponseWriter: c.Writer, wrote: wrote, match: "response.output_text.delta"}
 	requestContext, cancel := context.WithCancel(context.Background())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(requestContext)
 	scope := responsesstate.Scope{TenantID: 11, UserID: 11, TokenID: 7, RouteID: 3, TargetID: 4, ChannelID: 5, Model: "model-a"}
@@ -163,6 +164,7 @@ func TestResponsesStreamCancelledAfterCompletedEventDoesNotPersist(t *testing.T)
 	writerDone := make(chan struct{})
 	go func() {
 		defer close(writerDone)
+		_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n")
 		_, _ = io.WriteString(writer, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_cancelled\",\"status\":\"completed\",\"output\":[]}}\n\n")
 		<-requestContext.Done()
 		_ = writer.Close()
@@ -196,7 +198,8 @@ func TestResponsesStreamDoesNotPersistWhenFinalTerminalIsMalformed(t *testing.T)
 	require.NoError(t, err)
 
 	gin.SetMode(gin.TestMode)
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	scope := responsesstate.Scope{TenantID: 11, UserID: 11, TokenID: 7, RouteID: 3, TargetID: 4, ChannelID: 5, Model: "model-a"}
 	c.Set(string(appconstant.ContextKeyResponsesContinuity), responsesstate.ContinuityContext{Scope: scope, CurrentInput: json.RawMessage(`[]`)})
@@ -212,7 +215,9 @@ func TestResponsesStreamDoesNotPersistWhenFinalTerminalIsMalformed(t *testing.T)
 	resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}
 
 	_, apiErr := OaiResponsesStreamHandler(c, info, resp)
-	require.Nil(t, apiErr)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeUpstreamToolProtocolInvalid, apiErr.GetErrorCode())
+	assert.NotContains(t, recorder.Body.String(), "response.completed")
 	_, loadErr := store.Load(context.Background(), scope, "resp_not_terminal")
 	assert.ErrorIs(t, loadErr, responsesstate.ErrNotFound)
 }
@@ -318,7 +323,8 @@ func TestNativeResponsesStreamTerminalStateIsStickyAndOrdered(t *testing.T) {
 			resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}
 
 			_, apiErr := OaiResponsesStreamHandler(c, info, resp)
-			require.Nil(t, apiErr)
+			require.NotNil(t, apiErr)
+			assert.Equal(t, types.ErrorCodeUpstreamToolProtocolInvalid, apiErr.GetErrorCode())
 			_, loadErr := store.Load(context.Background(), scope, "resp_sequence")
 			assert.ErrorIs(t, loadErr, responsesstate.ErrNotFound)
 		})

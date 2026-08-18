@@ -217,6 +217,12 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	streamErr := (*types.NewAPIError)(nil)
+	streamValidator := toolpolicy.NewStreamValidatorForChatContext(c)
+	stopStream := func(sr *helper.StreamResult) {
+		if sr != nil {
+			sr.Stop(streamErr)
+		}
+	}
 
 	if info.RelayFormat == types.RelayFormatClaude && info.ClaudeConvertInfo == nil {
 		info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone}
@@ -281,41 +287,61 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 	}
 
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	convertValidatedData := func(data string, sr *helper.StreamResult) bool {
 		if streamErr != nil {
-			sr.Stop(streamErr)
-			return
+			stopStream(sr)
+			return false
 		}
 
 		var streamResp dto.ResponsesStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResp); err != nil {
 			logger.LogError(c, "failed to unmarshal responses stream event: "+err.Error())
-			sr.Error(err)
-			return
+			streamErr = toolpolicy.NewResponseValidationError(fmt.Errorf("%w: invalid responses stream frame: %v", toolpolicy.ErrMalformedToolCall, err))
+			stopStream(sr)
+			return false
 		}
 
 		if streamResp.Type == "response.error" || streamResp.Type == "response.failed" {
 			if streamResp.Response != nil {
 				if oaiErr := streamResp.Response.GetOpenAIError(); oaiErr != nil && oaiErr.Type != "" {
 					streamErr = types.WithOpenAIError(*oaiErr, http.StatusInternalServerError)
-					sr.Stop(streamErr)
-					return
+					stopStream(sr)
+					return false
 				}
 			}
 			streamErr = types.NewOpenAIError(fmt.Errorf("responses stream error: %s", streamResp.Type), types.ErrorCodeBadResponse, http.StatusInternalServerError)
-			sr.Stop(streamErr)
-			return
+			stopStream(sr)
+			return false
 		}
 
 		results, err := relayconvert.ConvertStreamResponseChunk(c, info, state, &streamResp)
 		if err != nil {
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
-			sr.Stop(streamErr)
-			return
+			stopStream(sr)
+			return false
 		}
 		for _, result := range results {
 			if !sendStreamResult(result) {
-				sr.Stop(streamErr)
+				stopStream(sr)
+				return false
+			}
+		}
+		return true
+	}
+
+	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		if streamErr != nil {
+			sr.Stop(streamErr)
+			return
+		}
+		emitted, err := streamValidator.Accept(common.StringToByteSlice(data))
+		if err != nil {
+			streamErr = toolpolicy.NewResponseValidationError(err)
+			sr.Stop(streamErr)
+			return
+		}
+		for _, frame := range emitted {
+			if !convertValidatedData(string(frame), sr) {
 				return
 			}
 		}
@@ -323,6 +349,15 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 	if streamErr != nil {
 		return nil, streamErr
+	}
+	flushed, err := streamValidator.Finish()
+	if err != nil {
+		return nil, toolpolicy.NewResponseValidationError(err)
+	}
+	for _, frame := range flushed {
+		if !convertValidatedData(string(frame), nil) {
+			return nil, streamErr
+		}
 	}
 
 	usage := state.Usage()

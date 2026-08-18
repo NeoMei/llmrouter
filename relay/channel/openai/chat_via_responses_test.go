@@ -52,12 +52,15 @@ func TestOaiResponsesToChatStreamHandlerConvertsSSEOrderAndUsage(t *testing.T) {
 		`data: {"type":"response.output_text.delta","delta":"hello"}`,
 		`data: {"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup"}}`,
 		`data: {"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"q\":\"x\"}"}`,
+		`data: {"type":"response.function_call_arguments.done","output_index":1,"item_id":"fc_1","arguments":"{\"q\":\"x\"}"}`,
+		`data: {"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"x\"}","status":"completed"}}`,
 		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}}`,
 		`data: [DONE]`,
 		``,
 	}, "\n")
 
 	c, recorder, resp, info := newResponsesChatTestContext(t, body, true)
+	setNonStreamToolPolicy(t, c, "lookup")
 
 	usage, err := OaiResponsesToChatStreamHandler(c, info, resp)
 	require.Nil(t, err)
@@ -139,6 +142,7 @@ func TestOaiChatToResponsesStreamHandlerConvertsSSEOrderAndUsage(t *testing.T) {
 
 	c, recorder, resp, info := newResponsesChatTestContext(t, body, true)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	setNonStreamToolPolicy(t, c, "lookup")
 
 	usage, err := OaiChatToResponsesStreamHandler(c, info, resp)
 	require.Nil(t, err)

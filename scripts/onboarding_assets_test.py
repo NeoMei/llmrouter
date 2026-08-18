@@ -474,6 +474,12 @@ class OnboardingAssetsTest(unittest.TestCase):
                 "printf '# file: fixture\\n# owner: owner\\n# group: group\\nuser::rwx\\ngroup::---\\nother::---\\n\\n'\n"
             )
             (wrappers / "setfacl").write_text("#!/usr/bin/env bash\nexit 0\n")
+            if platform.system() == "Darwin":
+                (wrappers / "stat").write_text(
+                    "#!/usr/bin/env bash\n"
+                    "case \"$2\" in %u) format=%u ;; %a) format=%Lp ;; *) exit 2 ;; esac\n"
+                    "exec /usr/bin/stat -f \"$format\" \"$3\"\n"
+                )
             for wrapper in wrappers.iterdir():
                 wrapper.chmod(0o755)
 

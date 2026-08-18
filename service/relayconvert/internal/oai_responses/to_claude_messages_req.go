@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/compat"
 	relaymedia "github.com/QuantumNous/new-api/service/relayconvert/internal/media"
 	sharedclaude "github.com/QuantumNous/new-api/service/relayconvert/internal/shared/claude"
+	"github.com/QuantumNous/new-api/service/relayconvert/internal/toolcallid"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
 )
@@ -32,6 +33,7 @@ func OpenAIResponsesRequestToClaudeMessages(c *gin.Context, req *dto.OpenAIRespo
 	if err := ValidateRequestChatUnsupportedFields(req); err != nil {
 		return nil, err
 	}
+	toolIDs := toolcallid.New("call")
 
 	claudeRequest := &dto.ClaudeRequest{
 		Model:       req.Model,
@@ -93,11 +95,23 @@ func OpenAIResponsesRequestToClaudeMessages(c *gin.Context, req *dto.OpenAIRespo
 		itemType := strings.TrimSpace(common.Interface2String(item["type"]))
 		switch itemType {
 		case ResponsesInputTypeFunctionCall:
-			claudeRequest.Messages = appendClaudeToolUse(claudeRequest.Messages, responsesFunctionCallItemToClaudeToolUse(item, "arguments"))
+			toolUse, err := responsesFunctionCallItemToClaudeToolUse(item, "arguments", toolIDs)
+			if err != nil {
+				return nil, err
+			}
+			claudeRequest.Messages = appendClaudeToolUse(claudeRequest.Messages, toolUse)
 		case ResponsesInputTypeCustomToolCall:
-			claudeRequest.Messages = appendClaudeToolUse(claudeRequest.Messages, responsesFunctionCallItemToClaudeToolUse(item, "input"))
+			toolUse, err := responsesFunctionCallItemToClaudeToolUse(item, "input", toolIDs)
+			if err != nil {
+				return nil, err
+			}
+			claudeRequest.Messages = appendClaudeToolUse(claudeRequest.Messages, toolUse)
 		case ResponsesInputTypeFunctionCallOutput, ResponsesInputTypeCustomToolOutput:
-			claudeRequest.Messages = appendClaudeToolResult(claudeRequest.Messages, responsesFunctionOutputItemToClaudeToolResult(item))
+			toolResult, err := responsesFunctionOutputItemToClaudeToolResult(item, toolIDs)
+			if err != nil {
+				return nil, err
+			}
+			claudeRequest.Messages = appendClaudeToolResult(claudeRequest.Messages, toolResult)
 		default:
 			role := responsesClaudeRole(item)
 			parts, err := responsesInputContentToClaudeMediaMessages(c, item["content"])
@@ -228,21 +242,39 @@ func responsesInputContentToClaudeMediaMessages(c *gin.Context, content any) ([]
 	return parts, nil
 }
 
-func responsesFunctionCallItemToClaudeToolUse(item map[string]any, inputKey string) dto.ClaudeMediaMessage {
+func responsesFunctionCallItemToClaudeToolUse(item map[string]any, inputKey string, ids *toolcallid.Normalizer) (dto.ClaudeMediaMessage, error) {
+	name := strings.TrimSpace(common.Interface2String(item["name"]))
+	if name == "" {
+		return dto.ClaudeMediaMessage{}, fmt.Errorf("tool call is missing function name")
+	}
+	var input any
+	if inputKey == "arguments" {
+		arguments, err := parseResponsesFunctionArguments(item[inputKey])
+		if err != nil {
+			return dto.ClaudeMediaMessage{}, fmt.Errorf("invalid arguments for function %s: %w", name, err)
+		}
+		input = arguments
+	} else {
+		input = ObjectValue(item[inputKey], inputKey)
+	}
 	return dto.ClaudeMediaMessage{
 		Type:  "tool_use",
-		Id:    CallID(item),
-		Name:  strings.TrimSpace(common.Interface2String(item["name"])),
-		Input: ObjectValue(item[inputKey], inputKey),
-	}
+		Id:    ids.Normalize(rawResponsesCallID(item)),
+		Name:  name,
+		Input: input,
+	}, nil
 }
 
-func responsesFunctionOutputItemToClaudeToolResult(item map[string]any) dto.ClaudeMediaMessage {
+func responsesFunctionOutputItemToClaudeToolResult(item map[string]any, ids *toolcallid.Normalizer) (dto.ClaudeMediaMessage, error) {
+	normalizedID, err := normalizeResponsesResultID(ids, item)
+	if err != nil {
+		return dto.ClaudeMediaMessage{}, err
+	}
 	return dto.ClaudeMediaMessage{
 		Type:      "tool_result",
-		ToolUseId: CallID(item),
+		ToolUseId: normalizedID,
 		Content:   responsesToolOutputValue(item["output"]),
-	}
+	}, nil
 }
 
 func responsesToolOutputValue(value any) any {

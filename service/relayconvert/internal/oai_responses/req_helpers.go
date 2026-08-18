@@ -45,7 +45,7 @@ func responsesInputItems(raw []byte) ([]map[string]any, error) {
 		}, nil
 	case "array":
 		var items []map[string]any
-		if err := common.Unmarshal(raw, &items); err != nil {
+		if err := common.UnmarshalUnique(raw, &items); err != nil {
 			return nil, fmt.Errorf("invalid input array: %w", err)
 		}
 		return items, nil

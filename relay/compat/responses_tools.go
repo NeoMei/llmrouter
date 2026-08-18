@@ -62,7 +62,7 @@ func promoteAdditionalTools(input json.RawMessage) ([]map[string]any, json.RawMe
 		return nil, input, nil
 	}
 	var items []map[string]any
-	if err := common.Unmarshal(input, &items); err != nil {
+	if err := common.UnmarshalUnique(input, &items); err != nil {
 		return nil, nil, fmt.Errorf("invalid Responses input: %w", err)
 	}
 
@@ -205,7 +205,7 @@ func parseExistingTools(tools json.RawMessage) ([]map[string]any, bool, error) {
 		return nil, false, nil
 	}
 	var items []map[string]any
-	if err := common.Unmarshal(tools, &items); err != nil {
+	if err := common.UnmarshalUnique(tools, &items); err != nil {
 		return nil, false, fmt.Errorf("invalid Responses tools: %w", err)
 	}
 	result := make([]map[string]any, 0, len(items))

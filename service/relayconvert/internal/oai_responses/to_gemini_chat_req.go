@@ -11,6 +11,7 @@ import (
 	relaymedia "github.com/QuantumNous/new-api/service/relayconvert/internal/media"
 	relaymeta "github.com/QuantumNous/new-api/service/relayconvert/internal/meta"
 	sharedgemini "github.com/QuantumNous/new-api/service/relayconvert/internal/shared/gemini"
+	"github.com/QuantumNous/new-api/service/relayconvert/internal/toolcallid"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
 )
@@ -38,6 +39,7 @@ func OpenAIResponsesRequestToGeminiChat(c *gin.Context, req *dto.OpenAIResponses
 	if err := ValidateRequestChatUnsupportedFields(req); err != nil {
 		return nil, err
 	}
+	toolIDs := toolcallid.New("call")
 
 	geminiRequest := &dto.GeminiChatRequest{
 		GenerationConfig: dto.GeminiChatGenerationConfig{
@@ -130,7 +132,7 @@ func OpenAIResponsesRequestToGeminiChat(c *gin.Context, req *dto.OpenAIResponses
 		itemType := strings.TrimSpace(common.Interface2String(item["type"]))
 		switch itemType {
 		case ResponsesInputTypeFunctionCall:
-			part, callID, err := responsesFunctionCallItemToGeminiPart(item)
+			part, callID, err := responsesFunctionCallItemToGeminiPart(item, toolIDs)
 			if err != nil {
 				return nil, err
 			}
@@ -140,7 +142,10 @@ func OpenAIResponsesRequestToGeminiChat(c *gin.Context, req *dto.OpenAIResponses
 			}
 			appendGeminiContentPart(geminiRequest, "model", part)
 		case ResponsesInputTypeFunctionCallOutput:
-			part := responsesFunctionOutputItemToGeminiPart(item, callNames)
+			part, err := responsesFunctionOutputItemToGeminiPart(item, callNames, toolIDs)
+			if err != nil {
+				return nil, err
+			}
 			appendGeminiContentPart(geminiRequest, "user", part)
 		default:
 			role := responsesGeminiRole(item)
@@ -247,32 +252,44 @@ func responsesContentPartToGeminiParts(c *gin.Context, part map[string]any) ([]d
 	}
 }
 
-func responsesFunctionCallItemToGeminiPart(item map[string]any) (dto.GeminiPart, string, error) {
+func responsesFunctionCallItemToGeminiPart(item map[string]any, ids *toolcallid.Normalizer) (dto.GeminiPart, string, error) {
 	name := strings.TrimSpace(common.Interface2String(item["name"]))
 	if name == "" {
 		return dto.GeminiPart{}, "", fmt.Errorf("function_call item is missing name")
 	}
-	callID := CallID(item)
+	arguments, err := parseResponsesFunctionArguments(item["arguments"])
+	if err != nil {
+		return dto.GeminiPart{}, "", fmt.Errorf("invalid arguments for function %s: %w", name, err)
+	}
+	callID := ids.Normalize(rawResponsesCallID(item))
 	return dto.GeminiPart{
 		FunctionCall: &dto.FunctionCall{
 			FunctionName: name,
-			Arguments:    ObjectValue(item["arguments"], "arguments"),
+			Arguments:    arguments,
+			ID:           responsesToolCallIDJSON(callID),
 		},
 	}, callID, nil
 }
 
-func responsesFunctionOutputItemToGeminiPart(item map[string]any, callNames map[string]string) dto.GeminiPart {
-	callID := CallID(item)
+func responsesFunctionOutputItemToGeminiPart(item map[string]any, callNames map[string]string, ids *toolcallid.Normalizer) (dto.GeminiPart, error) {
+	callID, err := normalizeResponsesResultID(ids, item)
+	if err != nil {
+		return dto.GeminiPart{}, err
+	}
 	name := strings.TrimSpace(common.Interface2String(item["name"]))
 	if name == "" {
 		name = callNames[callID]
+	}
+	if name == "" {
+		return dto.GeminiPart{}, fmt.Errorf("tool result %q is missing function name", CallID(item))
 	}
 	return dto.GeminiPart{
 		FunctionResponse: &dto.GeminiFunctionResponse{
 			Name:     name,
 			Response: GeminiResponseMap(item["output"]),
+			ID:       responsesToolCallIDJSON(callID),
 		},
-	}
+	}, nil
 }
 
 func appendGeminiContentPart(req *dto.GeminiChatRequest, role string, part dto.GeminiPart) {

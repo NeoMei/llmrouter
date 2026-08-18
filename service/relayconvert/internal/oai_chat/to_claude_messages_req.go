@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	relaymedia "github.com/QuantumNous/new-api/service/relayconvert/internal/media"
 	sharedclaude "github.com/QuantumNous/new-api/service/relayconvert/internal/shared/claude"
+	"github.com/QuantumNous/new-api/service/relayconvert/internal/toolcallid"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/reasoning"
 	"github.com/gin-gonic/gin"
@@ -28,6 +29,7 @@ type openRouterRequestReasoning struct {
 }
 
 func OpenAIChatRequestToClaudeMessages(c *gin.Context, textRequest dto.GeneralOpenAIRequest) (*dto.ClaudeRequest, error) {
+	toolIDs := toolcallid.New("call")
 	claudeTools := make([]any, 0, len(textRequest.Tools))
 
 	for _, tool := range textRequest.Tools {
@@ -301,6 +303,10 @@ func OpenAIChatRequestToClaudeMessages(c *gin.Context, textRequest dto.GeneralOp
 			Role: message.Role,
 		}
 		if message.Role == "tool" {
+			normalizedID, err := normalizeToolResultID(toolIDs, message.ToolCallId)
+			if err != nil {
+				return nil, err
+			}
 			if len(claudeMessages) > 0 && claudeMessages[len(claudeMessages)-1].Role == "user" {
 				lastClaudeMessage := claudeMessages[len(claudeMessages)-1]
 				if content, ok := lastClaudeMessage.Content.(string); ok {
@@ -313,7 +319,7 @@ func OpenAIChatRequestToClaudeMessages(c *gin.Context, textRequest dto.GeneralOp
 				}
 				lastClaudeMessage.Content = append(lastClaudeMessage.Content.([]dto.ClaudeMediaMessage), dto.ClaudeMediaMessage{
 					Type:      "tool_result",
-					ToolUseId: message.ToolCallId,
+					ToolUseId: normalizedID,
 					Content:   message.Content,
 				})
 				claudeMessages[len(claudeMessages)-1] = lastClaudeMessage
@@ -324,7 +330,7 @@ func OpenAIChatRequestToClaudeMessages(c *gin.Context, textRequest dto.GeneralOp
 			claudeMessage.Content = []dto.ClaudeMediaMessage{
 				{
 					Type:      "tool_result",
-					ToolUseId: message.ToolCallId,
+					ToolUseId: normalizedID,
 					Content:   message.Content,
 				},
 			}
@@ -373,16 +379,21 @@ func OpenAIChatRequestToClaudeMessages(c *gin.Context, textRequest dto.GeneralOp
 			}
 
 			if message.ToolCalls != nil {
-				for _, toolCall := range message.ParseToolCalls() {
-					inputObj := make(map[string]any)
-					if args := toolCall.Function.Arguments; args != "" {
-						if err := common.Unmarshal([]byte(args), &inputObj); err != nil {
-							common.SysLog("tool call function arguments is not a map[string]any: " + fmt.Sprintf("%v", toolCall.Function.Arguments))
-						}
+				toolCalls, err := parseMessageToolCalls(message.ToolCalls)
+				if err != nil {
+					return nil, err
+				}
+				for _, toolCall := range toolCalls {
+					if strings.TrimSpace(toolCall.Function.Name) == "" {
+						return nil, fmt.Errorf("tool call is missing function name")
+					}
+					inputObj, err := toolcallid.ParseObjectArguments(toolCall.Function.Arguments)
+					if err != nil {
+						return nil, fmt.Errorf("invalid arguments for function %s: %w", toolCall.Function.Name, err)
 					}
 					claudeMediaMessages = append(claudeMediaMessages, dto.ClaudeMediaMessage{
 						Type:  "tool_use",
-						Id:    toolCall.ID,
+						Id:    toolIDs.Normalize(toolCall.ID),
 						Name:  toolCall.Function.Name,
 						Input: inputObj,
 					})

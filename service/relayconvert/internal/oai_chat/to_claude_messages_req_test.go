@@ -86,3 +86,51 @@ func TestOpenAIChatRequestToClaudeMessagesOmitsEmptyTools(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenAIChatRequestToClaudeNormalizesToolIDsAndPreservesBigInt(t *testing.T) {
+	request := chatRequestWithToolHistory("bad/id", `{"n":184467440737095516160}`)
+	got, err := OpenAIChatRequestToClaudeMessages(nil, request)
+	require.NoError(t, err)
+	use := findClaudePart(t, got.Messages, "tool_use")
+	result := findClaudePart(t, got.Messages, "tool_result")
+	assert.NotEqual(t, "bad/id", use.Id)
+	assert.Equal(t, use.Id, result.ToolUseId)
+	raw, err := common.Marshal(use.Input)
+	require.NoError(t, err)
+	assert.Equal(t, `{"n":184467440737095516160}`, string(raw))
+}
+
+func findClaudePart(t *testing.T, messages []dto.ClaudeMessage, partType string) dto.ClaudeMediaMessage {
+	t.Helper()
+	for _, message := range messages {
+		parts, ok := message.Content.([]dto.ClaudeMediaMessage)
+		if !ok {
+			continue
+		}
+		for _, part := range parts {
+			if part.Type == partType {
+				return part
+			}
+		}
+	}
+	t.Fatalf("missing Claude part %q", partType)
+	return dto.ClaudeMediaMessage{}
+}
+
+func TestOpenAIChatRequestToClaudeRejectsMalformedArguments(t *testing.T) {
+	for _, args := range []string{`{bad-json`, `[]`, `{"x":1,"x":2}`} {
+		t.Run(args, func(t *testing.T) {
+			_, err := OpenAIChatRequestToClaudeMessages(nil, chatRequestWithToolHistory("call_1", args))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "arguments")
+		})
+	}
+}
+
+func TestOpenAIChatRequestToClaudeRejectsUnknownToolResultID(t *testing.T) {
+	request := chatRequestWithToolHistory("call_1", `{}`)
+	request.Messages[1].ToolCallId = "unknown"
+	_, err := OpenAIChatRequestToClaudeMessages(nil, request)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown tool result id")
+}

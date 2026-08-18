@@ -11,11 +11,13 @@ import (
 	relaymedia "github.com/QuantumNous/new-api/service/relayconvert/internal/media"
 	relaymeta "github.com/QuantumNous/new-api/service/relayconvert/internal/meta"
 	sharedgemini "github.com/QuantumNous/new-api/service/relayconvert/internal/shared/gemini"
+	"github.com/QuantumNous/new-api/service/relayconvert/internal/toolcallid"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
 )
 
 func OpenAIChatRequestToGeminiGenerateContent(c *gin.Context, textRequest dto.GeneralOpenAIRequest, info *relaycommon.RelayInfo) (*dto.GeminiChatRequest, error) {
+	toolIDs := toolcallid.New("call")
 	geminiRequest := dto.GeminiChatRequest{
 		Contents: make([]dto.GeminiChatContent, 0, len(textRequest.Messages)),
 		GenerationConfig: dto.GeminiChatGenerationConfig{
@@ -244,10 +246,21 @@ func OpenAIChatRequestToGeminiGenerateContent(c *gin.Context, textRequest dto.Ge
 			}
 			parts := &geminiRequest.Contents[len(geminiRequest.Contents)-1].Parts
 			name := ""
+			normalizedID := ""
+			if message.Role == "tool" || strings.TrimSpace(message.ToolCallId) != "" {
+				var err error
+				normalizedID, err = normalizeToolResultID(toolIDs, message.ToolCallId)
+				if err != nil {
+					return nil, err
+				}
+			}
 			if message.Name != nil {
 				name = *message.Name
-			} else if val, exists := toolCallIDs[message.ToolCallId]; exists {
+			} else if val, exists := toolCallIDs[normalizedID]; exists {
 				name = val
+			}
+			if strings.TrimSpace(name) == "" {
+				return nil, fmt.Errorf("tool result %q is missing function name", message.ToolCallId)
 			}
 			var contentMap map[string]interface{}
 			contentStr := message.StringContent()
@@ -265,6 +278,9 @@ func OpenAIChatRequestToGeminiGenerateContent(c *gin.Context, textRequest dto.Ge
 				Name:     name,
 				Response: contentMap,
 			}
+			if normalizedID != "" {
+				functionResp.ID = toolCallIDJSON(normalizedID)
+			}
 
 			*parts = append(*parts, dto.GeminiPart{
 				FunctionResponse: functionResp,
@@ -279,24 +295,31 @@ func OpenAIChatRequestToGeminiGenerateContent(c *gin.Context, textRequest dto.Ge
 		shouldAttachThoughtSignature := (message.Role == "assistant" || message.Role == "model") && sharedgemini.ShouldAttachThoughtSignature()
 		signatureAttached := false
 		if message.ToolCalls != nil {
-			for _, call := range message.ParseToolCalls() {
-				args := map[string]interface{}{}
-				if call.Function.Arguments != "" {
-					if common.Unmarshal([]byte(call.Function.Arguments), &args) != nil {
-						return nil, fmt.Errorf("invalid arguments for function %s, args: %s", call.Function.Name, call.Function.Arguments)
-					}
+			toolCalls, err := parseMessageToolCalls(message.ToolCalls)
+			if err != nil {
+				return nil, err
+			}
+			for _, call := range toolCalls {
+				if strings.TrimSpace(call.Function.Name) == "" {
+					return nil, fmt.Errorf("tool call is missing function name")
 				}
+				args, err := toolcallid.ParseObjectArguments(call.Function.Arguments)
+				if err != nil {
+					return nil, fmt.Errorf("invalid arguments for function %s: %w", call.Function.Name, err)
+				}
+				normalizedID := toolIDs.Normalize(call.ID)
 				toolCall := dto.GeminiPart{
 					FunctionCall: &dto.FunctionCall{
 						FunctionName: call.Function.Name,
 						Arguments:    args,
+						ID:           toolCallIDJSON(normalizedID),
 					},
 				}
 				if shouldAttachThoughtSignature && !signatureAttached && sharedgemini.AttachFunctionCallThoughtSignature(&toolCall) {
 					signatureAttached = true
 				}
 				parts = append(parts, toolCall)
-				toolCallIDs[call.ID] = call.Function.Name
+				toolCallIDs[normalizedID] = call.Function.Name
 			}
 		}
 

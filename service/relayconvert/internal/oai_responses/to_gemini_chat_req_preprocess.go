@@ -39,7 +39,7 @@ func filterGeminiResponsesTools(raw []byte) ([]byte, error) {
 	}
 
 	var tools []map[string]any
-	if err := common.Unmarshal(raw, &tools); err != nil {
+	if err := common.UnmarshalUnique(raw, &tools); err != nil {
 		return nil, err
 	}
 
@@ -62,7 +62,7 @@ func filterGeminiResponsesInput(raw []byte) ([]byte, error) {
 	}
 
 	var items []map[string]any
-	if err := common.Unmarshal(raw, &items); err != nil {
+	if err := common.UnmarshalUnique(raw, &items); err != nil {
 		return nil, err
 	}
 

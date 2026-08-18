@@ -97,3 +97,31 @@ be stopped or retained on instruction. No production traffic has been switched.
 - Playwright browser acceptance: **14/14 passed** locally and **14/14 passed** serially against remote staging via SSH tunnel.
 - Parity matrix and updated no-go recommendation: `artifacts/migration-parity/parity-matrix.md`.
 - Updated no-go recommendation remains in effect; the staging target must not receive production traffic until provider smoke tests, a fresh clone, and release artifacts are complete.
+
+## Update 2026-08-18: repository release-candidate certification
+
+The repository release candidate at `827d468fb4bc404c459b1696f9a9f2644f77ee59`
+completed the authoritative GitHub gates:
+
+- CI passed for Backend, Web, CLI, and Onboarding.
+- The Docker Integration Matrix passed for PostgreSQL, MySQL, Redis, S3/MinIO,
+  deterministic upstream behavior, and two gateway nodes.
+- Electron packaging passed on Linux, macOS, and Windows, including package
+  probes, checksums, and artifact uploads.
+- The manually dispatched Nightly passed dependency, failure recovery,
+  performance, billing, backup/restore, and Playwright browser acceptance, and
+  uploaded `nightly-evidence-32123518900`.
+
+Evidence:
+
+- PR: <https://github.com/NeoMei/llmrouter/pull/1>
+- CI: <https://github.com/NeoMei/llmrouter/actions/runs/32122286035>
+- Integration: <https://github.com/NeoMei/llmrouter/actions/runs/32122286112>
+- Electron: <https://github.com/NeoMei/llmrouter/actions/runs/32122286001>
+- Nightly: <https://github.com/NeoMei/llmrouter/actions/runs/32123518900>
+
+This evidence makes the repository code eligible for an RC publication. It does
+not authorize production cutover and does not satisfy signed GA publication:
+the GitHub repository currently has no Actions secrets, repository variables,
+or configured environments for live-provider certification, Apple notarization,
+or Windows signing. Those credential-bound gates remain fail-closed.

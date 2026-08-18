@@ -63,16 +63,27 @@ services:
         mc mb --ignore-existing test/gateway-files
 
   upstream:
-    image: hashicorp/http-echo:1.0.0
-    command: ['-listen=:8080', '-text={"status":"ok"}']
+    image: python:3.12-alpine@sha256:d09d15e60962ca365d1cd544a48773bac9d33f2fb1b00f2aa0deec78ade7dc31
+    command: ['python3', '/app/upstream_server.py']
+    environment:
+      UPSTREAM_PORT: '8080'
+    volumes:
+      - ./tests/upstream_server.py:/app/upstream_server.py:ro
     ports: ['58080:8080']
     healthcheck:
-      test: ['CMD', 'wget', '-q', '-O', '-', 'http://127.0.0.1:8080/']
+      test:
+        [
+          'CMD',
+          'python3',
+          '-c',
+          'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8080/healthz", timeout=1).read()',
+        ]
       interval: 2s
       timeout: 2s
       retries: 30
 
   gateway-a:
+    image: llmrouter-test-gateway:local
     build: .
     environment: &gateway-environment
       SQL_DSN: postgresql://gateway:test-only-postgres-secret@postgres:5432/gateway
@@ -107,7 +118,7 @@ services:
       start_period: 10s
 
   gateway-b:
-    build: .
+    image: llmrouter-test-gateway:local
     environment:
       <<: *gateway-environment
       NODE_NAME: integration-b

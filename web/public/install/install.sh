@@ -49,8 +49,12 @@ download() {
   case "$status" in 2[0-9][0-9]) ;; *) rm -f "$destination"; return 1 ;; esac
 }
 
-file_owner() { stat -f '%u' "$1" 2>/dev/null || stat -c '%u' "$1"; }
-file_mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+file_owner() {
+  case "$os" in darwin) stat -f '%u' "$1" ;; linux) stat -c '%u' "$1" ;; esac
+}
+file_mode() {
+  case "$os" in darwin) stat -f '%Lp' "$1" ;; linux) stat -c '%a' "$1" ;; esac
+}
 
 clear_extra_acls() {
   path=$1
@@ -62,7 +66,7 @@ clear_extra_acls() {
     linux)
       if command -v setfacl >/dev/null 2>&1; then setfacl -b -- "$path" || fail "cannot remove ACLs: $path"; fi
       if command -v getfacl >/dev/null 2>&1; then
-        getfacl -cp -- "$path" | awk '/^#/ { next } /^user::/ || /^group::---$/ || /^other::---$/ { next } { exit 1 }' || fail "non-owner ACL access remains: $path"
+        getfacl -cp -- "$path" | awk 'NF == 0 || /^#/ { next } /^user::/ || /^group::---$/ || /^other::---$/ { next } { exit 1 }' || fail "non-owner ACL access remains: $path"
       fi
       ;;
   esac

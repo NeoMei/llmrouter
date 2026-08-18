@@ -190,9 +190,10 @@ class OnboardingAssetsTest(unittest.TestCase):
 
     def test_page_is_token_free_and_explains_all_client_modes(self):
         html = (INSTALL / "index.html").read_text()
+        visible_text = " ".join(html.split())
         self.assertIn("window.location.origin", html)
         self.assertIn("MCP tool access", html)
-        self.assertIn("does not replace Claude Desktop", html)
+        self.assertIn("does not replace Claude Desktop", visible_text)
         self.assertIn("/v1/models", html)
         self.assertIn("fallback", html.lower())
         self.assertIn("navigator.clipboard.writeText", html)
@@ -278,7 +279,17 @@ class OnboardingAssetsTest(unittest.TestCase):
             self.bootstrap_site(root, "#!/usr/bin/env bash\ntest -t 0 && printf tty > \"$HOME/input-mode\" || exit 78\n")
             origin, _ = self.serve(root)
             command = f"HOME={shlex.quote(str(home))} LLMROUTER_SERVER_URL={shlex.quote(origin)} bash {shlex.quote(str(INSTALL / 'install.sh'))}"
-            result = subprocess.run(["script", "-q", "/dev/null", "bash", "-c", command], capture_output=True, text=True, check=False)
+            if platform.system() == "Darwin":
+                script_command = ["script", "-q", "/dev/null", "bash", "-c", command]
+            else:
+                script_command = [
+                    "script",
+                    "-q",
+                    "-c",
+                    f"bash -c {shlex.quote(command)}",
+                    "/dev/null",
+                ]
+            result = subprocess.run(script_command, capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual((home / "input-mode").read_text(), "tty")
 
@@ -444,6 +455,42 @@ class OnboardingAssetsTest(unittest.TestCase):
             result = self.run_bash_bootstrap(home, origin, {"PATH": f"{wrappers}:{os.environ['PATH']}"})
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(paths, [])
+
+    def test_bash_bootstrap_accepts_linux_base_acl_with_blank_separator(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary) / "site"
+            home = pathlib.Path(temporary) / "home"
+            home.mkdir()
+            self.bootstrap_site(root, operating_system="linux")
+            origin, paths = self.serve(root)
+            wrappers = pathlib.Path(temporary) / "wrappers"
+            wrappers.mkdir()
+            (wrappers / "uname").write_text(
+                "#!/usr/bin/env bash\n"
+                "if [ \"$1\" = -s ]; then printf Linux; else exec /usr/bin/uname \"$@\"; fi\n"
+            )
+            (wrappers / "getfacl").write_text(
+                "#!/usr/bin/env bash\n"
+                "printf '# file: fixture\\n# owner: owner\\n# group: group\\nuser::rwx\\ngroup::---\\nother::---\\n\\n'\n"
+            )
+            (wrappers / "setfacl").write_text("#!/usr/bin/env bash\nexit 0\n")
+            if platform.system() == "Darwin":
+                (wrappers / "stat").write_text(
+                    "#!/usr/bin/env bash\n"
+                    "case \"$2\" in %u) format=%u ;; %a) format=%Lp ;; *) exit 2 ;; esac\n"
+                    "exec /usr/bin/stat -f \"$format\" \"$3\"\n"
+                )
+            for wrapper in wrappers.iterdir():
+                wrapper.chmod(0o755)
+
+            result = self.run_bash_bootstrap(
+                home,
+                origin,
+                {"PATH": f"{wrappers}:{os.environ['PATH']}"},
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("/install/checksums.txt", paths)
 
 
 if __name__ == "__main__":

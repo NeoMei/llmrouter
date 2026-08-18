@@ -157,11 +157,11 @@
 
   Expected: PASS. If Bun is unavailable directly, use the configured bundled Node runtime for the existing Rsbuild-compatible checks and record the limitation; do not mark the Bun gate passed without GitHub evidence.
 
-- [ ] **Step 2: Commit and push the release-readiness branch**
+- [x] **Step 2: Commit and push the release-readiness branch**
 
   Commit only the plan, tests, workflows, Compose file, integration script, and readiness documentation. Push `codex/release-readiness` to `NeoMei/llmrouter`.
 
-- [ ] **Step 3: Run authoritative GitHub checks**
+- [x] **Step 3: Run authoritative GitHub checks**
 
   Open a PR using `.github/PULL_REQUEST_TEMPLATE.md`, disclose AI assistance if required by the repository author check, and require fresh successful CI and Integration Matrix runs for the exact head commit. Manually dispatch Nightly on that same commit and require browser evidence upload.
 
@@ -169,6 +169,16 @@
 
   Merge to `main`, confirm `main` and `upstream-sync` point to the intended release commit, and rerun or confirm push-triggered CI and Integration Matrix on `main`.
 
-- [ ] **Step 5: Record remaining credential-bound publication gates**
+- [x] **Step 5: Record remaining credential-bound publication gates**
 
   Verify GitHub repository/environment secret names without exposing values. If Apple/Windows signing credentials and production provider-certification inputs are absent, retain a fail-closed NO-GO for signed GA publication while declaring the repository code eligible for RC publication. Do not extract provider credentials from the production server or create signing identities without explicit authorization.
+
+## Verification Evidence
+
+- Release code head: `827d468fb4bc404c459b1696f9a9f2644f77ee59`.
+- PR: <https://github.com/NeoMei/llmrouter/pull/1> (`CLEAN`, non-draft).
+- CI: <https://github.com/NeoMei/llmrouter/actions/runs/32122286035> (Backend, Web, CLI, and Onboarding passed).
+- Integration Matrix: <https://github.com/NeoMei/llmrouter/actions/runs/32122286112> (dependency, provider, database, Redis, object-store, and multi-node gateway checks passed).
+- Electron: <https://github.com/NeoMei/llmrouter/actions/runs/32122286001> (Linux, macOS, and Windows packages built, probed, checksummed, and uploaded).
+- Nightly: <https://github.com/NeoMei/llmrouter/actions/runs/32123518900> (resilience, performance, billing, restore, and browser acceptance passed; artifact `nightly-evidence-32123518900` uploaded).
+- GitHub Actions secrets, repository variables, and environments were empty at verification time. Signed/notarized GA publication and live-provider certification therefore remain fail-closed pending explicit credential provisioning.

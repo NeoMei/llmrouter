@@ -2,7 +2,10 @@ package relay
 
 import (
 	"fmt"
+	"net/http"
 
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/relay/channel/gateway"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/toolpolicy"
 	"github.com/QuantumNous/new-api/types"
@@ -27,7 +30,34 @@ func finalizeOutboundToolPolicy(c *gin.Context, info *relaycommon.RelayInfo, con
 		}
 		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
+	jsonData, repairErr := repairFinalGatewayChat(c, info, convertedRequest, jsonData)
+	if repairErr != nil {
+		return nil, repairErr
+	}
 	return jsonData, nil
+}
+
+func repairFinalGatewayChat(c *gin.Context, info *relaycommon.RelayInfo, convertedRequest any, jsonData []byte) ([]byte, *types.NewAPIError) {
+	if !isFinalGatewayChat(info, convertedRequest) {
+		return jsonData, nil
+	}
+	repaired, err := gateway.RepairFinalChatRequest(c, jsonData)
+	if err != nil {
+		toolpolicy.Clear(c)
+		return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+	return repaired, nil
+}
+
+func isFinalGatewayChat(info *relaycommon.RelayInfo, convertedRequest any) bool {
+	if info == nil || info.ApiType != constant.APITypeGateway {
+		return false
+	}
+	format, ok := relaycommon.GuessRelayFormatFromRequest(convertedRequest)
+	if !ok {
+		format = info.GetFinalRequestRelayFormat()
+	}
+	return format == types.RelayFormatOpenAI
 }
 
 func captureOutboundToolPolicy(c *gin.Context, info *relaycommon.RelayInfo, convertedRequest any, jsonData []byte) error {

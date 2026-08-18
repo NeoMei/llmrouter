@@ -4,16 +4,29 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/relay/toolpolicy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func mustToolCalls(t *testing.T, calls ...dto.ToolCallRequest) json.RawMessage {
 	t.Helper()
-	raw, err := json.Marshal(calls)
+	raw, err := common.Marshal(calls)
 	require.NoError(t, err)
 	return raw
+}
+
+func mustRepairPolicy(t *testing.T, choice any, names ...string) toolpolicy.Policy {
+	t.Helper()
+	tools := make([]dto.ToolCallRequest, 0, len(names))
+	for _, name := range names {
+		tools = append(tools, dto.ToolCallRequest{Type: "function", Function: dto.FunctionRequest{Name: name}})
+	}
+	policy, err := toolpolicy.BuildFromChat(tools, choice)
+	require.NoError(t, err)
+	return policy
 }
 
 func TestRepairDanglingToolCalls_SynthesizesBeforeUser(t *testing.T) {
@@ -21,14 +34,14 @@ func TestRepairDanglingToolCalls_SynthesizesBeforeUser(t *testing.T) {
 		Messages: []dto.Message{
 			{Role: "user", Content: "use the tool"},
 			{Role: "assistant", ToolCalls: mustToolCalls(t,
-				dto.ToolCallRequest{ID: "call_1", Function: dto.FunctionRequest{Name: "calc"}},
+				dto.ToolCallRequest{ID: "call_1", Type: "function", Function: dto.FunctionRequest{Name: "calc", Arguments: `{}`}},
 			)},
 			// 没有 tool result，直接进了下一个 user
 			{Role: "user", Content: "what's next?"},
 		},
 	}
 
-	RepairDanglingToolCalls(req)
+	require.NoError(t, RepairDanglingToolCalls(req, mustRepairPolicy(t, nil, "calc")))
 
 	// assistant(0:idx1) 之后、第二个 user 之前应插入一条 tool result
 	var roles []string
@@ -48,7 +61,7 @@ func TestRepairDanglingToolCalls_NoOpWhenComplete(t *testing.T) {
 	req := &dto.GeneralOpenAIRequest{
 		Messages: []dto.Message{
 			{Role: "assistant", ToolCalls: mustToolCalls(t,
-				dto.ToolCallRequest{ID: "call_1", Function: dto.FunctionRequest{Name: "calc"}},
+				dto.ToolCallRequest{ID: "call_1", Type: "function", Function: dto.FunctionRequest{Name: "calc", Arguments: `{}`}},
 			)},
 			{Role: "tool", ToolCallId: "call_1", Content: "42"},
 		},
@@ -56,7 +69,7 @@ func TestRepairDanglingToolCalls_NoOpWhenComplete(t *testing.T) {
 	want := make([]dto.Message, len(req.Messages))
 	copy(want, req.Messages)
 
-	RepairDanglingToolCalls(req)
+	require.NoError(t, RepairDanglingToolCalls(req, mustRepairPolicy(t, nil, "calc")))
 
 	require.Len(t, req.Messages, 2)
 	assert.Equal(t, "tool", req.Messages[1].Role)
@@ -75,12 +88,12 @@ func TestRepairDanglingToolCalls_SynthesizesAtTail(t *testing.T) {
 		Messages: []dto.Message{
 			{Role: "user", Content: "go"},
 			{Role: "assistant", ToolCalls: mustToolCalls(t,
-				dto.ToolCallRequest{ID: "tail_call", Function: dto.FunctionRequest{Name: "search"}},
+				dto.ToolCallRequest{ID: "tail_call", Type: "function", Function: dto.FunctionRequest{Name: "search", Arguments: `{}`}},
 			)},
 		},
 	}
 
-	RepairDanglingToolCalls(req)
+	require.NoError(t, RepairDanglingToolCalls(req, mustRepairPolicy(t, nil, "search")))
 
 	require.Len(t, req.Messages, 3)
 	assert.Equal(t, "tool", req.Messages[2].Role)
@@ -92,14 +105,14 @@ func TestRepairDanglingToolCalls_PartiallyAnswered(t *testing.T) {
 	req := &dto.GeneralOpenAIRequest{
 		Messages: []dto.Message{
 			{Role: "assistant", ToolCalls: mustToolCalls(t,
-				dto.ToolCallRequest{ID: "call_1", Function: dto.FunctionRequest{Name: "a"}},
-				dto.ToolCallRequest{ID: "call_2", Function: dto.FunctionRequest{Name: "b"}},
+				dto.ToolCallRequest{ID: "call_1", Type: "function", Function: dto.FunctionRequest{Name: "a", Arguments: `{}`}},
+				dto.ToolCallRequest{ID: "call_2", Type: "function", Function: dto.FunctionRequest{Name: "b", Arguments: `{}`}},
 			)},
 			{Role: "tool", ToolCallId: "call_2", Content: "done"},
 		},
 	}
 
-	RepairDanglingToolCalls(req)
+	require.NoError(t, RepairDanglingToolCalls(req, mustRepairPolicy(t, nil, "a", "b")))
 
 	// 期望: assistant, tool(call_2 已有), tool(call_1 合成)
 	require.Len(t, req.Messages, 3)
@@ -114,17 +127,17 @@ func TestRepairDanglingToolCalls_PreservesOrderAcrossTurns(t *testing.T) {
 		Messages: []dto.Message{
 			{Role: "user", Content: "q1"},
 			{Role: "assistant", ToolCalls: mustToolCalls(t,
-				dto.ToolCallRequest{ID: "c1", Function: dto.FunctionRequest{Name: "f1"}},
+				dto.ToolCallRequest{ID: "c1", Type: "function", Function: dto.FunctionRequest{Name: "f1", Arguments: `{}`}},
 			)},
 			{Role: "user", Content: "q2"},
 			{Role: "assistant", ToolCalls: mustToolCalls(t,
-				dto.ToolCallRequest{ID: "c2", Function: dto.FunctionRequest{Name: "f2"}},
+				dto.ToolCallRequest{ID: "c2", Type: "function", Function: dto.FunctionRequest{Name: "f2", Arguments: `{}`}},
 			)},
 			{Role: "tool", ToolCallId: "c2", Content: "r2"},
 		},
 	}
 
-	RepairDanglingToolCalls(req)
+	require.NoError(t, RepairDanglingToolCalls(req, mustRepairPolicy(t, nil, "f1", "f2")))
 
 	var roles []string
 	for _, m := range req.Messages {
@@ -148,12 +161,123 @@ func TestRepairDanglingToolCalls_NoToolCalls_NoOp(t *testing.T) {
 			{Role: "assistant", Content: "hello"},
 		},
 	}
-	RepairDanglingToolCalls(req)
+	require.NoError(t, RepairDanglingToolCalls(req, mustRepairPolicy(t, nil)))
 	require.Len(t, req.Messages, 2)
 }
 
 func TestRepairDanglingToolCalls_NilMessages_NoPanic(t *testing.T) {
 	req := &dto.GeneralOpenAIRequest{}
-	RepairDanglingToolCalls(req) // must not panic
+	require.NoError(t, RepairDanglingToolCalls(req, mustRepairPolicy(t, nil))) // must not panic
 	assert.Empty(t, req.Messages)
+}
+
+func TestRepairDanglingToolCallsRejectsInvalidHistoryAtomically(t *testing.T) {
+	tests := []struct {
+		name   string
+		calls  json.RawMessage
+		policy toolpolicy.Policy
+		want   error
+	}{
+		{
+			name: "undeclared name",
+			calls: mustToolCalls(t, dto.ToolCallRequest{ID: "call_1", Type: "function",
+				Function: dto.FunctionRequest{Name: "delete_all", Arguments: `{}`}}),
+			policy: mustRepairPolicy(t, nil, "lookup"), want: toolpolicy.ErrUndeclaredTool,
+		},
+		{
+			name: "missing name",
+			calls: mustToolCalls(t, dto.ToolCallRequest{ID: "call_1", Type: "function",
+				Function: dto.FunctionRequest{Arguments: `{}`}}),
+			policy: mustRepairPolicy(t, nil, "lookup"), want: toolpolicy.ErrMalformedToolCall,
+		},
+		{
+			name: "missing id",
+			calls: mustToolCalls(t, dto.ToolCallRequest{Type: "function",
+				Function: dto.FunctionRequest{Name: "lookup", Arguments: `{}`}}),
+			policy: mustRepairPolicy(t, nil, "lookup"), want: toolpolicy.ErrMalformedToolCall,
+		},
+		{
+			name: "malformed arguments",
+			calls: mustToolCalls(t, dto.ToolCallRequest{ID: "call_1", Type: "function",
+				Function: dto.FunctionRequest{Name: "lookup", Arguments: `{"q":`}}),
+			policy: mustRepairPolicy(t, nil, "lookup"), want: toolpolicy.ErrMalformedArguments,
+		},
+		{
+			name: "wrong argument type",
+			calls: mustToolCalls(t, dto.ToolCallRequest{ID: "call_1", Type: "function",
+				Function: dto.FunctionRequest{Name: "lookup", Arguments: `[]`}}),
+			policy: mustRepairPolicy(t, nil, "lookup"), want: toolpolicy.ErrMalformedArguments,
+		},
+		{
+			name: "wrong tool type",
+			calls: mustToolCalls(t, dto.ToolCallRequest{ID: "call_1", Type: "custom",
+				Custom: json.RawMessage(`{"name":"lookup","input":{}}`)}),
+			policy: mustRepairPolicy(t, nil, "lookup"), want: toolpolicy.ErrToolKindMismatch,
+		},
+		{
+			name: "tool choice none",
+			calls: mustToolCalls(t, dto.ToolCallRequest{ID: "call_1", Type: "function",
+				Function: dto.FunctionRequest{Name: "lookup", Arguments: `{}`}}),
+			policy: mustRepairPolicy(t, "none", "lookup"), want: toolpolicy.ErrDisallowedTool,
+		},
+		{
+			name: "forced choice mismatch",
+			calls: mustToolCalls(t, dto.ToolCallRequest{ID: "call_1", Type: "function",
+				Function: dto.FunctionRequest{Name: "save", Arguments: `{}`}}),
+			policy: mustRepairPolicy(t, map[string]any{"type": "function", "function": map[string]any{"name": "lookup"}}, "lookup", "save"),
+			want:   toolpolicy.ErrDisallowedTool,
+		},
+		{
+			name: "duplicate call id",
+			calls: mustToolCalls(t,
+				dto.ToolCallRequest{ID: "call_1", Type: "function", Function: dto.FunctionRequest{Name: "lookup", Arguments: `{}`}},
+				dto.ToolCallRequest{ID: "call_1", Type: "function", Function: dto.FunctionRequest{Name: "lookup", Arguments: `{}`}},
+			),
+			policy: mustRepairPolicy(t, nil, "lookup"), want: toolpolicy.ErrMalformedToolCall,
+		},
+		{
+			name:   "malformed tool calls container",
+			calls:  json.RawMessage(`{"not":"an array"}`),
+			policy: mustRepairPolicy(t, nil, "lookup"), want: toolpolicy.ErrMalformedToolCall,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &dto.GeneralOpenAIRequest{Messages: []dto.Message{
+				{Role: "assistant", Content: map[string]any{"huge": json.Number("9007199254740993123456789")}, ToolCalls: tc.calls},
+				{Role: "user", Content: "continue"},
+			}}
+			before, err := common.Marshal(req)
+			require.NoError(t, err)
+
+			err = RepairDanglingToolCalls(req, tc.policy)
+
+			require.ErrorIs(t, err, tc.want)
+			after, marshalErr := common.Marshal(req)
+			require.NoError(t, marshalErr)
+			assert.JSONEq(t, string(before), string(after), "an invalid history must remain deeply unchanged")
+		})
+	}
+}
+
+func TestRepairDanglingToolCallsSupportsDeclaredCustomCall(t *testing.T) {
+	policy, err := toolpolicy.BuildFromChat([]dto.ToolCallRequest{{
+		Type: "custom", Custom: json.RawMessage(`{"name":"shell"}`),
+	}}, nil)
+	require.NoError(t, err)
+	req := &dto.GeneralOpenAIRequest{Messages: []dto.Message{{
+		Role: "assistant",
+		ToolCalls: mustToolCalls(t, dto.ToolCallRequest{
+			ID: "call_custom", Type: "custom",
+			Custom: json.RawMessage(`{"name":"shell","input":"pwd"}`),
+		}),
+	}}}
+
+	err = RepairDanglingToolCalls(req, policy)
+
+	require.NoError(t, err)
+	require.Len(t, req.Messages, 2)
+	assert.Equal(t, "call_custom", req.Messages[1].ToolCallId)
+	assert.Contains(t, req.Messages[1].StringContent(), `"shell"`)
 }

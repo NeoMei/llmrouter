@@ -3,19 +3,94 @@ package gateway
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/crypto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/profile"
+	"github.com/QuantumNous/new-api/relay/toolpolicy"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+func gatewayPolicy(t *testing.T, choice any, names ...string) toolpolicy.Policy {
+	t.Helper()
+	tools := make([]dto.ToolCallRequest, 0, len(names))
+	for _, name := range names {
+		tools = append(tools, dto.ToolCallRequest{Type: "function", Function: dto.FunctionRequest{Name: name}})
+	}
+	policy, err := toolpolicy.BuildFromChat(tools, choice)
+	require.NoError(t, err)
+	return policy
+}
+
+func TestRepairFinalChatRequestUsesContextPolicyAndPreservesRawFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	toolpolicy.Set(c, gatewayPolicy(t, nil, "lookup"))
+	body := []byte(`{"model":"m","unknown":{"huge":9007199254740993123456789},"messages":[` +
+		`{"role":"assistant","content":null,"provider_extension":{"huge":9007199254740993123456789},` +
+		`"tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"x\"}"}}]}` +
+		`]}`)
+
+	out, err := RepairFinalChatRequest(c, body)
+	require.NoError(t, err)
+
+	var object map[string]json.RawMessage
+	require.NoError(t, common.UnmarshalUnique(out, &object))
+	assert.JSONEq(t, `{"huge":9007199254740993123456789}`, string(object["unknown"]))
+	var messages []json.RawMessage
+	require.NoError(t, common.UnmarshalUnique(object["messages"], &messages))
+	require.Len(t, messages, 2)
+	assert.Contains(t, string(messages[0]), `"provider_extension"`)
+	assert.Contains(t, string(messages[0]), `9007199254740993123456789`)
+	var result dto.Message
+	require.NoError(t, common.UnmarshalUnique(messages[1], &result))
+	assert.Equal(t, "tool", result.Role)
+	assert.Equal(t, "call_1", result.ToolCallId)
+}
+
+func TestRepairFinalChatRequestFailsClosedWithoutPolicyOnlyWhenCallsExist(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	withCalls := []byte(`{"messages":[{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}}]}]}`)
+
+	out, err := RepairFinalChatRequest(c, withCalls)
+	assert.Nil(t, out)
+	require.ErrorIs(t, err, toolpolicy.ErrMissingToolPolicy)
+
+	text := []byte(`{"unknown":9007199254740993123456789,"messages":[{"role":"user","content":"hi"}]}`)
+	out, err = RepairFinalChatRequest(c, text)
+	require.NoError(t, err)
+	assert.Equal(t, text, out, "text-only requests must remain byte-for-byte compatible")
+
+	emptyCalls := []byte(`{"messages":[{"role":"assistant","content":"done","tool_calls":[]}]}`)
+	out, err = RepairFinalChatRequest(c, emptyCalls)
+	require.NoError(t, err)
+	assert.Equal(t, emptyCalls, out, "an empty tool_calls array contains no call and needs no policy")
+}
+
+func TestRepairFinalChatRequestRejectsInvalidCallWithoutChangingBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	toolpolicy.Set(c, gatewayPolicy(t, nil, "lookup"))
+	body := []byte(`{"messages":[{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"delete_all","arguments":"{}"}}]}]}`)
+	original := append([]byte(nil), body...)
+
+	out, err := RepairFinalChatRequest(c, body)
+
+	assert.Nil(t, out)
+	require.ErrorIs(t, err, toolpolicy.ErrUndeclaredTool)
+	assert.Equal(t, original, body)
+}
 
 // ─── pure-function helpers ───
 

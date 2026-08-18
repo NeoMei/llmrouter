@@ -133,6 +133,10 @@ func chatCompletionsViaResponses(c *gin.Context, info *relaycommon.RelayInfo, ad
 		}
 		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
+	jsonData, repairErr := repairFinalGatewayChat(c, info, convertedRequest, jsonData)
+	if repairErr != nil {
+		return nil, repairErr
+	}
 
 	body, size, getBody, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 	if err != nil {

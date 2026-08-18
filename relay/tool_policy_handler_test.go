@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -249,4 +250,60 @@ func TestSemanticallyInvalidOverrideFailsBeforePolicyCapture(t *testing.T) {
 	assert.True(t, types.IsSkipRetryError(apiErr))
 	_, ok := toolpolicy.FromContext(c)
 	assert.False(t, ok)
+}
+
+func TestGatewayDanglingRepairUsesPostOverrideFinalPolicy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name     string
+		override map[string]any
+	}{
+		{
+			name:     "choice changed to none",
+			override: map[string]any{"tool_choice": "none"},
+		},
+		{
+			name: "forced named choice mismatch",
+			override: map[string]any{
+				"tools": []any{
+					map[string]any{"type": "function", "function": map[string]any{"name": "lookup"}},
+					map[string]any{"type": "function", "function": map[string]any{"name": "save"}},
+				},
+				"tool_choice": map[string]any{"type": "function", "function": map[string]any{"name": "save"}},
+			},
+		},
+		{
+			name: "catalog replaced",
+			override: map[string]any{
+				"tools": []any{map[string]any{"type": "function", "function": map[string]any{"name": "save"}}},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			info := &relaycommon.RelayInfo{
+				RelayFormat: types.RelayFormatOpenAI,
+				ChannelMeta: &relaycommon.ChannelMeta{
+					ApiType:       constant.APITypeGateway,
+					ParamOverride: tc.override,
+				},
+			}
+			body := []byte(`{"tools":[{"type":"function","function":{"name":"lookup"}}],"tool_choice":"auto",` +
+				`"messages":[{"role":"assistant","tool_calls":[{"id":"call_1","type":"function",` +
+				`"function":{"name":"lookup","arguments":"{}"}}]}]}`)
+
+			out, apiErr := finalizeOutboundToolPolicy(c, info, &dto.GeneralOpenAIRequest{}, body)
+
+			assert.Nil(t, out)
+			require.NotNil(t, apiErr)
+			assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
+			assert.Equal(t, types.ErrorCodeInvalidRequest, apiErr.GetErrorCode())
+			assert.True(t, types.IsSkipRetryError(apiErr))
+			_, ok := toolpolicy.FromContext(c)
+			assert.False(t, ok)
+		})
+	}
 }

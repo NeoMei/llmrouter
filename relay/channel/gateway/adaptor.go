@@ -2,17 +2,22 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"regexp"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/profile"
 	quirkpkg "github.com/QuantumNous/new-api/relay/quirk"
+	"github.com/QuantumNous/new-api/relay/toolpolicy"
 	"github.com/QuantumNous/new-api/service/relayconvert"
 	"github.com/QuantumNous/new-api/types"
 
@@ -40,7 +45,6 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		return nil, err
 	}
 	quirkpkg.NeutralizeIdentity(req)
-	quirkpkg.RepairDanglingToolCalls(req)
 	quirkpkg.GuardEmptyAssistant(req)
 	profile.ApplyRules(req, p)
 	return a.Inner.ConvertOpenAIRequest(c, info, req)
@@ -62,7 +66,6 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 		// Apply quirk + profile on the Chat Completions format request.
 		p, pErr := a.Loader.Get(c.Request.Context(), info.UpstreamModelName)
 		quirkpkg.NeutralizeIdentity(openaiReq)
-		quirkpkg.RepairDanglingToolCalls(openaiReq)
 		quirkpkg.GuardEmptyAssistant(openaiReq)
 		if pErr == nil && p != nil {
 			profile.ApplyRules(openaiReq, p)
@@ -87,7 +90,6 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 	}
 	p, pErr := a.Loader.Get(c.Request.Context(), info.UpstreamModelName)
 	quirkpkg.NeutralizeIdentity(openaiReq)
-	quirkpkg.RepairDanglingToolCalls(openaiReq)
 	quirkpkg.GuardEmptyAssistant(openaiReq)
 	if pErr == nil && p != nil {
 		profile.ApplyRules(openaiReq, p)
@@ -204,6 +206,93 @@ func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, req dto.Re
 }
 func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.RelayInfo, req dto.EmbeddingRequest) (any, error) {
 	return a.Inner.ConvertEmbeddingRequest(c, info, req)
+}
+
+// RepairFinalChatRequest validates and repairs the exact post-override Gateway
+// Chat body. Existing raw messages and unknown top-level fields are retained;
+// only synthesized tool-result messages are newly encoded.
+func RepairFinalChatRequest(c *gin.Context, body []byte) ([]byte, error) {
+	var object map[string]json.RawMessage
+	if err := common.UnmarshalUnique(body, &object); err != nil {
+		return nil, fmt.Errorf("invalid final gateway chat request: %w", err)
+	}
+	rawMessages, exists := object["messages"]
+	if !exists {
+		return body, nil
+	}
+	if common.GetJsonType(rawMessages) != "array" {
+		return nil, fmt.Errorf("invalid final gateway chat messages")
+	}
+	var messageFrames []json.RawMessage
+	if err := common.UnmarshalUnique(rawMessages, &messageFrames); err != nil {
+		return nil, fmt.Errorf("invalid final gateway chat messages: %w", err)
+	}
+	messages := make([]dto.Message, len(messageFrames))
+	hasToolCalls := false
+	for i, frame := range messageFrames {
+		if err := common.UnmarshalUnique(frame, &messages[i]); err != nil {
+			return nil, fmt.Errorf("invalid final gateway chat message %d: %w", i, err)
+		}
+		if containsToolCall(messages[i].ToolCalls) {
+			hasToolCalls = true
+		}
+	}
+	if !hasToolCalls {
+		return body, nil
+	}
+	policy, ok := toolpolicy.FromContext(c)
+	if !ok {
+		return nil, fmt.Errorf("%w: gateway tool history requires a final request policy", toolpolicy.ErrMissingToolPolicy)
+	}
+	request := &dto.GeneralOpenAIRequest{Messages: messages}
+	if err := quirkpkg.RepairDanglingToolCalls(request, policy); err != nil {
+		return nil, err
+	}
+	if len(request.Messages) == len(messages) {
+		return body, nil
+	}
+
+	repairedFrames := make([]json.RawMessage, 0, len(request.Messages))
+	originalIndex := 0
+	for _, message := range request.Messages {
+		if originalIndex < len(messages) && reflect.DeepEqual(message, messages[originalIndex]) {
+			repairedFrames = append(repairedFrames, messageFrames[originalIndex])
+			originalIndex++
+			continue
+		}
+		encoded, err := common.Marshal(message)
+		if err != nil {
+			return nil, fmt.Errorf("encode synthesized gateway tool result: %w", err)
+		}
+		repairedFrames = append(repairedFrames, encoded)
+	}
+	if originalIndex != len(messages) {
+		return nil, fmt.Errorf("gateway tool repair lost an original message")
+	}
+	encodedMessages, err := common.Marshal(repairedFrames)
+	if err != nil {
+		return nil, fmt.Errorf("encode repaired gateway messages: %w", err)
+	}
+	object["messages"] = encodedMessages
+	repairedBody, err := common.Marshal(object)
+	if err != nil {
+		return nil, fmt.Errorf("encode repaired gateway request: %w", err)
+	}
+	return repairedBody, nil
+}
+
+func containsToolCall(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	if common.GetJsonType(raw) != "array" {
+		return true
+	}
+	var calls []json.RawMessage
+	if err := common.UnmarshalUnique(raw, &calls); err != nil {
+		return true
+	}
+	return len(calls) > 0
 }
 
 // ─── helpers ───

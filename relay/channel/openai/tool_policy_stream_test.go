@@ -112,8 +112,16 @@ func TestNativeStreamHandlersReturnErrorAndNilUsageOnUpstreamErrorTerminal(t *te
 		body   string
 		handle func(*gin.Context, *relaycommon.RelayInfo, *http.Response) (*dto.Usage, *types.NewAPIError)
 	}{
-		{name: "responses failed", path: "/v1/responses", format: types.RelayFormatOpenAIResponses, body: `data: {"type":"response.failed","error":{"message":"upstream failed"}}\n\ndata: [DONE]\n\n`, handle: OaiResponsesStreamHandler},
-		{name: "chat error", path: "/v1/chat/completions", format: types.RelayFormatOpenAI, body: `data: {"error":{"message":"upstream failed","type":"server_error"}}\n\ndata: [DONE]\n\n`, handle: OaiStreamHandler},
+		{name: "responses failed", path: "/v1/responses", format: types.RelayFormatOpenAIResponses, body: strings.Join([]string{
+			`data: {"type":"response.failed","error":{"message":"upstream failed"}}`,
+			`data: {"type":"response.completed","response":{"id":"must_not_run","status":"completed","output":[]}}`,
+			`data: [DONE]`, ``,
+		}, "\n"), handle: OaiResponsesStreamHandler},
+		{name: "chat error", path: "/v1/chat/completions", format: types.RelayFormatOpenAI, body: strings.Join([]string{
+			`data: {"error":{"message":"upstream failed","type":"server_error"}}`,
+			`data: {"choices":[{"index":0,"delta":{"content":"must not run"},"finish_reason":"stop"}]}`,
+			`data: [DONE]`, ``,
+		}, "\n"), handle: OaiStreamHandler},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -123,6 +131,8 @@ func TestNativeStreamHandlersReturnErrorAndNilUsageOnUpstreamErrorTerminal(t *te
 			require.NotNil(t, apiErr)
 			assert.NotContains(t, recorder.Body.String(), "[DONE]")
 			assert.NotContains(t, recorder.Body.String(), "response.completed")
+			assert.NotContains(t, recorder.Body.String(), "must not run")
+			assert.Empty(t, recorder.Body.String())
 		})
 	}
 }

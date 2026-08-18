@@ -225,6 +225,79 @@ func TestStreamValidatorAllowsCompletedCallToBeReconciledByResponseTerminal(t *t
 	require.Len(t, emitted, 2)
 }
 
+func TestStreamValidatorRejectsResponsesTerminalToolSetMismatch(t *testing.T) {
+	done := json.RawMessage(`{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"item_1","call_id":"call_1","name":"lookup","arguments":"{}","status":"completed"}}`)
+	tests := []struct {
+		name     string
+		terminal json.RawMessage
+		skipDone bool
+	}{
+		{name: "omitted streamed call", terminal: json.RawMessage(`{"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[]}}`)},
+		{name: "new terminal call", skipDone: true, terminal: json.RawMessage(`{"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"type":"function_call","id":"item_1","call_id":"call_1","name":"lookup","arguments":"{}","status":"completed"}]}}`)},
+		{name: "item identity changed", terminal: json.RawMessage(`{"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"type":"function_call","id":"item_2","call_id":"call_1","name":"lookup","arguments":"{}","status":"completed"}]}}`)},
+		{name: "call identity changed", terminal: json.RawMessage(`{"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"type":"function_call","id":"item_1","call_id":"call_2","name":"lookup","arguments":"{}","status":"completed"}]}}`)},
+		{name: "kind changed", terminal: json.RawMessage(`{"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"type":"custom_tool_call","id":"item_1","call_id":"call_1","name":"shell","input":"{}","status":"completed"}]}}`)},
+		{name: "name changed", terminal: json.RawMessage(`{"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"type":"function_call","id":"item_1","call_id":"call_1","name":"shell","arguments":"{}","status":"completed"}]}}`)},
+		{name: "arguments changed", terminal: json.RawMessage(`{"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"type":"function_call","id":"item_1","call_id":"call_1","name":"lookup","arguments":"{\"x\":1}","status":"completed"}]}}`)},
+		{name: "duplicate terminal call", terminal: json.RawMessage(`{"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"type":"function_call","id":"item_1","call_id":"call_1","name":"lookup","arguments":"{}","status":"completed"},{"type":"function_call","id":"item_1","call_id":"call_1","name":"lookup","arguments":"{}","status":"completed"}]}}`)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			validator := NewStreamValidator(streamTestPolicy(t))
+			if !test.skipDone {
+				emitted, err := validator.Accept(done)
+				require.NoError(t, err)
+				assert.Empty(t, emitted)
+			}
+			emitted, err := validator.Accept(test.terminal)
+			require.Error(t, err)
+			assert.Empty(t, emitted)
+			_, finishErr := validator.Finish()
+			require.Error(t, finishErr)
+		})
+	}
+}
+
+func TestStreamValidatorRejectsDeltaOrDuplicateDoneAfterArgumentDone(t *testing.T) {
+	tests := []struct {
+		name      string
+		added     json.RawMessage
+		done      json.RawMessage
+		lateDelta json.RawMessage
+	}{
+		{
+			name:      "function",
+			added:     json.RawMessage(`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"item_1","call_id":"call_1","name":"lookup","status":"in_progress"}}`),
+			done:      json.RawMessage(`{"type":"response.function_call_arguments.done","call_id":"call_1","arguments":"{}"}`),
+			lateDelta: json.RawMessage(`{"type":"response.function_call_arguments.delta","call_id":"call_1","delta":"late"}`),
+		},
+		{
+			name:      "custom",
+			added:     json.RawMessage(`{"type":"response.output_item.added","output_index":0,"item":{"type":"custom_tool_call","id":"item_1","call_id":"call_1","name":"shell","status":"in_progress"}}`),
+			done:      json.RawMessage(`{"type":"response.custom_tool_call_input.done","call_id":"call_1","input":"echo ok"}`),
+			lateDelta: json.RawMessage(`{"type":"response.custom_tool_call_input.delta","call_id":"call_1","delta":"late"}`),
+		},
+	}
+	for _, test := range tests {
+		for _, late := range []struct {
+			name  string
+			frame json.RawMessage
+		}{{name: "delta", frame: test.lateDelta}, {name: "duplicate done", frame: test.done}} {
+			t.Run(test.name+"/"+late.name, func(t *testing.T) {
+				validator := NewStreamValidator(streamTestPolicy(t))
+				for _, frame := range []json.RawMessage{test.added, test.done} {
+					emitted, err := validator.Accept(frame)
+					require.NoError(t, err)
+					assert.Empty(t, emitted)
+				}
+				emitted, err := validator.Accept(late.frame)
+				require.ErrorIs(t, err, ErrMalformedToolCall)
+				assert.Empty(t, emitted)
+			})
+		}
+	}
+}
+
 func TestStreamValidatorRejectsConflictingCrossNamespaceAliases(t *testing.T) {
 	validator := NewStreamValidator(streamTestPolicy(t))
 	_, err := validator.Accept(json.RawMessage(`{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"item_a","delta":"{}"}`))
@@ -254,6 +327,18 @@ func TestStreamValidatorRejectsNativeChatErrorObject(t *testing.T) {
 	emitted, err := validator.Accept(json.RawMessage(`{"error":{"message":"upstream failed","type":"server_error"}}`))
 	require.Error(t, err)
 	assert.Empty(t, emitted)
+}
+
+func TestStreamValidatorRejectsPresentNullErrorField(t *testing.T) {
+	for _, frame := range []json.RawMessage{
+		json.RawMessage(`{"choices":[],"error":null}`),
+		json.RawMessage(`{"type":"response.output_text.delta","delta":"safe","error":null}`),
+	} {
+		validator := NewStreamValidator(streamTestPolicy(t))
+		emitted, err := validator.Accept(frame)
+		require.ErrorIs(t, err, ErrMalformedToolCall)
+		assert.Empty(t, emitted)
+	}
 }
 
 func TestStreamValidatorRejectsNullOrWrongTypedProtocolFields(t *testing.T) {

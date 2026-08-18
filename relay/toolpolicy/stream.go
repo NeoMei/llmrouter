@@ -33,17 +33,19 @@ type StreamValidator struct {
 }
 
 type pendingStreamCall struct {
-	protocol   string
-	chatChoice int
-	kind       ToolKind
-	id         string
-	name       string
-	typeName   string
-	nativeType string
-	arguments  []streamFragment
-	finalArgs  json.RawMessage
-	completed  bool
-	createdAt  uint64
+	protocol        string
+	chatChoice      int
+	kind            ToolKind
+	id              string
+	name            string
+	typeName        string
+	nativeType      string
+	arguments       []streamFragment
+	finalArgs       json.RawMessage
+	argumentsDoneAt uint64
+	inputDoneAt     uint64
+	completed       bool
+	createdAt       uint64
 }
 
 type streamFragment struct {
@@ -343,6 +345,12 @@ func (v *StreamValidator) acceptResponsesFrame(sequence uint64, envelope *stream
 			return false, fmt.Errorf("%w: stream changed tool kind", ErrMalformedToolCall)
 		}
 		call.kind = kind
+		if kind == ToolKindFunction && call.argumentsDoneAt != 0 {
+			return false, fmt.Errorf("%w: function arguments frame arrived after arguments.done", ErrMalformedToolCall)
+		}
+		if kind == ToolKindCustom && call.inputDoneAt != 0 {
+			return false, fmt.Errorf("%w: custom input frame arrived after input.done", ErrMalformedToolCall)
+		}
 		owners[call] = struct{}{}
 		gate := v.ensureTerminalGate("responses-terminal", sequence)
 		v.responseGate = gate
@@ -357,6 +365,13 @@ func (v *StreamValidator) acceptResponsesFrame(sequence uint64, envelope *stream
 		}
 		if len(bytes.TrimSpace(envelope.Input)) > 0 {
 			call.finalArgs = append(json.RawMessage(nil), envelope.Input...)
+		}
+		if strings.HasSuffix(eventType, ".done") {
+			if kind == ToolKindFunction {
+				call.argumentsDoneAt = sequence
+			} else {
+				call.inputDoneAt = sequence
+			}
 		}
 		return true, nil
 	case "response.completed", "response.done":
@@ -407,23 +422,69 @@ func (v *StreamValidator) validateResponsesTerminal(sequence uint64, response *d
 	if err := v.validatePolicy(func(policy Policy) error { return ValidateResponsesResponse(policy, response) }); err != nil {
 		return err
 	}
+	seen := make(map[*pendingStreamCall]struct{})
 	for outputIndex := range response.Output {
 		item := &response.Output[outputIndex]
 		if !isStreamToolItem(item.Type) {
 			continue
 		}
 		index := outputIndex
-		call, err := v.resolveResponsesCall(sequence, &index, item.ID, "", item, true)
+		call, err := v.resolveCompletedResponsesCall(&index, item)
 		if err != nil {
 			return err
 		}
+		if _, duplicate := seen[call]; duplicate {
+			return fmt.Errorf("%w: responses terminal repeated a streamed tool call", ErrMalformedToolCall)
+		}
+		seen[call] = struct{}{}
 		owners[call] = struct{}{}
 		if err := v.applyResponsesItem(call, item); err != nil {
 			return err
 		}
-		call.completed = true
+	}
+	for call := range v.calls {
+		if call == v.chatGate || call == v.responseGate || call.protocol != "responses" {
+			continue
+		}
+		if !call.completed {
+			return fmt.Errorf("%w: responses terminal referenced a pending tool call", ErrIncompleteToolCall)
+		}
+		if _, ok := seen[call]; !ok {
+			return fmt.Errorf("%w: responses terminal omitted a streamed tool call", ErrMalformedToolCall)
+		}
 	}
 	return nil
+}
+
+func (v *StreamValidator) resolveCompletedResponsesCall(outputIndex *int, item *dto.ResponsesOutput) (*pendingStreamCall, error) {
+	aliases := responsesCallAliases(outputIndex, "", "", item)
+	var call *pendingStreamCall
+	for _, alias := range aliases {
+		candidate := v.aliases[alias]
+		if candidate == nil {
+			continue
+		}
+		if call == nil {
+			call = candidate
+		} else if call != candidate {
+			return nil, fmt.Errorf("%w: responses terminal aliases conflict", ErrMalformedToolCall)
+		}
+	}
+	if call == nil || !call.completed || call.protocol != "responses" {
+		return nil, fmt.Errorf("%w: responses terminal introduced an uncompleted tool call", ErrMalformedToolCall)
+	}
+	// Identity aliases must already have been observed on the streamed call.
+	// Output indexes may be learned at the aggregate terminal, but item/call IDs
+	// may not silently change there.
+	for _, identity := range []string{strings.TrimSpace(item.ID), strings.TrimSpace(item.CallId)} {
+		if identity == "" {
+			continue
+		}
+		if v.aliases["responses:raw:"+identity] != call {
+			return nil, fmt.Errorf("%w: responses terminal changed tool identity", ErrMalformedToolCall)
+		}
+	}
+	return call, nil
 }
 
 func (v *StreamValidator) completeCall(call *pendingStreamCall) error {
@@ -490,6 +551,14 @@ func (v *StreamValidator) validatePolicy(validate func(Policy) error) error {
 }
 
 func (v *StreamValidator) resolveResponsesCall(sequence uint64, outputIndex *int, itemID, callID string, item *dto.ResponsesOutput, allowCompleted bool) (*pendingStreamCall, error) {
+	aliases := responsesCallAliases(outputIndex, itemID, callID, item)
+	if len(aliases) == 0 {
+		aliases = append(aliases, "responses:anonymous:"+strconv.FormatUint(sequence, 10))
+	}
+	return v.resolveCall(aliases, "responses", 0, sequence, allowCompleted)
+}
+
+func responsesCallAliases(outputIndex *int, itemID, callID string, item *dto.ResponsesOutput) []string {
 	aliases := make([]string, 0, 8)
 	if outputIndex != nil {
 		aliases = append(aliases, "responses:output:"+strconv.Itoa(*outputIndex))
@@ -508,10 +577,7 @@ func (v *StreamValidator) resolveResponsesCall(sequence uint64, outputIndex *int
 			aliases = append(aliases, "responses:call:"+callID, "responses:raw:"+callID)
 		}
 	}
-	if len(aliases) == 0 {
-		aliases = append(aliases, "responses:anonymous:"+strconv.FormatUint(sequence, 10))
-	}
-	return v.resolveCall(aliases, "responses", 0, sequence, allowCompleted)
+	return aliases
 }
 
 func (v *StreamValidator) resolveCall(aliases []string, protocol string, chatChoice int, sequence uint64, allowCompleted bool) (*pendingStreamCall, error) {
@@ -596,6 +662,26 @@ func (v *StreamValidator) mergeCalls(left, right *pendingStreamCall) (*pendingSt
 		return nil, fmt.Errorf("%w: conflicting tool call kinds", ErrMalformedToolCall)
 	}
 	left.arguments = append(left.arguments, right.arguments...)
+	if left.argumentsDoneAt != 0 && right.argumentsDoneAt != 0 {
+		return nil, fmt.Errorf("%w: duplicate function arguments.done aliases", ErrMalformedToolCall)
+	}
+	if left.inputDoneAt != 0 && right.inputDoneAt != 0 {
+		return nil, fmt.Errorf("%w: duplicate custom input.done aliases", ErrMalformedToolCall)
+	}
+	if left.argumentsDoneAt == 0 {
+		left.argumentsDoneAt = right.argumentsDoneAt
+	}
+	if left.inputDoneAt == 0 {
+		left.inputDoneAt = right.inputDoneAt
+	}
+	for _, fragment := range left.arguments {
+		if left.kind == ToolKindFunction && left.argumentsDoneAt != 0 && fragment.sequence > left.argumentsDoneAt {
+			return nil, fmt.Errorf("%w: function argument delta followed arguments.done", ErrMalformedToolCall)
+		}
+		if left.kind == ToolKindCustom && left.inputDoneAt != 0 && fragment.sequence > left.inputDoneAt {
+			return nil, fmt.Errorf("%w: custom input delta followed input.done", ErrMalformedToolCall)
+		}
+	}
 	if len(left.finalArgs) == 0 {
 		left.finalArgs = right.finalArgs
 	} else if len(right.finalArgs) > 0 && !bytes.Equal(bytes.TrimSpace(left.finalArgs), bytes.TrimSpace(right.finalArgs)) {
@@ -787,9 +873,10 @@ func validateStreamFieldTypes(raw json.RawMessage) (bool, error) {
 		}
 	}
 	if value, ok := object["error"]; ok {
-		if !isRawNull(value) {
-			return true, nil
+		if isRawNull(value) {
+			return false, fmt.Errorf("%w: error must not be null", ErrMalformedToolCall)
 		}
+		return true, nil
 	}
 	if value, ok := object["choices"]; ok {
 		var choices []json.RawMessage

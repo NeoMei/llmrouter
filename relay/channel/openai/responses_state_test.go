@@ -138,6 +138,41 @@ func TestResponsesStreamPersistsEligibleCompletedTerminal(t *testing.T) {
 	assert.Contains(t, string(record.Input), "current")
 }
 
+func TestResponsesStreamTerminalOmissionDoesNotFlushPersistOrSucceed(t *testing.T) {
+	previousTimeout := appconstant.StreamingTimeout
+	appconstant.StreamingTimeout = 30
+	t.Cleanup(func() { appconstant.StreamingTimeout = previousTimeout })
+	t.Setenv("RESPONSES_STATE_ENABLED", "1")
+	responsesstate.ResetForTest()
+	t.Cleanup(responsesstate.ResetForTest)
+	store, err := responsesstate.Default()
+	require.NoError(t, err)
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	setNonStreamToolPolicy(t, c, "lookup")
+	scope := responsesstate.Scope{TenantID: 11, UserID: 11, TokenID: 7, RouteID: 3, TargetID: 4, ChannelID: 5, Model: "model-a"}
+	c.Set(string(appconstant.ContextKeyResponsesContinuity), responsesstate.ContinuityContext{Scope: scope, CurrentInput: json.RawMessage(`[]`)})
+	info := &relaycommon.RelayInfo{UserId: 11, TokenId: 7, ModelRouteId: 3, ModelTargetId: 4, ResolvedChannelId: 5, ResolvedModelName: "model-a", DisablePing: true, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "model-a"}}
+	body := strings.Join([]string{
+		`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"item_1","call_id":"call_1","name":"lookup","arguments":"{}","status":"completed"}}`,
+		`data: {"type":"response.completed","response":{"id":"resp_bad","status":"completed","output":[]}}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}
+
+	usage, apiErr := OaiResponsesStreamHandler(c, info, resp)
+	require.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeUpstreamToolProtocolInvalid, apiErr.GetErrorCode())
+	assert.Empty(t, recorder.Body.String())
+	_, loadErr := store.Load(context.Background(), scope, "resp_bad")
+	assert.ErrorIs(t, loadErr, responsesstate.ErrNotFound)
+}
+
 func TestResponsesStreamCancelledAfterCompletedEventDoesNotPersist(t *testing.T) {
 	previousTimeout := appconstant.StreamingTimeout
 	appconstant.StreamingTimeout = 30

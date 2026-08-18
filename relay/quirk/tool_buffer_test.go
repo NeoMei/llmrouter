@@ -1,6 +1,8 @@
 package quirk
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"testing"
 
 	"github.com/QuantumNous/new-api/dto"
@@ -229,6 +231,8 @@ func TestToolCallBufferGeneratedIDsAreDeterministicAndInstanceLocal(t *testing.T
 	b, err := makeBuffer().Flush()
 	require.NoError(t, err)
 	assert.Equal(t, a[0].ID, b[0].ID)
+	sum := sha256.Sum256([]byte("1"))
+	assert.Equal(t, "call_gw_"+hex.EncodeToString(sum[:])[:24], a[0].ID)
 	assert.Regexp(t, `^[A-Za-z0-9_-]{1,64}$`, a[0].ID)
 }
 
@@ -241,4 +245,70 @@ func TestToolCallBufferNormalizesInvalidProvidedID(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEqual(t, "bad/id", flushed[0].ID)
 	assert.Regexp(t, `^[A-Za-z0-9_-]{1,64}$`, flushed[0].ID)
+}
+
+func TestToolCallBufferNilIndexUsesDistinctIDKeys(t *testing.T) {
+	b := NewToolCallBuffer()
+	b.Accumulate([]dto.ToolCallResponse{
+		{ID: "a", Function: dto.FunctionResponse{Name: "first", Arguments: `{}`}},
+		{ID: "b", Function: dto.FunctionResponse{Name: "second", Arguments: `{}`}},
+	})
+	flushed, err := b.Flush()
+	require.NoError(t, err)
+	require.Len(t, flushed, 2)
+	assert.Equal(t, "a", flushed[0].ID)
+	assert.Equal(t, "b", flushed[1].ID)
+}
+
+func TestToolCallBufferNilIndexSameIDMergesAcrossChunks(t *testing.T) {
+	b := NewToolCallBuffer()
+	b.Accumulate([]dto.ToolCallResponse{{ID: "a", Function: dto.FunctionResponse{Name: "lookup", Arguments: `{"q":`}}})
+	b.Accumulate([]dto.ToolCallResponse{{ID: "a", Function: dto.FunctionResponse{Arguments: `"x"}`}}})
+	flushed, err := b.Flush()
+	require.NoError(t, err)
+	require.Len(t, flushed, 1)
+	assert.Equal(t, `{"q":"x"}`, flushed[0].Args)
+}
+
+func TestToolCallBufferLaterIndexBridgesIDAlias(t *testing.T) {
+	b := NewToolCallBuffer()
+	b.Accumulate([]dto.ToolCallResponse{{ID: "a", Function: dto.FunctionResponse{Name: "lookup"}}})
+	b.Accumulate([]dto.ToolCallResponse{{Index: intPtr(3), ID: "a", Function: dto.FunctionResponse{Arguments: `{}`}}})
+	flushed, err := b.Flush()
+	require.NoError(t, err)
+	require.Len(t, flushed, 1)
+	assert.Equal(t, "a", flushed[0].ID)
+}
+
+func TestToolCallBufferRejectsConflictingAliases(t *testing.T) {
+	b := NewToolCallBuffer()
+	b.Accumulate([]dto.ToolCallResponse{{Index: intPtr(0), ID: "a", Function: dto.FunctionResponse{Name: "first", Arguments: `{}`}}})
+	b.Accumulate([]dto.ToolCallResponse{{Index: intPtr(0), ID: "b", Function: dto.FunctionResponse{Name: "second", Arguments: `{}`}}})
+	_, err := b.Flush()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "conflicting tool call aliases")
+}
+
+func TestToolCallBufferRejectsAmbiguousUnidentifiedDelta(t *testing.T) {
+	b := NewToolCallBuffer()
+	b.Accumulate([]dto.ToolCallResponse{
+		{ID: "a", Function: dto.FunctionResponse{Name: "first"}},
+		{ID: "b", Function: dto.FunctionResponse{Name: "second"}},
+	})
+	b.Accumulate([]dto.ToolCallResponse{{Function: dto.FunctionResponse{Arguments: `{}`}}})
+	_, err := b.Flush()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ambiguous tool call delta")
+}
+
+func TestToolCallBufferRejectsAnonymousCallBeforeMultipleIdentifiedCalls(t *testing.T) {
+	b := NewToolCallBuffer()
+	b.Accumulate([]dto.ToolCallResponse{{Function: dto.FunctionResponse{Name: "unknown"}}})
+	b.Accumulate([]dto.ToolCallResponse{
+		{ID: "a", Function: dto.FunctionResponse{Name: "first", Arguments: `{}`}},
+		{ID: "b", Function: dto.FunctionResponse{Name: "second", Arguments: `{}`}},
+	})
+	_, err := b.Flush()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ambiguous tool call delta")
 }

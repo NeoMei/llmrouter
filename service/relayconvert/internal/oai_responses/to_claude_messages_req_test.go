@@ -58,10 +58,58 @@ func TestOpenAIResponsesRequestToClaudeRejectsUnknownToolResultID(t *testing.T) 
 	assert.Contains(t, err.Error(), "unknown tool result id")
 }
 
+func TestOpenAIResponsesRequestToClaudeRejectsEmptyToolResultID(t *testing.T) {
+	_, err := OpenAIResponsesRequestToClaudeMessages(nil, responsesRequestWithToolHistory("", `{}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown tool result id")
+}
+
+func TestOpenAIResponsesRequestToClaudeRejectsDuplicateToolCallID(t *testing.T) {
+	_, err := OpenAIResponsesRequestToClaudeMessages(nil, responsesRequestWithCalls("call_1", "call_1"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate tool call id")
+}
+
+func TestOpenAIResponsesRequestToClaudeAssignsUniqueOrdinalsToEmptyToolCallIDs(t *testing.T) {
+	got, err := OpenAIResponsesRequestToClaudeMessages(nil, responsesRequestWithCalls("", ""))
+	require.NoError(t, err)
+	uses := collectResponsesClaudeParts(got.Messages, "tool_use")
+	require.Len(t, uses, 2)
+	assert.NotEmpty(t, uses[0].Id)
+	assert.NotEqual(t, uses[0].Id, uses[1].Id)
+}
+
 func responsesRequestWithToolHistory(id, args string) *dto.OpenAIResponsesRequest {
 	input, _ := common.Marshal([]map[string]any{
 		{"type": "function_call", "call_id": id, "name": "lookup", "arguments": args},
 		{"type": "function_call_output", "call_id": id, "output": "ok"},
 	})
 	return &dto.OpenAIResponsesRequest{Model: "test-model", Input: input}
+}
+
+func responsesRequestWithCalls(ids ...string) *dto.OpenAIResponsesRequest {
+	items := make([]map[string]any, 0, len(ids))
+	for i, id := range ids {
+		items = append(items, map[string]any{
+			"type": "function_call", "call_id": id, "name": "lookup", "arguments": `{}`, "ordinal": i,
+		})
+	}
+	input, _ := common.Marshal(items)
+	return &dto.OpenAIResponsesRequest{Model: "test-model", Input: input}
+}
+
+func collectResponsesClaudeParts(messages []dto.ClaudeMessage, partType string) []dto.ClaudeMediaMessage {
+	var found []dto.ClaudeMediaMessage
+	for _, message := range messages {
+		parts, ok := message.Content.([]dto.ClaudeMediaMessage)
+		if !ok {
+			continue
+		}
+		for _, part := range parts {
+			if part.Type == partType {
+				found = append(found, part)
+			}
+		}
+	}
+	return found
 }

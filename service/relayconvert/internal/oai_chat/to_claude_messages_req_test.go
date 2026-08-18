@@ -134,3 +134,46 @@ func TestOpenAIChatRequestToClaudeRejectsUnknownToolResultID(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown tool result id")
 }
+
+func TestOpenAIChatRequestToClaudeRejectsEmptyToolResultID(t *testing.T) {
+	_, err := OpenAIChatRequestToClaudeMessages(nil, chatRequestWithToolHistory("", `{}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown tool result id")
+}
+
+func TestOpenAIChatRequestToClaudeRejectsDuplicateToolCallID(t *testing.T) {
+	_, err := OpenAIChatRequestToClaudeMessages(nil, chatRequestWithCalls(
+		dto.ToolCallRequest{ID: "call_1", Type: "function", Function: dto.FunctionRequest{Name: "first", Arguments: `{}`}},
+		dto.ToolCallRequest{ID: "call_1", Type: "function", Function: dto.FunctionRequest{Name: "second", Arguments: `{}`}},
+	))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate tool call id")
+}
+
+func TestOpenAIChatRequestToClaudeAssignsUniqueOrdinalsToEmptyToolCallIDs(t *testing.T) {
+	got, err := OpenAIChatRequestToClaudeMessages(nil, chatRequestWithCalls(
+		dto.ToolCallRequest{Type: "function", Function: dto.FunctionRequest{Name: "first", Arguments: `{}`}},
+		dto.ToolCallRequest{Type: "function", Function: dto.FunctionRequest{Name: "second", Arguments: `{}`}},
+	))
+	require.NoError(t, err)
+	uses := collectClaudeParts(got.Messages, "tool_use")
+	require.Len(t, uses, 2)
+	assert.NotEmpty(t, uses[0].Id)
+	assert.NotEqual(t, uses[0].Id, uses[1].Id)
+}
+
+func collectClaudeParts(messages []dto.ClaudeMessage, partType string) []dto.ClaudeMediaMessage {
+	var found []dto.ClaudeMediaMessage
+	for _, message := range messages {
+		parts, ok := message.Content.([]dto.ClaudeMediaMessage)
+		if !ok {
+			continue
+		}
+		for _, part := range parts {
+			if part.Type == partType {
+				found = append(found, part)
+			}
+		}
+	}
+	return found
+}

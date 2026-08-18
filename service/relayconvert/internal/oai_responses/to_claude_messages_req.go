@@ -257,9 +257,13 @@ func responsesFunctionCallItemToClaudeToolUse(item map[string]any, inputKey stri
 	} else {
 		input = ObjectValue(item[inputKey], inputKey)
 	}
+	normalizedID, err := ids.RegisterCall(rawResponsesCallID(item))
+	if err != nil {
+		return dto.ClaudeMediaMessage{}, err
+	}
 	return dto.ClaudeMediaMessage{
 		Type:  "tool_use",
-		Id:    ids.Normalize(rawResponsesCallID(item)),
+		Id:    normalizedID,
 		Name:  name,
 		Input: input,
 	}, nil

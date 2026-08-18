@@ -24,7 +24,7 @@ func normalizeResponsesResultID(ids *toolcallid.Normalizer, item map[string]any)
 	if sourceID == "" {
 		return "", fmt.Errorf("unknown tool result id: id is empty")
 	}
-	normalized, ok := ids.Lookup(sourceID)
+	normalized, ok := ids.LookupResult(sourceID)
 	if !ok {
 		return "", fmt.Errorf("unknown tool result id %q", sourceID)
 	}

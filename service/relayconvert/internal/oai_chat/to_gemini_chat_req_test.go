@@ -44,6 +44,33 @@ func TestOpenAIChatRequestToGeminiRejectsUnknownToolResultID(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown tool result id")
 }
 
+func TestOpenAIChatRequestToGeminiRejectsEmptyToolResultID(t *testing.T) {
+	_, err := OpenAIChatRequestToGeminiGenerateContent(nil, chatRequestWithToolHistory("", `{}`), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown tool result id")
+}
+
+func TestOpenAIChatRequestToGeminiRejectsDuplicateToolCallID(t *testing.T) {
+	_, err := OpenAIChatRequestToGeminiGenerateContent(nil, chatRequestWithCalls(
+		dto.ToolCallRequest{ID: "call_1", Type: "function", Function: dto.FunctionRequest{Name: "first", Arguments: `{}`}},
+		dto.ToolCallRequest{ID: "call_1", Type: "function", Function: dto.FunctionRequest{Name: "second", Arguments: `{}`}},
+	), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate tool call id")
+}
+
+func TestOpenAIChatRequestToGeminiAssignsUniqueOrdinalsToEmptyToolCallIDs(t *testing.T) {
+	got, err := OpenAIChatRequestToGeminiGenerateContent(nil, chatRequestWithCalls(
+		dto.ToolCallRequest{Type: "function", Function: dto.FunctionRequest{Name: "first", Arguments: `{}`}},
+		dto.ToolCallRequest{Type: "function", Function: dto.FunctionRequest{Name: "second", Arguments: `{}`}},
+	), nil)
+	require.NoError(t, err)
+	require.Len(t, got.Contents, 1)
+	require.Len(t, got.Contents[0].Parts, 2)
+	assert.NotEmpty(t, got.Contents[0].Parts[0].FunctionCall.ID)
+	assert.NotEqual(t, got.Contents[0].Parts[0].FunctionCall.ID, got.Contents[0].Parts[1].FunctionCall.ID)
+}
+
 func chatRequestWithToolHistory(id, args string) dto.GeneralOpenAIRequest {
 	toolCalls, _ := common.Marshal([]dto.ToolCallRequest{{
 		ID: id, Type: "function", Function: dto.FunctionRequest{Name: "lookup", Arguments: args},
@@ -55,5 +82,13 @@ func chatRequestWithToolHistory(id, args string) dto.GeneralOpenAIRequest {
 			{Role: "assistant", Content: "", ToolCalls: json.RawMessage(toolCalls)},
 			{Role: "tool", Content: `{"ok":true}`, ToolCallId: id, Name: &name},
 		},
+	}
+}
+
+func chatRequestWithCalls(calls ...dto.ToolCallRequest) dto.GeneralOpenAIRequest {
+	toolCalls, _ := common.Marshal(calls)
+	return dto.GeneralOpenAIRequest{
+		Model:    "test-model",
+		Messages: []dto.Message{{Role: "assistant", Content: "", ToolCalls: json.RawMessage(toolCalls)}},
 	}
 }

@@ -41,4 +41,25 @@ func TestOpenAIResponsesRequestToGeminiRejectsUnknownToolResultID(t *testing.T) 
 	assert.Contains(t, err.Error(), "unknown tool result id")
 }
 
+func TestOpenAIResponsesRequestToGeminiRejectsEmptyToolResultID(t *testing.T) {
+	_, err := OpenAIResponsesRequestToGeminiChat(nil, responsesRequestWithToolHistory("", `{}`), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown tool result id")
+}
+
+func TestOpenAIResponsesRequestToGeminiRejectsDuplicateToolCallID(t *testing.T) {
+	_, err := OpenAIResponsesRequestToGeminiChat(nil, responsesRequestWithCalls("call_1", "call_1"), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate tool call id")
+}
+
+func TestOpenAIResponsesRequestToGeminiAssignsUniqueOrdinalsToEmptyToolCallIDs(t *testing.T) {
+	got, err := OpenAIResponsesRequestToGeminiChat(nil, responsesRequestWithCalls("", ""), nil)
+	require.NoError(t, err)
+	require.Len(t, got.Contents, 1)
+	require.Len(t, got.Contents[0].Parts, 2)
+	assert.NotEmpty(t, got.Contents[0].Parts[0].FunctionCall.ID)
+	assert.NotEqual(t, got.Contents[0].Parts[0].FunctionCall.ID, got.Contents[0].Parts[1].FunctionCall.ID)
+}
+
 var _ = dto.GeminiChatRequest{}

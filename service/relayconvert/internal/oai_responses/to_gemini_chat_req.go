@@ -261,7 +261,10 @@ func responsesFunctionCallItemToGeminiPart(item map[string]any, ids *toolcallid.
 	if err != nil {
 		return dto.GeminiPart{}, "", fmt.Errorf("invalid arguments for function %s: %w", name, err)
 	}
-	callID := ids.Normalize(rawResponsesCallID(item))
+	callID, err := ids.RegisterCall(rawResponsesCallID(item))
+	if err != nil {
+		return dto.GeminiPart{}, "", err
+	}
 	return dto.GeminiPart{
 		FunctionCall: &dto.FunctionCall{
 			FunctionName: name,

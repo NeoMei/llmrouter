@@ -1,14 +1,11 @@
 package quirk
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/internal/toolcallid"
 )
 
 // ponytail: 移植自 opencodex openai-chat.ts:parseStream
@@ -27,34 +24,60 @@ type BufferedToolCall struct {
 }
 
 type bufferedEntry struct {
-	key  string // 匹配键：i:<index> 或 id:<id>
-	id   string
-	name string
-	args string
+	index *int
+	id    string
+	name  string
+	args  string
 }
 
 // ToolCallBuffer 累积流式 tool call delta，在 Flush 时原子输出。
 type ToolCallBuffer struct {
-	pending []bufferedEntry
-	ids     *bufferIDNormalizer
+	pending []*bufferedEntry
+	byIndex map[int]*bufferedEntry
+	byID    map[string]*bufferedEntry
+	ids     *toolcallid.Normalizer
+	err     error
 }
 
 func NewToolCallBuffer() *ToolCallBuffer {
-	return &ToolCallBuffer{ids: newBufferIDNormalizer("call_gw")}
+	return &ToolCallBuffer{
+		byIndex: make(map[int]*bufferedEntry),
+		byID:    make(map[string]*bufferedEntry),
+		ids:     toolcallid.New("call_gw"),
+	}
 }
 
 // Has 返回是否有未 flush 的 tool call。
 func (b *ToolCallBuffer) Has() bool {
-	return len(b.pending) > 0
+	return len(b.pending) > 0 || b.err != nil
 }
 
 // Accumulate 处理一个 delta chunk 中的 tool_calls，按 index/id 累积。
-// Index 是跨分片的稳定键（所有分片共享同一 Index），ID 仅作二级匹配。
+// Index 和 ID 是对等 alias；两者同时出现时建立桥接，冲突或无法
+// 判定归属的无标识分片会在 Flush 时 fail closed。
 func (b *ToolCallBuffer) Accumulate(toolCalls []dto.ToolCallResponse) {
+	if b.err != nil {
+		return
+	}
+	if len(toolCalls) > 1 {
+		if len(b.pending) == 1 && b.pending[0].index == nil && b.pending[0].id == "" {
+			b.err = fmt.Errorf("ambiguous tool call delta: an unidentified pending call cannot be matched to a multi-call chunk")
+			return
+		}
+		for i := range toolCalls {
+			if toolCalls[i].Index == nil && toolCalls[i].ID == "" {
+				b.err = fmt.Errorf("ambiguous tool call delta: call %d in a multi-call chunk has neither index nor id", i)
+				return
+			}
+		}
+	}
 	for i := range toolCalls {
 		tc := &toolCalls[i]
-		key := fmt.Sprintf("i:%d", indexOrZero(tc.Index))
-		entry := b.findOrCreate(key, tc.ID)
+		entry, err := b.resolve(tc.Index, tc.ID)
+		if err != nil {
+			b.err = err
+			return
+		}
 		if tc.ID != "" && entry.id == "" {
 			entry.id = tc.ID
 		}
@@ -71,117 +94,97 @@ func (b *ToolCallBuffer) Accumulate(toolCalls []dto.ToolCallResponse) {
 // A failed flush leaves pending calls untouched so callers cannot lose the
 // malformed terminal state while handling the error.
 func (b *ToolCallBuffer) Flush() ([]BufferedToolCall, error) {
+	if b.err != nil {
+		return nil, b.err
+	}
 	for i := range b.pending {
-		e := &b.pending[i]
+		e := b.pending[i]
 		if strings.TrimSpace(e.name) == "" {
 			return nil, fmt.Errorf("tool call %d is missing function name", i)
 		}
-		if strings.TrimSpace(e.args) == "" || common.GetJsonType([]byte(e.args)) != "object" {
-			return nil, fmt.Errorf("tool call %d arguments must be a JSON object", i)
-		}
-		var object map[string]any
-		if err := common.UnmarshalUnique([]byte(e.args), &object); err != nil || object == nil {
-			if err == nil {
-				err = fmt.Errorf("arguments must be a JSON object")
-			}
+		if _, err := toolcallid.ParseObjectArguments(e.args); err != nil {
 			return nil, fmt.Errorf("tool call %d has invalid arguments: %w", i, err)
 		}
 	}
 
 	result := make([]BufferedToolCall, len(b.pending))
 	for i := range b.pending {
-		e := &b.pending[i]
+		e := b.pending[i]
+		normalizedID, err := b.ids.RegisterCall(e.id)
+		if err != nil {
+			return nil, err
+		}
 		result[i] = BufferedToolCall{
-			ID:   b.ids.normalize(e.id),
+			ID:   normalizedID,
 			Name: strings.TrimSpace(e.name),
 			Args: e.args,
 		}
 	}
 	b.pending = nil
+	b.byIndex = make(map[int]*bufferedEntry)
+	b.byID = make(map[string]*bufferedEntry)
 	return result, nil
 }
 
-type bufferIDNormalizer struct {
-	prefix  string
-	forward map[string]string
-	reverse map[string]string
-	seq     uint64
+func (b *ToolCallBuffer) resolve(index *int, id string) (*bufferedEntry, error) {
+	var indexed, identified *bufferedEntry
+	if index != nil {
+		indexed = b.byIndex[*index]
+	}
+	if id != "" {
+		identified = b.byID[id]
+	}
+	if indexed != nil && identified != nil && indexed != identified {
+		return nil, fmt.Errorf("conflicting tool call aliases: index %d and id %q identify different calls", *index, id)
+	}
+
+	entry := indexed
+	if entry == nil {
+		entry = identified
+	}
+	if entry == nil {
+		if index == nil && id == "" {
+			switch len(b.pending) {
+			case 0:
+				entry = b.newEntry()
+			case 1:
+				entry = b.pending[0]
+			default:
+				return nil, fmt.Errorf("ambiguous tool call delta: missing both index and id with %d pending calls", len(b.pending))
+			}
+		} else if len(b.pending) == 1 && b.pending[0].index == nil && b.pending[0].id == "" {
+			entry = b.pending[0]
+		} else {
+			entry = b.newEntry()
+		}
+	}
+
+	if index != nil {
+		if entry.index != nil && *entry.index != *index {
+			return nil, fmt.Errorf("conflicting tool call aliases: id %q changed index from %d to %d", id, *entry.index, *index)
+		}
+		if existing := b.byIndex[*index]; existing != nil && existing != entry {
+			return nil, fmt.Errorf("conflicting tool call aliases: index %d is already assigned", *index)
+		}
+		indexCopy := *index
+		entry.index = &indexCopy
+		b.byIndex[*index] = entry
+	}
+	if id != "" {
+		if entry.id != "" && entry.id != id {
+			return nil, fmt.Errorf("conflicting tool call aliases: index identifies id %q but received %q", entry.id, id)
+		}
+		if existing := b.byID[id]; existing != nil && existing != entry {
+			return nil, fmt.Errorf("conflicting tool call aliases: id %q is already assigned", id)
+		}
+		entry.id = id
+		b.byID[id] = entry
+	}
+	return entry, nil
 }
 
-func newBufferIDNormalizer(prefix string) *bufferIDNormalizer {
-	return &bufferIDNormalizer{
-		prefix:  prefix,
-		forward: make(map[string]string),
-		reverse: make(map[string]string),
-	}
-}
-
-func (n *bufferIDNormalizer) normalize(source string) string {
-	if source != "" {
-		if normalized, ok := n.forward[source]; ok {
-			return normalized
-		}
-	}
-	seed := source
-	if seed == "" {
-		n.seq++
-		seed = "empty:" + strconv.FormatUint(n.seq, 10)
-	}
-	candidate := source
-	if !validBufferedToolCallID(candidate) {
-		sum := sha256.Sum256([]byte(seed))
-		candidate = n.prefix + "_" + hex.EncodeToString(sum[:])[:24]
-	}
-	base := candidate
-	for collision := 2; ; collision++ {
-		owner, exists := n.reverse[candidate]
-		if !exists || owner == source {
-			break
-		}
-		suffix := "_" + strconv.Itoa(collision)
-		trimmed := base
-		if len(trimmed)+len(suffix) > 64 {
-			trimmed = trimmed[:64-len(suffix)]
-		}
-		candidate = trimmed + suffix
-	}
-	if source != "" {
-		n.forward[source] = candidate
-	}
-	n.reverse[candidate] = source
-	return candidate
-}
-
-func validBufferedToolCallID(id string) bool {
-	if id == "" || len(id) > 64 {
-		return false
-	}
-	for i := 0; i < len(id); i++ {
-		c := id[i]
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-func (b *ToolCallBuffer) findOrCreate(key, id string) *bufferedEntry {
-	for i := range b.pending {
-		if b.pending[i].key == key {
-			return &b.pending[i]
-		}
-		if id != "" && b.pending[i].id == id {
-			return &b.pending[i]
-		}
-	}
-	b.pending = append(b.pending, bufferedEntry{key: key})
-	return &b.pending[len(b.pending)-1]
-}
-
-func indexOrZero(p *int) int {
-	if p == nil {
-		return 0
-	}
-	return *p
+func (b *ToolCallBuffer) newEntry() *bufferedEntry {
+	entry := &bufferedEntry{}
+	b.pending = append(b.pending, entry)
+	return entry
 }

@@ -391,9 +391,13 @@ func OpenAIChatRequestToClaudeMessages(c *gin.Context, textRequest dto.GeneralOp
 					if err != nil {
 						return nil, fmt.Errorf("invalid arguments for function %s: %w", toolCall.Function.Name, err)
 					}
+					normalizedID, err := toolIDs.RegisterCall(toolCall.ID)
+					if err != nil {
+						return nil, err
+					}
 					claudeMediaMessages = append(claudeMediaMessages, dto.ClaudeMediaMessage{
 						Type:  "tool_use",
-						Id:    toolIDs.Normalize(toolCall.ID),
+						Id:    normalizedID,
 						Name:  toolCall.Function.Name,
 						Input: inputObj,
 					})

@@ -307,7 +307,10 @@ func OpenAIChatRequestToGeminiGenerateContent(c *gin.Context, textRequest dto.Ge
 				if err != nil {
 					return nil, fmt.Errorf("invalid arguments for function %s: %w", call.Function.Name, err)
 				}
-				normalizedID := toolIDs.Normalize(call.ID)
+				normalizedID, err := toolIDs.RegisterCall(call.ID)
+				if err != nil {
+					return nil, err
+				}
 				toolCall := dto.GeminiPart{
 					FunctionCall: &dto.FunctionCall{
 						FunctionName: call.Function.Name,

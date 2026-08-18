@@ -1,10 +1,10 @@
 package modelcatalog
 
 import (
-	"encoding/json"
 	"net/http"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,7 +29,7 @@ func TestRouteDecisionContainsNoSecrets(t *testing.T) {
 			Reason:    "rate_limited",
 		}},
 	}
-	encoded, err := json.Marshal(trace)
+	encoded, err := common.Marshal(trace)
 	require.NoError(t, err)
 	require.NotContains(t, string(encoded), "sk-")
 	require.NotContains(t, string(encoded), "Authorization")
@@ -43,7 +43,7 @@ func TestRouteDecisionAttemptPreservesTargetIdentityAndRejectedReason(t *testing
 		RejectedReason: "context_capacity_exceeded",
 	}
 
-	encoded, err := json.Marshal(attempt)
+	encoded, err := common.Marshal(attempt)
 	require.NoError(t, err)
 	require.Contains(t, string(encoded), `"route_id":5`)
 	require.Contains(t, string(encoded), `"target_id":8`)

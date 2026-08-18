@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/service/modelcatalog"
 	"github.com/gin-gonic/gin"
@@ -36,4 +37,33 @@ func TestGetRouteDecisionEndpointNotFound(t *testing.T) {
 	GetRouteDecisionEndpoint(c)
 
 	require.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestRouteDecisionSnapshotsDoNotShareAttemptStorage(t *testing.T) {
+	trace := modelcatalog.RouteDecisionTrace{
+		Attempts: []modelcatalog.Attempt{{ChannelID: 7, Reason: "original"}},
+	}
+	RecordRouteDecision("req-snapshot-isolation", trace)
+	trace.Attempts[0].Reason = "mutated input"
+
+	first, ok := GetRouteDecision("req-snapshot-isolation")
+	require.True(t, ok)
+	require.Equal(t, "original", first.Attempts[0].Reason)
+	first.Attempts[0].Reason = "mutated output"
+
+	second, ok := GetRouteDecision("req-snapshot-isolation")
+	require.True(t, ok)
+	require.Equal(t, "original", second.Attempts[0].Reason)
+}
+
+func TestAppendRouteAttemptRefreshesTraceLifetime(t *testing.T) {
+	const requestID = "req-refresh-lifetime"
+	traceStoreMu.Lock()
+	traceStore[requestID] = traceEntry{RecordedAt: time.Now().Add(-routeDecisionTraceTTL - time.Second)}
+	traceStoreMu.Unlock()
+
+	AppendRouteAttempt(requestID, modelcatalog.Attempt{ChannelID: 9})
+	trace, ok := GetRouteDecision(requestID)
+	require.True(t, ok)
+	require.Len(t, trace.Attempts, 1)
 }

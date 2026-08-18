@@ -2,6 +2,8 @@ package common
 
 import (
 	"encoding/json"
+	"io"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -46,4 +48,14 @@ func TestUnmarshalUseNumberRejectsTrailingJSON(t *testing.T) {
 	var value map[string]any
 	err := UnmarshalUseNumber([]byte(`{"count":9007199254740993} trailing`), &value)
 	require.Error(t, err)
+}
+
+func TestNewJsonDecoderPreservesBufferedSequentialValues(t *testing.T) {
+	decoder := NewJsonDecoder(strings.NewReader(`{"first":1}{"second":2}`))
+	var first, second json.RawMessage
+	require.NoError(t, decoder.Decode(&first))
+	require.NoError(t, decoder.Decode(&second))
+	require.JSONEq(t, `{"first":1}`, string(first))
+	require.JSONEq(t, `{"second":2}`, string(second))
+	require.ErrorIs(t, decoder.Decode(&json.RawMessage{}), io.EOF)
 }

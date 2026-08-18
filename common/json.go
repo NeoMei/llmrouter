@@ -19,6 +19,12 @@ func DecodeJson(reader io.Reader, v any) error {
 	return json.NewDecoder(reader).Decode(v)
 }
 
+// NewJsonDecoder returns a persistent decoder for streams containing multiple
+// JSON values. Reusing one decoder preserves bytes buffered past each value.
+func NewJsonDecoder(reader io.Reader) *json.Decoder {
+	return json.NewDecoder(reader)
+}
+
 func Marshal(v any) ([]byte, error) {
 	return json.Marshal(v)
 }

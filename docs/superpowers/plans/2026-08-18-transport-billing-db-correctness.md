@@ -31,7 +31,7 @@
 - Consumes: existing `BodyStorage` lifecycle, disk-cache threshold controls, and `ErrStorageClosed`.
 - Produces: `BodyStorage.NewReader() (io.ReadCloser, error)`, returning a fresh cursor at byte zero on every call.
 
-- [ ] **Step 1: Write failing memory and disk replay tests**
+- [x] **Step 1: Write failing memory and disk replay tests**
 
 Add table tests that force both storage modes and prove that primary reader, replay reader A, and replay reader B can be interleaved without moving one another's cursors. Also assert that a reader opened before storage close remains readable, while `NewReader` after close returns `ErrStorageClosed`.
 
@@ -87,13 +87,13 @@ func TestBodyStorageNewReaderRejectsClosedStorage(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 Run: `go test ./common -run 'TestBodyStorageNewReader' -count=1`
 
 Expected: build failure because `BodyStorage.NewReader`, `memoryStorage.NewReader`, and `diskStorage.NewReader` do not exist.
 
-- [ ] **Step 3: Add the independent-reader contract**
+- [x] **Step 3: Add the independent-reader contract**
 
 ```go
 type BodyStorage interface {
@@ -128,13 +128,13 @@ func (d *diskStorage) NewReader() (io.ReadCloser, error) {
 }
 ```
 
-- [ ] **Step 4: Verify GREEN and the race-sensitive cursor contract**
+- [x] **Step 4: Verify GREEN and the race-sensitive cursor contract**
 
 Run: `go test -race ./common -run 'TestBodyStorage(NewReader|Disk|Memory)' -count=1`
 
 Expected: PASS with no race report.
 
-- [ ] **Step 5: Commit Task 1**
+- [x] **Step 5: Commit Task 1**
 
 ```bash
 git add common/body_storage.go common/body_storage_test.go
@@ -163,7 +163,7 @@ git commit -m "fix(relay): add independent readers to body storage"
 - Consumes: `BodyStorage.NewReader() (io.ReadCloser, error)` from Task 1.
 - Produces: `NewOutboundJSONBody(data []byte) (io.Reader, int64, func() (io.ReadCloser, error), io.Closer, error)` and `ApplyUpstreamBodyMetadata(req *http.Request, info *relaycommon.RelayInfo)`.
 
-- [ ] **Step 1: Write failing outbound-body and request metadata tests**
+- [x] **Step 1: Write failing outbound-body and request metadata tests**
 
 Cover exact length, two complete independent `GetBody` reads, metadata reset on `RelayInfo.InitChannelMeta`, preservation of a request-native `GetBody`, and removal of the task path's unsafe same-reader closure.
 
@@ -211,13 +211,13 @@ func TestApplyUpstreamBodyMetadata(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `go test ./relay/common ./relay/channel -run '(OutboundJSONBody|UpstreamBodyMetadata|GetBody)' -count=1`
 
 Expected: build failures for the new return value and missing `UpstreamRequestGetBody`/`ApplyUpstreamBodyMetadata`.
 
-- [ ] **Step 3: Implement the replay metadata seam**
+- [x] **Step 3: Implement the replay metadata seam**
 
 ```go
 func NewOutboundJSONBody(data []byte) (
@@ -262,7 +262,7 @@ requestBody = body
 
 For Claude pass-through storage, bind `storage.NewReader` directly. Call `ApplyUpstreamBodyMetadata` from `DoApiRequest`, `DoFormRequest`, and `DoTaskApiRequest`. Delete the task closure that returns `io.NopCloser(requestBody)`.
 
-- [ ] **Step 4: Add transport-level regression coverage**
+- [x] **Step 4: Add transport-level regression coverage**
 
 Use an `httptest` server/transport harness in `relay/channel/api_request_getbody_test.go` that reads the original body, invokes `req.GetBody` twice, and verifies the complete payload on each replay. Add a multipart case and a cancellation case; cancellation must return `context.Canceled` and must not make `GetBody` return a partial payload.
 
@@ -288,7 +288,7 @@ func TestApplyUpstreamBodyMetadataKeepsNativeGetBody(t *testing.T) {
 }
 ```
 
-- [ ] **Step 5: Verify GREEN across all relay body producers**
+- [x] **Step 5: Verify GREEN across all relay body producers**
 
 Run: `go test -race ./common ./relay/common ./relay/channel ./relay -run '(BodyStorage|OutboundJSONBody|UpstreamBodyMetadata|GetBody|Replay|Cancellation)' -count=1`
 
@@ -298,7 +298,7 @@ Run: `rg -n 'NewOutboundJSONBody\(' relay -g '*.go'`
 
 Expected: every production call binds five return values and assigns `UpstreamRequestGetBody`; no task request sets `GetBody` to the original `requestBody`.
 
-- [ ] **Step 6: Commit Task 2**
+- [x] **Step 6: Commit Task 2**
 
 ```bash
 git add common/body_storage.go relay/common/outbound_body.go relay/common/outbound_body_test.go relay/common/relay_info.go relay/channel/api_request.go relay/channel/api_request_getbody_test.go relay/chat_completions_via_responses.go relay/responses_compact_via_chat.go relay/responses_handler.go relay/image_handler.go relay/gemini_handler.go relay/claude_handler.go relay/rerank_handler.go relay/compatible_handler.go relay/embedding_handler.go
@@ -319,7 +319,7 @@ git commit -m "fix(relay): make upstream bodies replay-safe"
 - Consumes: `BillingSettler.Reserve(int) error`, `BillingSettler.GetPreConsumedQuota() int`, `PreConsumeBilling`, `helper.HandleGroupRatio`, and `billingexpr.QuotaRoundStrict`.
 - Produces: `PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon.RelayInfo) *types.NewAPIError`.
 
-- [ ] **Step 1: Read the billing-expression contract and write transition tests**
+- [x] **Step 1: Read the billing-expression contract and write transition tests**
 
 Add deterministic tests for free→paid, paid→free, cheaper→more-expensive, equal-ratio no-op, and reservation failure. The spy settler records reserve calls and exposes the resulting pre-consumed amount.
 
@@ -359,13 +359,13 @@ func TestPrepareTieredBillingForSelectedGroupReservesHigherFinalGroup(t *testing
 }
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `go test ./service -run 'TestPrepareTieredBillingForSelectedGroup' -count=1`
 
 Expected: build failure because `PrepareTieredBillingForSelectedGroup` does not exist.
 
-- [ ] **Step 3: Implement group refresh and pre-send reservation**
+- [x] **Step 3: Implement group refresh and pre-send reservation**
 
 ```go
 func refreshTieredBillingGroup(relayInfo *relaycommon.RelayInfo) (*billingexpr.BillingSnapshot, error) {
@@ -406,7 +406,7 @@ func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon
 }
 ```
 
-- [ ] **Step 4: Move selection-dependent updates to the correct retry seam**
+- [x] **Step 4: Move selection-dependent updates to the correct retry seam**
 
 In `getChannel`, call `helper.HandleGroupRatio` only after channel selection succeeds. In the retry loop, preserve this exact order:
 
@@ -426,13 +426,13 @@ bodyStorage, bodyErr := common.GetBodyStorage(c)
 
 The controller regression test must assert that a failed reservation records the attempted channel, makes zero upstream calls, and returns a skip-retry billing error.
 
-- [ ] **Step 5: Verify GREEN and settlement invariants**
+- [x] **Step 5: Verify GREEN and settlement invariants**
 
 Run: `go test -race ./service ./controller -run '(Tiered|BillingSession|FinalGroup|Reservation)' -count=1`
 
 Expected: PASS; free→paid creates/reserves before upstream, paid→free settles to zero, higher group reserves the delta, and failure prevents send.
 
-- [ ] **Step 6: Commit Task 3**
+- [x] **Step 6: Commit Task 3**
 
 ```bash
 git add service/tiered_settle.go service/tiered_settle_test.go service/billing_session.go controller/relay.go controller/relay_tiered_retry_test.go
@@ -450,7 +450,7 @@ git commit -m "fix(billing): prepare tiered quota for final group"
 - Consumes: existing DB drivers and `common.DebugEnabled`/`common.GetEnvOrDefault`.
 - Produces: `newGormConfig(prepareStmt bool) *gorm.Config`, `newGormLogger(io.Writer) logger.Interface`, and `sanitizeDBError(error) error`.
 
-- [ ] **Step 1: Write failing sanitizer and parameterization tests**
+- [x] **Step 1: Write failing sanitizer and parameterization tests**
 
 Use representative MySQL, PostgreSQL, ClickHouse, and SQLite driver errors containing `super-secret`. Assert that non-debug output retains the driver class/code but never the secret, while an arbitrary network error remains unchanged. Restore `common.DebugEnabled` and `SQL_SLOW_THRESHOLD_MS` with `t.Cleanup`.
 
@@ -475,13 +475,13 @@ func TestSanitizeDBErrorRedactsDriverMessage(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `go test ./model -run '(SanitizeDBError|GormLogger|SlowThreshold)' -count=1`
 
 Expected: build failure because `sanitizeDBError` and `newGormLogger` do not exist.
 
-- [ ] **Step 3: Add the centralized GORM logger**
+- [x] **Step 3: Add the centralized GORM logger**
 
 Implement the approved seam with constants `defaultSlowThresholdMs = 200` and `maxSlowThresholdMs = 60 * 60 * 1000`. The logger config must set:
 
@@ -497,17 +497,17 @@ logger.Config{
 
 The writer sanitizes only `error` arguments when debug is disabled. `sanitizeDBError` maps `*mysql.MySQLError`, `*pgconn.PgError`, `*proto.Exception`, and `*sqlitedriver.Error` to class/code-only errors, and returns every other error unchanged.
 
-- [ ] **Step 4: Route every database open through the centralized config**
+- [x] **Step 4: Route every database open through the centralized config**
 
 Use `newGormConfig(false)` for ClickHouse and `newGormConfig(true)` for PostgreSQL, MySQL, and SQLite. Preserve the current DSN normalization and dialect selection exactly.
 
-- [ ] **Step 5: Verify GREEN**
+- [x] **Step 5: Verify GREEN**
 
 Run: `go test -race ./model -run '(SanitizeDBError|GormLogger|SlowThreshold|ChooseDB)' -count=1`
 
 Expected: PASS; captured logs contain SQL operation context and driver class/code, but no bound secret or driver message secret.
 
-- [ ] **Step 6: Commit Task 4**
+- [x] **Step 6: Commit Task 4**
 
 ```bash
 git add model/gorm_logger.go model/gorm_logger_test.go model/main.go
@@ -523,13 +523,13 @@ git commit -m "fix(model): redact parameters from database logs"
 - Consumes: all Task 1–4 outputs.
 - Produces: a reviewable, separately revertible subproject with fresh test evidence.
 
-- [ ] **Step 1: Run focused race suites**
+- [x] **Step 1: Run focused race suites**
 
 Run: `go test -race ./common ./relay/common ./relay/channel ./relay ./service ./controller ./model -count=1`
 
 Expected: PASS with no race report.
 
-- [ ] **Step 2: Run the full backend gate**
+- [x] **Step 2: Run the full backend gate**
 
 Run: `go test ./...`
 
@@ -539,7 +539,7 @@ Run: `go vet ./...`
 
 Expected: exit 0 with no diagnostics.
 
-- [ ] **Step 3: Run formatting and diff hygiene**
+- [x] **Step 3: Run formatting and diff hygiene**
 
 Run: `gofmt -w common/body_storage.go common/body_storage_test.go relay/common/outbound_body.go relay/common/outbound_body_test.go relay/common/relay_info.go relay/channel/api_request.go relay/channel/api_request_getbody_test.go relay/chat_completions_via_responses.go relay/responses_compact_via_chat.go relay/responses_handler.go relay/image_handler.go relay/gemini_handler.go relay/claude_handler.go relay/rerank_handler.go relay/compatible_handler.go relay/embedding_handler.go service/tiered_settle.go service/tiered_settle_test.go service/billing_session.go controller/relay.go controller/relay_tiered_retry_test.go model/gorm_logger.go model/gorm_logger_test.go model/main.go`
 
@@ -547,12 +547,12 @@ Run: `git diff --check`
 
 Expected: no output and exit 0.
 
-- [ ] **Step 4: Review scope before the checkpoint commit**
+- [x] **Step 4: Review scope before the checkpoint commit**
 
 Run: `git status --short && git diff --stat HEAD~4..HEAD && git diff -- scripts/prepare-sidecar-env.py`
 
 Expected: the untracked sidecar helper remains untouched; no UI, provider feature, channel type, or protected project identity changed.
 
-- [ ] **Step 5: Preserve task-level commit boundaries**
+- [x] **Step 5: Preserve task-level commit boundaries**
 
 If verification exposes a regression, return to the task that introduced it, add a failing regression test, implement the minimum fix, re-run that task's GREEN command and this full gate, then amend that task's commit with `git commit --amend --no-edit`. If the gate is clean, do not create an empty commit.

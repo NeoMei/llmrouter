@@ -40,7 +40,7 @@
 - Consumes: normalized Chat `[]dto.ToolCallRequest`, Responses `Tools`/`ToolChoice` raw JSON, and Gin request context.
 - Produces: `Policy`, `BuildFromChat`, `BuildFromResponses`, `BuildFromClaude`, `BuildFromGemini`, `ValidateCall`, `Set`, `FromContext`, and stable error code `upstream_tool_policy_violation`.
 
-- [ ] **Step 1: Write failing policy tests**
+- [x] **Step 1: Write failing policy tests**
 
 Cover declared function, undeclared function, empty name, `tool_choice:"none"`, forced named choice, no-catalog text-only behavior, duplicate declaration normalization, and invalid request tool definitions.
 
@@ -77,13 +77,13 @@ func mustPolicy(t *testing.T, allowedName string) Policy {
 }
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `go test ./relay/toolpolicy -count=1`
 
 Expected: build failure because the package and interfaces do not exist.
 
-- [ ] **Step 3: Implement the policy model**
+- [x] **Step 3: Implement the policy model**
 
 ```go
 type ToolKind string
@@ -125,13 +125,13 @@ type Policy struct {
 
 Return copies from `FromContext`; never expose the internal map for mutation. Add `ContextKeyToolPolicy`. Build and store the matching policy after the request copy is normalized in `TextHelper`, `ResponsesHelper`, `ClaudeHelper`, or `GeminiHelper`, before adaptor conversion or upstream send.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run: `go test -race ./relay/toolpolicy -count=1`
 
 Expected: PASS with no race report.
 
-- [ ] **Step 5: Commit Task 1**
+- [x] **Step 5: Commit Task 1**
 
 ```bash
 git add relay/toolpolicy/policy.go relay/toolpolicy/policy_test.go constant/context_key.go relay/compatible_handler.go relay/responses_handler.go relay/claude_handler.go relay/gemini_handler.go types/error.go
@@ -154,7 +154,7 @@ git commit -m "feat(relay): capture request-scoped tool policy"
 - Consumes: `Policy.ValidateCall` from Task 1 and current response DTOs.
 - Produces: `ValidateChatResponse`, `ValidateResponsesResponse`, `ValidateClaudeResponse`, and `ValidateGeminiResponse` returning typed policy/protocol errors.
 
-- [ ] **Step 1: Write failing response validation tests**
+- [x] **Step 1: Write failing response validation tests**
 
 Test one valid call and each invalid condition: undeclared name, missing name, missing ID, malformed arguments, wrong argument type, forced-choice mismatch, and refusal/incomplete Responses output. Add `Refusal string json:"refusal,omitempty"` to `dto.ResponsesOutputContent` so refusal eligibility is representable.
 
@@ -173,13 +173,13 @@ func TestValidateResponsesResponseRejectsUndeclaredTool(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `go test ./relay/toolpolicy ./relay/channel/openai ./relay/channel/claude ./relay/channel/gemini -run '(Validate.*Tool|UndeclaredTool|MalformedArguments|ForcedChoice)' -count=1`
 
 Expected: build failure for the validation functions.
 
-- [ ] **Step 3: Implement format adapters into one validation core**
+- [x] **Step 3: Implement format adapters into one validation core**
 
 Each format adapter extracts only complete upstream calls and maps them to `toolpolicy.Call`. It returns an error before any `c.JSON`, `c.Data`, SSE write, continuity persistence, or success settlement. Built-in non-call output items remain unchanged; built-in calls are valid only when the request declared their exact type/name.
 
@@ -207,17 +207,17 @@ func ValidateResponsesResponse(policy Policy, response *dto.OpenAIResponsesRespo
 }
 ```
 
-- [ ] **Step 4: Wire validation before output and persistence**
+- [x] **Step 4: Wire validation before output and persistence**
 
 At every non-stream response boundary, retrieve the request policy from Gin context and validate the provider-native response or its normalized DTO before writing. Convert failures to `upstream_tool_policy_violation` or `upstream_tool_protocol_invalid`, set skip-success-settlement state, and return a retryable channel error only when the existing upstream-error policy permits another channel. Ensure `persistResponsesTurn` is not called after a validation failure.
 
-- [ ] **Step 5: Verify GREEN**
+- [x] **Step 5: Verify GREEN**
 
 Run: `go test -race ./relay/toolpolicy ./relay/channel/openai ./relay/channel/claude ./relay/channel/gemini -run '(Tool|Responses|Claude|Gemini|Policy)' -count=1`
 
 Expected: PASS; recorder bodies contain no invalid tool call bytes.
 
-- [ ] **Step 6: Commit Task 2**
+- [x] **Step 6: Commit Task 2**
 
 ```bash
 git add relay/toolpolicy/validate_response.go relay/toolpolicy/validate_response_test.go relay/channel/openai/relay-openai.go relay/channel/openai/relay_responses.go relay/channel/claude/relay-claude.go relay/channel/gemini/relay-gemini.go relay/channel/openai/responses_state_test.go dto/openai_response.go
@@ -238,7 +238,7 @@ git commit -m "fix(relay): reject invalid upstream tool calls"
 - Consumes: immutable `Policy` and complete-call validator from Tasks 1–2.
 - Produces: `StreamValidator.Accept(event json.RawMessage) ([]json.RawMessage, error)` and `StreamValidator.Finish() ([]json.RawMessage, error)`.
 
-- [ ] **Step 1: Write failing stream state-machine tests**
+- [x] **Step 1: Write failing stream state-machine tests**
 
 Cover split name/arguments, interleaved indices, null delta padding, valid terminal flush, missing name, malformed JSON, terminal event without completion, and EOF with a pending call. Assert tool-related frames are withheld until validation succeeds, while unrelated text frames pass through immediately.
 
@@ -262,13 +262,13 @@ func TestStreamValidatorBuffersToolFramesUntilValidDone(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `go test ./relay/toolpolicy -run 'TestStreamValidator' -count=1`
 
 Expected: build failure because `StreamValidator` does not exist.
 
-- [ ] **Step 3: Implement request-local stream accumulation**
+- [x] **Step 3: Implement request-local stream accumulation**
 
 Key pending calls by output index/item ID/call ID in an instance-owned map. Ignore a frame whose complete JSON value is `null`; do not ignore null bytes inside an argument string. Buffer every frame belonging to a pending tool item. At the terminal frame, combine arguments, validate the completed call, and return the buffered frames in original order. `Finish` returns `ErrIncompleteToolCall` when pending calls remain.
 
@@ -289,17 +289,17 @@ type pendingCall struct {
 }
 ```
 
-- [ ] **Step 4: Put the state machine before every SSE write**
+- [x] **Step 4: Put the state machine before every SSE write**
 
 For native OpenAI Chat/Responses streams and both Chat↔Responses converters, pass each normalized event through `Accept`, write only returned frames, and call `Finish` on `[DONE]`, `response.completed`, EOF, and cancellation. On failure, do not emit buffered tool frames or a successful terminal event; return the stable upstream protocol error and skip persistence/success billing.
 
-- [ ] **Step 5: Verify GREEN**
+- [x] **Step 5: Verify GREEN**
 
 Run: `go test -race ./relay/toolpolicy ./relay/channel/openai ./service/relayconvert/internal/oai_chat ./service/relayconvert/internal/oai_responses -run '(Stream|ToolCall|Null|Incomplete|Terminal)' -count=1`
 
 Expected: PASS; invalid buffered frames never appear in recorder output.
 
-- [ ] **Step 6: Commit Task 3**
+- [x] **Step 6: Commit Task 3**
 
 ```bash
 git add relay/toolpolicy/stream.go relay/toolpolicy/stream_test.go relay/channel/openai/relay-openai.go relay/channel/openai/relay_responses.go service/relayconvert/internal/oai_chat/to_oai_responses_stream_resp.go service/relayconvert/internal/oai_responses/to_oai_chat_stream_resp.go
@@ -326,7 +326,7 @@ git commit -m "fix(relay): validate streamed tool calls atomically"
 - Consumes: validated request history and existing converter entry points.
 - Produces: `toolcallid.Normalizer`, `Normalize(sourceID string) string`, `Lookup(sourceID string) (string, bool)`, and `ToolCallBuffer.Flush() ([]BufferedToolCall, error)`.
 
-- [ ] **Step 1: Write failing normalization and malformed-argument tests**
+- [x] **Step 1: Write failing normalization and malformed-argument tests**
 
 Test valid IDs preserved, invalid characters normalized, empty IDs assigned deterministically, two source IDs with the same sanitized base remain collision-free, the same source ID maps identically within one normalizer, and separate normalizers do not share state. Converter tests must expect an error for `{bad-json` rather than `{}`.
 
@@ -342,13 +342,13 @@ func TestNormalizerIsStableCollisionFreeAndRequestLocal(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `go test ./service/relayconvert/internal/toolcallid ./service/relayconvert/internal/oai_chat ./service/relayconvert/internal/oai_responses ./relay/quirk -run '(Normalizer|MalformedArguments|ToolCallBuffer)' -count=1`
 
 Expected: build failure for the new package/API, and existing converter behavior fails the malformed-JSON expectation.
 
-- [ ] **Step 3: Implement deterministic request-local IDs**
+- [x] **Step 3: Implement deterministic request-local IDs**
 
 Allow ASCII letters, digits, `_`, and `-`, with a maximum of 64 bytes. Preserve a valid non-empty source ID. Otherwise concatenate the configured prefix, `_`, and the first 24 lowercase hexadecimal characters of SHA-256 over the source ID or generated ordinal; on an in-request collision, append `_2`, `_3`, shortening the hash portion to remain within 64 bytes. Store forward and reverse maps only on the `Normalizer` instance.
 
@@ -361,19 +361,19 @@ type Normalizer struct {
 }
 ```
 
-- [ ] **Step 4: Use one normalizer for each conversion request/history**
+- [x] **Step 4: Use one normalizer for each conversion request/history**
 
 Instantiate one normalizer at each top-level converter entry and pass it through message/input-item conversion. Normalize both tool calls and their later tool results through the same map. Return a descriptive conversion error when function arguments cannot be decoded as valid JSON; do not substitute an empty object.
 
 Change `ToolCallBuffer.Flush` to validate non-empty name and JSON-object arguments and return `([]BufferedToolCall, error)`. Missing IDs use an instance-owned normalizer rather than a process-global counter.
 
-- [ ] **Step 5: Verify GREEN**
+- [x] **Step 5: Verify GREEN**
 
 Run: `go test -race ./service/relayconvert/internal/toolcallid ./service/relayconvert/internal/oai_chat ./service/relayconvert/internal/oai_responses ./relay/quirk -run '(Tool|Normalizer|Claude|Gemini|Malformed|Collision)' -count=1`
 
 Expected: PASS with no race report.
 
-- [ ] **Step 6: Commit Task 4**
+- [x] **Step 6: Commit Task 4**
 
 ```bash
 git add service/relayconvert/internal/toolcallid/normalizer.go service/relayconvert/internal/toolcallid/normalizer_test.go service/relayconvert/internal/oai_chat/to_claude_messages_req.go service/relayconvert/internal/oai_chat/to_claude_messages_req_test.go service/relayconvert/internal/oai_chat/to_gemini_chat_req.go service/relayconvert/internal/oai_chat/to_gemini_chat_req_test.go service/relayconvert/internal/oai_responses/to_claude_messages_req.go service/relayconvert/internal/oai_responses/to_claude_messages_req_test.go service/relayconvert/internal/oai_responses/to_gemini_chat_req.go service/relayconvert/internal/oai_responses/to_gemini_chat_req_test.go relay/quirk/tool_buffer.go relay/quirk/tool_buffer_test.go
@@ -392,7 +392,7 @@ git commit -m "fix(convert): normalize tool IDs and reject malformed calls"
 - Consumes: `toolpolicy.Policy` and normalized IDs from Tasks 1 and 4.
 - Produces: `RepairDanglingToolCalls(req *dto.GeneralOpenAIRequest, policy toolpolicy.Policy) error`.
 
-- [ ] **Step 1: Write failing repair-policy tests**
+- [x] **Step 1: Write failing repair-policy tests**
 
 Retain the valid dangling repair test. Add undeclared name, missing name, malformed arguments, invalid ID, and `tool_choice:none` cases; each must return an error and leave the message slice unchanged.
 
@@ -411,17 +411,17 @@ func TestRepairDanglingToolCallsRejectsUndeclaredCallWithoutMutation(t *testing.
 }
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `go test ./relay/quirk -run 'TestRepairDanglingToolCalls' -count=1`
 
 Expected: build failure because the repair function does not accept a policy or return an error.
 
-- [ ] **Step 3: Validate before mutation and synthesize only approved results**
+- [x] **Step 3: Validate before mutation and synthesize only approved results**
 
 First scan into a new output slice and validate every assistant call through `policy.ValidateCall`. Only after the full scan succeeds assign `req.Messages = repaired`. Preserve the existing placeholder text for a valid declared call whose result is genuinely absent.
 
-- [ ] **Step 4: Update callers and verify GREEN**
+- [x] **Step 4: Update callers and verify GREEN**
 
 Retrieve the request policy from Gin context, pass it to repair, and propagate an error as `invalid_request_error` before upstream send.
 
@@ -429,7 +429,7 @@ Run: `go test -race ./relay/quirk ./relay/... -run '(Dangling|ToolRepair|ToolPol
 
 Expected: PASS; invalid history is never mutated into apparently valid tool output.
 
-- [ ] **Step 5: Commit Task 5**
+- [x] **Step 5: Commit Task 5**
 
 ```bash
 git add relay/quirk/tool_repair.go relay/quirk/tool_repair_test.go
@@ -446,19 +446,19 @@ git commit -m "fix(relay): gate dangling tool repair by request policy"
 - Consumes: Tasks 1–5 plus the previous two subprojects.
 - Produces: final branch evidence suitable for code review, push, authorized deployment, and the online matrix.
 
-- [ ] **Step 1: Run focused race suites**
+- [x] **Step 1: Run focused race suites**
 
 Run: `go test -race ./relay/toolpolicy ./relay/quirk ./relay/channel/openai ./relay/channel/claude ./relay/channel/gemini ./service/relayconvert/... ./service/responsesstate -count=1`
 
 Expected: PASS with no race report.
 
-- [ ] **Step 2: Run all offline protocol contracts**
+- [x] **Step 2: Run all offline protocol contracts**
 
 Run: `go test ./relay/... ./service/relayconvert/... ./service/modelcatalog ./service/responsesstate -count=1`
 
 Expected: PASS for Chat, Responses, Compact, Anthropic, Gemini, route, continuity, stream, and tool conversion contracts.
 
-- [ ] **Step 3: Run the full backend completion gate**
+- [x] **Step 3: Run the full backend completion gate**
 
 Run: `go test ./...`
 
@@ -472,7 +472,7 @@ Run: `gofmt -w relay/toolpolicy relay/quirk service/relayconvert/internal/toolca
 
 Expected: no formatting or whitespace diagnostics.
 
-- [ ] **Step 4: Perform whole-branch review and scope audit**
+- [x] **Step 4: Perform whole-branch review and scope audit**
 
 Run: `git diff --stat e424a24e..HEAD && git diff --name-only e424a24e..HEAD && git diff -- scripts/prepare-sidecar-env.py`
 
@@ -487,3 +487,5 @@ curl -fsS https://llmrouter.win/api/status
 ```
 
 Run the existing online 16-case protocol matrix against the deployed commit. Expected: all 16 gateway cases pass; Kimi may return only the already-known upstream `access_terminated_error` while its billing period is exhausted, and that external condition must not be reported as an llmrouter regression.
+
+Verification note (2026-08-18): the local whole-branch review, focused race suites, full `go test ./...`, `go vet ./...`, formatting, and diff-scope checks passed after closing the remaining replay-metadata, JSON-wrapper, and route-trace isolation gaps. Push, deployment, health checking, and the online protocol matrix remain intentionally pending explicit deployment authorization.

@@ -34,7 +34,7 @@
 - Consumes: existing authorization snapshots, target priority ordering, route metadata JSON, and wire decoding.
 - Produces: `ResolveCandidates(ctx context.Context, userID int, groups []string, requestedModel, client string) ([]ResolvedModel, error)`; `Resolve` remains a first-candidate compatibility wrapper.
 
-- [ ] **Step 1: Write failing candidate and context metadata tests**
+- [x] **Step 1: Write failing candidate and context metadata tests**
 
 Add tests proving authorized targets are returned in priority/ID order, every candidate carries its target-specific context capacity (falling back to route metadata for legacy rows), and returned slices are independent copies.
 
@@ -62,13 +62,13 @@ func TestResolveCandidatesReturnsOrderedAuthorizedTargets(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `go test ./service/modelcatalog -run 'TestResolveCandidates' -count=1`
 
 Expected: build failure because `ResolveCandidates`, `ResolvedModel.ContextWindow`, and `ResolvedModel.RequiresKnownContext` do not exist.
 
-- [ ] **Step 3: Extend the immutable catalog result**
+- [x] **Step 3: Extend the immutable catalog result**
 
 ```go
 type routeMetadata struct {
@@ -118,13 +118,13 @@ func (c *Catalog) Resolve(ctx context.Context, userID int, groups []string, requ
 }
 ```
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run: `go test -race ./service/modelcatalog -count=1`
 
 Expected: PASS with no race report; legacy `Resolve` tests remain unchanged.
 
-- [ ] **Step 5: Commit Task 1**
+- [x] **Step 5: Commit Task 1**
 
 ```bash
 git add model/client_model_route.go service/modelcatalog/catalog.go service/modelcatalog/catalog_test.go
@@ -145,7 +145,7 @@ git commit -m "feat(routing): expose ordered route candidates"
 - Consumes: `ResolveCandidates` from Task 1, `model.GetChannelById(id, true)`, existing `ModelPriceHelper`, `PreConsumeBilling`, and `BillingSettler.Reserve`.
 - Produces: `relaycommon.RouteCandidate`, `selectRouteCandidateForAttempt`, error code `context_capacity_exceeded`, and trace attempts containing route/target identity.
 
-- [ ] **Step 1: Write failing admission and pinning tests**
+- [x] **Step 1: Write failing admission and pinning tests**
 
 Cover four contracts: an undersized candidate is skipped before billing/send; a later eligible target is selected; no eligible target returns `context_capacity_exceeded`; and `getChannel` loads the explicit candidate channel instead of calling the random distributor.
 
@@ -167,13 +167,13 @@ func TestFilterRouteCandidatesPreservesLegacyUnknownCapacity(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `go test ./controller ./service/modelcatalog -run '(RouteCandidate|ContextCapacity|ExplicitTarget|OrderedFallback)' -count=1`
 
 Expected: build failure for the new candidate/filter/trace fields.
 
-- [ ] **Step 3: Add neutral route-attempt state to RelayInfo**
+- [x] **Step 3: Add neutral route-attempt state to RelayInfo**
 
 ```go
 type RouteCandidate struct {
@@ -200,7 +200,7 @@ RouteCandidateIndex int
 
 Extend `modelcatalog.Attempt` with `RouteID`, `TargetID`, and `RejectedReason`. Preserve existing JSON fields.
 
-- [ ] **Step 4: Resolve, filter, and bind candidates before pricing**
+- [x] **Step 4: Resolve, filter, and bind candidates before pricing**
 
 Change `resolveClientModelRoute` to accept `estimatedInputTokens int` and return `*types.NewAPIError`. A catalog miss preserves legacy behavior; a matched route whose candidates are all ineligible returns HTTP 400 with `types.ErrorCodeContextCapacityExceeded` and `types.ErrOptionWithSkipRetry()`.
 
@@ -222,7 +222,7 @@ func filterRouteCandidatesByContext(candidates []modelcatalog.ResolvedModel, est
 
 Convert each eligible catalog result to `relaycommon.RouteCandidate`. Set `RouteCandidateIndex = 0`, then copy the first candidate's route, target, channel, upstream model, billing model, context, and selected wire to the authoritative RelayInfo fields.
 
-- [ ] **Step 5: Pin each attempt and refresh its billing identity**
+- [x] **Step 5: Pin each attempt and refresh its billing identity**
 
 At the start of each retry-loop iteration, bind the current explicit candidate. `getChannel` must take this branch before the random distributor:
 
@@ -244,13 +244,13 @@ Before the first attempt and whenever the candidate index advances, set `Resolve
 
 Advance `RouteCandidateIndex` only after `shouldRetry` accepts the failure and another explicit candidate exists. Do not fall through to the random distributor after the explicit candidate list is exhausted.
 
-- [ ] **Step 6: Verify GREEN and no-send/no-charge behavior**
+- [x] **Step 6: Verify GREEN and no-send/no-charge behavior**
 
 Run: `go test -race ./controller ./service/modelcatalog -run '(Route|Candidate|ContextCapacity|Fallback|BillingIdentity)' -count=1`
 
 Expected: PASS; rejected candidates generate trace entries with `RejectedReason="context_capacity_exceeded"`, zero upstream calls, and no quota mutation.
 
-- [ ] **Step 7: Commit Task 2**
+- [x] **Step 7: Commit Task 2**
 
 ```bash
 git add relay/common/relay_info.go controller/relay.go controller/relay_route_test.go service/modelcatalog/route_policy.go service/modelcatalog/route_policy_test.go types/error.go
@@ -270,7 +270,7 @@ git commit -m "fix(routing): bind explicit targets and enforce context fit"
 - Consumes: existing memory/Redis TTL and size limits.
 - Produces: `CurrentVersion = 2`, `Scope`, `Record.ParentResponseID`, `Store.Load(ctx, scope, responseID)`, `ErrLegacyScope`, and `ErrScopeMismatch`.
 
-- [ ] **Step 1: Write failing scope-isolation tests**
+- [x] **Step 1: Write failing scope-isolation tests**
 
 Test tenant/user, token, route, target/channel, model, and explicit client-task mismatches independently. Seed the old unversioned key and assert `ErrLegacyScope`, not `ErrNotFound`. Assert that new v2 keys do not contain raw response IDs.
 
@@ -284,13 +284,13 @@ func TestStoreRejectsLegacyUnscopedRecord(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `go test ./service/responsesstate -run '(LegacyScope|ScopeMismatch|V2Key|TaskIsolation)' -count=1`
 
 Expected: build failure because the v2 scope API and errors do not exist.
 
-- [ ] **Step 3: Define the versioned record and store contract**
+- [x] **Step 3: Define the versioned record and store contract**
 
 ```go
 const CurrentVersion = 2
@@ -331,7 +331,7 @@ type Store interface {
 
 `Key` must start with `responses-state:v2:` and hash the response ID. Retain a private `legacyKey(tenantID, tokenID, responseID)` solely to detect and reject old records. `ValidateRecord` requires version 2 and every scope identity except `ClientTaskID`, which is filled before save.
 
-- [ ] **Step 4: Enforce scope in memory and Redis implementations**
+- [x] **Step 4: Enforce scope in memory and Redis implementations**
 
 Load the v2 key, validate the record, and compare all non-empty expected scope fields. When `expected.ClientTaskID` is empty, adopt the stored server-issued task ID; when it is non-empty, require equality. If the v2 key is absent, probe the legacy key and return `ErrLegacyScope` when it exists. Redis must use `common.Unmarshal`/`common.Marshal`, not direct `encoding/json` functions.
 
@@ -348,13 +348,13 @@ func scopeMatches(expected, actual Scope) bool {
 }
 ```
 
-- [ ] **Step 5: Verify GREEN**
+- [x] **Step 5: Verify GREEN**
 
 Run: `go test -race ./service/responsesstate -run '(Store|Scope|Legacy|Redis|Memory)' -count=1`
 
 Expected: PASS with no race report.
 
-- [ ] **Step 6: Commit Task 3**
+- [x] **Step 6: Commit Task 3**
 
 ```bash
 git add service/responsesstate/store.go service/responsesstate/memory.go service/responsesstate/redis.go service/responsesstate/store_test.go service/responsesstate/default_test.go
@@ -371,7 +371,7 @@ git commit -m "fix(responses): version and scope continuity records"
 - Consumes: v2 `Store` and `Record.ParentResponseID` from Task 3.
 - Produces: `Expansion`, `Expand(ctx, store, expectedScope, request) (Expansion, error)`, and `SaveTurn(ctx, store, record) error`.
 
-- [ ] **Step 1: Write failing linear-history tests**
+- [x] **Step 1: Write failing linear-history tests**
 
 Create a three-turn chain where each record stores only its own input/output and parent ID. Assert expanded item count is exactly the sum of the three turns plus current input, and that saving a child never embeds an ancestor's materialized items. Preserve cycle, `MaxReplayHops`, TTL, and byte ceiling tests.
 
@@ -390,13 +390,13 @@ func TestExpandUsesParentLinksWithoutResavingMaterializedHistory(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `go test ./service/responsesstate -run '(ParentLinks|Linear|ReplayHops|Cycles)' -count=1`
 
 Expected: build failure for `Expansion` and the scoped `Expand` signature.
 
-- [ ] **Step 3: Replace pseudo-parent items with explicit parent links**
+- [x] **Step 3: Replace pseudo-parent items with explicit parent links**
 
 Walk `Record.ParentResponseID` for at most `MaxReplayHops`, collect each record once, then append in root-to-leaf order. Keep a `seen` map for cycles. Never inspect stored input for a synthetic `previous_response_id` item. Preserve the original current input separately in `Expansion.CurrentInput` and delete `previous_response_id` only from `Expansion.Request`.
 
@@ -417,13 +417,13 @@ func SaveTurn(ctx context.Context, store Store, record Record) error {
 }
 ```
 
-- [ ] **Step 4: Verify GREEN and bounded complexity**
+- [x] **Step 4: Verify GREEN and bounded complexity**
 
 Run: `go test -race ./service/responsesstate -run '(Expand|Parent|Linear|Replay|Record)' -count=1`
 
 Expected: PASS; a chain of N retained turns loads N records and serialized child size does not grow with ancestor materialization.
 
-- [ ] **Step 5: Commit Task 4**
+- [x] **Step 5: Commit Task 4**
 
 ```bash
 git add service/responsesstate/store.go service/responsesstate/store_test.go
@@ -445,7 +445,7 @@ git commit -m "fix(responses): make continuity expansion linear"
 - Consumes: scoped linear expansion from Tasks 3–4 and authoritative route identity from Task 2.
 - Produces: `ContinuityContext`, `ParseClientTaskID`, `EligibleCompletedResponse`, and error code `responses_state_scope_invalid`.
 
-- [ ] **Step 1: Write failing handler-policy tests**
+- [x] **Step 1: Write failing handler-policy tests**
 
 Cover omitted `store`→`false`, explicit `true` preservation, legacy/mismatch errors returned to the client, bounded `client_metadata.task_id`, server-issued task ID inheritance, refusal exclusion, incomplete exclusion, error exclusion, cancelled stream exclusion, and completed valid persistence.
 
@@ -467,13 +467,13 @@ func TestEligibleCompletedResponseRejectsRefusal(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `go test ./relay ./relay/channel/openai ./service/responsesstate -run '(StoreDefault|StateScope|ClientTask|Eligible|Refusal|Incomplete|Persist)' -count=1`
 
 Expected: build failures for the normalization, continuity context, and eligibility helpers.
 
-- [ ] **Step 3: Normalize store and derive only bounded task identity**
+- [x] **Step 3: Normalize store and derive only bounded task identity**
 
 ```go
 func normalizeResponsesStore(request *dto.OpenAIResponsesRequest) {
@@ -485,7 +485,7 @@ func normalizeResponsesStore(request *dto.OpenAIResponsesRequest) {
 
 `ParseClientTaskID` reads only `client_metadata.task_id`, trims it, limits it to 128 bytes, and accepts `[A-Za-z0-9._:-]+`. Invalid non-empty values return `types.ErrorCodeInvalidRequest`. If a first turn has no explicit task ID, persistence sets it to the response ID. If a continuation has no explicit task ID, expansion adopts the stored scope's server-issued task ID.
 
-- [ ] **Step 4: Replace silent expansion fallback with a stable error**
+- [x] **Step 4: Replace silent expansion fallback with a stable error**
 
 Build the expected scope from `RelayInfo.UserId`, `TokenId`, `ModelRouteId`, `ModelTargetId`, `ResolvedChannelId`, the parsed task ID, and `ResolvedModelNameOrOrigin`. Map `ErrLegacyScope` and `ErrScopeMismatch` to HTTP 409, `types.ErrorCodeResponsesStateScopeInvalid`, skip retry, and return before upstream/billing mutation. Keep unavailable state storage as a server error rather than silently dropping the client's continuity request.
 
@@ -499,19 +499,19 @@ type ContinuityContext struct {
 }
 ```
 
-- [ ] **Step 5: Gate persistence on a valid terminal response**
+- [x] **Step 5: Gate persistence on a valid terminal response**
 
 `EligibleCompletedResponse` requires a non-empty response ID, status exactly `"completed"`, nil `Error`, nil `IncompleteDetails`, and no output/content type `refusal`. Stream code calls persistence only after a valid `response.completed` terminal event; cancellation, malformed terminal events, and upstream errors leave no record.
 
 Persist the original `CurrentInput`, not expanded materialization, and set `ParentResponseID` from the request context. Log a save failure as best-effort only after eligibility passes.
 
-- [ ] **Step 6: Verify GREEN**
+- [x] **Step 6: Verify GREEN**
 
 Run: `go test -race ./service/responsesstate ./relay ./relay/channel/openai -run '(Responses|Store|Scope|Task|Eligible|Persist|Refusal|Incomplete|Cancelled)' -count=1`
 
 Expected: PASS; unsafe state never reaches upstream and ineligible outputs never enter memory/Redis.
 
-- [ ] **Step 7: Commit Task 5**
+- [x] **Step 7: Commit Task 5**
 
 ```bash
 git add constant/context_key.go dto/openai_request.go relay/responses_handler.go relay/responses_handler_test.go relay/channel/openai/relay_responses.go relay/channel/openai/responses_state_test.go service/responsesstate/store.go types/error.go
@@ -527,19 +527,19 @@ git commit -m "fix(responses): fail closed on scoped continuity"
 - Consumes: all Task 1–5 outputs.
 - Produces: a separately reviewable route/continuity subproject with fresh evidence.
 
-- [ ] **Step 1: Run focused race suites**
+- [x] **Step 1: Run focused race suites**
 
 Run: `go test -race ./service/modelcatalog ./service/responsesstate ./controller ./relay ./relay/channel/openai -count=1`
 
 Expected: PASS with no race report.
 
-- [ ] **Step 2: Run offline route and protocol contracts**
+- [x] **Step 2: Run offline route and protocol contracts**
 
 Run: `go test ./service/modelcatalog ./controller ./relay/... -count=1`
 
 Expected: PASS, including explicit target, fallback, Responses, compact, and conversion suites.
 
-- [ ] **Step 3: Run full backend and hygiene gates**
+- [x] **Step 3: Run full backend and hygiene gates**
 
 Run: `go test ./... && go vet ./...`
 
@@ -549,7 +549,7 @@ Run: `gofmt -w service/modelcatalog/catalog.go service/modelcatalog/catalog_test
 
 Expected: no formatting or whitespace diagnostics.
 
-- [ ] **Step 4: Verify scope and checkpoint**
+- [x] **Step 4: Verify scope and checkpoint**
 
 Run: `git diff --name-only HEAD~5..HEAD && git diff -- scripts/prepare-sidecar-env.py`
 

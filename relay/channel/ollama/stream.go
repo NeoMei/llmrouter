@@ -98,7 +98,7 @@ func ollamaStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	defer service.CloseResponseBodyGracefully(resp)
 
 	helper.SetEventStreamHeaders(c)
-	decoder := json.NewDecoder(resp.Body)
+	decoder := common.NewJsonDecoder(resp.Body)
 	validator := toolpolicy.NewNativeStreamValidatorFromContext(c, toolpolicy.NativeStreamOllama)
 	usage := &dto.Usage{}
 	var model = info.UpstreamModelName

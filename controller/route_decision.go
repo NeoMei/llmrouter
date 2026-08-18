@@ -87,7 +87,7 @@ func RecordRouteDecision(requestID string, trace modelcatalog.RouteDecisionTrace
 	traceStoreMu.Lock()
 	defer traceStoreMu.Unlock()
 	traceStore[requestID] = traceEntry{
-		Trace:      trace,
+		Trace:      cloneRouteDecisionTrace(trace),
 		RecordedAt: time.Now(),
 	}
 	cleanupTraceStoreLocked()
@@ -105,6 +105,7 @@ func AppendRouteAttempt(requestID string, attempt modelcatalog.Attempt) {
 		entry = traceEntry{Trace: modelcatalog.RouteDecisionTrace{}, RecordedAt: time.Now()}
 	}
 	entry.Trace.Attempts = append(entry.Trace.Attempts, attempt)
+	entry.RecordedAt = time.Now()
 	traceStore[requestID] = entry
 }
 
@@ -119,7 +120,7 @@ func GetRouteDecision(requestID string) (modelcatalog.RouteDecisionTrace, bool) 
 	if time.Since(entry.RecordedAt) > routeDecisionTraceTTL {
 		return modelcatalog.RouteDecisionTrace{}, false
 	}
-	return entry.Trace, true
+	return cloneRouteDecisionTrace(entry.Trace), true
 }
 
 // GetRouteDecisionTrace returns the trace for a request ID as raw JSON.
@@ -128,11 +129,16 @@ func GetRouteDecisionTrace(requestID string) (json.RawMessage, bool) {
 	if !ok {
 		return nil, false
 	}
-	data, err := json.Marshal(trace)
+	data, err := common.Marshal(trace)
 	if err != nil {
 		return nil, false
 	}
 	return data, true
+}
+
+func cloneRouteDecisionTrace(trace modelcatalog.RouteDecisionTrace) modelcatalog.RouteDecisionTrace {
+	trace.Attempts = append([]modelcatalog.Attempt(nil), trace.Attempts...)
+	return trace
 }
 
 func GetRouteDecisionEndpoint(c *gin.Context) {

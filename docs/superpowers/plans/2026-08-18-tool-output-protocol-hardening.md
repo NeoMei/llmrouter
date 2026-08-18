@@ -478,7 +478,7 @@ Run: `git diff --stat e424a24e..HEAD && git diff --name-only e424a24e..HEAD && g
 
 Expected: changes are limited to approved specs/plans and core transport, billing, logging, routing, continuity, tool-policy, converter, DTO/error, and test files; the sidecar helper has no diff.
 
-- [ ] **Step 5: Push, deploy, and verify only after review authorization**
+- [x] **Step 5: Push, deploy, and verify only after review authorization**
 
 After the whole-branch review has no open Critical/Important findings, commit any verified repair with `git commit -m "test(core): close protocol hardening verification gaps"`, push the reviewed branch, deploy that exact commit using the repository's existing deployment workflow, then verify:
 
@@ -488,4 +488,4 @@ curl -fsS https://llmrouter.win/api/status
 
 Run the existing online 16-case protocol matrix against the deployed commit. Expected: all 16 gateway cases pass; Kimi may return only the already-known upstream `access_terminated_error` while its billing period is exhausted, and that external condition must not be reported as an llmrouter regression.
 
-Verification note (2026-08-18): the local whole-branch review, focused race suites, full `go test ./...`, `go vet ./...`, formatting, and diff-scope checks passed after closing the remaining replay-metadata, JSON-wrapper, and route-trace isolation gaps. Push, deployment, health checking, and the online protocol matrix remain intentionally pending explicit deployment authorization.
+Verification note (2026-08-18): the local whole-branch review, focused race suites, full `go test ./...`, `go vet ./...`, formatting, and diff-scope checks passed after closing the remaining replay-metadata, JSON-wrapper, and route-trace isolation gaps. After explicit deployment authorization, commit `7591d93ebe513fb0ac8a9f9a83894ed51c32a678` was pushed to `main` and `upstream-sync`, built as immutable image `llmrouter:7591d93e`, canary-checked, and deployed with the previous `llmrouter:e424a24e` container retained stopped for rollback. Local and public health checks passed, and the supported 16-case Chat, Responses, and Claude protocol matrix passed. Additional DeepSeek Responses-stream probes correctly failed closed when the upstream ended without a `response.completed` terminal.

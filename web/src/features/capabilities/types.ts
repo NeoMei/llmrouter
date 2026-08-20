@@ -35,7 +35,7 @@ export function hasCapability(
   operation: string
 ): boolean {
   return Boolean(
-    snapshot?.capabilities.some(
+    snapshot?.capabilities?.some(
       (capability) => capability.operation === operation && capability.supported
     )
   )

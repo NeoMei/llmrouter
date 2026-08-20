@@ -56,6 +56,8 @@ export function FilesPage() {
     mutationFn: deleteFile,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['api-files'] }),
   })
+  const fileList = Array.isArray(files.data) ? files.data : []
+
   const canUpload = hasCapability(capabilities.data, 'files.create')
   const canDownload = hasCapability(capabilities.data, 'files.content')
   const canDelete = hasCapability(capabilities.data, 'files.delete')

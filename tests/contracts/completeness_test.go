@@ -45,11 +45,6 @@ func TestAllPublicResourceRoutesHaveE2ECase(t *testing.T) {
 
 	resourceOperations := map[capability.Operation]bool{
 		capability.OperationModelDelete: true, capability.OperationImageVariation: true,
-		capability.OperationFileList: true, capability.OperationFileCreate: true,
-		capability.OperationFileRetrieve: true, capability.OperationFileContent: true,
-		capability.OperationFileDelete: true, capability.OperationFineTuningCreate: true,
-		capability.OperationFineTuningList: true, capability.OperationFineTuningRetrieve: true,
-		capability.OperationFineTuningCancel: true, capability.OperationFineTuningEventsList: true,
 	}
 
 	want := make([]capability.RouteManifestEntry, 0, len(fixtures))

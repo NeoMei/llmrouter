@@ -39,7 +39,6 @@ type OpenAIModel struct {
 		AllowLogprobs      bool   `json:"allow_logprobs"`
 		AllowSearchIndices bool   `json:"allow_search_indices"`
 		AllowView          bool   `json:"allow_view"`
-		AllowFineTuning    bool   `json:"allow_fine_tuning"`
 		Organization       string `json:"organization"`
 		Group              string `json:"group"`
 		IsBlocking         bool   `json:"is_blocking"`

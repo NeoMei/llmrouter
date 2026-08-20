@@ -17,10 +17,6 @@ func TestResolveRequest(t *testing.T) {
 		operation Operation
 	}{
 		{http.MethodPost, "/v1/chat/completions", ProtocolOpenAI, OperationChatCreate},
-		{http.MethodPost, "/v1/files", ProtocolOpenAI, OperationFileCreate},
-		{http.MethodGet, "/v1/files/file-1/content", ProtocolOpenAI, OperationFileContent},
-		{http.MethodGet, "/v1/fine_tuning/jobs/job-1/events?limit=20", ProtocolOpenAI, OperationFineTuningEventsList},
-		{http.MethodPost, "/v1/fine-tunes/job-1/cancel", ProtocolOpenAI, OperationFineTuningCancel},
 		{http.MethodDelete, "/v1/models/model-1", ProtocolOpenAI, OperationModelDelete},
 		{http.MethodPost, "/v1beta/models/gemini-2.5-pro:generateContent", ProtocolGemini, OperationGeminiGenerate},
 		{http.MethodPost, "/v1/videos/video-1/remix", ProtocolOpenAI, OperationVideoRemix},

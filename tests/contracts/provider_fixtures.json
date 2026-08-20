@@ -1,5 +1,12 @@
 {
-  "required_scenarios": ["success", "error", "timeout", "malformed", "retry", "billing"],
+  "required_scenarios": [
+    "success",
+    "error",
+    "timeout",
+    "malformed",
+    "retry",
+    "billing"
+  ],
   "operations": [
     "models.list",
     "models.retrieve",
@@ -19,16 +26,6 @@
     "images.variations.create",
     "rerank.create",
     "moderations.create",
-    "files.list",
-    "files.create",
-    "files.retrieve",
-    "files.content",
-    "files.delete",
-    "fine_tuning.jobs.create",
-    "fine_tuning.jobs.list",
-    "fine_tuning.jobs.retrieve",
-    "fine_tuning.jobs.cancel",
-    "fine_tuning.events.list",
     "gemini.generate",
     "gemini.embed",
     "videos.create",

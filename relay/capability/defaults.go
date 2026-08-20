@@ -40,7 +40,7 @@ func defaultDeclarations() []Declaration {
 	}
 
 	allChannels := constant.AllChannelTypes()
-	support(allChannels, OperationModelList, OperationModelRetrieve)
+	support(allChannels, OperationModelList, OperationModelRetrieve, OperationModelDelete)
 
 	openAICompatible := []int{
 		constant.ChannelTypeOpenAI,
@@ -122,16 +122,8 @@ func defaultDeclarations() []Declaration {
 	support([]int{constant.ChannelTypeOpenAI, constant.ChannelTypeAzure, constant.ChannelTypeAdvancedCustom, constant.ChannelTypeGateway},
 		OperationAudioTranscription, OperationAudioTranslation, OperationAudioSpeech,
 		OperationImageGeneration, OperationImageEdit,
-		OperationFileList, OperationFileCreate, OperationFileRetrieve, OperationFileContent, OperationFileDelete,
 	)
 	support([]int{constant.ChannelTypeOpenAI}, OperationImageVariation)
-
-	// Azure fine-tuning uses a deployment/api-version-specific control plane
-	// rather than the OpenAI-compatible /v1/fine_tuning/jobs contract.
-	support([]int{constant.ChannelTypeOpenAI, constant.ChannelTypeAdvancedCustom},
-		OperationFineTuningCreate, OperationFineTuningList, OperationFineTuningRetrieve,
-		OperationFineTuningCancel, OperationFineTuningEventsList, OperationModelDelete,
-	)
 
 	support([]int{constant.ChannelTypeCohere, constant.ChannelTypeJina, constant.ChannelTypeSiliconFlow}, OperationRerankCreate)
 

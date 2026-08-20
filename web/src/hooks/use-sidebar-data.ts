@@ -21,7 +21,6 @@ import {
   Box,
   CreditCard,
   FileText,
-  Files,
   FlaskConical,
   GitBranch,
   Key,
@@ -86,16 +85,6 @@ export function useSidebarData(): SidebarData {
             title: t('API Keys'),
             url: '/keys',
             icon: Key,
-          },
-          {
-            title: t('Files'),
-            url: '/files',
-            icon: Files,
-          },
-          {
-            title: t('Fine-tuning'),
-            url: '/fine-tuning',
-            icon: FlaskConical,
           },
           {
             title: t('Usage Logs'),

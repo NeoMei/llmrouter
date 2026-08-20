@@ -20,44 +20,34 @@ const (
 type Operation string
 
 const (
-	OperationModelList            Operation = "models.list"
-	OperationModelRetrieve        Operation = "models.retrieve"
-	OperationModelDelete          Operation = "models.delete"
-	OperationChatCreate           Operation = "chat.completions.create"
-	OperationCompletionCreate     Operation = "completions.create"
-	OperationResponseCreate       Operation = "responses.create"
-	OperationResponseCompact      Operation = "responses.compact"
-	OperationRealtimeConnect      Operation = "realtime.connect"
-	OperationClaudeMessageCreate  Operation = "claude.messages.create"
-	OperationEmbeddingCreate      Operation = "embeddings.create"
-	OperationAudioTranscription   Operation = "audio.transcriptions.create"
-	OperationAudioTranslation     Operation = "audio.translations.create"
-	OperationAudioSpeech          Operation = "audio.speech.create"
-	OperationImageGeneration      Operation = "images.generations.create"
-	OperationImageEdit            Operation = "images.edits.create"
-	OperationImageVariation       Operation = "images.variations.create"
-	OperationRerankCreate         Operation = "rerank.create"
-	OperationModerationCreate     Operation = "moderations.create"
-	OperationFileList             Operation = "files.list"
-	OperationFileCreate           Operation = "files.create"
-	OperationFileRetrieve         Operation = "files.retrieve"
-	OperationFileContent          Operation = "files.content"
-	OperationFileDelete           Operation = "files.delete"
-	OperationFineTuningCreate     Operation = "fine_tuning.jobs.create"
-	OperationFineTuningList       Operation = "fine_tuning.jobs.list"
-	OperationFineTuningRetrieve   Operation = "fine_tuning.jobs.retrieve"
-	OperationFineTuningCancel     Operation = "fine_tuning.jobs.cancel"
-	OperationFineTuningEventsList Operation = "fine_tuning.events.list"
-	OperationGeminiGenerate       Operation = "gemini.generate"
-	OperationGeminiEmbed          Operation = "gemini.embed"
-	OperationVideoCreate          Operation = "videos.create"
-	OperationVideoRetrieve        Operation = "videos.retrieve"
-	OperationVideoRemix           Operation = "videos.remix"
-	OperationVideoContent         Operation = "videos.content"
-	OperationMidjourneySubmit     Operation = "midjourney.submit"
-	OperationMidjourneyFetch      Operation = "midjourney.fetch"
-	OperationSunoSubmit           Operation = "suno.submit"
-	OperationSunoFetch            Operation = "suno.fetch"
+	OperationModelList           Operation = "models.list"
+	OperationModelRetrieve       Operation = "models.retrieve"
+	OperationModelDelete         Operation = "models.delete"
+	OperationChatCreate          Operation = "chat.completions.create"
+	OperationCompletionCreate    Operation = "completions.create"
+	OperationResponseCreate      Operation = "responses.create"
+	OperationResponseCompact     Operation = "responses.compact"
+	OperationRealtimeConnect     Operation = "realtime.connect"
+	OperationClaudeMessageCreate Operation = "claude.messages.create"
+	OperationEmbeddingCreate     Operation = "embeddings.create"
+	OperationAudioTranscription  Operation = "audio.transcriptions.create"
+	OperationAudioTranslation    Operation = "audio.translations.create"
+	OperationAudioSpeech         Operation = "audio.speech.create"
+	OperationImageGeneration     Operation = "images.generations.create"
+	OperationImageEdit           Operation = "images.edits.create"
+	OperationImageVariation      Operation = "images.variations.create"
+	OperationRerankCreate        Operation = "rerank.create"
+	OperationModerationCreate    Operation = "moderations.create"
+	OperationGeminiGenerate      Operation = "gemini.generate"
+	OperationGeminiEmbed         Operation = "gemini.embed"
+	OperationVideoCreate         Operation = "videos.create"
+	OperationVideoRetrieve       Operation = "videos.retrieve"
+	OperationVideoRemix          Operation = "videos.remix"
+	OperationVideoContent        Operation = "videos.content"
+	OperationMidjourneySubmit    Operation = "midjourney.submit"
+	OperationMidjourneyFetch     Operation = "midjourney.fetch"
+	OperationSunoSubmit          Operation = "suno.submit"
+	OperationSunoFetch           Operation = "suno.fetch"
 )
 
 var allOperations = []Operation{
@@ -67,9 +57,6 @@ var allOperations = []Operation{
 	OperationAudioTranscription, OperationAudioTranslation, OperationAudioSpeech,
 	OperationImageGeneration, OperationImageEdit, OperationImageVariation,
 	OperationRerankCreate, OperationModerationCreate,
-	OperationFileList, OperationFileCreate, OperationFileRetrieve, OperationFileContent, OperationFileDelete,
-	OperationFineTuningCreate, OperationFineTuningList, OperationFineTuningRetrieve,
-	OperationFineTuningCancel, OperationFineTuningEventsList,
 	OperationGeminiGenerate, OperationGeminiEmbed,
 	OperationVideoCreate, OperationVideoRetrieve, OperationVideoRemix, OperationVideoContent,
 	OperationMidjourneySubmit, OperationMidjourneyFetch, OperationSunoSubmit, OperationSunoFetch,
@@ -143,16 +130,6 @@ var publicRoutes = []routeSpec{
 	route(http.MethodPost, `^/v1/images/variations$`, OperationImageVariation),
 	route(http.MethodPost, `^/v1/rerank$`, OperationRerankCreate),
 	route(http.MethodPost, `^/v1/moderations$`, OperationModerationCreate),
-	route(http.MethodGet, `^/v1/files$`, OperationFileList),
-	route(http.MethodPost, `^/v1/files$`, OperationFileCreate),
-	route(http.MethodGet, `^/v1/files/[^/]+/content$`, OperationFileContent),
-	route(http.MethodGet, `^/v1/files/[^/]+$`, OperationFileRetrieve),
-	route(http.MethodDelete, `^/v1/files/[^/]+$`, OperationFileDelete),
-	route(http.MethodPost, `^/v1/(fine-tunes|fine_tuning/jobs)$`, OperationFineTuningCreate),
-	route(http.MethodGet, `^/v1/(fine-tunes|fine_tuning/jobs)$`, OperationFineTuningList),
-	route(http.MethodPost, `^/v1/(fine-tunes|fine_tuning/jobs)/[^/]+/cancel$`, OperationFineTuningCancel),
-	route(http.MethodGet, `^/v1/(fine-tunes|fine_tuning/jobs)/[^/]+/events$`, OperationFineTuningEventsList),
-	route(http.MethodGet, `^/v1/(fine-tunes|fine_tuning/jobs)/[^/]+$`, OperationFineTuningRetrieve),
 	route(http.MethodPost, `^/v1beta/models/[^/]+:(generateContent|streamGenerateContent|countTokens)$`, OperationGeminiGenerate),
 	route(http.MethodPost, `^/v1/models/[^/]+:(generateContent|streamGenerateContent|countTokens)$`, OperationGeminiGenerate),
 	route(http.MethodPost, `^/v1beta/models/[^/]+:(embedContent|batchEmbedContents)$`, OperationGeminiEmbed),

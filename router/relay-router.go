@@ -154,21 +154,26 @@ func SetRelayRouter(router *gin.Engine) {
 			controller.Relay(c, types.RelayFormatOpenAI)
 		})
 
-		// managed resources
+		// managed resources that require upstream channel selection
 		httpRouter.POST("/images/variations", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatOpenAIImage)
 		})
-		httpRouter.GET("/files", controller.ListFiles)
-		httpRouter.POST("/files", controller.UploadFile)
-		httpRouter.DELETE("/files/:id", controller.DeleteFile)
-		httpRouter.GET("/files/:id", controller.GetFile)
-		httpRouter.GET("/files/:id/content", controller.GetFileContent)
 		httpRouter.POST("/fine-tunes", controller.CreateFineTuningJob)
 		httpRouter.GET("/fine-tunes", controller.ListFineTuningJobs)
 		httpRouter.GET("/fine-tunes/:id", controller.GetFineTuningJob)
 		httpRouter.POST("/fine-tunes/:id/cancel", controller.CancelFineTuningJob)
 		httpRouter.GET("/fine-tunes/:id/events", controller.ListFineTuningEvents)
 		httpRouter.DELETE("/models/:model", controller.DeleteFineTunedModel)
+	}
+	// Local managed resources: files are stored in the configured object store
+	// and do not require upstream channel distribution.
+	localManagedRouter := relayV1Router.Group("")
+	{
+		localManagedRouter.GET("/files", controller.ListFiles)
+		localManagedRouter.POST("/files", controller.UploadFile)
+		localManagedRouter.DELETE("/files/:id", controller.DeleteFile)
+		localManagedRouter.GET("/files/:id", controller.GetFile)
+		localManagedRouter.GET("/files/:id/content", controller.GetFileContent)
 	}
 
 	relayMjRouter := router.Group("/mj")

@@ -116,7 +116,7 @@ export function FilesPage() {
           <p className='text-destructive mb-4'>{files.error.message}</p>
         )}
         <div className='space-y-2'>
-          {(files.data ?? []).map((file) => (
+          {fileList.map((file) => (
             <div
               key={file.id}
               className='flex items-center justify-between rounded-lg border p-3'
@@ -156,7 +156,7 @@ export function FilesPage() {
               </div>
             </div>
           ))}
-          {!files.isPending && (files.data?.length ?? 0) === 0 && (
+          {!files.isPending && fileList.length === 0 && (
             <p className='text-muted-foreground'>No files uploaded.</p>
           )}
         </div>

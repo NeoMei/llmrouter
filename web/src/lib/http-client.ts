@@ -132,7 +132,8 @@ api.interceptors.response.use(
       const messageKey = getServerErrorMessageKey(error)
       const message = messageKey
         ? t(messageKey)
-        : error?.response?.data?.message ||
+        : error?.response?.data?.error?.message ||
+          error?.response?.data?.message ||
           error?.message ||
           t('Request failed')
       toast.error(message)

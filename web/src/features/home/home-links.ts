@@ -18,7 +18,13 @@ For commercial licensing, please contact support@quantumnous.com
 */
 export const HERO_DOCS_PATH = '/docs' as const
 
-export function getHeroPrimaryAction(isAuthenticated: boolean) {
+export type HeroPrimaryAction =
+  | { readonly labelKey: 'Get API Key'; readonly to: '/keys' }
+  | { readonly labelKey: 'Get Started'; readonly to: '/sign-up' }
+
+export function getHeroPrimaryAction(
+  isAuthenticated: boolean
+): HeroPrimaryAction {
   if (isAuthenticated) {
     return {
       labelKey: 'Get API Key',

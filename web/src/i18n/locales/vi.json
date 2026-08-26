@@ -4353,7 +4353,7 @@
     "Supported variables": "Biến được hỗ trợ",
     "Supports `-thinking`, `-thinking-": "Hỗ trợ `-thinking`, `-thinking-",
     "Supports HTML markup or iframe embedding. Enter HTML code directly, or provide a complete URL to automatically embed it as an iframe.": "Hỗ trợ đánh dấu HTML hoặc nhúng iframe. Nhập mã HTML trực tiếp, hoặc cung cấp một URL đầy đủ để tự động nhúng nó dưới dạng một iframe.",
-    "Supports one-click configuration and perfectly adapts to NewAPI multi-protocol configuration.": "Hỗ trợ cấu hình bằng một cú nhấp chuột và thích ứng hoàn hảo với cấu hình đa giao thức NewAPI.",
+    "Supports one-click configuration and perfectly adapts to NewAPI multi-protocol configuration.": "Hỗ trợ cấu hình bằng một cú nhấp chuột và tương thích hoàn toàn với cấu hình đa giao thức LLM API.",
     "Supports PNG, JPG, SVG, or WebP. Recommended size: 128×128 or smaller.": "Hỗ trợ PNG, JPG, SVG hoặc WebP. Kích thước khuyến nghị: 128×128 hoặc nhỏ hơn.",
     "Surprise me": "Gợi ý bất ngờ",
     "Sustained tokens per second": "Token mỗi giây duy trì",

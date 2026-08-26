@@ -4353,7 +4353,7 @@
     "Supported variables": "支持变量",
     "Supports `-thinking`, `-thinking-": "支持 `-thinking`、`-thinking-`",
     "Supports HTML markup or iframe embedding. Enter HTML code directly, or provide a complete URL to automatically embed it as an iframe.": "支持 HTML 标记或 iframe 嵌入。直接输入 HTML 代码，或提供完整的 URL 以将其自动嵌入为 iframe。",
-    "Supports one-click configuration and perfectly adapts to NewAPI multi-protocol configuration.": "支持一键配置并完美适配 NewAPI 多协议配置",
+    "Supports one-click configuration and perfectly adapts to NewAPI multi-protocol configuration.": "支持一键配置并完美适配 LLM API 多协议配置。",
     "Supports PNG, JPG, SVG, or WebP. Recommended size: 128×128 or smaller.": "支持 PNG、JPG、SVG 或 WebP，建议尺寸不超过 128×128。",
     "Surprise me": "给我惊喜",
     "Sustained tokens per second": "持续每秒 Token 数",

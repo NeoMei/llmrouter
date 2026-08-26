@@ -4353,7 +4353,7 @@
     "Supported variables": "Variables supportées",
     "Supports `-thinking`, `-thinking-": "Prend en charge `-thinking`, `-thinking-",
     "Supports HTML markup or iframe embedding. Enter HTML code directly, or provide a complete URL to automatically embed it as an iframe.": "Prend en charge le balisage HTML ou l'intégration d'iframe. Entrez le code HTML directement, ou fournissez une URL complète pour l'intégrer automatiquement en tant qu'iframe.",
-    "Supports one-click configuration and perfectly adapts to NewAPI multi-protocol configuration.": "Prend en charge la configuration en un clic et s'adapte parfaitement à la configuration multi-protocole NewAPI.",
+    "Supports one-click configuration and perfectly adapts to NewAPI multi-protocol configuration.": "Prend en charge la configuration en un clic et s’adapte parfaitement à la configuration multiprotocole LLM API.",
     "Supports PNG, JPG, SVG, or WebP. Recommended size: 128×128 or smaller.": "Prend en charge PNG, JPG, SVG ou WebP. Taille recommandée : 128×128 ou moins.",
     "Surprise me": "Surprends-moi",
     "Sustained tokens per second": "Jetons par seconde soutenus",

@@ -4353,7 +4353,7 @@
     "Supported variables": "サポートされる変数",
     "Supports `-thinking`, `-thinking-": "「-thinking」、「-thinking-」をサポートします",
     "Supports HTML markup or iframe embedding. Enter HTML code directly, or provide a complete URL to automatically embed it as an iframe.": "HTMLマークアップまたはiframe埋め込みをサポートします。HTMLコードを直接入力するか、完全なURLを提供してiframeとして自動的に埋め込みます。",
-    "Supports one-click configuration and perfectly adapts to NewAPI multi-protocol configuration.": "ワンクリック設定をサポートし、NewAPIマルチプロトコル設定に完全に適応します。",
+    "Supports one-click configuration and perfectly adapts to NewAPI multi-protocol configuration.": "ワンクリック設定をサポートし、LLM API のマルチプロトコル設定に完全対応します。",
     "Supports PNG, JPG, SVG, or WebP. Recommended size: 128×128 or smaller.": "PNG、JPG、SVG、WebPに対応。推奨サイズ: 128×128以下。",
     "Surprise me": "おまかせ",
     "Sustained tokens per second": "持続的な毎秒トークン数",

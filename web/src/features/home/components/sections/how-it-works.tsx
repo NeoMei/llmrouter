@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Settings, Zap, BarChart3 } from 'lucide-react'
+import { KeyRound, Bot, BarChart3 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { AnimateInView } from '@/components/animate-in-view'
@@ -27,24 +27,24 @@ export function HowItWorks() {
   const steps = [
     {
       num: '1',
-      title: t('Configure'),
-      desc: t(
-        'Add your API keys, set up channels and configure access permissions'
-      ),
-      icon: <Settings className='size-6' strokeWidth={1.5} />,
+      title: t('Create API Key'),
+      desc: t('Sign up and create an API key with the access scope you need'),
+      icon: <KeyRound className='size-6' strokeWidth={1.5} />,
     },
     {
       num: '2',
-      title: t('Connect'),
+      title: t('Choose a Domestic Model'),
       desc: t(
-        'Connect through OpenAI, Claude, Gemini, and other compatible API routes'
+        'Select DeepSeek, GLM, Kimi, Qwen, Doubao, MiniMax, or another enabled domestic model'
       ),
-      icon: <Zap className='size-6' strokeWidth={1.5} />,
+      icon: <Bot className='size-6' strokeWidth={1.5} />,
     },
     {
       num: '3',
-      title: t('Monitor'),
-      desc: t('Track usage, costs and performance with real-time analytics'),
+      title: t('Connect and Monitor'),
+      desc: t(
+        'Call the unified API from your application or coding tool and track usage and costs'
+      ),
       icon: <BarChart3 className='size-6' strokeWidth={1.5} />,
     },
   ]
@@ -57,7 +57,7 @@ export function HowItWorks() {
             {t('How It Works')}
           </p>
           <h2 className='text-2xl font-bold tracking-tight md:text-3xl'>
-            {t('Three steps to get started')}
+            {t('Three steps to use domestic models')}
           </h2>
         </AnimateInView>
 

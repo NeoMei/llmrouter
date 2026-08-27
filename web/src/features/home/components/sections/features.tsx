@@ -19,16 +19,18 @@ For commercial licensing, please contact support@quantumnous.com
 import {
   Zap,
   Shield,
-  Globe,
+  Route,
   Code,
   Gauge,
   DollarSign,
   Users,
-  HeartHandshake,
+  ChartNoAxesCombined,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { AnimateInView } from '@/components/animate-in-view'
+
+import { FEATURED_DOMESTIC_MODELS } from '../../home-content'
 
 interface FeaturesProps {
   className?: string
@@ -39,26 +41,24 @@ export function Features(_props: FeaturesProps) {
 
   const features = [
     {
-      id: 'fast',
+      id: 'models',
       num: '01',
-      title: t('Lightning Fast'),
+      title: t('Domestic Model Access'),
       desc: t(
-        'Optimized network architecture ensures millisecond response times'
+        'One API connects DeepSeek, GLM, Kimi, Qwen, Doubao, MiniMax, and more.'
       ),
       span: 'md:col-span-2',
       icon: <Zap className='size-4 text-blue-400' />,
       visual: (
         <div className='mt-4 grid grid-cols-3 gap-2'>
-          {['OpenAI', 'Claude', 'Gemini', 'DeepSeek', 'Qwen', 'Llama'].map(
-            (name) => (
-              <div
-                key={name}
-                className='border-border/30 bg-muted/20 text-muted-foreground flex items-center justify-center rounded-lg border px-3 py-2 text-xs transition-colors duration-300 hover:border-blue-500/30 hover:bg-blue-500/5'
-              >
-                {name}
-              </div>
-            )
-          )}
+          {FEATURED_DOMESTIC_MODELS.map((name) => (
+            <div
+              key={name}
+              className='border-border/30 bg-muted/20 text-muted-foreground flex items-center justify-center rounded-lg border px-3 py-2 text-xs transition-colors duration-300 hover:border-blue-500/30 hover:bg-blue-500/5'
+            >
+              {name}
+            </div>
+          ))}
         </div>
       ),
     },
@@ -100,12 +100,14 @@ export function Features(_props: FeaturesProps) {
       ),
     },
     {
-      id: 'global',
+      id: 'routing',
       num: '03',
-      title: t('Global Coverage'),
-      desc: t('Multi-region deployment for stable global access'),
+      title: t('Unified Routing'),
+      desc: t(
+        'Route requests across domestic model services with consistent access and failover controls'
+      ),
       span: 'md:col-span-1',
-      icon: <Globe className='size-4 text-violet-400' />,
+      icon: <Route className='size-4 text-violet-400' />,
       visual: (
         <div className='mt-4 space-y-2'>
           {[t('Load Balancing'), t('Rate Limiting'), t('Cost Tracking')].map(
@@ -173,9 +175,9 @@ export function Features(_props: FeaturesProps) {
       desc: t('Multi-user management with flexible permission allocation'),
     },
     {
-      icon: <HeartHandshake className='size-5' strokeWidth={1.5} />,
-      title: t('Open Source'),
-      desc: t('Community driven, self-hosted, and extensible'),
+      icon: <ChartNoAxesCombined className='size-5' strokeWidth={1.5} />,
+      title: t('Usage Visibility'),
+      desc: t('Track model usage, costs, and request performance in one place'),
     },
   ]
 
@@ -187,9 +189,9 @@ export function Features(_props: FeaturesProps) {
             {t('Core Features')}
           </p>
           <h2 className='text-2xl leading-tight font-bold tracking-tight md:text-3xl'>
-            {t('Built for developers,')}
+            {t('Built for domestic AI applications,')}
             <br />
-            {t('designed for scale')}
+            {t('ready for production workflows')}
           </h2>
         </AnimateInView>
 

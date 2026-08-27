@@ -47,7 +47,7 @@
 - `HOME_STATS` items expose `end`, `suffix`, and `labelKey`.
 - `HOME_API_DEMOS` items expose the rendering fields already used by `HeroTerminalDemo` plus an explicit domestic model identifier in each request.
 
-- [ ] **Step 1: Write the failing contract test**
+- [x] **Step 1: Write the failing contract test**
 
 Create a Node test that imports the four exports and asserts:
 
@@ -83,7 +83,7 @@ assert.deepEqual(
 )
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run from `web/`:
 
@@ -93,7 +93,7 @@ bun run test src/features/home/__tests__/positioning.test.ts
 
 Expected: FAIL because `../home-content` does not exist.
 
-- [ ] **Step 3: Implement the pure content module**
+- [x] **Step 3: Implement the pure content module**
 
 Create `home-content.ts` with the project copyright header and this content:
 
@@ -171,11 +171,11 @@ export const HOME_API_DEMOS = [
 ] as const satisfies readonly ApiDemoConfig[]
 ```
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run the focused positioning test again and expect all assertions to pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src/features/home/home-content.ts web/src/features/home/__tests__/positioning.test.ts
@@ -197,7 +197,7 @@ git commit -m "test(home): lock domestic model positioning"
 - Consumes `FEATURED_DOMESTIC_MODELS`, `HOME_STATS`, and `HOME_API_DEMOS` from `home-content.ts`.
 - Keeps existing section component props and exports unchanged.
 
-- [ ] **Step 1: Extend the locale-copy test before implementation**
+- [x] **Step 1: Extend the locale-copy test before implementation**
 
 Require every locale to define these English source keys:
 
@@ -235,11 +235,11 @@ const POSITIONING_KEYS = [
 
 For `zh`, assert the hero keys render as `国产大模型接入服务`, `一个 API，接入`, and `主流国产大模型`. Keep the existing assertion for the exact LLM API multi-protocol sentence.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run the copy test and expect failure because the new keys are missing.
 
-- [ ] **Step 3: Update components with minimal structural change**
+- [x] **Step 3: Update components with minimal structural change**
 
 Make these exact substitutions while preserving surrounding JSX and styles:
 
@@ -323,7 +323,7 @@ desc: t('Track model usage, costs, and request performance in one place')
 {t('View Models')}
 ```
 
-- [ ] **Step 4: Apply complete translations with the sanctioned script**
+- [x] **Step 4: Apply complete translations with the sanctioned script**
 
 Create `web/scripts/add-missing-keys.mjs` using the exact writer structure from `.agents/skills/i18n-translate/SKILL.md` and this exact translation contract:
 
@@ -517,7 +517,7 @@ bun run i18n:sync
 
 Delete the temporary script with `apply_patch` after synchronization.
 
-- [ ] **Step 5: Verify GREEN**
+- [x] **Step 5: Verify GREEN**
 
 Run:
 
@@ -527,7 +527,7 @@ bun run test src/features/home/__tests__/positioning.test.ts src/features/home/_
 
 Expected: all homepage tests pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Stage only the homepage and locale files, verify the temporary script is absent, and commit:
 
@@ -540,7 +540,7 @@ git commit -m "feat(home): focus homepage on domestic models"
 **Files:**
 - Verify all files modified by Tasks 1 and 2.
 
-- [ ] **Step 1: Run static verification**
+- [x] **Step 1: Run static verification**
 
 From `web/` run:
 
@@ -551,14 +551,14 @@ bun run format:check
 bun run build
 ```
 
-- [ ] **Step 2: Audit visible-copy regressions**
+- [x] **Step 2: Audit visible-copy regressions**
 
 Search the default homepage files and confirm OpenAI, Claude, Gemini, and Llama do not appear as supplied model examples. Claude Code, Codex, and OpenCode remain only in the approved supported-client links. Confirm no self-deployment or upstream-channel onboarding copy remains in the default homepage sections.
 
-- [ ] **Step 3: Verify in a local browser**
+- [x] **Step 3: Verify in a local browser**
 
 Run the local production build or development server, open the default homepage in Chinese, and confirm the hero, terminal tabs, service facts, feature grid, three-step flow, and final CTA all show the approved domestic-model positioning at desktop and mobile widths.
 
-- [ ] **Step 4: Review repository scope**
+- [x] **Step 4: Review repository scope**
 
 Run `git status --short` and `git diff --stat`. Confirm `scripts/prepare-sidecar-env.py` remains untracked and no unrelated files are staged or committed.

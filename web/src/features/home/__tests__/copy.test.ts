@@ -24,32 +24,32 @@ const DESCRIPTION_KEY =
   'Supports one-click configuration and perfectly adapts to NewAPI multi-protocol configuration.'
 const LOCALES = ['en', 'zh', 'zh-TW', 'fr', 'ja', 'ru', 'vi'] as const
 const POSITIONING_KEYS = [
-  'Domestic AI Model Access Service',
+  'Open-source AI Model Access Service',
   'One API for',
-  'Leading Domestic AI Models',
-  'Access DeepSeek, GLM, Kimi, Qwen, Doubao, MiniMax, and more through one API. Use domestic models directly in your AI applications and coding tools.',
-  'domestic models available',
-  'domestic model brands',
+  'Leading Open-source AI Models',
+  'Access DeepSeek, GLM, Kimi, Qwen, MiniMax, and more through one API. Use open-source models directly in your AI applications and coding tools.',
+  'open-source models available',
+  'open-source model families',
   'coding clients supported',
   'unified API key',
-  'Domestic Model Access',
-  'One API connects DeepSeek, GLM, Kimi, Qwen, Doubao, MiniMax, and more.',
+  'Open-source Model Access',
+  'One API connects DeepSeek, GLM, Kimi, Qwen, MiniMax, and more.',
   'Unified Routing',
-  'Route requests across domestic model services with consistent access and failover controls',
-  'Built for domestic AI applications,',
+  'Route requests across open-source model services with consistent access and failover controls',
+  'Built for open-source AI applications,',
   'ready for production workflows',
   'Usage Visibility',
   'Track model usage, costs, and request performance in one place',
-  'Three steps to use domestic models',
+  'Three steps to use open-source models',
   'Create API Key',
   'Sign up and create an API key with the access scope you need',
-  'Choose a Domestic Model',
-  'Select DeepSeek, GLM, Kimi, Qwen, Doubao, MiniMax, or another enabled domestic model',
+  'Choose an Open-source Model',
+  'Select DeepSeek, GLM, Kimi, Qwen, MiniMax, or another enabled open-source model',
   'Connect and Monitor',
   'Call the unified API from your application or coding tool and track usage and costs',
   'Ready to use',
-  'domestic AI models?',
-  'Create an API key, choose an enabled domestic model, and start calling it from your application or coding tool.',
+  'open-source AI models?',
+  'Create an API key, choose an enabled open-source model, and start calling it from your application or coding tool.',
   'View Models',
 ] as const
 
@@ -79,7 +79,7 @@ describe('homepage copy', () => {
     )
   })
 
-  test('domestic-model positioning is translated in every supported locale', async () => {
+  test('open-source-model positioning is translated in every supported locale', async () => {
     for (const locale of LOCALES) {
       const localePath = new URL(
         `../../../i18n/locales/${locale}.json`,
@@ -104,13 +104,18 @@ describe('homepage copy', () => {
     const zhPath = new URL('../../../i18n/locales/zh.json', import.meta.url)
     const zhMessages = JSON.parse(await fs.readFile(zhPath, 'utf8'))
     assert.equal(
-      zhMessages.translation['Domestic AI Model Access Service'],
-      '国产大模型接入服务'
+      zhMessages.translation['Open-source AI Model Access Service'],
+      '开源大模型接入服务'
     )
     assert.equal(zhMessages.translation['One API for'], '一个 API，接入')
     assert.equal(
-      zhMessages.translation['Leading Domestic AI Models'],
-      '主流国产大模型'
+      zhMessages.translation['Leading Open-source AI Models'],
+      '主流开源大模型'
     )
+
+    const positioningText = POSITIONING_KEYS.map(
+      (key) => zhMessages.translation[key]
+    ).join('\n')
+    assert.doesNotMatch(positioningText, /国产模型|国内模型/)
   })
 })

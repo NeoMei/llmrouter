@@ -77,7 +77,7 @@ export function Hero(props: HeroProps) {
               <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75' />
               <span className='relative inline-flex size-1.5 rounded-full bg-blue-500 dark:bg-blue-400' />
             </span>
-            <span>{t('Domestic AI Model Access Service')}</span>
+            <span>{t('Open-source AI Model Access Service')}</span>
           </div>
 
           <h1
@@ -87,7 +87,7 @@ export function Hero(props: HeroProps) {
             {t('One API for')}
             <br />
             <span className='bg-gradient-to-r from-blue-400 via-violet-400 to-purple-500 bg-clip-text text-transparent'>
-              {t('Leading Domestic AI Models')}
+              {t('Leading Open-source AI Models')}
             </span>
           </h1>
           <p
@@ -95,7 +95,7 @@ export function Hero(props: HeroProps) {
             style={{ animationDelay: '120ms' }}
           >
             {t(
-              'Access DeepSeek, GLM, Kimi, Qwen, Doubao, MiniMax, and more through one API. Use domestic models directly in your AI applications and coding tools.'
+              'Access DeepSeek, GLM, Kimi, Qwen, MiniMax, and more through one API. Use open-source models directly in your AI applications and coding tools.'
             )}
           </p>
 

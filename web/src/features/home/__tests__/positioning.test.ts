@@ -20,33 +20,32 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
 import {
-  FEATURED_DOMESTIC_MODELS,
+  FEATURED_OPEN_SOURCE_MODELS,
   HOME_API_DEMOS,
   HOME_STATS,
 } from '../home-content'
 
-describe('homepage domestic model positioning', () => {
-  test('features the domestic model families enabled by the service', () => {
-    assert.deepEqual(FEATURED_DOMESTIC_MODELS, [
+describe('homepage open-source model positioning', () => {
+  test('features the open-source model families enabled by the service', () => {
+    assert.deepEqual(FEATURED_OPEN_SOURCE_MODELS, [
       'DeepSeek',
       'GLM',
       'Kimi',
       'Qwen',
-      'Doubao',
       'MiniMax',
     ])
   })
 
   test('reports conservative facts about the hosted service', () => {
     assert.deepEqual(HOME_STATS, [
-      { end: 20, suffix: '+', labelKey: 'domestic models available' },
-      { end: 6, suffix: '+', labelKey: 'domestic model brands' },
+      { end: 20, suffix: '+', labelKey: 'open-source models available' },
+      { end: 6, suffix: '+', labelKey: 'open-source model families' },
       { end: 3, suffix: '', labelKey: 'coding clients supported' },
       { end: 1, suffix: '', labelKey: 'unified API key' },
     ])
   })
 
-  test('demonstrates enabled domestic models through the unified chat route', () => {
+  test('demonstrates enabled open-source models through the unified chat route', () => {
     assert.deepEqual(
       HOME_API_DEMOS.map((demo) => ({
         label: demo.label,

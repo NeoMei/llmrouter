@@ -57,12 +57,12 @@ export function CTA(props: CTAProps) {
           {t('Ready to use')}
           <br />
           <span className='bg-gradient-to-r from-blue-400 via-violet-400 to-purple-500 bg-clip-text text-transparent'>
-            {t('domestic AI models?')}
+            {t('open-source AI models?')}
           </span>
         </h2>
         <p className='text-muted-foreground/80 mx-auto mt-5 max-w-md text-sm leading-relaxed md:text-base'>
           {t(
-            'Create an API key, choose an enabled domestic model, and start calling it from your application or coding tool.'
+            'Create an API key, choose an enabled open-source model, and start calling it from your application or coding tool.'
           )}
         </p>
         <div className='mt-8 flex items-center justify-center gap-3'>

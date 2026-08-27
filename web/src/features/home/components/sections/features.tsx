@@ -30,7 +30,7 @@ import { useTranslation } from 'react-i18next'
 
 import { AnimateInView } from '@/components/animate-in-view'
 
-import { FEATURED_DOMESTIC_MODELS } from '../../home-content'
+import { FEATURED_OPEN_SOURCE_MODELS } from '../../home-content'
 
 interface FeaturesProps {
   className?: string
@@ -43,15 +43,13 @@ export function Features(_props: FeaturesProps) {
     {
       id: 'models',
       num: '01',
-      title: t('Domestic Model Access'),
-      desc: t(
-        'One API connects DeepSeek, GLM, Kimi, Qwen, Doubao, MiniMax, and more.'
-      ),
+      title: t('Open-source Model Access'),
+      desc: t('One API connects DeepSeek, GLM, Kimi, Qwen, MiniMax, and more.'),
       span: 'md:col-span-2',
       icon: <Zap className='size-4 text-blue-400' />,
       visual: (
         <div className='mt-4 grid grid-cols-3 gap-2'>
-          {FEATURED_DOMESTIC_MODELS.map((name) => (
+          {FEATURED_OPEN_SOURCE_MODELS.map((name) => (
             <div
               key={name}
               className='border-border/30 bg-muted/20 text-muted-foreground flex items-center justify-center rounded-lg border px-3 py-2 text-xs transition-colors duration-300 hover:border-blue-500/30 hover:bg-blue-500/5'
@@ -104,7 +102,7 @@ export function Features(_props: FeaturesProps) {
       num: '03',
       title: t('Unified Routing'),
       desc: t(
-        'Route requests across domestic model services with consistent access and failover controls'
+        'Route requests across open-source model services with consistent access and failover controls'
       ),
       span: 'md:col-span-1',
       icon: <Route className='size-4 text-violet-400' />,
@@ -189,7 +187,7 @@ export function Features(_props: FeaturesProps) {
             {t('Core Features')}
           </p>
           <h2 className='text-2xl leading-tight font-bold tracking-tight md:text-3xl'>
-            {t('Built for domestic AI applications,')}
+            {t('Built for open-source AI applications,')}
             <br />
             {t('ready for production workflows')}
           </h2>

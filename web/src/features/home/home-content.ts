@@ -32,18 +32,17 @@ export interface ApiDemoConfig {
   accent: AccentTone
 }
 
-export const FEATURED_DOMESTIC_MODELS = [
+export const FEATURED_OPEN_SOURCE_MODELS = [
   'DeepSeek',
   'GLM',
   'Kimi',
   'Qwen',
-  'Doubao',
   'MiniMax',
 ] as const
 
 export const HOME_STATS = [
-  { end: 20, suffix: '+', labelKey: 'domestic models available' },
-  { end: 6, suffix: '+', labelKey: 'domestic model brands' },
+  { end: 20, suffix: '+', labelKey: 'open-source models available' },
+  { end: 6, suffix: '+', labelKey: 'open-source model families' },
   { end: 3, suffix: '', labelKey: 'coding clients supported' },
   { end: 1, suffix: '', labelKey: 'unified API key' },
 ] as const

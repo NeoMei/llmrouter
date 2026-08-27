@@ -33,9 +33,9 @@ export function HowItWorks() {
     },
     {
       num: '2',
-      title: t('Choose a Domestic Model'),
+      title: t('Choose an Open-source Model'),
       desc: t(
-        'Select DeepSeek, GLM, Kimi, Qwen, Doubao, MiniMax, or another enabled domestic model'
+        'Select DeepSeek, GLM, Kimi, Qwen, MiniMax, or another enabled open-source model'
       ),
       icon: <Bot className='size-6' strokeWidth={1.5} />,
     },
@@ -57,7 +57,7 @@ export function HowItWorks() {
             {t('How It Works')}
           </p>
           <h2 className='text-2xl font-bold tracking-tight md:text-3xl'>
-            {t('Three steps to use domestic models')}
+            {t('Three steps to use open-source models')}
           </h2>
         </AnimateInView>
 

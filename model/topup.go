@@ -12,16 +12,22 @@ import (
 )
 
 type TopUp struct {
-	Id              int     `json:"id"`
-	UserId          int     `json:"user_id" gorm:"index"`
-	Amount          int64   `json:"amount"`
-	Money           float64 `json:"money"`
-	TradeNo         string  `json:"trade_no" gorm:"unique;type:varchar(255);index"`
-	PaymentMethod   string  `json:"payment_method" gorm:"type:varchar(50)"`
-	PaymentProvider string  `json:"payment_provider" gorm:"type:varchar(50);default:''"`
-	CreateTime      int64   `json:"create_time"`
-	CompleteTime    int64   `json:"complete_time"`
-	Status          string  `json:"status"`
+	Id                int     `json:"id"`
+	UserId            int     `json:"user_id" gorm:"index"`
+	Amount            int64   `json:"amount"`
+	Money             float64 `json:"money"`
+	TradeNo           string  `json:"trade_no" gorm:"unique;type:varchar(255);index"`
+	PaymentMethod     string  `json:"payment_method" gorm:"type:varchar(50)"`
+	PaymentProvider   string  `json:"payment_provider" gorm:"type:varchar(50);default:'';uniqueIndex:idx_topups_provider_trade"`
+	Currency          string  `json:"currency" gorm:"type:varchar(8);default:''"`
+	PaidAmountMinor   int64   `json:"paid_amount_minor"`
+	CreditedQuota     int     `json:"credited_quota"`
+	ProviderTradeNo   *string `json:"provider_trade_no,omitempty" gorm:"type:varchar(64);uniqueIndex:idx_topups_provider_trade"`
+	NextReconcileTime int64   `json:"next_reconcile_time" gorm:"index"`
+	ReconcileAttempts int     `json:"reconcile_attempts"`
+	CreateTime        int64   `json:"create_time"`
+	CompleteTime      int64   `json:"complete_time"`
+	Status            string  `json:"status"`
 }
 
 const (
@@ -30,6 +36,7 @@ const (
 	PaymentMethodWaffo        = "waffo"
 	PaymentMethodWaffoPancake = "waffo_pancake"
 	PaymentMethodBalance      = "balance"
+	PaymentMethodWeChatNative = "wechat_native"
 )
 
 const (
@@ -39,20 +46,319 @@ const (
 	PaymentProviderWaffo        = "waffo"
 	PaymentProviderWaffoPancake = "waffo_pancake"
 	PaymentProviderBalance      = "balance"
+	PaymentProviderWeChatPay    = "wechat_pay"
 )
 
 var (
-	ErrPaymentMethodMismatch   = errors.New("payment method mismatch")
-	ErrTopUpNotFound           = errors.New("topup not found")
-	ErrTopUpStatusInvalid      = errors.New("topup status invalid")
-	ErrInvalidTopUpQuota       = errors.New("invalid top-up quota")
-	ErrTopUpQuotaLimitExceeded = errors.New("top-up quota limit exceeded")
+	ErrPaymentMethodMismatch      = errors.New("payment method mismatch")
+	ErrTopUpNotFound              = errors.New("topup not found")
+	ErrTopUpStatusInvalid         = errors.New("topup status invalid")
+	ErrInvalidTopUpQuota          = errors.New("invalid top-up quota")
+	ErrTopUpQuotaLimitExceeded    = errors.New("top-up quota limit exceeded")
+	ErrTopUpOrderConflict         = errors.New("top-up order conflicts with existing snapshot")
+	ErrTopUpAmountMismatch        = errors.New("top-up amount mismatch")
+	ErrTopUpCurrencyMismatch      = errors.New("top-up currency mismatch")
+	ErrTopUpProviderTradeConflict = errors.New("provider transaction belongs to another top-up")
 )
+
+type WeChatTopUpOrderInput struct {
+	UserID        int
+	TradeNo       string
+	AmountMinor   int64
+	CreditedQuota int
+	CreateTime    int64
+}
+
+type WeChatTopUpSettlement struct {
+	TradeNo         string
+	ProviderTradeNo string
+	AmountMinor     int64
+	Currency        string
+	CallerIP        string
+}
 
 func (topUp *TopUp) Insert() error {
 	var err error
 	err = DB.Create(topUp).Error
 	return err
+}
+
+func CreateOrReuseWeChatTopUp(input WeChatTopUpOrderInput) (*TopUp, bool, error) {
+	if input.UserID <= 0 || input.TradeNo == "" || input.AmountMinor <= 0 || input.CreditedQuota <= 0 || input.CreateTime <= 0 {
+		return nil, false, errors.New("invalid WeChat top-up order")
+	}
+
+	validateExisting := func(existing *TopUp) error {
+		if existing.UserId != input.UserID ||
+			existing.PaymentProvider != PaymentProviderWeChatPay ||
+			existing.PaymentMethod != PaymentMethodWeChatNative ||
+			existing.Currency != "CNY" ||
+			existing.PaidAmountMinor != input.AmountMinor ||
+			existing.CreditedQuota != input.CreditedQuota {
+			return ErrTopUpOrderConflict
+		}
+		return nil
+	}
+
+	existing := &TopUp{}
+	if err := DB.Where("trade_no = ?", input.TradeNo).First(existing).Error; err == nil {
+		if err := validateExisting(existing); err != nil {
+			return nil, false, err
+		}
+		return existing, true, nil
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, false, err
+	}
+
+	if err := ValidateTopUpQuotaCapacity(input.UserID, input.CreditedQuota); err != nil {
+		return nil, false, err
+	}
+
+	topUp := &TopUp{
+		UserId:            input.UserID,
+		Money:             float64(input.AmountMinor) / 100,
+		TradeNo:           input.TradeNo,
+		PaymentMethod:     PaymentMethodWeChatNative,
+		PaymentProvider:   PaymentProviderWeChatPay,
+		Currency:          "CNY",
+		PaidAmountMinor:   input.AmountMinor,
+		CreditedQuota:     input.CreditedQuota,
+		NextReconcileTime: input.CreateTime + 30,
+		CreateTime:        input.CreateTime,
+		Status:            common.TopUpStatusPending,
+	}
+	if err := DB.Create(topUp).Error; err == nil {
+		return topUp, false, nil
+	} else {
+		createErr := err
+		winner := &TopUp{}
+		if loadErr := DB.Where("trade_no = ?", input.TradeNo).First(winner).Error; loadErr != nil {
+			return nil, false, createErr
+		}
+		if validateErr := validateExisting(winner); validateErr != nil {
+			return nil, false, validateErr
+		}
+		return winner, true, nil
+	}
+}
+
+func SettleWeChatTopUp(settlement WeChatTopUpSettlement) (
+	alreadyDone bool,
+	userID int,
+	creditedQuota int,
+	err error,
+) {
+	if settlement.TradeNo == "" || settlement.ProviderTradeNo == "" {
+		return false, 0, 0, errors.New("invalid WeChat top-up settlement")
+	}
+
+	refCol := "`trade_no`"
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
+		refCol = `"trade_no"`
+	}
+
+	topUp := &TopUp{}
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockForUpdate(tx).Where(refCol+" = ?", settlement.TradeNo).First(topUp).Error; err != nil {
+			return ErrTopUpNotFound
+		}
+		if topUp.PaymentProvider != PaymentProviderWeChatPay || topUp.PaymentMethod != PaymentMethodWeChatNative {
+			return ErrPaymentMethodMismatch
+		}
+		if topUp.PaidAmountMinor != settlement.AmountMinor {
+			return ErrTopUpAmountMismatch
+		}
+		if topUp.Currency != "CNY" || settlement.Currency != topUp.Currency {
+			return ErrTopUpCurrencyMismatch
+		}
+		if topUp.ProviderTradeNo != nil && *topUp.ProviderTradeNo != settlement.ProviderTradeNo {
+			return ErrTopUpProviderTradeConflict
+		}
+
+		var conflictingCount int64
+		if err := tx.Model(&TopUp{}).
+			Where("payment_provider = ? AND provider_trade_no = ? AND trade_no <> ?", PaymentProviderWeChatPay, settlement.ProviderTradeNo, settlement.TradeNo).
+			Count(&conflictingCount).Error; err != nil {
+			return err
+		}
+		if conflictingCount != 0 {
+			return ErrTopUpProviderTradeConflict
+		}
+
+		userID = topUp.UserId
+		creditedQuota = topUp.CreditedQuota
+		if topUp.Status == common.TopUpStatusSuccess {
+			alreadyDone = true
+			if topUp.ProviderTradeNo == nil {
+				topUp.ProviderTradeNo = &settlement.ProviderTradeNo
+				if err := tx.Save(topUp).Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		if topUp.Status != common.TopUpStatusPending {
+			return ErrTopUpStatusInvalid
+		}
+
+		topUp.ProviderTradeNo = &settlement.ProviderTradeNo
+		topUp.CompleteTime = common.GetTimestamp()
+		topUp.Status = common.TopUpStatusSuccess
+		if err := tx.Save(topUp).Error; err != nil {
+			return err
+		}
+		return creditTopUpQuota(tx, topUp.UserId, topUp.CreditedQuota, nil)
+	})
+	if err != nil {
+		return false, 0, 0, err
+	}
+	if alreadyDone {
+		return true, userID, creditedQuota, nil
+	}
+
+	syncCreditUserQuotaCache(userID, creditedQuota, "WeChat Pay topup")
+	RecordTopupLog(
+		userID,
+		fmt.Sprintf("微信支付充值成功，充值额度: %v，支付金额：%s %s", logger.FormatQuota(creditedQuota), formatTopUpMinor(topUp.PaidAmountMinor), topUp.Currency),
+		settlement.CallerIP,
+		PaymentMethodWeChatNative,
+		PaymentProviderWeChatPay,
+	)
+	return false, userID, creditedQuota, nil
+}
+
+func formatTopUpMinor(amountMinor int64) string {
+	return decimal.NewFromInt(amountMinor).Shift(-2).StringFixed(2)
+}
+
+func GetUserWeChatTopUp(userID int, tradeNo string) (*TopUp, error) {
+	if userID <= 0 || tradeNo == "" {
+		return nil, ErrTopUpNotFound
+	}
+	topUp := &TopUp{}
+	result := DB.Where(
+		"user_id = ? AND trade_no = ? AND payment_provider = ?",
+		userID,
+		tradeNo,
+		PaymentProviderWeChatPay,
+	).First(topUp)
+	if result.Error != nil {
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return nil, ErrTopUpNotFound
+		}
+		return nil, result.Error
+	}
+	return topUp, nil
+}
+
+func ExpireWeChatTopUp(tradeNo string) error {
+	if tradeNo == "" {
+		return ErrTopUpNotFound
+	}
+	refCol := "`trade_no`"
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
+		refCol = `"trade_no"`
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		topUp := &TopUp{}
+		if err := lockForUpdate(tx).Where(refCol+" = ?", tradeNo).First(topUp).Error; err != nil {
+			return ErrTopUpNotFound
+		}
+		if topUp.PaymentProvider != PaymentProviderWeChatPay {
+			return ErrPaymentMethodMismatch
+		}
+		if topUp.Status != common.TopUpStatusPending {
+			return ErrTopUpStatusInvalid
+		}
+		return tx.Model(topUp).Updates(map[string]interface{}{
+			"status":              common.TopUpStatusExpired,
+			"complete_time":       common.GetTimestamp(),
+			"next_reconcile_time": 0,
+		}).Error
+	})
+}
+
+func HasDueWeChatTopUps(now int64) bool {
+	if now <= 0 {
+		return false
+	}
+	var count int64
+	err := DB.Model(&TopUp{}).Where(
+		"payment_provider = ? AND status = ? AND next_reconcile_time > 0 AND next_reconcile_time <= ?",
+		PaymentProviderWeChatPay,
+		common.TopUpStatusPending,
+		now,
+	).Limit(1).Count(&count).Error
+	if err != nil {
+		common.SysError("check due WeChat top-ups failed: " + err.Error())
+		return false
+	}
+	return count != 0
+}
+
+func ClaimDueWeChatTopUps(now int64, limit int) ([]*TopUp, error) {
+	if now <= 0 || limit <= 0 {
+		return nil, errors.New("invalid WeChat top-up claim arguments")
+	}
+
+	claimed := make([]*TopUp, 0, limit)
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		candidates := make([]*TopUp, 0, limit)
+		if err := tx.Where(
+			"payment_provider = ? AND status = ? AND next_reconcile_time > 0 AND next_reconcile_time <= ?",
+			PaymentProviderWeChatPay,
+			common.TopUpStatusPending,
+			now,
+		).Order("next_reconcile_time ASC, id ASC").Limit(limit).Find(&candidates).Error; err != nil {
+			return err
+		}
+
+		for _, candidate := range candidates {
+			nextReconcileTime := nextWeChatReconcileTime(candidate, now)
+			result := tx.Model(&TopUp{}).
+				Where(
+					"id = ? AND payment_provider = ? AND status = ? AND next_reconcile_time > 0 AND next_reconcile_time <= ?",
+					candidate.Id,
+					PaymentProviderWeChatPay,
+					common.TopUpStatusPending,
+					now,
+				).
+				Updates(map[string]interface{}{
+					"reconcile_attempts":  gorm.Expr("reconcile_attempts + 1"),
+					"next_reconcile_time": nextReconcileTime,
+				})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				continue
+			}
+			candidate.ReconcileAttempts++
+			candidate.NextReconcileTime = nextReconcileTime
+			claimed = append(claimed, candidate)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return claimed, nil
+}
+
+func nextWeChatReconcileTime(topUp *TopUp, now int64) int64 {
+	offsets := [...]int64{60, 180, 300, 600, 900}
+	index := topUp.ReconcileAttempts
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(offsets) {
+		index = len(offsets) - 1
+	}
+	next := topUp.CreateTime + offsets[index]
+	if next <= now {
+		return now + 30
+	}
+	return next
 }
 
 func topUpQuotaMaxCurrent(creditedQuota int) (int, error) {
@@ -478,10 +784,16 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 		}
 
 		// 计算应充值额度：
+		// - 微信订单：只使用创建时的精确额度快照，不按当前汇率或单价重算
 		// - Stripe 订单：Money 代表经分组倍率换算后的美元数量，直接 * QuotaPerUnit
 		// - 其他订单（如易支付）：Amount 为美元数量，* QuotaPerUnit
 		var quotaErr error
-		if topUp.PaymentProvider == PaymentProviderStripe {
+		if topUp.PaymentProvider == PaymentProviderWeChatPay {
+			quotaToAdd = topUp.CreditedQuota
+			if quotaToAdd <= 0 {
+				return ErrInvalidTopUpQuota
+			}
+		} else if topUp.PaymentProvider == PaymentProviderStripe {
 			quotaToAdd, quotaErr = common.QuotaFromDecimalStrict(
 				decimal.NewFromFloat(topUp.Money).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
 			)

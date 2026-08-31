@@ -24,6 +24,13 @@ import (
 
 func GetTopUpInfo(c *gin.Context) {
 	complianceConfirmed := operation_setting.IsPaymentComplianceConfirmed()
+	wechatPayConfig := service.WeChatPayConfig{}
+	enableWeChatPay := false
+	if complianceConfirmed {
+		var err error
+		wechatPayConfig, err = loadReadyWeChatPayConfig()
+		enableWeChatPay = err == nil
+	}
 
 	// 获取支付方式
 	payMethods := operation_setting.PayMethods
@@ -97,11 +104,24 @@ func GetTopUpInfo(c *gin.Context) {
 	}
 
 	data := gin.H{
-		"enable_online_topup":              isEpayTopUpEnabled(),
-		"enable_stripe_topup":              isStripeTopUpEnabled(),
-		"enable_creem_topup":               isCreemTopUpEnabled(),
-		"enable_waffo_topup":               enableWaffo,
-		"enable_waffo_pancake_topup":       enableWaffoPancake,
+		"enable_online_topup":        isEpayTopUpEnabled(),
+		"enable_stripe_topup":        isStripeTopUpEnabled(),
+		"enable_creem_topup":         isCreemTopUpEnabled(),
+		"enable_waffo_topup":         enableWaffo,
+		"enable_waffo_pancake_topup": enableWaffoPancake,
+		"enable_wechat_pay":          enableWeChatPay,
+		"wechat_pay_min_amount": func() string {
+			if !enableWeChatPay {
+				return ""
+			}
+			return decimal.NewFromInt(wechatPayConfig.MinAmountMinor).Shift(-2).StringFixed(2)
+		}(),
+		"wechat_pay_max_amount": func() string {
+			if !enableWeChatPay {
+				return ""
+			}
+			return decimal.NewFromInt(wechatPayConfig.MaxAmountMinor).Shift(-2).StringFixed(2)
+		}(),
 		"enable_redemption":                complianceConfirmed,
 		"payment_compliance_confirmed":     complianceConfirmed,
 		"payment_compliance_terms_version": operation_setting.CurrentComplianceTermsVersion,

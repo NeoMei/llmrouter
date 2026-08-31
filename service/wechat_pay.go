@@ -129,6 +129,39 @@ type WeChatPayError struct {
 	cause      error
 }
 
+func ValidateWeChatPaySuccessfulTransaction(
+	config WeChatPayConfig,
+	transaction WeChatPayTransaction,
+	expectedTradeNo string,
+	expectedAmountMinor int64,
+) error {
+	if transaction.TradeState != "SUCCESS" {
+		return errors.New("unexpected WeChat Pay trade state")
+	}
+	if transaction.TradeType != "NATIVE" {
+		return errors.New("unexpected WeChat Pay trade type")
+	}
+	if transaction.MchID != config.MchID {
+		return errors.New("WeChat Pay merchant mismatch")
+	}
+	if transaction.AppID != "" && transaction.AppID != config.AppID {
+		return errors.New("WeChat Pay AppID mismatch")
+	}
+	if transaction.OutTradeNo != expectedTradeNo {
+		return errors.New("WeChat Pay merchant order mismatch")
+	}
+	if transaction.TransactionID == "" {
+		return errors.New("missing WeChat Pay transaction ID")
+	}
+	if transaction.Currency != "CNY" {
+		return errors.New("WeChat Pay currency mismatch")
+	}
+	if transaction.AmountMinor != expectedAmountMinor {
+		return errors.New("WeChat Pay amount mismatch")
+	}
+	return nil
+}
+
 func (e *WeChatPayError) Error() string {
 	if e.Code != "" {
 		return fmt.Sprintf("WeChat Pay %s failed: %s", e.Operation, e.Code)
@@ -158,11 +191,24 @@ func newSDKWeChatPayProvider(
 }
 
 func NewConfiguredWeChatPayProvider(ctx context.Context) (WeChatPayProvider, WeChatPayConfig, error) {
+	return newConfiguredWeChatPayProvider(ctx, true)
+}
+
+func NewConfiguredWeChatPayCallbackProvider(ctx context.Context) (WeChatPayProvider, WeChatPayConfig, error) {
+	return newConfiguredWeChatPayProvider(ctx, false)
+}
+
+func newConfiguredWeChatPayProvider(ctx context.Context, requireEnabled bool) (WeChatPayProvider, WeChatPayConfig, error) {
 	config, err := LoadWeChatPayConfig()
 	if err != nil {
 		return nil, WeChatPayConfig{}, err
 	}
-	if err := config.Ready(); err != nil {
+	if requireEnabled {
+		err = config.Ready()
+	} else {
+		err = config.CredentialsReady()
+	}
+	if err != nil {
 		return nil, WeChatPayConfig{}, err
 	}
 
@@ -438,6 +484,10 @@ func (config WeChatPayConfig) Ready() error {
 	if !config.Enabled {
 		return errors.New("WeChat Pay is disabled")
 	}
+	return config.CredentialsReady()
+}
+
+func (config WeChatPayConfig) CredentialsReady() error {
 	if !wechatPayMerchantIDPattern.MatchString(config.MchID) {
 		return errors.New("invalid WeChat Pay merchant ID")
 	}

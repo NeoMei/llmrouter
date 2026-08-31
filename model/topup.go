@@ -77,6 +77,47 @@ type WeChatTopUpSettlement struct {
 	CallerIP        string
 }
 
+type WeChatPayIncident struct {
+	UserID          int
+	EventID         string
+	EventType       string
+	TradeNo         string
+	ProviderTradeNo string
+	Reason          string
+	RequestID       string
+	CallerIP        string
+}
+
+func RecordWeChatPayIncident(incident WeChatPayIncident) error {
+	adminInfo := map[string]interface{}{
+		"event_id":          incident.EventID,
+		"event_type":        incident.EventType,
+		"trade_no":          incident.TradeNo,
+		"provider_trade_no": incident.ProviderTradeNo,
+		"reason":            incident.Reason,
+		"request_id":        incident.RequestID,
+		"caller_ip":         incident.CallerIP,
+	}
+	other, err := common.Marshal(map[string]interface{}{"admin_info": adminInfo})
+	if err != nil {
+		return err
+	}
+	username := ""
+	if incident.UserID > 0 {
+		username, _ = GetUsernameById(incident.UserID, true)
+	}
+	return createLog(&Log{
+		UserId:    incident.UserID,
+		Username:  username,
+		CreatedAt: common.GetTimestamp(),
+		Type:      LogTypeTopup,
+		Content:   "WeChat Pay callback requires reconciliation",
+		Ip:        incident.CallerIP,
+		RequestId: incident.RequestID,
+		Other:     string(other),
+	})
+}
+
 func (topUp *TopUp) Insert() error {
 	var err error
 	err = DB.Create(topUp).Error
@@ -439,13 +480,25 @@ func GetTopUpById(id int) *TopUp {
 }
 
 func GetTopUpByTradeNo(tradeNo string) *TopUp {
-	var topUp *TopUp
-	var err error
-	err = DB.Where("trade_no = ?", tradeNo).First(&topUp).Error
+	topUp, err := GetTopUpByTradeNoWithError(tradeNo)
 	if err != nil {
 		return nil
 	}
 	return topUp
+}
+
+func GetTopUpByTradeNoWithError(tradeNo string) (*TopUp, error) {
+	if tradeNo == "" {
+		return nil, ErrTopUpNotFound
+	}
+	topUp := &TopUp{}
+	if err := DB.Where("trade_no = ?", tradeNo).First(topUp).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrTopUpNotFound
+		}
+		return nil, err
+	}
+	return topUp, nil
 }
 
 func UpdatePendingTopUpStatus(tradeNo string, expectedPaymentProvider string, targetStatus string) error {

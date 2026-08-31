@@ -146,6 +146,13 @@ func TestWeChatPayConfigReadyAcceptsCompleteConfig(t *testing.T) {
 	require.NoError(t, config.Ready())
 }
 
+func TestWeChatPayConfigCredentialsReadyAllowsCallbacksWhileNewOrdersDisabled(t *testing.T) {
+	config := validWeChatPayConfigForTest(t)
+	config.Enabled = false
+	require.Error(t, config.Ready())
+	require.NoError(t, config.CredentialsReady())
+}
+
 func TestWeChatPayConfigReadyRejectsUnsafeOrIncompleteConfig(t *testing.T) {
 	tests := []struct {
 		name   string

@@ -24,6 +24,8 @@ curl --fail --silent --show-error -H "Authorization: Bearer ${MANAGEMENT_TOKEN}"
 
 5. Run authenticated smoke requests for `/v1/models`, one non-streaming request, one streaming request, Files, and any enabled Fine-tuning provider. Save request IDs with the release evidence.
 
+For direct CNY wallet top-ups, follow [WeChat Pay Native operations](wechat-native-pay.md). Keep the channel disabled until its credential, callback, exact-settlement, and one-time-credit checks pass.
+
 ## Required alerts
 
 - Page immediately: no healthy instances, readiness below 50%, database unavailable, authentication failure spike, billing invariant violation, or sustained 5xx above 5% for five minutes.

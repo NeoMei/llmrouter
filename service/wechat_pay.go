@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/rsa"
 	"errors"
 	"fmt"
 	"math"
@@ -18,6 +19,8 @@ import (
 
 	"github.com/shopspring/decimal"
 	"github.com/wechatpay-apiv3/wechatpay-go/core"
+	"github.com/wechatpay-apiv3/wechatpay-go/core/auth"
+	"github.com/wechatpay-apiv3/wechatpay-go/core/auth/validators"
 	"github.com/wechatpay-apiv3/wechatpay-go/core/auth/verifiers"
 	"github.com/wechatpay-apiv3/wechatpay-go/core/consts"
 	"github.com/wechatpay-apiv3/wechatpay-go/core/notify"
@@ -53,6 +56,8 @@ type WeChatPayConfig struct {
 	APIV3KeyPath           string
 	PublicKeyID            string
 	PublicKeyPath          string
+	NextPublicKeyID        string
+	NextPublicKeyPath      string
 	NotifyURL              string
 	MinAmountMinor         int64
 	MaxAmountMinor         int64
@@ -118,6 +123,55 @@ type sdkWeChatPayProvider struct {
 	config       WeChatPayConfig
 	api          weChatPayNativeAPI
 	notifyParser weChatPayNotifyParser
+}
+
+type weChatPayPublicKeyVerifier struct {
+	currentID string
+	verifiers map[string]auth.Verifier
+}
+
+type weChatPayVerifierOption struct {
+	verifier auth.Verifier
+}
+
+func (option weChatPayVerifierOption) Apply(settings *core.DialSettings) error {
+	settings.Validator = validators.NewWechatPayResponseValidator(option.verifier)
+	return nil
+}
+
+func newWeChatPayPublicKeyVerifier(
+	currentID string,
+	currentKey *rsa.PublicKey,
+	nextID string,
+	nextKey *rsa.PublicKey,
+) auth.Verifier {
+	keyVerifiers := map[string]auth.Verifier{
+		currentID: verifiers.NewSHA256WithRSAPubkeyVerifier(currentID, *currentKey),
+	}
+	if nextID != "" && nextKey != nil {
+		keyVerifiers[nextID] = verifiers.NewSHA256WithRSAPubkeyVerifier(nextID, *nextKey)
+	}
+	return &weChatPayPublicKeyVerifier{
+		currentID: currentID,
+		verifiers: keyVerifiers,
+	}
+}
+
+func (verifier *weChatPayPublicKeyVerifier) Verify(
+	ctx context.Context,
+	serial string,
+	message string,
+	signature string,
+) error {
+	keyVerifier, ok := verifier.verifiers[serial]
+	if !ok {
+		return fmt.Errorf("unrecognized WeChat Pay public key ID: %s", serial)
+	}
+	return keyVerifier.Verify(ctx, serial, message, signature)
+}
+
+func (verifier *weChatPayPublicKeyVerifier) GetSerial(_ context.Context) (string, error) {
+	return verifier.currentID, nil
 }
 
 type WeChatPayError struct {
@@ -237,19 +291,37 @@ func newConfiguredWeChatPayProvider(ctx context.Context, requireEnabled bool) (W
 		return nil, WeChatPayConfig{}, fmt.Errorf("read APIv3 key: %w", err)
 	}
 
-	client, err := core.NewClient(ctx, option.WithWechatPayPublicKeyAuthCipher(
-		config.MchID,
-		config.MerchantCertSerial,
-		privateKey,
+	var nextPublicKey *rsa.PublicKey
+	if config.NextPublicKeyPath != "" {
+		nextPublicKey, err = wechatpayutils.LoadPublicKeyWithPath(config.NextPublicKeyPath)
+		if err != nil {
+			return nil, WeChatPayConfig{}, fmt.Errorf("load next WeChat Pay public key: %w", err)
+		}
+	}
+	publicKeyVerifier := newWeChatPayPublicKeyVerifier(
 		config.PublicKeyID,
 		publicKey,
-	))
+		config.NextPublicKeyID,
+		nextPublicKey,
+	)
+
+	client, err := core.NewClient(
+		ctx,
+		option.WithWechatPayPublicKeyAuthCipher(
+			config.MchID,
+			config.MerchantCertSerial,
+			privateKey,
+			config.PublicKeyID,
+			publicKey,
+		),
+		weChatPayVerifierOption{verifier: publicKeyVerifier},
+	)
 	if err != nil {
 		return nil, WeChatPayConfig{}, fmt.Errorf("create WeChat Pay client: %w", err)
 	}
 	notifyParser, err := notify.NewRSANotifyHandler(
 		strings.TrimSpace(string(apiV3Key)),
-		verifiers.NewSHA256WithRSAPubkeyVerifier(config.PublicKeyID, *publicKey),
+		publicKeyVerifier,
 	)
 	if err != nil {
 		return nil, WeChatPayConfig{}, fmt.Errorf("create WeChat Pay notify handler: %w", err)
@@ -463,6 +535,8 @@ func LoadWeChatPayConfig() (WeChatPayConfig, error) {
 		APIV3KeyPath:           strings.TrimSpace(os.Getenv("WECHATPAY_API_V3_KEY_PATH")),
 		PublicKeyID:            strings.TrimSpace(os.Getenv("WECHATPAY_PUBLIC_KEY_ID")),
 		PublicKeyPath:          strings.TrimSpace(os.Getenv("WECHATPAY_PUBLIC_KEY_PATH")),
+		NextPublicKeyID:        strings.TrimSpace(os.Getenv("WECHATPAY_NEXT_PUBLIC_KEY_ID")),
+		NextPublicKeyPath:      strings.TrimSpace(os.Getenv("WECHATPAY_NEXT_PUBLIC_KEY_PATH")),
 		Description:            strings.TrimSpace(os.Getenv("WECHATPAY_DESCRIPTION")),
 	}
 	if config.Description == "" {
@@ -542,6 +616,19 @@ func (config WeChatPayConfig) CredentialsReady() error {
 	}
 	if _, err := wechatpayutils.LoadPublicKeyWithPath(config.PublicKeyPath); err != nil {
 		return fmt.Errorf("invalid WeChat Pay public key: %w", err)
+	}
+	hasNextPublicKeyID := config.NextPublicKeyID != ""
+	hasNextPublicKeyPath := config.NextPublicKeyPath != ""
+	if hasNextPublicKeyID != hasNextPublicKeyPath {
+		return errors.New("next WeChat Pay public key ID and path must be configured together")
+	}
+	if hasNextPublicKeyID {
+		if !wechatPayPublicKeyIDPattern.MatchString(config.NextPublicKeyID) || config.NextPublicKeyID == config.PublicKeyID {
+			return errors.New("invalid next WeChat Pay public key ID")
+		}
+		if _, err := wechatpayutils.LoadPublicKeyWithPath(config.NextPublicKeyPath); err != nil {
+			return fmt.Errorf("invalid next WeChat Pay public key: %w", err)
+		}
 	}
 	return nil
 }

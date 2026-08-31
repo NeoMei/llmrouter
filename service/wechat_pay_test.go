@@ -2,9 +2,12 @@ package service
 
 import (
 	"context"
+	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"math"
@@ -151,6 +154,49 @@ func TestWeChatPayConfigCredentialsReadyAllowsCallbacksWhileNewOrdersDisabled(t 
 	config.Enabled = false
 	require.Error(t, config.Ready())
 	require.NoError(t, config.CredentialsReady())
+}
+
+func TestWeChatPayConfigReadyAcceptsOptionalNextPublicKey(t *testing.T) {
+	config := validWeChatPayConfigForTest(t)
+	_, nextPublicKeyPath := writeWeChatPayTestKeys(t, t.TempDir())
+	config.NextPublicKeyID = "PUB_KEY_ID_0000000000000000000000000000000002"
+	config.NextPublicKeyPath = nextPublicKeyPath
+	require.NoError(t, config.Ready())
+
+	config.NextPublicKeyPath = ""
+	require.Error(t, config.Ready())
+}
+
+func TestWeChatPayPublicKeyVerifierAcceptsRotationOverlap(t *testing.T) {
+	currentKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	nextKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	const currentID = "PUB_KEY_ID_0000000000000000000000000000000001"
+	const nextID = "PUB_KEY_ID_0000000000000000000000000000000002"
+	verifier := newWeChatPayPublicKeyVerifier(
+		currentID,
+		&currentKey.PublicKey,
+		nextID,
+		&nextKey.PublicKey,
+	)
+
+	message := "rotation-overlap-message"
+	for keyID, key := range map[string]*rsa.PrivateKey{
+		currentID: currentKey,
+		nextID:    nextKey,
+	} {
+		digest := sha256.Sum256([]byte(message))
+		signature, signErr := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
+		require.NoError(t, signErr)
+		require.NoError(t, verifier.Verify(context.Background(), keyID, message, base64.StdEncoding.EncodeToString(signature)))
+	}
+
+	serial, err := verifier.GetSerial(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, currentID, serial)
+	require.Error(t, verifier.Verify(context.Background(), "PUB_KEY_ID_UNKNOWN", message, "invalid"))
 }
 
 func TestWeChatPayConfigReadyRejectsUnsafeOrIncompleteConfig(t *testing.T) {

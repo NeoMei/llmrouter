@@ -282,7 +282,14 @@ func TestRequestWeChatNativePayClassifiesProviderCreateFailures(t *testing.T) {
 
 			_, response := performWeChatNativeCreate(t, userID, fmt.Sprintf(`{"amount":"50","idempotency_key":"%s"}`, idempotencyKey))
 			assert.Equal(t, false, response["success"])
-			stored := model.GetTopUpByTradeNo(weChatPayTradeNo(userID, idempotencyKey))
+			tradeNo := weChatPayTradeNo(userID, idempotencyKey)
+			data, ok := response["data"].(map[string]interface{})
+			require.True(t, ok)
+			assert.Equal(t, tradeNo, data["trade_no"])
+			assert.Equal(t, tt.wantStatus, data["status"])
+			assert.Equal(t, "", data["code_url"])
+
+			stored := model.GetTopUpByTradeNo(tradeNo)
 			require.NotNil(t, stored)
 			assert.Equal(t, tt.wantStatus, stored.Status)
 		})

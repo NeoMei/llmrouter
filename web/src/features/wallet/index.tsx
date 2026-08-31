@@ -25,10 +25,12 @@ import { useSystemConfig } from '@/hooks/use-system-config'
 import { getSelf } from '@/lib/api'
 
 import { AffiliateRewardsCard } from './components/affiliate-rewards-card'
+import { CnyTopupCard } from './components/cny-topup-card'
 import { BillingHistoryDialog } from './components/dialogs/billing-history-dialog'
 import { CreemConfirmDialog } from './components/dialogs/creem-confirm-dialog'
 import { PaymentConfirmDialog } from './components/dialogs/payment-confirm-dialog'
 import { TransferDialog } from './components/dialogs/transfer-dialog'
+import { WeChatNativePaymentDialog } from './components/dialogs/wechat-native-payment-dialog'
 import { RechargeFormCard } from './components/recharge-form-card'
 import { SubscriptionPlansCard } from './components/subscription-plans-card'
 import { WalletStatsCard } from './components/wallet-stats-card'
@@ -41,6 +43,7 @@ import {
   useCreemPayment,
   useWaffoPayment,
   useWaffoPancakePayment,
+  useWeChatNativePayment,
 } from './hooks'
 import {
   getDefaultPaymentType,
@@ -124,6 +127,8 @@ export function Wallet(props: WalletProps) {
       setUserLoading(false)
     }
   }, [])
+
+  const weChatPayment = useWeChatNativePayment({ onSuccess: fetchUser })
 
   useEffect(() => {
     fetchUser()
@@ -295,7 +300,15 @@ export function Wallet(props: WalletProps) {
                   : 'grid gap-4'
               }
             >
-              <div id='wallet-add-funds' className='scroll-mt-4'>
+              <div id='wallet-add-funds' className='scroll-mt-4 space-y-4'>
+                {topupInfo?.enable_wechat_pay ? (
+                  <CnyTopupCard
+                    minAmount={topupInfo.wechat_pay_min_amount || '1.00'}
+                    maxAmount={topupInfo.wechat_pay_max_amount || '5000.00'}
+                    processing={weChatPayment.processing}
+                    onSubmit={weChatPayment.createPayment}
+                  />
+                ) : null}
                 <RechargeFormCard
                   topupInfo={topupInfo}
                   presetAmounts={presetAmounts}
@@ -382,6 +395,15 @@ export function Wallet(props: WalletProps) {
         onConfirm={handleCreemConfirm}
         product={selectedCreemProduct}
         processing={creemProcessing}
+      />
+
+      <WeChatNativePaymentDialog
+        open={weChatPayment.open}
+        onOpenChange={weChatPayment.setOpen}
+        order={weChatPayment.order}
+        processing={weChatPayment.processing}
+        polling={weChatPayment.polling}
+        onRetry={weChatPayment.retryPayment}
       />
     </>
   )

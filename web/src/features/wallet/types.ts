@@ -60,6 +60,8 @@ export type WaffoPancakePaymentResponse = ApiResponse<
   | string
 >
 
+export type WeChatNativeOrderResponse = ApiResponse<WeChatNativeOrder>
+
 /**
  * Creem product configuration
  */
@@ -152,6 +154,12 @@ export interface TopupInfo {
   waffo_pancake_min_topup?: number
   /** Whether redemption code usage is enabled */
   enable_redemption?: boolean
+  /** Whether direct WeChat Pay Native topup is enabled */
+  enable_wechat_pay?: boolean
+  /** Minimum direct WeChat Pay amount, expressed as an exact CNY string */
+  wechat_pay_min_amount?: string
+  /** Maximum direct WeChat Pay amount, expressed as an exact CNY string */
+  wechat_pay_max_amount?: string
   /** Whether compliance confirmation has been completed */
   payment_compliance_confirmed?: boolean
   /** Current compliance terms version */
@@ -205,6 +213,29 @@ export interface WaffoPancakePaymentRequest {
 }
 
 /**
+ * Direct WeChat Pay Native request parameters
+ */
+export interface WeChatNativePaymentRequest {
+  /** Exact CNY amount with at most two decimal places */
+  amount: string
+  /** Stable key reused while the same payment action remains unresolved */
+  idempotency_key: string
+}
+
+/**
+ * Direct WeChat Pay Native order returned by the local server
+ */
+export interface WeChatNativeOrder {
+  trade_no: string
+  code_url: string
+  amount: string
+  currency: 'CNY'
+  credited_quota: number
+  expires_at: number
+  status: TopupStatus
+}
+
+/**
  * Amount calculation request
  */
 export interface AmountRequest {
@@ -247,7 +278,7 @@ export interface UserWalletData {
 /**
  * Topup record status
  */
-export type TopupStatus = 'success' | 'pending' | 'expired'
+export type TopupStatus = 'success' | 'pending' | 'failed' | 'expired'
 
 /**
  * Topup billing record
@@ -271,6 +302,14 @@ export interface TopupRecord {
   complete_time?: number
   /** Payment status */
   status: TopupStatus
+  /** Payment provider identifier for provider-native orders */
+  payment_provider?: string
+  /** Settlement currency for provider-native orders */
+  currency?: string
+  /** Exact paid amount in the currency's minor unit */
+  paid_amount_minor?: number
+  /** Immutable quota snapshot credited after settlement */
+  credited_quota?: number
 }
 
 /**

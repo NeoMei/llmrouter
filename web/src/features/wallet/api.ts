@@ -39,6 +39,8 @@ import type {
   WaffoPaymentResponse,
   WaffoPancakePaymentRequest,
   WaffoPancakePaymentResponse,
+  WeChatNativePaymentRequest,
+  WeChatNativeOrderResponse,
 } from './types'
 
 // ============================================================================
@@ -178,6 +180,32 @@ export async function requestWaffoPancakePayment(
   const res = await api.post('/api/user/waffo-pancake/pay', request, {
     skipBusinessError: true,
   } as Record<string, unknown>)
+  return res.data
+}
+
+/**
+ * Create or recover a direct WeChat Pay Native order.
+ */
+export async function requestWeChatNativePayment(
+  request: WeChatNativePaymentRequest
+): Promise<WeChatNativeOrderResponse> {
+  const res = await api.post('/api/user/wechat-pay/native', request, {
+    skipBusinessError: true,
+  } as Record<string, unknown>)
+  return res.data
+}
+
+/**
+ * Read local order state. This endpoint never performs a provider query.
+ */
+export async function getWeChatNativeOrder(
+  tradeNo: string,
+  signal?: AbortSignal
+): Promise<WeChatNativeOrderResponse> {
+  const res = await api.get(
+    `/api/user/wechat-pay/orders/${encodeURIComponent(tradeNo)}`,
+    { signal }
+  )
   return res.data
 }
 

@@ -117,12 +117,19 @@ func RequestWeChatNativePay(c *gin.Context) {
 	if err != nil {
 		ambiguous := service.IsAmbiguousWeChatPayError(err)
 		if !ambiguous {
-			if statusErr := model.UpdatePendingTopUpStatus(topUp.TradeNo, model.PaymentProviderWeChatPay, common.TopUpStatusFailed); statusErr != nil && !errors.Is(statusErr, model.ErrTopUpStatusInvalid) {
+			statusErr := model.UpdatePendingTopUpStatus(topUp.TradeNo, model.PaymentProviderWeChatPay, common.TopUpStatusFailed)
+			if statusErr == nil {
+				topUp.Status = common.TopUpStatusFailed
+			} else if !errors.Is(statusErr, model.ErrTopUpStatusInvalid) {
 				logger.LogError(c.Request.Context(), fmt.Sprintf("WeChat Pay definitive create rejection status update failed trade_no=%s error=%q", topUp.TradeNo, statusErr.Error()))
 			}
 		}
 		logger.LogWarn(c.Request.Context(), fmt.Sprintf("WeChat Pay create failed trade_no=%s ambiguous=%t error=%q", topUp.TradeNo, ambiguous, err.Error()))
-		common.ApiErrorMsg(c, "failed to create WeChat Pay order")
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "failed to create WeChat Pay order",
+			"data":    weChatTopUpData(topUp, ""),
+		})
 		return
 	}
 
@@ -131,7 +138,11 @@ func RequestWeChatNativePay(c *gin.Context) {
 }
 
 func writeWeChatTopUpResponse(c *gin.Context, topUp *model.TopUp, codeURL string) {
-	common.ApiSuccess(c, gin.H{
+	common.ApiSuccess(c, weChatTopUpData(topUp, codeURL))
+}
+
+func weChatTopUpData(topUp *model.TopUp, codeURL string) gin.H {
+	return gin.H{
 		"trade_no":       topUp.TradeNo,
 		"code_url":       codeURL,
 		"amount":         decimal.NewFromInt(topUp.PaidAmountMinor).Shift(-2).StringFixed(2),
@@ -139,7 +150,7 @@ func writeWeChatTopUpResponse(c *gin.Context, topUp *model.TopUp, codeURL string
 		"credited_quota": topUp.CreditedQuota,
 		"expires_at":     topUp.CreateTime + model.WeChatTopUpOrderLifetimeSeconds,
 		"status":         topUp.Status,
-	})
+	}
 }
 
 func weChatPayTradeNo(userID int, idempotencyKey string) string {

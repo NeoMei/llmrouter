@@ -12,16 +12,58 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
-// RegisterScheduledSystemTasks wires the periodic channel test, upstream model
-// update, and async task polling (Midjourney / Suno / video) jobs into the
-// system task framework so a DB lease dedups execution across multiple master
-// instances and each run is recorded as one task row. Call this before
-// service.StartSystemTaskRunner.
+// RegisterScheduledSystemTasks wires periodic maintenance and reconciliation
+// jobs into the system task framework so a DB lease deduplicates execution
+// across multiple master instances and records each run as one task row.
 func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(channelTestHandler{})
 	service.RegisterSystemTaskHandler(modelUpdateHandler{})
 	service.RegisterSystemTaskHandler(midjourneyPollHandler{})
 	service.RegisterSystemTaskHandler(asyncTaskPollHandler{})
+	service.RegisterSystemTaskHandler(weChatPayReconcileHandler{})
+}
+
+var (
+	loadReadyWeChatPayReconcileConfig = func() (service.WeChatPayConfig, error) {
+		config, err := service.LoadWeChatPayConfig()
+		if err != nil {
+			return service.WeChatPayConfig{}, err
+		}
+		if err := config.CredentialsReady(); err != nil {
+			return service.WeChatPayConfig{}, err
+		}
+		return config, nil
+	}
+	loadWeChatPayReconcileProvider = service.NewConfiguredWeChatPayCallbackProvider
+)
+
+type weChatPayReconcileHandler struct{}
+
+func (weChatPayReconcileHandler) Type() string { return model.SystemTaskTypeWeChatPayReconcile }
+
+func (weChatPayReconcileHandler) Enabled() bool {
+	if _, err := loadReadyWeChatPayReconcileConfig(); err != nil {
+		return false
+	}
+	return model.HasDueWeChatTopUps(common.GetTimestamp())
+}
+
+func (weChatPayReconcileHandler) Interval() time.Duration { return 30 * time.Second }
+
+func (weChatPayReconcileHandler) NewPayload() any { return nil }
+
+func (weChatPayReconcileHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	provider, config, err := loadWeChatPayReconcileProvider(ctx)
+	if err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		return
+	}
+	summary := service.ReconcileWeChatTopUps(ctx, provider, config, common.GetTimestamp(), 100)
+	if summary.ClaimErrors > 0 || summary.IncidentErrors > 0 || summary.ModelErrors > 0 {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, summary, fmt.Errorf("WeChat Pay reconciliation encountered persistence errors"))
+		return
+	}
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
 }
 
 // channelTestHandler runs the scheduled "test all channels" job. Enablement and

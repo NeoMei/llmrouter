@@ -31,12 +31,13 @@ type TopUp struct {
 }
 
 const (
-	PaymentMethodStripe       = "stripe"
-	PaymentMethodCreem        = "creem"
-	PaymentMethodWaffo        = "waffo"
-	PaymentMethodWaffoPancake = "waffo_pancake"
-	PaymentMethodBalance      = "balance"
-	PaymentMethodWeChatNative = "wechat_native"
+	PaymentMethodStripe                   = "stripe"
+	PaymentMethodCreem                    = "creem"
+	PaymentMethodWaffo                    = "waffo"
+	PaymentMethodWaffoPancake             = "waffo_pancake"
+	PaymentMethodBalance                  = "balance"
+	PaymentMethodWeChatNative             = "wechat_native"
+	WeChatTopUpOrderLifetimeSeconds int64 = 15 * 60
 )
 
 const (
@@ -86,6 +87,7 @@ type WeChatPayIncident struct {
 	Reason          string
 	RequestID       string
 	CallerIP        string
+	Source          string
 }
 
 func RecordWeChatPayIncident(incident WeChatPayIncident) error {
@@ -97,6 +99,7 @@ func RecordWeChatPayIncident(incident WeChatPayIncident) error {
 		"reason":            incident.Reason,
 		"request_id":        incident.RequestID,
 		"caller_ip":         incident.CallerIP,
+		"source":            incident.Source,
 	}
 	other, err := common.Marshal(map[string]interface{}{"admin_info": adminInfo})
 	if err != nil {
@@ -106,12 +109,16 @@ func RecordWeChatPayIncident(incident WeChatPayIncident) error {
 	if incident.UserID > 0 {
 		username, _ = GetUsernameById(incident.UserID, true)
 	}
+	content := "WeChat Pay callback requires reconciliation"
+	if incident.Source == "reconciliation" {
+		content = "WeChat Pay reconciliation requires review"
+	}
 	return createLog(&Log{
 		UserId:    incident.UserID,
 		Username:  username,
 		CreatedAt: common.GetTimestamp(),
 		Type:      LogTypeTopup,
-		Content:   "WeChat Pay callback requires reconciliation",
+		Content:   content,
 		Ip:        incident.CallerIP,
 		RequestId: incident.RequestID,
 		Other:     string(other),
@@ -397,6 +404,9 @@ func nextWeChatReconcileTime(topUp *TopUp, now int64) int64 {
 	}
 	next := topUp.CreateTime + offsets[index]
 	if next <= now {
+		if now >= topUp.CreateTime+WeChatTopUpOrderLifetimeSeconds {
+			return now + 10*60
+		}
 		return now + 30
 	}
 	return next

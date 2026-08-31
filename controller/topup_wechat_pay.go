@@ -19,8 +19,6 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-const weChatPayOrderLifetimeSeconds int64 = 15 * 60
-
 var (
 	weChatPayIdempotencyKeyPattern = regexp.MustCompile(`^[0-9A-Za-z_-]{16,64}$`)
 	loadReadyWeChatPayConfig       = func() (service.WeChatPayConfig, error) {
@@ -114,7 +112,7 @@ func RequestWeChatNativePay(c *gin.Context) {
 	createResult, err := provider.CreateNative(c.Request.Context(), service.WeChatPayCreateRequest{
 		OutTradeNo:  topUp.TradeNo,
 		AmountMinor: topUp.PaidAmountMinor,
-		ExpiresAt:   time.Unix(topUp.CreateTime+weChatPayOrderLifetimeSeconds, 0),
+		ExpiresAt:   time.Unix(topUp.CreateTime+model.WeChatTopUpOrderLifetimeSeconds, 0),
 	})
 	if err != nil {
 		ambiguous := service.IsAmbiguousWeChatPayError(err)
@@ -139,7 +137,7 @@ func writeWeChatTopUpResponse(c *gin.Context, topUp *model.TopUp, codeURL string
 		"amount":         decimal.NewFromInt(topUp.PaidAmountMinor).Shift(-2).StringFixed(2),
 		"currency":       topUp.Currency,
 		"credited_quota": topUp.CreditedQuota,
-		"expires_at":     topUp.CreateTime + weChatPayOrderLifetimeSeconds,
+		"expires_at":     topUp.CreateTime + model.WeChatTopUpOrderLifetimeSeconds,
 		"status":         topUp.Status,
 	})
 }

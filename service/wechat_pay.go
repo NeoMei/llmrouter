@@ -138,6 +138,21 @@ func ValidateWeChatPaySuccessfulTransaction(
 	if transaction.TradeState != "SUCCESS" {
 		return errors.New("unexpected WeChat Pay trade state")
 	}
+	if err := ValidateWeChatPayTransactionIdentity(config, transaction, expectedTradeNo, expectedAmountMinor); err != nil {
+		return err
+	}
+	if transaction.TransactionID == "" {
+		return errors.New("missing WeChat Pay transaction ID")
+	}
+	return nil
+}
+
+func ValidateWeChatPayTransactionIdentity(
+	config WeChatPayConfig,
+	transaction WeChatPayTransaction,
+	expectedTradeNo string,
+	expectedAmountMinor int64,
+) error {
 	if transaction.TradeType != "NATIVE" {
 		return errors.New("unexpected WeChat Pay trade type")
 	}
@@ -149,9 +164,6 @@ func ValidateWeChatPaySuccessfulTransaction(
 	}
 	if transaction.OutTradeNo != expectedTradeNo {
 		return errors.New("WeChat Pay merchant order mismatch")
-	}
-	if transaction.TransactionID == "" {
-		return errors.New("missing WeChat Pay transaction ID")
 	}
 	if transaction.Currency != "CNY" {
 		return errors.New("WeChat Pay currency mismatch")

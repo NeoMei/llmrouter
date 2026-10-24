@@ -192,7 +192,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
               variant='ghost'
               size='icon-sm'
               onClick={handleDirectTest}
-              disabled={isTesting}
+              disabled={isTesting || channel.type === 60}
               aria-label={t('Test Connection')}
             />
           }
@@ -218,6 +218,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
                   handleTest()
                 }}
                 aria-label={t('Test Channel Connection')}
+                disabled={channel.type === 60}
               />
             }
           >
@@ -274,7 +275,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           )}
 
           {/* Test Connection */}
-          <DropdownMenuItem onClick={handleTest}>
+          <DropdownMenuItem disabled={channel.type === 60} onClick={handleTest}>
             {t('Test Connection')}
             <DropdownMenuShortcut>
               <PlugZap size={16} />
@@ -290,7 +291,10 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           </DropdownMenuItem>
 
           {/* Fetch Models */}
-          <DropdownMenuItem onClick={handleFetchModels}>
+          <DropdownMenuItem
+            disabled={channel.type === 60}
+            onClick={handleFetchModels}
+          >
             {t('Fetch Models')}
             <DropdownMenuShortcut>
               <Download size={16} />
@@ -352,6 +356,17 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
             </DropdownMenuItem>
           )}
 
+          {(isMultiKey || channel.type === 59) && (
+            <DropdownMenuItem
+              disabled={!hasPermission(currentUser, 'channel', 'read')}
+              onClick={() => {
+                setCurrentRow(channel)
+                setOpen('account-pool')
+              }}
+            >
+              {t('Account pool')}
+            </DropdownMenuItem>
+          )}
           {/* Manage Keys (only for multi-key channels) */}
           {isMultiKey && (
             <DropdownMenuItem onClick={handleManageKeys}>

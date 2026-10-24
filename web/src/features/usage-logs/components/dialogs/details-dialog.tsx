@@ -740,6 +740,43 @@ export function DetailsDialog(props: DetailsDialogProps) {
           )}
         </div>
 
+        {(other?.billing_unit === 'request' || other?.native_usage_unit) && (
+          <DetailSection label={t('Native usage')}>
+            {other.billing_unit === 'request' &&
+              other.request_count != null && (
+                <DetailRow
+                  label={t('Requests')}
+                  value={String(other.request_count)}
+                />
+              )}
+            {other.native_usage_unit === 'images' &&
+              other.native_usage_images != null && (
+                <DetailRow
+                  label={t('Images')}
+                  value={String(other.native_usage_images)}
+                />
+              )}
+            {other.native_usage_unit === 'characters' &&
+              other.native_usage_characters != null && (
+                <DetailRow
+                  label={t('Characters')}
+                  value={String(other.native_usage_characters)}
+                />
+              )}
+            {other.native_pricing && (
+              <DetailRow
+                label={t('Pricing basis')}
+                value={other.native_pricing}
+              />
+            )}
+            <p className='text-muted-foreground text-xs'>
+              {t(
+                'Native units are separate from tokens. Zero tokens do not imply a free request.'
+              )}
+            </p>
+          </DetailSection>
+        )}
+
         {/* Request conversion (admin only, not for refund) */}
         {showConversion && (
           <DetailSection label={t('Request Conversion')}>

@@ -89,10 +89,10 @@ require.Len(t, result.Data[0].Embedding, 1024)
 
 **Interfaces:** A bounded protocol client submits multipart to the configured v2 jobs endpoint, polls by provider job ID and reads JSONL output using the creating account. Persist opaque platform job ID, owning user/token/channel/member, configured model, provider job ID, execution state, result metadata and existing billing-context reference; never expose provider credentials. Use model CAS transitions for submit/settle/refund and idempotent retries. Read exact pinned SuperWagie/backend and official PaddleOCR protocol before implementing field names.
 
-- [ ] Fixture multipart local PDF/URL submission, returned provider job, running/success/failure, multi-page JSONL retaining tables/formulas/page order, credential rotation for the same member, cross-user denial, and deleted member/no substitute.
-- [ ] Submission uncertainty persists a nonterminal uncertain state; do not recreate the provider job after a timeout. Duplicate polls/callbacks cannot double-settle/refund. Bound pages/input/result bytes and validate download destinations/redirects through existing controlled HTTP rules.
-- [ ] Integrate checked page/request billing using an explicit configured price and existing atomic preconsume session; missing required pricing fails before supplier call. Read `pkg/billingexpr/expr.md` before touching any expression paths. No guessed page counts or invented confidence/bbox fields.
-- [ ] Run protocol/model/service tests, race and model migrations. Report exact caller-facing interfaces for Task 6; root reviews and commits.
+- [x] Fixture multipart local PDF/URL submission, returned provider job, running/success/failure, multi-page JSONL retaining tables/formulas/page order, credential rotation for the same member, cross-user denial, and deleted member/no substitute.
+- [x] Submission uncertainty persists a nonterminal uncertain state; do not recreate the provider job after a timeout. Duplicate polls/callbacks cannot double-settle/refund. Bound pages/input/result bytes and validate download destinations/redirects through existing controlled HTTP rules.
+- [x] Integrate checked page/request billing using an explicit configured price and existing atomic preconsume session; missing required pricing fails before supplier call. Read `pkg/billingexpr/expr.md` before touching any expression paths. No guessed page counts or invented confidence/bbox fields.
+- [x] Run protocol/model/service tests, race and model migrations. Report exact caller-facing interfaces for Task 6; root reviews and commits.
 
 ## Task 6: OCR public compatibility, canonical API and billing integration
 

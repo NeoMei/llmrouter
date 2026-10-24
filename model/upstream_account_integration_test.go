@@ -1,0 +1,157 @@
+package model
+
+import (
+	"context"
+	"github.com/QuantumNous/new-api/common"
+	"os"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+)
+
+// These DSNs must name dedicated disposable databases, never application databases.
+func TestUpstreamAccountConfiguredDatabases(t *testing.T) {
+	for _, dialect := range []struct {
+		name, env string
+		open      func(string) gorm.Dialector
+	}{
+		{"mysql57", "LLMROUTER_ACCOUNT_POOL_MYSQL_DSN", mysql.Open},
+		{"postgres96", "LLMROUTER_ACCOUNT_POOL_POSTGRES_DSN", func(dsn string) gorm.Dialector {
+			return postgres.New(postgres.Config{DSN: dsn, PreferSimpleProtocol: true})
+		}},
+	} {
+		t.Run(dialect.name, func(t *testing.T) {
+			previousType := common.MainDatabaseType()
+			// The explicit DB must remain authoritative even with unrelated globals.
+			common.SetMainDatabaseType(common.DatabaseTypeSQLite)
+			t.Cleanup(func() { common.SetMainDatabaseType(previousType) })
+			dsn := os.Getenv(dialect.env)
+			if dsn == "" {
+				t.Skip(dialect.env + " is not configured")
+			}
+			handles := make([]*gorm.DB, 2)
+			for i := range handles {
+				db, err := gorm.Open(dialect.open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+				require.NoError(t, err)
+				handles[i] = db
+				sqlDB, err := db.DB()
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+			}
+			db, second := handles[0], handles[1]
+			require.NoError(t, db.AutoMigrate(&UpstreamAccountPool{}, &UpstreamAccountMember{}, &UpstreamAccountState{}))
+			require.NoError(t, db.AutoMigrate(&UpstreamAccountPool{}, &UpstreamAccountMember{}, &UpstreamAccountState{}))
+			ctx := context.Background()
+			now := time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC)
+			poolID := "fixture:" + uuid.NewString() + strings.Repeat("p", 52)
+			otherPool := "vision:" + uuid.NewString()
+			group := "supplier:" + uuid.NewString() + strings.Repeat("g", 51)
+			t.Cleanup(func() {
+				namespaces := []string{poolID, otherPool, "pool:" + poolID, "pool:" + otherPool, "quota:" + group}
+				require.NoError(t, db.Where("pool_id IN ?", namespaces).Delete(&UpstreamAccountState{}).Error)
+				require.NoError(t, db.Where("pool_id IN ?", namespaces).Delete(&UpstreamAccountMember{}).Error)
+				require.NoError(t, db.Where("pool_id IN ?", namespaces).Delete(&UpstreamAccountPool{}).Error)
+			})
+			refs := make([]UpstreamAccountRef, 3)
+			for i, key := range []string{"A", "B", "C"} {
+				var err error
+				refs[i], err = ResolveUpstreamAccountRef(ctx, db, poolID, 17, i, "fixture-secret-"+key, group)
+				require.NoError(t, err)
+			}
+			scope := UpstreamAccountScope{Operation: "speech", Model: "m"}
+			var first UpstreamAccountSelection
+			for i := range refs {
+				sent, err := SelectUpstreamAccount(ctx, handles[i%2], refs, scope, nil, now)
+				require.NoError(t, err)
+				assert.Equal(t, refs[i].MemberID, sent.Ref.MemberID)
+				if i == 0 {
+					first = sent
+				}
+			}
+			require.NoError(t, RecordUpstreamAccountFailure(ctx, second, first, scope, UpstreamAccountFailure{Kind: UpstreamAccountCooldown, Reason: "rate_limit", RetryAt: now.Add(time.Minute)}, now))
+			require.NoError(t, RecordUpstreamAccountSuccess(ctx, db, first, scope, now))
+			_, err := SelectUpstreamAccount(ctx, second, refs[:1], scope, nil, now)
+			var unavailable *UpstreamAccountUnavailable
+			require.ErrorAs(t, err, &unavailable)
+			_, err = SelectUpstreamAccount(ctx, db, refs[:1], UpstreamAccountScope{Operation: "text"}, nil, now)
+			require.NoError(t, err)
+			_, err = SelectUpstreamAccount(ctx, second, refs[:1], scope, nil, now.Add(time.Minute))
+			require.NoError(t, err)
+			require.NoError(t, SetUpstreamAccountPaused(ctx, db, refs[0], true, now))
+			require.NoError(t, RecoverUpstreamAccount(ctx, second, refs[0], scope, now))
+			_, err = SelectUpstreamAccount(ctx, second, refs[:1], scope, nil, now.Add(time.Hour))
+			require.ErrorAs(t, err, &unavailable)
+			require.NoError(t, SetUpstreamAccountPaused(ctx, db, refs[0], false, now))
+			vision, err := ResolveUpstreamAccountRef(ctx, second, otherPool, 18, 0, "fixture-secret-vision", group)
+			require.NoError(t, err)
+			require.NoError(t, RecordUpstreamAccountFailure(ctx, db, first, UpstreamAccountScope{QuotaGroup: group}, UpstreamAccountFailure{Kind: UpstreamAccountCooldown, Reason: "quota_exhausted", RetryAt: now.Add(time.Hour)}, now))
+			_, err = SelectUpstreamAccount(ctx, second, []UpstreamAccountRef{vision}, UpstreamAccountScope{Operation: "vision"}, nil, now)
+			require.ErrorAs(t, err, &unavailable)
+			require.NoError(t, RecoverUpstreamAccount(ctx, second, vision, UpstreamAccountScope{QuotaGroup: group}, now))
+
+			// Force the exact MVCC ordering: the selector reads pool membership while
+			// another pool still holds the quota-group failure transaction open. Its
+			// post-lock health read must observe that newly committed failure.
+			failureReady := make(chan struct{})
+			allowFailure := make(chan struct{})
+			selectionWaiting := make(chan struct{})
+			var failureOnce, selectionOnce sync.Once
+			require.NoError(t, db.Callback().Update().Before("gorm:update").Register("accountpool_fixture_failure", func(tx *gorm.DB) {
+				if tx.Statement.Table == "upstream_account_states" {
+					failureOnce.Do(func() { close(failureReady); <-allowFailure })
+				}
+			}))
+			require.NoError(t, second.Callback().Create().Before("gorm:create").Register("accountpool_fixture_wait", func(tx *gorm.DB) {
+				if pool, ok := tx.Statement.Dest.(*UpstreamAccountPool); ok && pool.PoolID == "quota:"+group {
+					selectionOnce.Do(func() { close(selectionWaiting) })
+				}
+			}))
+			failureDone := make(chan error, 1)
+			go func() {
+				failureDone <- RecordUpstreamAccountFailure(ctx, db, first, UpstreamAccountScope{QuotaGroup: group}, UpstreamAccountFailure{Kind: UpstreamAccountCooldown, Reason: "quota_exhausted", RetryAt: now.Add(time.Hour)}, now)
+			}()
+			<-failureReady
+			selectionDone := make(chan error, 1)
+			go func() {
+				_, err := SelectUpstreamAccount(ctx, second, []UpstreamAccountRef{vision}, UpstreamAccountScope{Operation: "vision"}, nil, now)
+				selectionDone <- err
+			}()
+			<-selectionWaiting
+			close(allowFailure)
+			require.NoError(t, <-failureDone)
+			require.ErrorAs(t, <-selectionDone, &unavailable)
+			require.NoError(t, db.Callback().Update().Remove("accountpool_fixture_failure"))
+			require.NoError(t, second.Callback().Create().Remove("accountpool_fixture_wait"))
+			require.NoError(t, RecoverUpstreamAccount(ctx, second, vision, UpstreamAccountScope{QuotaGroup: group}, now))
+			start := make(chan struct{})
+			results := make(chan UpstreamAccountSelection, 2)
+			failures := make(chan error, 2)
+			for _, handle := range handles {
+				go func(handle *gorm.DB) {
+					<-start
+					sent, err := SelectUpstreamAccount(ctx, handle, refs, scope, nil, now.Add(time.Hour))
+					results <- sent
+					failures <- err
+				}(handle)
+			}
+			close(start)
+			a, b := <-results, <-results
+			require.NoError(t, <-failures)
+			require.NoError(t, <-failures)
+			assert.NotEqual(t, a.Ref.MemberID, b.Ref.MemberID)
+			require.NoError(t, RecordUpstreamAccountFailure(ctx, db, first, UpstreamAccountScope{}, UpstreamAccountFailure{Kind: UpstreamAccountInvalid, Reason: "invalid_credential"}, now))
+			selected, err := SelectUpstreamAccount(ctx, second, refs, scope, nil, now)
+			require.NoError(t, err)
+			assert.NotEqual(t, first.Ref.MemberID, selected.Ref.MemberID)
+		})
+	}
+}

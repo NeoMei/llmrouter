@@ -18,6 +18,15 @@ import (
 // is skipped there; SQLite's single-writer model makes one of two conflicting
 // transactions fail instead of both committing.
 func lockForUpdate(tx *gorm.DB) *gorm.DB {
+	// Repository APIs may receive an explicit DB distinct from the configured
+	// application database. Prefer that concrete dialect over process globals.
+	switch tx.Dialector.Name() {
+	case "sqlite":
+		return tx
+	case "mysql", "postgres":
+		return tx.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
+	// Keep the configured behavior for test/dummy or custom dialects.
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		return tx
 	}

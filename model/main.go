@@ -296,6 +296,9 @@ func migrateDB() error {
 		&ProviderModel{},
 		&UserProviderKey{},
 		&ProviderKeyPool{},
+		&UpstreamAccountPool{},
+		&UpstreamAccountMember{},
+		&UpstreamAccountState{},
 		&ClientModelRoute{},
 		&ClientModelTarget{},
 	)
@@ -366,6 +369,9 @@ func migrateDBFast() error {
 		{&ProviderModel{}, "ProviderModel"},
 		{&UserProviderKey{}, "UserProviderKey"},
 		{&ProviderKeyPool{}, "ProviderKeyPool"},
+		{&UpstreamAccountPool{}, "UpstreamAccountPool"},
+		{&UpstreamAccountMember{}, "UpstreamAccountMember"},
+		{&UpstreamAccountState{}, "UpstreamAccountState"},
 		{&ClientModelRoute{}, "ClientModelRoute"},
 		{&ClientModelTarget{}, "ClientModelTarget"},
 	}

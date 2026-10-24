@@ -31,7 +31,7 @@
 
 **Interfaces:** Produce public Go types `model.UpstreamAccountRef` (pool/member/channel/key-index/quota-group, no credential), `model.UpstreamAccountScope` (operation/model, shared group), `model.UpstreamAccountSelection` (ref, selected key index, selected timestamp), and `model.UpstreamAccountUnavailable` (earliest retry time). Provide deterministic selection/state methods taking context and explicit `now`, with a repository DB parameter where needed for tests. Expose `service/accountpool.ParseRetryAfter(value string, now time.Time) time.Duration` and structured failure classification without a Gin dependency. Record the exact finalized signatures in the report for Task 2.
 
-- [ ] Add a deterministic SQLite fixture with 3 opaque members; select A/B/C, cool A for one operation, prove text still eligible, expiry re-admits A, pause persists, invalid credential isolates only A, shared quota group blocks configured siblings, stale success cannot clear a newer failure.
+- [x] Add a deterministic SQLite fixture with 3 opaque members; select A/B/C, cool A for one operation, prove text still eligible, expiry re-admits A, pause persists, invalid credential isolates only A, shared quota group blocks configured siblings, stale success cannot clear a newer failure.
 
 ```go
 require.NoError(t, db.AutoMigrate(&model.UpstreamAccountState{}))
@@ -39,10 +39,10 @@ assert.NotContains(t, string(publicJSON), "fixture-secret")
 assert.Equal(t, wantMember, selected.Ref.MemberID)
 ```
 
-- [ ] Run the focused tests red before implementing persistence and selection. Use explicit clock values, real GORM state, no sleeps/random stress.
-- [ ] Implement safe stable member IDs, scoped state, compatible atomic updates, pause/resume/recovery, shared quota settings, and cursor/least-recent-selection coordination across independent DB handles. Do not hold a DB transaction during network I/O; use bounded index lengths that fit minimum MySQL configuration.
-- [ ] Implement Retry-After numeric/date parsing and saturation, fixed structured refusal categories, and no failure on generic 403. Make persistence failures observable and fail closed; do not silently disable healthy siblings.
-- [ ] Run focused tests and race; report signatures, migration changes, red/green evidence and safe pool/group ID derivation. Root reviews and commits.
+- [x] Run the focused tests red before implementing persistence and selection. Use explicit clock values, real GORM state, no sleeps/random stress.
+- [x] Implement safe stable member IDs, scoped state, compatible atomic updates, pause/resume/recovery, shared quota settings, and cursor/least-recent-selection coordination across independent DB handles. Do not hold a DB transaction during network I/O; use bounded index lengths that fit minimum MySQL configuration.
+- [x] Implement Retry-After numeric/date parsing and saturation, fixed structured refusal categories, and no failure on generic 403. Make persistence failures observable and fail closed; do not silently disable healthy siblings.
+- [x] Run focused tests and race; report signatures, migration changes, red/green evidence and safe pool/group ID derivation. Root reviews and commits.
 
 ## Task 2: Actual relay member selection, pool failover and resource ownership
 

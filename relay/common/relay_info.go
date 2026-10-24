@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/model_setting"
@@ -102,6 +103,9 @@ type RouteCandidate struct {
 }
 
 type RelayInfo struct {
+	PlatformMode    bool
+	PlatformBilling *platformbilling.Session
+
 	TokenId           int
 	TokenKey          string
 	TokenGroup        string
@@ -524,7 +528,10 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	if reqId == "" {
 		reqId = common.NewRequestId()
 	}
+	platform, platformMode := c.Get("platform_billing")
+	session, _ := platform.(*platformbilling.Session)
 	info := &RelayInfo{
+		PlatformMode: platformMode, PlatformBilling: session,
 		Request: request,
 
 		RequestId:  reqId,

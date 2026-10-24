@@ -4,9 +4,37 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+func TestGeneralOpenAIRequestFunctionStrictRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name, suffix   string
+		present, value bool
+	}{
+		{name: "absent"},
+		{name: "explicit_false", suffix: `,"strict":false`, present: true},
+		{name: "explicit_true", suffix: `,"strict":true`, present: true, value: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var req GeneralOpenAIRequest
+			require.NoError(t, common.Unmarshal([]byte(`{"model":"test","tools":[{"type":"function","function":{"name":"lookup"`+tc.suffix+`}}]}`), &req))
+			encoded, err := common.Marshal(req)
+			require.NoError(t, err)
+			strict := gjson.GetBytes(encoded, "tools.0.function.strict")
+			assert.Equal(t, tc.present, strict.Exists())
+			if tc.present {
+				assert.Equal(t, tc.value, strict.Bool())
+			}
+		})
+	}
+	for _, malformed := range []string{`"false"`, `0`, `{}`} {
+		var req GeneralOpenAIRequest
+		assert.Error(t, common.Unmarshal([]byte(`{"tools":[{"type":"function","function":{"name":"lookup","strict":`+malformed+`}}]}`), &req))
+	}
+}
 
 func TestGeneralOpenAIRequestPreserveExplicitZeroValues(t *testing.T) {
 	raw := []byte(`{

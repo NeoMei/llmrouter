@@ -131,6 +131,8 @@ func OpenAIResponsesRequestToGeminiChat(c *gin.Context, req *dto.OpenAIResponses
 	for _, item := range inputItems {
 		itemType := strings.TrimSpace(common.Interface2String(item["type"]))
 		switch itemType {
+		case "configuration_update":
+			continue
 		case ResponsesInputTypeFunctionCall:
 			part, callID, err := responsesFunctionCallItemToGeminiPart(item, toolIDs)
 			if err != nil {

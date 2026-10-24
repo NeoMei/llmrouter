@@ -314,3 +314,21 @@ func mustRawMessage(t *testing.T, value any) []byte {
 	require.NoError(t, err)
 	return raw
 }
+
+func TestConfigurationUpdateNeverBecomesConversationTurn(t *testing.T) {
+	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{Model: "test", Reasoning: &dto.Reasoning{Effort: "low"}, Input: mustRawMessage(t, []map[string]any{
+		{"type": "configuration_update", "reasoning": map[string]any{"effort": "high"}},
+		{"type": "message", "role": "assistant", "content": "calling"},
+		{"type": "configuration_update", "reasoning": map[string]any{"effort": "medium"}},
+		{"type": "function_call", "call_id": "call_a", "name": "lookup", "arguments": "{}"},
+		{"type": "function_call_output", "call_id": "call_a", "output": "result"},
+		{"type": "configuration_update", "reasoning": map[string]any{"effort": "high"}},
+	})})
+	require.NoError(t, err)
+	require.Len(t, got.Messages, 2)
+	assert.Equal(t, "assistant", got.Messages[0].Role)
+	require.Len(t, got.Messages[0].ParseToolCalls(), 1)
+	assert.Equal(t, "tool", got.Messages[1].Role)
+	assert.Equal(t, "call_a", got.Messages[1].ToolCallId)
+	assert.Equal(t, "low", got.ReasoningEffort)
+}

@@ -94,6 +94,8 @@ func OpenAIResponsesRequestToClaudeMessages(c *gin.Context, req *dto.OpenAIRespo
 	for _, item := range inputItems {
 		itemType := strings.TrimSpace(common.Interface2String(item["type"]))
 		switch itemType {
+		case "configuration_update":
+			continue
 		case ResponsesInputTypeFunctionCall:
 			toolUse, err := responsesFunctionCallItemToClaudeToolUse(item, "arguments", toolIDs)
 			if err != nil {

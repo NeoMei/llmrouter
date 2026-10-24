@@ -177,3 +177,52 @@ func collectClaudeParts(messages []dto.ClaudeMessage, partType string) []dto.Cla
 	}
 	return found
 }
+
+func TestAdjacentAssistantMessagesRetainEveryToolCall(t *testing.T) {
+	for _, contents := range [][2]string{{"first", "second"}, {"", "second"}, {"...", "second"}} {
+		t.Run(contents[0], func(t *testing.T) {
+			first := dto.Message{Role: "assistant", Content: contents[0]}
+			first.SetToolCalls([]dto.ToolCallRequest{{ID: "call_a", Type: "function", Function: dto.FunctionRequest{Name: "a", Arguments: `{}`}}})
+			second := dto.Message{Role: "assistant", Content: contents[1]}
+			second.SetToolCalls([]dto.ToolCallRequest{{ID: "call_b", Type: "function", Function: dto.FunctionRequest{Name: "b", Arguments: `{}`}}})
+			got, err := OpenAIChatRequestToClaudeMessages(nil, dto.GeneralOpenAIRequest{Model: "claude-test", MaxTokens: common.GetPointer(uint(16)), Messages: []dto.Message{{Role: "user", Content: "go"}, first, second, {Role: "tool", ToolCallId: "call_a", Content: "a result"}, {Role: "tool", ToolCallId: "call_b", Content: "b result"}}})
+			require.NoError(t, err)
+			parts, err := got.Messages[1].ParseContent()
+			require.NoError(t, err)
+			var ids []string
+			var text string
+			for _, p := range parts {
+				if p.Type == "tool_use" {
+					ids = append(ids, p.Id)
+				}
+				if p.Type == "text" {
+					text += p.GetText()
+				}
+			}
+			assert.Equal(t, []string{"call_a", "call_b"}, ids)
+			if contents[0] == "" {
+				assert.Equal(t, "second", text)
+			} else {
+				assert.Equal(t, contents[0]+" second", text)
+			}
+			resultParts, err := got.Messages[2].ParseContent()
+			require.NoError(t, err)
+			require.Len(t, resultParts, 2)
+			assert.Equal(t, "call_a", resultParts[0].ToolUseId)
+			assert.Equal(t, "call_b", resultParts[1].ToolUseId)
+		})
+	}
+}
+
+func TestAdjacentAssistantEmptyToolCallDoesNotEraseEarlierText(t *testing.T) {
+	messages := []dto.Message{{Role: "user", Content: "go"}, {Role: "assistant", Content: "explain"}, {Role: "assistant", Content: ""}, {Role: "assistant", Content: "next"}}
+	messages[2].SetToolCalls([]dto.ToolCallRequest{{ID: "call_a", Type: "function", Function: dto.FunctionRequest{Name: "a", Arguments: `{}`}}})
+	messages = append(messages, dto.Message{Role: "tool", ToolCallId: "call_a", Content: "done"})
+	got, err := OpenAIChatRequestToClaudeMessages(nil, dto.GeneralOpenAIRequest{Model: "claude-test", MaxTokens: common.GetPointer(uint(16)), Messages: messages})
+	require.NoError(t, err)
+	parts, err := got.Messages[1].ParseContent()
+	require.NoError(t, err)
+	require.Len(t, parts, 2)
+	assert.Equal(t, "explain next", parts[0].GetText())
+	assert.Equal(t, "call_a", parts[1].Id)
+}

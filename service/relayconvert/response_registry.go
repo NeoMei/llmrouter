@@ -474,7 +474,7 @@ func executeStatelessStreamResponseSpec(c *gin.Context, info *relaycommon.RelayI
 	var usage *dto.Usage
 	resultSteps := make([]ResponseStep, 0, len(steps))
 	for _, step := range steps {
-		if step.ConvertStreamChunk != nil || step.NewStreamState != nil || step.FinalizeStream != nil {
+		if step.ConvertStream == nil && (step.ConvertStreamChunk != nil || step.NewStreamState != nil || step.FinalizeStream != nil) {
 			return nil, fmt.Errorf("response converter %q requires response stream state", step.ID)
 		}
 		if step.ConvertStream == nil {
@@ -926,12 +926,50 @@ func convertClaudeMessagesResponseToOAIChat(_ *gin.Context, _ *relaycommon.Relay
 	return openAIResponse, usage, nil
 }
 
-func convertClaudeMessagesStreamResponseToOAIChat(_ *gin.Context, _ *relaycommon.RelayInfo, response any) (any, *dto.Usage, error) {
+func newClaudeMessagesToOAIChatStreamState(_ ResponseStreamOptions) any {
+	return &ClaudeResponseInfo{}
+}
+
+func convertClaudeMessagesStreamChunkToOAIChat(_ *gin.Context, _ *relaycommon.RelayInfo, response any, state any) ([]any, *dto.Usage, error) {
 	claudeResponse, err := asClaudeResponse(response)
 	if err != nil {
 		return nil, nil, err
 	}
-	openAIResponse := StreamResponseClaude2OpenAI(claudeResponse)
+	thinkingState, ok := state.(*ClaudeResponseInfo)
+	if !ok {
+		return nil, nil, fmt.Errorf("Claude thinking stream state is required")
+	}
+	openAIResponse := StreamResponseClaude2OpenAIWithState(claudeResponse, thinkingState)
+	usage := usageFromClaudeResponse(claudeResponse)
+	if openAIResponse == nil {
+		return nil, usage, nil
+	}
+	if usage != nil {
+		openAIResponse.Usage = usage
+	}
+	return []any{openAIResponse}, usage, nil
+}
+
+func convertClaudeMessagesStreamResponseToOAIChat(c *gin.Context, _ *relaycommon.RelayInfo, response any) (any, *dto.Usage, error) {
+	claudeResponse, err := asClaudeResponse(response)
+	if err != nil {
+		return nil, nil, err
+	}
+	var state *ClaudeResponseInfo
+	if c != nil {
+		const stateKey = "relayconvert_claude_chat_thinking"
+		if previous, ok := c.Get(stateKey); ok {
+			state, _ = previous.(*ClaudeResponseInfo)
+		}
+		if state == nil || claudeResponse.Type == "message_start" {
+			state = &ClaudeResponseInfo{}
+			c.Set(stateKey, state)
+		}
+		if claudeResponse.Type == "message_stop" {
+			c.Set(stateKey, nil)
+		}
+	}
+	openAIResponse := StreamResponseClaude2OpenAIWithState(claudeResponse, state)
 	usage := usageFromClaudeResponse(claudeResponse)
 	if openAIResponse != nil && usage != nil {
 		openAIResponse.Usage = usage

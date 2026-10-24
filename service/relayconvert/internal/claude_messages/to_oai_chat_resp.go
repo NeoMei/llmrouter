@@ -13,12 +13,14 @@ import (
 )
 
 type ClaudeResponseInfo struct {
-	ResponseId   string
-	Created      int64
-	Model        string
-	ResponseText strings.Builder
-	Usage        *dto.Usage
-	Done         bool
+	ResponseId               string
+	Created                  int64
+	Model                    string
+	ResponseText             strings.Builder
+	Usage                    *dto.Usage
+	Done                     bool
+	thinkingBlocks           map[int]*dto.ClaudeMediaMessage
+	nextReasoningDetailIndex int
 }
 
 func StopReasonClaudeToOpenAI(reason string) string {
@@ -26,6 +28,15 @@ func StopReasonClaudeToOpenAI(reason string) string {
 }
 
 func StreamResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.ChatCompletionsStreamResponse {
+	return StreamResponseClaude2OpenAIWithState(claudeResponse, nil)
+}
+
+func StreamResponseClaude2OpenAIWithState(claudeResponse *dto.ClaudeResponse, state *ClaudeResponseInfo) *dto.ChatCompletionsStreamResponse {
+	if state != nil && claudeResponse.Type == "message_start" {
+		state.thinkingBlocks = make(map[int]*dto.ClaudeMediaMessage)
+		state.nextReasoningDetailIndex = 0
+	}
+
 	var response dto.ChatCompletionsStreamResponse
 	response.Object = "chat.completion.chunk"
 	response.Model = claudeResponse.Model
@@ -45,6 +56,20 @@ func StreamResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.ChatCo
 		choice.Delta.Role = "assistant"
 	} else if claudeResponse.Type == "content_block_start" {
 		if claudeResponse.ContentBlock != nil {
+			block := claudeResponse.ContentBlock
+			if state != nil && (block.Type == "thinking" || block.Type == "redacted_thinking") {
+				if state.thinkingBlocks == nil {
+					state.thinkingBlocks = make(map[int]*dto.ClaudeMediaMessage)
+				}
+				clone := *block
+				if block.Thinking != nil {
+					clone.Thinking = common.GetPointer(*block.Thinking)
+				}
+				state.thinkingBlocks[fcIdx] = &clone
+			}
+			if block.Type == "thinking" {
+				choice.Delta.ReasoningContent = block.Thinking
+			}
 			if claudeResponse.ContentBlock.Type == "text" && claudeResponse.ContentBlock.Text != nil {
 				choice.Delta.SetContentString(*claudeResponse.ContentBlock.Text)
 			}
@@ -75,12 +100,39 @@ func StreamResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.ChatCo
 					},
 				})
 			case "signature_delta":
-				signatureContent := "\n"
-				choice.Delta.ReasoningContent = &signatureContent
+				if state != nil && state.thinkingBlocks[fcIdx] != nil {
+					state.thinkingBlocks[fcIdx].Signature += claudeResponse.Delta.Signature
+				}
 			case "thinking_delta":
 				choice.Delta.ReasoningContent = claudeResponse.Delta.Thinking
+				if state != nil && state.thinkingBlocks[fcIdx] != nil && claudeResponse.Delta.Thinking != nil {
+					block := state.thinkingBlocks[fcIdx]
+					text := ""
+					if block.Thinking != nil {
+						text = *block.Thinking
+					}
+					text += *claudeResponse.Delta.Thinking
+					block.Thinking = &text
+				}
 			}
 		}
+	} else if claudeResponse.Type == "content_block_stop" {
+		if state == nil || state.thinkingBlocks[fcIdx] == nil {
+			return nil
+		}
+		details := sharedclaude.ReasoningDetails([]dto.ClaudeMediaMessage{*state.thinkingBlocks[fcIdx]})
+		delete(state.thinkingBlocks, fcIdx)
+		if len(details) == 0 {
+			return nil
+		}
+		// Completed blocks carry complete entries, never a signature paired with partial text.
+		var entries []sharedclaude.ReasoningDetail
+		_ = common.Unmarshal(details, &entries)
+		for i := range entries {
+			entries[i].Index = state.nextReasoningDetailIndex
+			state.nextReasoningDetailIndex++
+		}
+		choice.Delta.ReasoningDetails, _ = common.Marshal(entries)
 	} else if claudeResponse.Type == "message_delta" {
 		if claudeResponse.Delta != nil && claudeResponse.Delta.StopReason != nil {
 			finishReason := StopReasonClaudeToOpenAI(*claudeResponse.Delta.StopReason)
@@ -119,6 +171,7 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 	}
 	tools := make([]dto.ToolCallResponse, 0)
 	thinkingContent := ""
+	reasoningBlocks := make([]dto.ClaudeMediaMessage, 0)
 
 	fullTextResponse.Id = claudeResponse.Id
 	for _, message := range claudeResponse.Content {
@@ -134,9 +187,12 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 				},
 			})
 		case "thinking":
+			reasoningBlocks = append(reasoningBlocks, message)
 			if message.Thinking != nil {
-				thinkingContent = *message.Thinking
+				thinkingContent += *message.Thinking
 			}
+		case "redacted_thinking":
+			reasoningBlocks = append(reasoningBlocks, message)
 		case "text":
 			responseText = message.GetText()
 		}
@@ -148,6 +204,7 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 		},
 		FinishReason: StopReasonClaudeToOpenAI(claudeResponse.StopReason),
 	}
+	choice.Message.ReasoningDetails = sharedclaude.ReasoningDetails(reasoningBlocks)
 	choice.SetStringContent(responseText)
 	if len(responseThinking) > 0 {
 		choice.ReasoningContent = &responseThinking
@@ -387,7 +444,7 @@ func FormatClaudeResponseInfo(claudeResponse *dto.ClaudeResponse, oaiResponse *d
 		}
 
 		claudeInfo.Done = true
-	} else if claudeResponse.Type == "content_block_start" {
+	} else if claudeResponse.Type == "content_block_start" || claudeResponse.Type == "content_block_stop" {
 	} else {
 		return false
 	}

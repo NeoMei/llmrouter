@@ -118,7 +118,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		}
 		helper.ClaudeChunkData(c, claudeResponse, data)
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
-		response := StreamResponseClaude2OpenAI(&claudeResponse)
+		response := relayconvert.StreamResponseClaude2OpenAIWithState(&claudeResponse, claudeInfo)
 
 		if !FormatClaudeResponseInfo(&claudeResponse, response, claudeInfo) || response == nil {
 			return nil

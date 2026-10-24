@@ -33,6 +33,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/reasoning"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/samber/lo"
+	"github.com/tidwall/gjson"
 
 	"github.com/gin-gonic/gin"
 )
@@ -606,6 +607,43 @@ func detectImageMimeType(filename string) string {
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
+	// configuration_update is an OpenAI positional control, not a message.
+	// Native OpenAI and OpenRouter keep it verbatim; Chat translations omit it.
+	supportsUpdates := false
+	if info != nil && info.ChannelMeta != nil {
+		host := ""
+		switch info.ChannelType {
+		case constant.ChannelTypeOpenAI:
+			host = "api.openai.com"
+		case constant.ChannelTypeOpenRouter:
+			host = "openrouter.ai"
+		}
+		if host != "" {
+			if info.ChannelBaseUrl == "" {
+				supportsUpdates = true
+			} else {
+				target, err := url.Parse(info.ChannelBaseUrl)
+				supportsUpdates = err == nil && target.Scheme == "https" && target.Host == host && target.User == nil
+			}
+		}
+	}
+	if !supportsUpdates && common.GetJsonType(request.Input) == "array" {
+		var items []json.RawMessage
+		if err := common.Unmarshal(request.Input, &items); err != nil {
+			return nil, err
+		}
+		filtered := make([]json.RawMessage, 0, len(items))
+		for _, item := range items {
+			if gjson.GetBytes(item, "type").String() == "configuration_update" {
+				continue
+			}
+			filtered = append(filtered, item)
+		}
+		if len(filtered) != len(items) {
+			request.Input, _ = common.Marshal(filtered)
+		}
+	}
+
 	//  转换模型推理力度后缀
 	effort, originModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(request.Model)
 	if effort != "" {

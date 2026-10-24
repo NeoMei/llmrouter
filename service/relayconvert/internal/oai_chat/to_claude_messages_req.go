@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relaymedia "github.com/QuantumNous/new-api/service/relayconvert/internal/media"
 	sharedclaude "github.com/QuantumNous/new-api/service/relayconvert/internal/shared/claude"
 	"github.com/QuantumNous/new-api/service/relayconvert/internal/toolcallid"
@@ -28,8 +29,9 @@ type openRouterRequestReasoning struct {
 	Exclude   bool   `json:"exclude,omitempty"`
 }
 
-func OpenAIChatRequestToClaudeMessages(c *gin.Context, textRequest dto.GeneralOpenAIRequest) (*dto.ClaudeRequest, error) {
+func OpenAIChatRequestToClaudeMessages(c *gin.Context, textRequest dto.GeneralOpenAIRequest, relayInfos ...*relaycommon.RelayInfo) (*dto.ClaudeRequest, error) {
 	toolIDs := toolcallid.New("call")
+	acceptSignedThinking := len(relayInfos) > 0 && sharedclaude.AcceptSignedThinking(relayInfos[0])
 	claudeTools := make([]any, 0, len(textRequest.Tools))
 
 	for _, tool := range textRequest.Tools {
@@ -230,13 +232,15 @@ func OpenAIChatRequestToClaudeMessages(c *gin.Context, textRequest dto.GeneralOp
 	lastMessage := dto.Message{
 		Role: "tool",
 	}
+	lastMessagePlaceholder := false
 	for i, message := range textRequest.Messages {
 		if message.Role == "" {
 			textRequest.Messages[i].Role = "user"
 		}
 		fmtMessage := dto.Message{
-			Role:    message.Role,
-			Content: message.Content,
+			Role:             message.Role,
+			Content:          message.Content,
+			ReasoningDetails: message.ReasoningDetails,
 		}
 		if message.Role == "tool" {
 			fmtMessage.ToolCallId = message.ToolCallId
@@ -245,13 +249,35 @@ func OpenAIChatRequestToClaudeMessages(c *gin.Context, textRequest dto.GeneralOp
 			fmtMessage.ToolCalls = message.ToolCalls
 		}
 		if lastMessage.Role == message.Role && lastMessage.Role != "tool" {
-			if lastMessage.IsStringContent() && message.IsStringContent() {
-				fmtMessage.SetStringContent(strings.Trim(fmt.Sprintf("%s %s", lastMessage.StringContent(), message.StringContent()), "\""))
+			if lastMessage.IsStringContent() && message.IsStringContent() && len(lastMessage.ReasoningDetails) == 0 && len(message.ReasoningDetails) == 0 {
+				if message.Role == "assistant" && (len(lastMessage.ToolCalls) > 0 || len(message.ToolCalls) > 0) {
+					previousCalls, err := parseMessageToolCalls(lastMessage.ToolCalls)
+					if err != nil {
+						return nil, err
+					}
+					nextCalls, err := parseMessageToolCalls(message.ToolCalls)
+					if err != nil {
+						return nil, err
+					}
+					texts := make([]string, 0, 2)
+					if previousText := lastMessage.StringContent(); previousText != "" && !(lastMessagePlaceholder && len(previousCalls) > 0) {
+						texts = append(texts, previousText)
+					}
+					if currentText := message.StringContent(); currentText != "" {
+						texts = append(texts, currentText)
+					}
+					fmtMessage.SetStringContent(strings.Join(texts, " "))
+					fmtMessage.SetToolCalls(append(previousCalls, nextCalls...))
+				} else {
+					fmtMessage.SetStringContent(strings.Trim(fmt.Sprintf("%s %s", lastMessage.StringContent(), message.StringContent()), "\""))
+				}
 				formatMessages = formatMessages[:len(formatMessages)-1]
 			}
 		}
-		if fmtMessage.Content == nil || (fmtMessage.IsStringContent() && fmtMessage.StringContent() == "") {
+		lastMessagePlaceholder = false
+		if (fmtMessage.Content == nil || (fmtMessage.IsStringContent() && fmtMessage.StringContent() == "")) && !(message.Role == "assistant" && acceptSignedThinking && len(sharedclaude.SignedThinkingBlocks(fmtMessage.ReasoningDetails)) > 0) {
 			fmtMessage.SetStringContent("...")
+			lastMessagePlaceholder = true
 		}
 		formatMessages = append(formatMessages, fmtMessage)
 		lastMessage = fmtMessage
@@ -299,6 +325,10 @@ func OpenAIChatRequestToClaudeMessages(c *gin.Context, textRequest dto.GeneralOp
 			}
 		}
 
+		var thinkingBlocks []dto.ClaudeMediaMessage
+		if message.Role == "assistant" && acceptSignedThinking {
+			thinkingBlocks = sharedclaude.SignedThinkingBlocks(message.ReasoningDetails)
+		}
 		claudeMessage := dto.ClaudeMessage{
 			Role: message.Role,
 		}
@@ -334,14 +364,14 @@ func OpenAIChatRequestToClaudeMessages(c *gin.Context, textRequest dto.GeneralOp
 					Content:   message.Content,
 				},
 			}
-		} else if message.IsStringContent() && message.ToolCalls == nil {
+		} else if message.IsStringContent() && message.ToolCalls == nil && len(thinkingBlocks) == 0 {
 			text := message.StringContent()
 			if text == "" {
 				text = "..."
 			}
 			claudeMessage.Content = text
 		} else {
-			claudeMediaMessages := make([]dto.ClaudeMediaMessage, 0)
+			claudeMediaMessages := append([]dto.ClaudeMediaMessage{}, thinkingBlocks...)
 			for _, mediaMessage := range message.ParseContent() {
 				switch mediaMessage.Type {
 				case "text":

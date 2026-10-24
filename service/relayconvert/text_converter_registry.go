@@ -56,9 +56,11 @@ var builtinTextConverters = []TextConverterSpec{
 			Convert: convertClaudeRequestToOpenAI,
 		},
 		Resp: TextResponseSide{
-			Convert:       convertClaudeMessagesResponseToOAIChat,
-			ConvertStream: convertClaudeMessagesStreamResponseToOAIChat,
-			Aliases:       []string{ResponseConverterClaudeMessagesToOAIChat},
+			Convert:            convertClaudeMessagesResponseToOAIChat,
+			ConvertStream:      convertClaudeMessagesStreamResponseToOAIChat,
+			NewStreamState:     newClaudeMessagesToOAIChatStreamState,
+			ConvertStreamChunk: convertClaudeMessagesStreamChunkToOAIChat,
+			Aliases:            []string{ResponseConverterClaudeMessagesToOAIChat},
 		},
 	},
 	{

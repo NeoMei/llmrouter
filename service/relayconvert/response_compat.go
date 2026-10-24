@@ -36,6 +36,10 @@ func StreamResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.ChatCo
 	return claudemessages.StreamResponseClaude2OpenAI(claudeResponse)
 }
 
+func StreamResponseClaude2OpenAIWithState(response *dto.ClaudeResponse, state *ClaudeResponseInfo) *dto.ChatCompletionsStreamResponse {
+	return claudemessages.StreamResponseClaude2OpenAIWithState(response, state)
+}
+
 func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextResponse {
 	return claudemessages.ResponseClaude2OpenAI(claudeResponse)
 }

@@ -113,3 +113,14 @@ func collectResponsesClaudeParts(messages []dto.ClaudeMessage, partType string) 
 	}
 	return found
 }
+
+func TestConfigurationUpdateDoesNotCreateClaudePlaceholder(t *testing.T) {
+	input := json.RawMessage(`[{"type":"message","role":"user","content":"go"},{"type":"configuration_update","reasoning":{"effort":"high"}}]`)
+	got, err := OpenAIResponsesRequestToClaudeMessages(nil, &dto.OpenAIResponsesRequest{Model: "claude-test", Input: input, MaxOutputTokens: common.GetPointer(uint(32))})
+	require.NoError(t, err)
+	require.Len(t, got.Messages, 1)
+	parts, err := got.Messages[0].ParseContent()
+	require.NoError(t, err)
+	require.Len(t, parts, 1)
+	assert.Equal(t, "go", parts[0].GetText())
+}

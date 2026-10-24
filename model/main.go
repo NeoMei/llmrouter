@@ -301,6 +301,7 @@ func migrateDB() error {
 		&OCRResourceGrant{},
 		&OCROperation{},
 		&OCRAuditEvent{},
+		&OCRLogReceipt{},
 		&UpstreamAccountPool{},
 		&UpstreamAccountMember{},
 		&UpstreamAccountState{},
@@ -379,6 +380,7 @@ func migrateDBFast() error {
 		{&OCRResourceGrant{}, "OCRResourceGrant"},
 		{&OCROperation{}, "OCROperation"},
 		{&OCRAuditEvent{}, "OCRAuditEvent"},
+		{&OCRLogReceipt{}, "OCRLogReceipt"},
 		{&UpstreamAccountPool{}, "UpstreamAccountPool"},
 		{&UpstreamAccountMember{}, "UpstreamAccountMember"},
 		{&UpstreamAccountState{}, "UpstreamAccountState"},
@@ -434,7 +436,7 @@ func migrateLOGDB() error {
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		return migrateClickHouseLogDB()
 	}
-	return LOG_DB.AutoMigrate(&Log{})
+	return LOG_DB.AutoMigrate(&Log{}, &OCRLogReceipt{})
 }
 
 func migrateClickHouseLogDB() error {

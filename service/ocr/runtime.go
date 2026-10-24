@@ -66,7 +66,28 @@ func (r *Runtime) Start() {
 	r.started = true
 	ctx, cancel := context.WithCancel(context.Background())
 	r.cancel = cancel
-	r.wg.Add(1)
+	r.wg.Add(2)
+	go func() {
+		defer r.wg.Done()
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			err := r.RunAuditBatch(ctx, 32)
+			if ctx.Err() != nil {
+				return
+			}
+			if errors.Is(err, model.ErrOCRLogUnsupported) {
+				common.SysError(model.ErrOCRLogUnsupported.Error())
+			} else if err != nil {
+				common.SysError("OCR consumption-log projection pending: database transaction or lookup failed; audit retained for retry")
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
 	go func() {
 		defer r.wg.Done()
 		ticker := time.NewTicker(10 * time.Second)
@@ -150,4 +171,12 @@ func (r *Runtime) RunBatch(ctx context.Context, after string, limit int) (string
 		after = ""
 	}
 	return after, nil
+}
+
+// RunAuditBatch runs independently from supplier polling and never changes its
+// outcome. Both workers are canceled and joined before billing/database close.
+func (r *Runtime) RunAuditBatch(ctx context.Context, limit int) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	return r.Billing.ProjectAuditLogs(ctx, model.LOG_DB, limit)
 }

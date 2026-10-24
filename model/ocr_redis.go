@@ -502,11 +502,17 @@ func (s *OCRBillingStore) refundRedis(ctx context.Context, id string) (OCRJob, e
 // event.ID for deduplication if exactly-once projection is required. A crash
 // after emit and before acknowledgement can deliver that event again.
 func (s *OCRBillingStore) ProjectAudit(ctx context.Context, limit int, emit func(context.Context, OCRAuditEvent) error) error {
+	return s.projectAudit(ctx, s.db.Where("projected_at = ?", 0), limit, emit)
+}
+
+// projectAudit owns outbox ordering and post-delivery acknowledgement for both
+// generic sinks and the relational consumption-log projection.
+func (s *OCRBillingStore) projectAudit(ctx context.Context, query *gorm.DB, limit int, emit func(context.Context, OCRAuditEvent) error) error {
 	if limit < 1 || limit > 100 || emit == nil {
 		return fmt.Errorf("invalid OCR audit projection")
 	}
 	var events []OCRAuditEvent
-	if err := s.db.WithContext(ctx).Where("projected_at = ?", 0).Order("created_at, id").Limit(limit).Find(&events).Error; err != nil {
+	if err := query.WithContext(ctx).Order("created_at, id").Limit(limit).Find(&events).Error; err != nil {
 		return err
 	}
 	for _, event := range events {

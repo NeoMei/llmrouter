@@ -64,6 +64,11 @@ func SetRouter(router *gin.Engine, assets WebAssets) {
 	SetApiRouter(router)
 	SetDashboardRouter(router)
 	SetOCRRouter(router, &controller.OCRHandler{Runtime: controller.OCRRuntime})
+	mediaHandler := &controller.RelayMediaHandler{}
+	if controller.RelayMediaRuntime != nil {
+		mediaHandler.Service = controller.RelayMediaRuntime.Service
+	}
+	SetRelayMediaRouter(router, mediaHandler)
 	SetRelayRouter(router)
 	SetVideoRouter(router)
 	frontendBaseUrl := os.Getenv("FRONTEND_BASE_URL")

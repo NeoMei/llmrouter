@@ -30,6 +30,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/service/ocr"
+	"github.com/QuantumNous/new-api/service/relaymedia"
 	_ "github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
@@ -62,6 +63,7 @@ func main() {
 	}
 
 	defer func() {
+		controller.RelayMediaRuntime.Close()
 		if err := controller.OCRRuntime.Close(); err != nil {
 			common.SysError("OCR runtime close failed")
 		}
@@ -352,6 +354,12 @@ func InitResources() error {
 	controller.OCRRuntime, err = ocr.RuntimeFromEnv(model.DB)
 	if err != nil {
 		return fmt.Errorf("OCR runtime initialization: %w", err)
+	}
+
+	controller.RelayMediaRuntime, err = relaymedia.RuntimeFromEnv(model.DB)
+	if err != nil {
+		_ = controller.OCRRuntime.Close()
+		return fmt.Errorf("relay media runtime initialization: %w", err)
 	}
 
 	perfmetrics.Init()

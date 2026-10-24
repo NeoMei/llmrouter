@@ -100,9 +100,9 @@ require.Len(t, result.Data[0].Embedding, 1024)
 
 **Interfaces:** Protected PaddleOCR `/api/v2/ocr/jobs` creation/status/result paths preserve the fixed downstream contract, with platform IDs and scoped access; canonical LLMRouter `/v1/ocr` exposes declared synchronous/async behavior over the same owner service. Capability selection and billing derive from authorized user/model/channel, never client-selected arbitrary provider URL.
 
-- [ ] Red router tests replay SuperWagie's submit/poll/download sequence; assert multipart, model, auth and returned JSONL. Add canonical OCR typed-result fixture. No raw upstream account IDs/keys may reach caller or logs.
-- [ ] Exercise correct fixed member across A/B rotation, task owner identity, token permissions, 400 bounds, insufficient wallet, 429 all-cooled, uncertain submit and repeated settlement.
-- [ ] Run server/router/controller/service/race and validate both API contracts independently. Root reviews and commits.
+- [x] Red router tests replay SuperWagie's submit/poll/download sequence; assert multipart, model, auth and returned JSONL. Add canonical OCR typed-result fixture. No raw upstream account IDs/keys may reach caller or logs.
+- [x] Exercise correct fixed member across A/B rotation, task owner identity, token permissions, 400 bounds, insufficient wallet, 429 all-cooled, uncertain submit and repeated settlement.
+- [x] Run server/router/controller/service/race and validate both API contracts independently. Root reviews and commits.
 
 ## Task 7: Domestic images, audio, video-understanding adapters and safe media replay
 

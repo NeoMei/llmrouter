@@ -85,6 +85,11 @@ func ClaudeErrorWrapperLocal(err error, code string, statusCode int) *dto.Claude
 
 func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFail bool) (newApiErr *types.NewAPIError) {
 	newApiErr = types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, resp.StatusCode)
+	// Apply after every body-decoding branch, including errors that replace newApiErr.
+	// Only the explicit veto is honored; an upstream cannot force a local retry.
+	if resp.Header.Get("X-Should-Retry") == "false" {
+		defer func() { types.ErrOptionWithSkipRetry()(newApiErr) }()
+	}
 
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {

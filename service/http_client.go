@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -89,6 +90,12 @@ func newRelayHTTPTransport() *http.Transport {
 	transport.MaxIdleConns = common.RelayMaxIdleConns
 	transport.MaxIdleConnsPerHost = common.RelayMaxIdleConnsPerHost
 	transport.IdleConnTimeout = time.Duration(common.RelayIdleConnTimeout) * time.Second
+	// Header wait is bounded independently of the body so long streams stay usable.
+	transport.ResponseHeaderTimeout = 0
+	if seconds := common.RelayResponseHeaderTimeout; seconds > 0 {
+		const maxTimeoutSeconds = int64(math.MaxInt64 / int64(time.Second))
+		transport.ResponseHeaderTimeout = time.Duration(min(int64(seconds), maxTimeoutSeconds)) * time.Second
+	}
 	transport.ForceAttemptHTTP2 = true
 	if common.TLSInsecureSkipVerify {
 		transport.TLSClientConfig = common.InsecureTLSConfig

@@ -162,6 +162,10 @@ var BatchUpdateInterval int
 var RelayTimeout int // unit is second
 
 var RelayIdleConnTimeout int // unit is second
+
+// RelayResponseHeaderTimeout bounds the wait for upstream headers, not the response body.
+// Zero disables the bound.
+var RelayResponseHeaderTimeout = 1800 // unit is second
 var RelayMaxIdleConns int
 var RelayMaxIdleConnsPerHost int
 

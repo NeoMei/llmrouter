@@ -2,8 +2,10 @@ package middleware
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 )
 
@@ -26,6 +28,14 @@ func SetUpLogger(server *gin.Engine) {
 		if tag == "" {
 			tag = "web"
 		}
+		path := param.Path
+		// OAuth codes/state are credentials too; redact logs without changing the request.
+		if strings.HasPrefix(param.Request.URL.Path, "/api/oauth/") || strings.HasPrefix(param.Request.URL.Path, "/oauth/") {
+			path = param.Request.URL.Path
+		} else if param.Request.URL.RawQuery != "" {
+			query := param.Request.URL.Query().Encode()
+			path = param.Request.URL.EscapedPath() + relaycommon.SanitizeURLForLog("?"+query)
+		}
 		return fmt.Sprintf("[GIN] %s | %s | %s | %3d | %13v | %15s | %7s %s\n",
 			param.TimeStamp.Format("2006/01/02 - 15:04:05"),
 			tag,
@@ -34,7 +44,7 @@ func SetUpLogger(server *gin.Engine) {
 			param.Latency,
 			param.ClientIP,
 			param.Method,
-			param.Path,
+			path,
 		)
 	}))
 }

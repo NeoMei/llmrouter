@@ -92,6 +92,12 @@ func (s *OCRBillingStore) RecordOCRRefusal(ctx context.Context, c OCRClaim, stat
 		}
 		j.SubmissionState = "rejected"
 		j.RetryRefusal = retry && j.SubmitAttempts < j.MaxAttempts
+		// A terminal refusal is definitive evidence of no execution. Persist
+		// its decision with that evidence so status-only recovery can resume
+		// Finish after interruption without replaying the upload or supplier.
+		if !j.RetryRefusal {
+			j.Decision = "failure"
+		}
 		if err := ocrUpdateAttempt(j, "refused", status); err != nil {
 			return err
 		}

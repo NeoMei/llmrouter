@@ -53,10 +53,14 @@ const (
 	RelayModeGemini
 
 	RelayModeResponsesCompact
+	RelayModeMultimodalEmbedding
 )
 
 func Path2RelayMode(path string) int {
 	path = strings.TrimPrefix(path, "/compatible-mode")
+	if path == "/v1/multimodal/embeddings" || path == "/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding" {
+		return RelayModeMultimodalEmbedding
+	}
 	if path == "/api/v1/services/rerank/text-rerank/text-rerank" {
 		return RelayModeRerank
 	}

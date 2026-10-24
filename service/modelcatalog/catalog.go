@@ -26,10 +26,11 @@ type ClientModelTarget = model.ClientModelTarget
 type WireProtocol string
 
 const (
-	WirePaddleOCR  WireProtocol = "paddleocr_jobs"
-	WireResponses  WireProtocol = "responses"
-	WireOpenAIChat WireProtocol = "openai_chat"
-	WireAnthropic  WireProtocol = "anthropic"
+	WireMultimodalEmbedding WireProtocol = "qwen_multimodal_embedding"
+	WirePaddleOCR           WireProtocol = "paddleocr_jobs"
+	WireResponses           WireProtocol = "responses"
+	WireOpenAIChat          WireProtocol = "openai_chat"
+	WireAnthropic           WireProtocol = "anthropic"
 )
 
 // ClientModel is the immutable public identity exposed to a client.
@@ -608,7 +609,7 @@ func decodeWires(raw string) ([]WireProtocol, error) {
 	for _, value := range values {
 		wire := WireProtocol(strings.ToLower(strings.TrimSpace(value)))
 		switch wire {
-		case WireResponses, WireOpenAIChat, WireAnthropic, WirePaddleOCR:
+		case WireResponses, WireOpenAIChat, WireAnthropic, WirePaddleOCR, WireMultimodalEmbedding:
 		default:
 			return nil, fmt.Errorf("unknown wire protocol %q", value)
 		}

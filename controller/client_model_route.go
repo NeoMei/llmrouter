@@ -97,7 +97,10 @@ func ListClientModelRouteOptions(c *gin.Context) {
 	registry := capability.DefaultRegistry()
 	for _, channel := range channels {
 		models := normalizeClientModelOptionNames(channel.GetModels())
-		wires := make([]string, 0, 3)
+		wires := make([]string, 0, 4)
+		if registry.Supports(channel.Type, capability.ProtocolOpenAI, capability.OperationMultimodalEmbedding) {
+			wires = append(wires, string(modelcatalog.WireMultimodalEmbedding))
+		}
 		if registry.Supports(channel.Type, capability.ProtocolPaddleOCR, capability.OperationOCRCreate) {
 			wires = append(wires, string(modelcatalog.WirePaddleOCR))
 		}
@@ -357,6 +360,10 @@ func validateTargetWiresForChannel(target model.ClientModelTarget, channelType i
 	registry := capability.DefaultRegistry()
 	for _, raw := range wires {
 		switch modelcatalog.WireProtocol(strings.ToLower(strings.TrimSpace(raw))) {
+		case modelcatalog.WireMultimodalEmbedding:
+			if !registry.Supports(channelType, capability.ProtocolOpenAI, capability.OperationMultimodalEmbedding) {
+				return fmt.Errorf("target %d channel does not support multimodal embeddings", target.Id)
+			}
 		case modelcatalog.WirePaddleOCR:
 			if !registry.Supports(channelType, capability.ProtocolPaddleOCR, capability.OperationOCRCreate) {
 				return fmt.Errorf("target %d channel does not support PaddleOCR jobs", target.Id)

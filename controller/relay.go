@@ -51,6 +51,8 @@ func relayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIErro
 		err = relay.AudioHelper(c, info)
 	case relayconstant.RelayModeRerank:
 		err = relay.RerankHelper(c, info)
+	case relayconstant.RelayModeMultimodalEmbedding:
+		err = relay.MultimodalEmbeddingHelper(c, info)
 	case relayconstant.RelayModeEmbeddings:
 		err = relay.EmbeddingHelper(c, info)
 	case relayconstant.RelayModeResponses, relayconstant.RelayModeResponsesCompact:
@@ -100,6 +102,11 @@ func relaySelectedChannel(c *gin.Context, relayInfo *relaycommon.RelayInfo, chan
 }
 
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+	defer func() {
+		if cleanup, ok := c.Get("internal.multimodal_cleanup"); ok {
+			cleanup.(func())()
+		}
+	}()
 
 	requestId := c.GetString(common.RequestIdKey)
 	//group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
@@ -211,6 +218,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
+	if relayFormat == types.RelayFormatMultimodalEmbedding && len(relayInfo.RouteCandidates) == 0 {
+		newAPIError = types.NewErrorWithStatusCode(errors.New("multimodal embeddings require an explicit public route"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		return
+	}
 	billingLifecycleStarted := false
 	defer func() {
 		// Only return quota if downstream failed and quota was actually pre-consumed
@@ -573,6 +584,10 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest), types.ErrOptionWithSkipRetry())
 	}
+	if err := helper.PrepareMultimodalReservation(c, info); err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+	priceData = info.PriceData
 	if err := helper.ValidateNativeImagePrice(c, info); err != nil {
 		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 	}
@@ -616,6 +631,9 @@ func prepareRouteCandidateForAttempt(c *gin.Context, info *relaycommon.RelayInfo
 		}
 	}
 
+	if validationErr := prepareMultimodalForAttempt(c, info, candidateChannel); validationErr != nil {
+		return types.NewErrorWithStatusCode(validationErr, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
 	if validationErr := validateDomesticUnderstandingForAttempt(c, info, candidateChannel); validationErr != nil {
 		return validationErr
 	}
@@ -1293,6 +1311,8 @@ func selectWireForRequest(relayInfo *relaycommon.RelayInfo, resolved *modelcatal
 
 func expectedWireForFormat(format types.RelayFormat) modelcatalog.WireProtocol {
 	switch format {
+	case types.RelayFormatMultimodalEmbedding:
+		return modelcatalog.WireMultimodalEmbedding
 	case types.RelayFormatOpenAIResponses, types.RelayFormatOpenAIResponsesCompaction:
 		return modelcatalog.WireResponses
 	case types.RelayFormatClaude:

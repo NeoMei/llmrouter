@@ -239,3 +239,18 @@ func TestClientModelRouteRejectsUnsupportedDeclaredOperation(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
 	require.Contains(t, recorder.Body.String(), "operation")
 }
+
+func TestMultimodalRouteWireOption(t *testing.T) {
+	db := setupClientModelRouteControllerTestDB(t)
+	require.NoError(t, db.Create(&model.Channel{Id: 27, Type: constant.ChannelTypeAli, Name: "Ali", Models: "qwen3-vl-embedding", Status: common.ChannelStatusEnabled}).Error)
+	ctx, rec := clientModelRouteRequestContext(t, http.MethodGet, "/api/client_model_routes/options", nil)
+	ListClientModelRouteOptions(ctx)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var out struct {
+		Data clientModelRouteOptionsResponse `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(rec.Body.Bytes(), &out))
+	require.Len(t, out.Data.Channels, 1)
+	require.Contains(t, out.Data.Channels[0].Wires, "qwen_multimodal_embedding")
+	require.NoError(t, validateTargetWiresForChannel(model.ClientModelTarget{Id: 1, PreferredWires: `["qwen_multimodal_embedding"]`}, constant.ChannelTypeAli))
+}

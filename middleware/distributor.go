@@ -50,7 +50,7 @@ func Distribute() func(c *gin.Context) {
 		// fail closed rather than reusing a legacy ability with the same name.
 		canDefer := false
 		switch operation {
-		case capability.OperationChatCreate, capability.OperationCompletionCreate, capability.OperationResponseCreate, capability.OperationResponseCompact, capability.OperationClaudeMessageCreate, capability.OperationEmbeddingCreate, capability.OperationAudioTranscription, capability.OperationAudioTranslation, capability.OperationAudioSpeech, capability.OperationImageGeneration, capability.OperationImageEdit, capability.OperationImageVariation, capability.OperationRerankCreate, capability.OperationGeminiGenerate, capability.OperationGeminiEmbed:
+		case capability.OperationChatCreate, capability.OperationCompletionCreate, capability.OperationResponseCreate, capability.OperationResponseCompact, capability.OperationClaudeMessageCreate, capability.OperationEmbeddingCreate, capability.OperationMultimodalEmbedding, capability.OperationAudioTranscription, capability.OperationAudioTranslation, capability.OperationAudioSpeech, capability.OperationImageGeneration, capability.OperationImageEdit, capability.OperationImageVariation, capability.OperationRerankCreate, capability.OperationGeminiGenerate, capability.OperationGeminiEmbed:
 			canDefer = true
 		}
 		recognized, routeErr := false, error(nil)

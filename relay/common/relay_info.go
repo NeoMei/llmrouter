@@ -654,6 +654,10 @@ func GenRelayInfo(c *gin.Context, relayFormat types.RelayFormat, request dto.Req
 		err = errors.New("request is not a RerankRequest")
 	case types.RelayFormatGemini:
 		info = GenRelayInfoGemini(c, request)
+	case types.RelayFormatMultimodalEmbedding:
+		info = genBaseRelayInfo(c, request)
+		info.RelayFormat = types.RelayFormatMultimodalEmbedding
+		info.RelayMode = relayconstant.RelayModeMultimodalEmbedding
 	case types.RelayFormatEmbedding:
 		info = GenRelayInfoEmbedding(c, request)
 	case types.RelayFormatOpenAIResponses:

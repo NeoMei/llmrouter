@@ -33,6 +33,7 @@ const (
 	OperationResponseCompact     Operation = "responses.compact"
 	OperationRealtimeConnect     Operation = "realtime.connect"
 	OperationClaudeMessageCreate Operation = "claude.messages.create"
+	OperationMultimodalEmbedding Operation = "multimodal.embeddings.create"
 	OperationEmbeddingCreate     Operation = "embeddings.create"
 	OperationAudioTranscription  Operation = "audio.transcriptions.create"
 	OperationAudioTranslation    Operation = "audio.translations.create"
@@ -58,7 +59,7 @@ var allOperations = []Operation{
 	OperationOCRCreate, OperationOCRRetrieve, OperationOCRResource,
 	OperationModelList, OperationModelRetrieve, OperationModelDelete,
 	OperationChatCreate, OperationCompletionCreate, OperationResponseCreate, OperationResponseCompact,
-	OperationRealtimeConnect, OperationClaudeMessageCreate, OperationEmbeddingCreate,
+	OperationRealtimeConnect, OperationClaudeMessageCreate, OperationEmbeddingCreate, OperationMultimodalEmbedding,
 	OperationAudioTranscription, OperationAudioTranslation, OperationAudioSpeech,
 	OperationImageGeneration, OperationImageEdit, OperationImageVariation,
 	OperationRerankCreate, OperationModerationCreate,
@@ -118,6 +119,8 @@ func PublicRouteManifest() []RouteManifestEntry {
 }
 
 var publicRoutes = []routeSpec{
+	route(http.MethodPost, `^/v1/multimodal/embeddings$`, OperationMultimodalEmbedding),
+	route(http.MethodPost, `^/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding$`, OperationMultimodalEmbedding),
 	route(http.MethodPost, `^/api/v2/ocr/jobs$`, OperationOCRCreate),
 	route(http.MethodGet, `^/api/v2/ocr/jobs/[^/]+$`, OperationOCRRetrieve),
 	route(http.MethodPost, `^/v1/ocr$`, OperationOCRCreate),

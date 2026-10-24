@@ -88,6 +88,8 @@ func SetRelayRouter(router *gin.Engine) {
 		httpRouter := relayV1Router.Group("")
 		httpRouter.Use(middleware.Distribute())
 
+		httpRouter.POST("/multimodal/embeddings", func(c *gin.Context) { controller.Relay(c, types.RelayFormatMultimodalEmbedding) })
+
 		// claude related routes
 		httpRouter.POST("/messages", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatClaude)
@@ -165,6 +167,9 @@ func SetRelayRouter(router *gin.Engine) {
 	compatible.POST("/embeddings", func(c *gin.Context) { controller.Relay(c, types.RelayFormatEmbedding) })
 	compatible.POST("/chat/completions", func(c *gin.Context) { controller.Relay(c, types.RelayFormatOpenAI) })
 
+	nativeMultimodal := router.Group("/api/v1/services/embeddings/multimodal-embedding")
+	nativeMultimodal.Use(middleware.RouteTag("relay"), middleware.SystemPerformanceCheck(), middleware.TokenOrUserAuth(), middleware.DistributedRateLimit(), middleware.ModelRequestRateLimit(), middleware.Distribute())
+	nativeMultimodal.POST("/multimodal-embedding", func(c *gin.Context) { controller.Relay(c, types.RelayFormatMultimodalEmbedding) })
 	nativeRerank := router.Group("/api/v1/services/rerank/text-rerank")
 	nativeRerank.Use(middleware.RouteTag("relay"), middleware.SystemPerformanceCheck(), middleware.TokenOrUserAuth(), middleware.AliNativeRerank(), middleware.DistributedRateLimit(), middleware.ModelRequestRateLimit(), middleware.Distribute())
 	nativeRerank.POST("/text-rerank", func(c *gin.Context) { controller.Relay(c, types.RelayFormatRerank) })

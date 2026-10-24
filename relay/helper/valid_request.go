@@ -47,6 +47,8 @@ func GetAndValidateRequest(c *gin.Context, format types.RelayFormat) (request dt
 
 	case types.RelayFormatOpenAIImage:
 		request, err = GetAndValidOpenAIImageRequest(c, relayMode)
+	case types.RelayFormatMultimodalEmbedding:
+		request, err = GetAndValidateMultimodalEmbeddingRequest(c)
 	case types.RelayFormatEmbedding:
 		request, err = GetAndValidateEmbeddingRequest(c, relayMode)
 	case types.RelayFormatRerank:

@@ -15,6 +15,46 @@ import (
 // in its original typed shape, including video_url objects and input_audio.data;
 // no URL is fetched and no capability is guessed from a model name.
 func ValidateModelAdmission(c *gin.Context, info *relaycommon.RelayInfo, m dto.ModelCapabilities, operation capability.Operation) error {
+	if r, ok := info.Request.(*dto.MultimodalEmbeddingRequest); ok {
+		if operation != capability.OperationMultimodalEmbedding {
+			return fmt.Errorf("wrong multimodal operation")
+		}
+		if err := ValidateMultimodalEmbeddingSpace(r, m.EmbeddingSpace); err != nil {
+			return err
+		}
+		if len(m.Operations) > 0 && !containsCapability(m.Operations, string(operation)) {
+			return fmt.Errorf("multimodal operation not declared")
+		}
+		if len(m.OutputModalities) > 0 && !containsCapability(m.OutputModalities, "embedding") {
+			return fmt.Errorf("embedding output not declared")
+		}
+		images := 0
+		for _, item := range r.Input {
+			modality := "text"
+			if item.Image != "" {
+				modality = "image"
+				images++
+			}
+			if item.Video != "" {
+				modality = "video"
+			}
+			if len(m.InputModalities) > 0 && !containsCapability(m.InputModalities, modality) {
+				return fmt.Errorf("input modality not declared")
+			}
+		}
+		if l := m.MediaLimits; l != nil {
+			if l.MaxImages != nil && images > *l.MaxImages {
+				return fmt.Errorf("too many images")
+			}
+			if l.MaxRequestBytes != nil {
+				storage, err := common.GetBodyStorage(c)
+				if err != nil || storage.Size() > *l.MaxRequestBytes {
+					return fmt.Errorf("request exceeds declared max_request_bytes")
+				}
+			}
+		}
+		return nil // Actual certified facts are checked per selected candidate before money.
+	}
 	facts, mediaErr := InspectRequestMedia(info.Request)
 	if _, audio := info.Request.(*dto.AudioRequest); audio && c.GetString(DomesticASRDataKey) != "" {
 		fact, err := DecodeMediaFact("audio", c.GetString(DomesticASRDataKey))

@@ -123,7 +123,7 @@ func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) g
 		c.Next()
 
 		// 5. 如果请求成功，记录成功请求
-		if c.Writer.Status() < 400 {
+		if c.Writer.Status() < 400 && !c.GetBool(string(constant.ContextKeyRelayFailed)) {
 			recordRedisRequest(ctx, rdb, successKey, successMaxCount)
 		}
 	}
@@ -158,7 +158,7 @@ func memoryRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) 
 		c.Next()
 
 		// 4. 如果请求成功，记录到实际的成功请求计数中
-		if c.Writer.Status() < 400 {
+		if c.Writer.Status() < 400 && !c.GetBool(string(constant.ContextKeyRelayFailed)) {
 			inMemoryRateLimiter.Request(successKey, successMaxCount, duration)
 		}
 	}

@@ -3,6 +3,11 @@ package constant
 type ContextKey string
 
 const (
+	// ContextKeyRelayFailed marks application failures after SSE headers committed HTTP 200.
+	ContextKeyRelayFailed ContextKey = "relay_failed"
+	// ContextKeyResponseStreamStatus exposes stream diagnostics for final SSE errors.
+	ContextKeyResponseStreamStatus ContextKey = "response_stream_status"
+
 	ContextKeyTokenCountMeta  ContextKey = "token_count_meta"
 	ContextKeyPromptTokens    ContextKey = "prompt_tokens"
 	ContextKeyEstimatedTokens ContextKey = "estimated_tokens"

@@ -114,9 +114,16 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			terminalValid = false
 			terminalResponse = nil
 		}
-		sendResponsesStreamData(c, streamResponse, data)
+		if err := helper.ResponseChunkData(c, streamResponse, data); err != nil {
+			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+			if info.StreamStatus != nil {
+				info.StreamStatus.RecordError(err.Error())
+			}
+			stopStream(sr)
+			return false
+		}
 		switch streamResponse.Type {
-		case "response.completed":
+		case "response.completed", "response.done":
 			terminalSeen = true
 			if streamResponse.Response != nil {
 				if !wasTerminalSeen && responsesstate.EligibleCompletedResponse(streamResponse.Response) {
@@ -187,8 +194,12 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if streamErr != nil {
 		return nil, streamErr
 	}
-	if abortErr := abortInvalidStreamTransport(c, info, streamValidator); abortErr != nil {
-		return nil, abortErr
+	// A clean upstream EOF is a legitimate Responses transport boundary. The
+	// validator still requires a valid, ordered success terminal before release.
+	if info.StreamStatus.EndReason != relaycommon.StreamEndReasonEOF || info.StreamStatus.HasErrors() || c.Request.Context().Err() != nil {
+		if abortErr := abortInvalidStreamTransport(c, info, streamValidator); abortErr != nil {
+			return nil, abortErr
+		}
 	}
 	flushed, err := streamValidator.Finish()
 	if err != nil {
@@ -199,6 +210,10 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			return nil, streamErr
 		}
 	}
+	if !terminalSeen {
+		return nil, toolpolicy.NewResponseValidationError(fmt.Errorf("%w: responses stream ended without a delivered success terminal", toolpolicy.ErrIncompleteToolCall))
+	}
+
 	if terminalValid && terminalResponse != nil && info.StreamStatus != nil && info.StreamStatus.IsNormalEnd() && !info.StreamStatus.HasErrors() && c.Request.Context().Err() == nil {
 		persistResponsesTurn(c, info, terminalResponse)
 	}

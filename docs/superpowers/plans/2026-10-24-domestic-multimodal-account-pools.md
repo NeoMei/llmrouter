@@ -50,11 +50,11 @@ assert.Equal(t, wantMember, selected.Ref.MemberID)
 
 **Interfaces:** Consume Task 1 types and policy. Selection produces an immutable sent-member receipt in request context/RelayInfo. Before non-2xx early return, shared transport records the actual member outcome using the receipt, operation and upstream response headers. Controller asks whether an untried authorized member remains before advancing a route target. Task private data stores stable account reference and safe credential ownership necessary for polling, not browser-readable data.
 
-- [ ] Reproduce with loopback HTTP: A returns 429 with Retry-After, B returns success. Use real middleware/controller/provider path, real billing session and SQLite. Assert exactly A/B sends, one final response and one settlement; next request skips A.
-- [ ] Exercise explicit route with one channel/two members, random mode with attempted-member exclusion, all-cooled Retry-After, retry budget zero, no retries after body output, cancellation, local quota failure and explicit upstream `X-Should-Retry:false`.
-- [ ] Make native multi-key and Gateway platform keys consume the same health policy, retain raw App-ID/token credential representation, and repair Gateway's error-before-DoResponse path. Replace unsupported SQL locking with compatible model-owned GORM selection. A BYOK rejection must not choose a platform key.
-- [ ] Bind existing async tasks to the sent member and resolve refreshed same-identity credentials. Never concatenate a multi-key blob into polling auth or rotate a task to an unrelated account. For unsafe create failures return execution uncertainty rather than automatically resubmit.
-- [ ] Verify focused packages/race, exact balances/refunds, state across cache refresh and two selector instances. Report added files and integration branches; root reviews and commits.
+- [x] Reproduce with loopback HTTP: A returns 429 with Retry-After, B returns success. Use real middleware/controller/provider path, real billing session and SQLite. Assert exactly A/B sends, one final response and one settlement; next request skips A.
+- [x] Exercise explicit route with one channel/two members, random mode with attempted-member exclusion, all-cooled Retry-After, retry budget zero, no retries after body output, cancellation, local quota failure and explicit upstream `X-Should-Retry:false`.
+- [x] Make native multi-key and Gateway platform keys consume the same health policy, retain raw App-ID/token credential representation, and repair Gateway's error-before-DoResponse path. Replace unsupported SQL locking with compatible model-owned GORM selection. A BYOK rejection must not choose a platform key.
+- [x] Bind existing async tasks to the sent member and resolve refreshed same-identity credentials. Never concatenate a multi-key blob into polling auth or rotate a task to an unrelated account. For unsafe create failures return execution uncertainty rather than automatically resubmit.
+- [x] Verify focused packages/race, exact balances/refunds, state across cache refresh and two selector instances. Report added files and integration branches; root reviews and commits.
 
 ## Task 3: Multimodal model metadata and vector-space admission
 

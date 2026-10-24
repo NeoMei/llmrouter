@@ -123,9 +123,9 @@ Execution split: 8a adds the bounded immutable MP4 snapshot/grant service requir
 
 **Interfaces:** Explicit `/v1/multimodal/embeddings` and documented Ali-compatible path accept declared text/image/video items with model/dimensions, return ordered vectors with a separate embedding-space identity, and use account selection and existing checked usage billing. Text vector routes never silently switch to this space.
 
-- [ ] Read current official Qwen-VL embedding contract, implement bounded types/allowed parameters and actual native response mapping. Fixture text+image, video-supported declaration, unsupported audio/model, batch/index preservation and dimension mismatch.
-- [ ] Verify existing text-embedding-v4/1024 tests unchanged; different spaces require new public IDs, no user index mutation.
-- [ ] Run vector/controller/adapter/price-boundary tests and race; root reviews and commits.
+- [x] Read current official Qwen-VL embedding contract, implement bounded types/allowed parameters and actual native response mapping. Fixture text+image, video-supported declaration, unsupported audio/model, batch/index preservation and dimension mismatch.
+- [x] Verify existing text-embedding-v4/1024 tests unchanged; different spaces require new public IDs, no user index mutation.
+- [x] Run vector/controller/adapter/price-boundary tests and race; root reviews and commits.
 
 ## Task 9: Admin account-pool and multimodal catalog UI
 

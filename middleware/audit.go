@@ -41,6 +41,12 @@ func (w *auditResponseWriter) WriteString(s string) (int, error) {
 // 这些是未被 handler 手动埋点的写操作，由中间件兜底记录；前端依据 action 用 i18n 本地化展示。
 // 未命中的写操作回退为 action="generic"，前端展示 "METHOD route"。
 var auditRouteActions = map[string]string{
+	"POST /api/channel/:id/account-pool/pause":         "channel.account_pool.pause",
+	"POST /api/channel/:id/account-pool/resume":        "channel.account_pool.resume",
+	"POST /api/channel/:id/account-pool/recover":       "channel.account_pool.recover",
+	"POST /api/channel/:id/account-pool/recover-group": "channel.account_pool.recover-group",
+	"POST /api/channel/:id/account-pool/quota-group":   "channel.account_pool.quota-group",
+
 	// 用户管理
 	"POST /api/user/topup/complete":                    "user.topup_complete",
 	"DELETE /api/user/:id/reset_passkey":               "user.reset_passkey",

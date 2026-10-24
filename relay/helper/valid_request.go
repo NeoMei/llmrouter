@@ -58,6 +58,9 @@ func GetAndValidateRequest(c *gin.Context, format types.RelayFormat) (request dt
 	default:
 		return nil, fmt.Errorf("unsupported relay format: %s", format)
 	}
+	if err == nil {
+		_, err = InspectRequestMedia(request)
+	}
 	return request, err
 }
 

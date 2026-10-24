@@ -15,6 +15,10 @@ import (
 // in its original typed shape, including video_url objects and input_audio.data;
 // no URL is fetched and no capability is guessed from a model name.
 func ValidateModelAdmission(c *gin.Context, info *relaycommon.RelayInfo, m dto.ModelCapabilities, operation capability.Operation) error {
+	facts, mediaErr := InspectRequestMedia(info.Request)
+	if mediaErr != nil {
+		return mediaErr
+	}
 	if m.EmbeddingSpace != nil && operation != capability.OperationEmbeddingCreate {
 		return fmt.Errorf("fixed embedding_space requires the validated embeddings.create response contract")
 	}
@@ -133,14 +137,36 @@ func ValidateModelAdmission(c *gin.Context, info *relaycommon.RelayInfo, m dto.M
 		if l.MaxImages != nil && counts["image"] > *l.MaxImages {
 			return fmt.Errorf("image count exceeds declared max_images")
 		}
-		// Bounds requiring decoded media facts cannot be certified by a URL or by
-		// client-supplied duration/page/pixel claims. Reject before charge until a
-		// provider-specific media validator supplies authoritative facts.
-		if (l.MaxAudioSeconds != nil && (modalities["audio"] || containsCapability(outputs, "audio"))) || (l.MaxVideoSeconds != nil && (modalities["video"] || containsCapability(outputs, "video"))) || (l.MaxPages != nil && modalities["document"]) || (l.MaxPixels != nil && (modalities["image"] || containsCapability(outputs, "image"))) {
-			return fmt.Errorf("declared media bounds require verified media metadata")
+		if (l.MaxPages != nil && modalities["document"]) || (l.MaxPixels != nil && containsCapability(outputs, "image")) || (l.MaxAudioSeconds != nil && containsCapability(outputs, "audio")) || (l.MaxVideoSeconds != nil && containsCapability(outputs, "video")) {
+			return fmt.Errorf("declared output/document bounds require verified media metadata")
 		}
-		if len(l.Formats) > 0 && (modalities["image"] || modalities["audio"] || modalities["video"] || modalities["document"] || containsCapability(outputs, "image") || containsCapability(outputs, "audio") || containsCapability(outputs, "video")) {
-			return fmt.Errorf("declared media formats require verified media metadata")
+		if len(l.Formats) > 0 && (modalities["document"] || containsCapability(outputs, "image") || containsCapability(outputs, "audio") || containsCapability(outputs, "video")) {
+			return fmt.Errorf("declared output/document format requires verified media metadata")
+		}
+		verifiedInputs := map[string]int{}
+		for _, fact := range facts {
+			verifiedInputs[fact.Modality]++
+		}
+		for _, modality := range []string{"image", "audio", "video"} {
+			requiresFacts := len(l.Formats) > 0 || (modality == "image" && l.MaxPixels != nil) || (modality == "audio" && l.MaxAudioSeconds != nil) || (modality == "video" && l.MaxVideoSeconds != nil)
+			if requiresFacts && counts[modality] > verifiedInputs[modality] {
+				return fmt.Errorf("declared media bounds require verified media metadata")
+			}
+		}
+		for _, fact := range facts {
+			required := len(l.Formats) > 0 || (fact.Modality == "image" && l.MaxPixels != nil) || (fact.Modality == "audio" && l.MaxAudioSeconds != nil) || (fact.Modality == "video" && l.MaxVideoSeconds != nil)
+			if required && fact.Format == "" {
+				return fmt.Errorf("declared media bounds require verified media metadata")
+			}
+			if len(l.Formats) > 0 && !containsCapability(l.Formats, fact.Format) {
+				return fmt.Errorf("decoded format is not declared")
+			}
+			if fact.Modality == "image" && l.MaxPixels != nil && fact.Pixels > *l.MaxPixels {
+				return fmt.Errorf("image exceeds declared max_pixels")
+			}
+			if fact.Modality == "audio" && l.MaxAudioSeconds != nil && fact.Seconds > *l.MaxAudioSeconds {
+				return fmt.Errorf("audio exceeds declared max_audio_seconds")
+			}
 		}
 		if l.VideoAudio != nil && !*l.VideoAudio && modalities["video"] {
 			return fmt.Errorf("video audio-track exclusion requires verified media metadata")

@@ -298,10 +298,22 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	audioInputTokens := usage.PromptTokensDetails.AudioTokens
 	audioOutTokens := usage.CompletionTokenDetails.AudioTokens
 
+	if relayInfo.ChannelType == constant.ChannelTypeAli && relayInfo.UpstreamModelName == "qwen3.8-omni-flash" {
+		// Audio units have a separate configured ratio. All remaining actual
+		// units (visual input and reasoning included) retain the base ratio;
+		// raw usage details are kept intact in the response and consume log.
+		textInputTokens = usage.PromptTokens - audioInputTokens
+		textOutTokens = usage.CompletionTokens - audioOutTokens
+	}
+
+	billingModel := relayInfo.OriginModelName
+	if relayInfo.ChannelType == constant.ChannelTypeAli && relayInfo.UpstreamModelName == "qwen3.8-omni-flash" {
+		billingModel = relayInfo.BillingModelNameOrOrigin()
+	}
 	tokenName := ctx.GetString("token_name")
-	completionRatio := decimal.NewFromFloat(ratio_setting.GetCompletionRatio(relayInfo.OriginModelName))
-	audioRatio := decimal.NewFromFloat(ratio_setting.GetAudioRatio(relayInfo.OriginModelName))
-	audioCompletionRatio := decimal.NewFromFloat(ratio_setting.GetAudioCompletionRatio(relayInfo.OriginModelName))
+	completionRatio := decimal.NewFromFloat(ratio_setting.GetCompletionRatio(billingModel))
+	audioRatio := decimal.NewFromFloat(ratio_setting.GetAudioRatio(billingModel))
+	audioCompletionRatio := decimal.NewFromFloat(ratio_setting.GetAudioCompletionRatio(billingModel))
 
 	modelRatio := relayInfo.PriceData.ModelRatio
 	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
@@ -317,8 +329,9 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 			TextTokens:  textOutTokens,
 			AudioTokens: audioOutTokens,
 		},
-		ModelName:  relayInfo.OriginModelName,
+		ModelName:  billingModel,
 		UsePrice:   usePrice,
+		ModelPrice: modelPrice,
 		ModelRatio: modelRatio,
 		GroupRatio: groupRatio,
 	}
@@ -361,6 +374,13 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	}
 	other := GenerateAudioOtherInfo(ctx, relayInfo, usage, modelRatio, groupRatio,
 		completionRatio.InexactFloat64(), audioRatio.InexactFloat64(), audioCompletionRatio.InexactFloat64(), modelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
+	if relayInfo.ChannelType == constant.ChannelTypeAli && relayInfo.UpstreamModelName == "qwen3.8-omni-flash" {
+		other["image_input"] = usage.PromptTokensDetails.ImageTokens
+		other["video_input"] = usage.PromptTokensDetails.VideoTokens
+		other["reasoning_output"] = usage.CompletionTokenDetails.ReasoningTokens
+		other["non_audio_input_billing_units"] = textInputTokens
+		other["non_audio_output_billing_units"] = textOutTokens
+	}
 	if tieredResult != nil {
 		InjectTieredBillingInfo(other, relayInfo, tieredResult)
 	}

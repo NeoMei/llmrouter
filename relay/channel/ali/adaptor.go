@@ -246,6 +246,13 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 }
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
+	if info.UpstreamModelName == "qwen3.8-omni-flash" {
+		storage, validationErr := validateUnderstandingResponse(resp, info)
+		if validationErr != nil {
+			return nil, validationErr
+		}
+		defer storage.Close()
+	}
 	switch info.RelayFormat {
 	case types.RelayFormatClaude:
 		if supportsAliAnthropicMessages(info.UpstreamModelName) {

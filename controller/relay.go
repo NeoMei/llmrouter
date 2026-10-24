@@ -27,6 +27,7 @@ import (
 	"github.com/QuantumNous/new-api/service/accountpool"
 	"github.com/QuantumNous/new-api/service/modelcatalog"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -287,6 +288,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			}
 		}
 		if len(relayInfo.RouteCandidates) == 0 {
+			if validationErr := validateDomesticUnderstandingForAttempt(c, relayInfo, channel); validationErr != nil {
+				newAPIError = validationErr
+				break
+			}
 			relayInfo.ResolvedChannelId = channel.Id
 			if legacyContinuityChannelID != channel.Id {
 				if continuityErr := relay.PrepareResponsesContinuityForAttempt(c, relayInfo); continuityErr != nil {
@@ -585,6 +590,10 @@ func prepareRouteCandidateForAttempt(c *gin.Context, info *relaycommon.RelayInfo
 		if err != nil || !middleware.ChannelSupportsRequestPath(candidateChannel, c.Request.URL.Path, info.ResolvedModelNameOrOrigin(), protocol, operation) {
 			return types.NewErrorWithStatusCode(errors.New("configured target does not support the request operation/path"), types.ErrorCodeNoCapableChannel, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
+	}
+
+	if validationErr := validateDomesticUnderstandingForAttempt(c, info, candidateChannel); validationErr != nil {
+		return validationErr
 	}
 
 	if err := modelcatalog.ValidateChannelOperations(info.ModelCapabilities, candidateChannel.Type); err != nil {
@@ -1259,4 +1268,70 @@ func expectedWireForFormat(format types.RelayFormat) modelcatalog.WireProtocol {
 		return modelcatalog.WireOpenAIChat
 	}
 	return ""
+}
+
+// Validate the selected mapped model before any reservation, on both catalog
+// and legacy selection. Mapping is evaluated on a private copy so pricing and
+// the original request retain their existing authoritative identities.
+func validateDomesticUnderstandingForAttempt(c *gin.Context, info *relaycommon.RelayInfo, channel *model.Channel) *types.NewAPIError {
+	if channel.Type != constant.ChannelTypeAli {
+		return nil
+	}
+	selectedModel := info.ResolvedModelNameOrOrigin()
+	if len(info.RouteCandidates) == 0 {
+		mapped := *info
+		mapped.ChannelMeta = &relaycommon.ChannelMeta{UpstreamModelName: selectedModel}
+		if err := helper.ModelMappedHelper(c, &mapped, nil); err != nil {
+			return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		selectedModel = mapped.UpstreamModelName
+	}
+	if err := helper.ValidateDomesticUnderstanding(info.Request, channel.Type, selectedModel); err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+	if selectedModel != "qwen3.8-omni-flash" && selectedModel != "qwen3.8-max" {
+		return nil
+	}
+	paramOverrides := channel.GetParamOverride()
+	if len(info.RouteCandidates) == 0 {
+		paramOverrides = common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride)
+	}
+	if len(info.RouteCandidates) > 0 {
+		if merged, applied := service.ApplyChannelAffinityOverrideTemplate(c, paramOverrides); applied {
+			paramOverrides = merged
+		}
+	}
+	for name, value := range paramOverrides {
+		switch name {
+		case "temperature", "top_p", "seed", "frequency_penalty", "presence_penalty":
+			number, ok := value.(float64)
+			if !ok || math.IsNaN(number) || math.IsInf(number, 0) {
+				return types.NewErrorWithStatusCode(errors.New("selected understanding requires finite scalar overrides"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			}
+		default:
+			return types.NewErrorWithStatusCode(fmt.Errorf("selected understanding does not support override %q", name), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+	}
+	settings := channel.GetSetting()
+	if len(info.RouteCandidates) == 0 {
+		if selectedSettings, ok := common.GetContextKeyType[dto.ChannelSettings](c, constant.ContextKeyChannelSetting); ok {
+			settings = selectedSettings
+		}
+	}
+	incompatible := settings.PassThroughBodyEnabled || model_setting.GetGlobalSettings().PassThroughRequestEnabled
+	if _, chat := info.Request.(*dto.GeneralOpenAIRequest); chat && service.ShouldChatCompletionsUseResponsesGlobal(channel.Id, channel.Type, info.OriginModelName) {
+		incompatible = true
+	}
+	if info.SelectedWire != "" {
+		if _, chat := info.Request.(*dto.GeneralOpenAIRequest); chat && info.SelectedWire != "openai_chat" {
+			incompatible = true
+		}
+		if _, responses := info.Request.(*dto.OpenAIResponsesRequest); responses && info.SelectedWire != "responses" {
+			incompatible = true
+		}
+	}
+	if incompatible {
+		return types.NewErrorWithStatusCode(errors.New("selected understanding requires direct typed Chat or Responses without raw passthrough"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+	return nil
 }

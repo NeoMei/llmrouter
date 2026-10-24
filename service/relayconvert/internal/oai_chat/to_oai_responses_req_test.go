@@ -126,3 +126,31 @@ func assistantMessageWithTool(content string, id string, name string, args strin
 	})
 	return msg
 }
+
+func TestChatImageDetailSurvivesResponsesConversion(t *testing.T) {
+	var req dto.GeneralOpenAIRequest
+	require.NoError(t, common.Unmarshal([]byte(`{"model":"qwen3.8-omni-flash","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.test/i","detail":"low"}}]}]}`), &req))
+	got, err := ChatCompletionsRequestToResponsesRequest(&req)
+	require.NoError(t, err)
+	assert.Equal(t, "low", gjson.GetBytes(got.Input, "0.content.0.detail").String())
+}
+
+func TestChatMediaConversionRejectsLoss(t *testing.T) {
+	for _, body := range []string{
+		`{"model":"m","messages":[{"role":"system","content":[{"type":"image_url","image_url":{"url":"https://example.test/i"}}]}]}`,
+		`{"model":"m","messages":[{"role":"user","content":[{"type":"video","video":["https://example.test/f"]}]}]}`,
+	} {
+		var req dto.GeneralOpenAIRequest
+		require.NoError(t, common.Unmarshal([]byte(body), &req))
+		_, err := ChatCompletionsRequestToResponsesRequest(&req)
+		require.Error(t, err)
+	}
+}
+func TestChatTopLevelFPSPreserved(t *testing.T) {
+	var req dto.GeneralOpenAIRequest
+	require.NoError(t, common.Unmarshal([]byte(`{"model":"m","messages":[{"role":"user","content":[{"type":"video_url","video_url":{"url":"https://example.test/v"},"fps":0}]}]}`), &req))
+	got, err := ChatCompletionsRequestToResponsesRequest(&req)
+	require.NoError(t, err)
+	assert.True(t, gjson.GetBytes(got.Input, "0.content.0.fps").Exists())
+	assert.Equal(t, int64(0), gjson.GetBytes(got.Input, "0.content.0.fps").Int())
+}

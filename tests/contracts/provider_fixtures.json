@@ -35,6 +35,10 @@
     "midjourney.submit",
     "midjourney.fetch",
     "suno.submit",
-    "suno.fetch"
+    "suno.fetch",
+    "multimodal.embeddings.create",
+    "ocr.jobs.create",
+    "ocr.jobs.retrieve",
+    "ocr.resources.retrieve"
   ]
 }

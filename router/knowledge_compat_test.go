@@ -28,7 +28,7 @@ import (
 // Exact fixed SuperWagie request shapes cross the production Gin router,
 // bearer authentication, catalog aliases, Ali HTTP conversion and settlement.
 func TestKnowledgeCompatibleHTTP(t *testing.T) {
-	for _, scenario := range []string{"native", "native-nil", "native-true", "native-top-one", "standard-nil", "standard", "embedding", "chat", "missing-token", "bad-token", "token-model", "token-group", "channel-group", "bad-input", "null-input", "bad-documents", "bad-top-n", "zero-top-n", "over-top-n", "bad-return-documents", "passthrough", "invalid-index", "duplicate-index", "invalid-score", "missing-index", "null-score", "negative-usage", "missing-usage", "global-passthrough", "chat-passthrough", "native-override"} {
+	for _, scenario := range []string{"native", "native-nil", "native-true", "native-top-one", "standard-nil", "standard", "embedding", "chat", "missing-token", "bad-token", "token-model", "token-group", "channel-group", "bad-input", "null-input", "bad-documents", "bad-top-n", "zero-top-n", "over-top-n", "bad-return-documents", "passthrough", "invalid-index", "duplicate-index", "invalid-score", "missing-index", "null-score", "negative-usage", "missing-usage", "global-passthrough", "chat-passthrough", "native-override", "canonical-missing-index", "canonical-null-index", "canonical-duplicate-index", "canonical-invalid-index", "canonical-missing-score", "canonical-null-score", "canonical-invalid-score", "canonical-missing-usage", "canonical-null-usage", "canonical-null-total-tokens", "canonical-negative-usage", "canonical-cardinality", "canonical-oversized"} {
 		t.Run(scenario, func(t *testing.T) {
 			gin.SetMode(gin.TestMode)
 			db, err := gorm.Open(sqlite.Open("file:knowledge_"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
@@ -144,33 +144,63 @@ func TestKnowledgeCompatibleHTTP(t *testing.T) {
 						assert.EqualValues(t, wantTop, params["top_n"])
 						assert.Equal(t, scenario == "native-true", params["return_documents"])
 					}
+					wireScenario := strings.TrimPrefix(scenario, "canonical-")
 					response := `{"request_id":"rank-fixture","output":{"results":[{"index":1,"relevance_score":0.9},{"index":0,"relevance_score":0.2}]},"usage":{"total_tokens":10}}`
-					if scenario == "invalid-index" {
+					if wireScenario == "invalid-index" {
 						response = strings.Replace(response, `"index":1`, `"index":2`, 1)
 					}
-					if scenario == "duplicate-index" {
+					if wireScenario == "duplicate-index" {
 						response = strings.Replace(response, `"index":1`, `"index":0`, 1)
 					}
-					if scenario == "missing-index" {
+					if wireScenario == "missing-index" {
 						response = strings.Replace(response, `"index":0,`, "", 1)
 					}
-					if scenario == "null-score" {
+					if wireScenario == "null-score" {
 						response = strings.Replace(response, `0.9`, `null`, 1)
 					}
-					if scenario == "negative-usage" {
+					if wireScenario == "negative-usage" {
 						response = strings.Replace(response, `"total_tokens":10`, `"total_tokens":-10`, 1)
 					}
-					if scenario == "missing-usage" {
+					if wireScenario == "missing-usage" {
 						response = strings.Replace(response, `,"usage":{"total_tokens":10}`, ``, 1)
 					}
-					if scenario == "native-top-one" {
+					if wireScenario == "native-top-one" {
 						response = strings.Replace(response, `,{"index":0,"relevance_score":0.2}`, ``, 1)
 					}
-					if scenario == "native-true" || scenario == "native" {
+					if wireScenario == "native-true" || wireScenario == "native" {
 						response = strings.Replace(response, `"index":1,`, `"index":1,"document":{"text":"second"},`, 1)
 					}
-					if scenario == "invalid-score" {
+					if wireScenario == "invalid-score" {
 						response = strings.Replace(response, `0.9`, `1e999`, 1)
+					}
+
+					if wireScenario == "null-index" {
+						response = strings.Replace(response, `"index":0`, `"index":null`, 1)
+					}
+					if wireScenario == "missing-score" {
+						response = strings.Replace(response, `,"relevance_score":0.9`, "", 1)
+					}
+					if wireScenario == "null-usage" {
+						response = strings.Replace(response, `"usage":{"total_tokens":10}`, `"usage":null`, 1)
+					}
+					if wireScenario == "null-total-tokens" {
+						response = strings.Replace(response, `"total_tokens":10`, `"total_tokens":null`, 1)
+					}
+					if wireScenario == "cardinality" {
+						response = strings.Replace(response, `,{"index":0,"relevance_score":0.2}`, "", 1)
+					}
+					if wireScenario == "oversized" {
+						// Send a valid JSON response beyond the production 64 MiB boundary.
+						// The trailing valid results would be returned and billed by an unbounded reader.
+						_, _ = io.WriteString(w, `{"padding":"`)
+						block := strings.Repeat(" ", 1<<20)
+						for range 65 {
+							if _, err := io.WriteString(w, block); err != nil {
+								return
+							}
+						}
+						_, _ = io.WriteString(w, `",`+strings.TrimPrefix(response, "{"))
+						return
 					}
 					_, _ = w.Write([]byte(response))
 				}
@@ -227,6 +257,11 @@ func TestKnowledgeCompatibleHTTP(t *testing.T) {
 			case "bad-return-documents":
 				body = strings.Replace(body, `"return_documents":false`, `"return_documents":"false"`, 1)
 			}
+			if strings.HasPrefix(scenario, "canonical-") {
+				path = "/v1/rerank"
+				body = `{"model":"knowledge-alias","query":"search","documents":["first","second"],"top_n":2,"return_documents":false}`
+			}
+
 			if scenario == "chat-passthrough" {
 				body = strings.TrimSuffix(body, "}") + `,"vendor_big":9007199254740993}`
 			}
@@ -292,7 +327,13 @@ func TestKnowledgeCompatibleHTTP(t *testing.T) {
 			} else {
 				require.GreaterOrEqual(t, recorder.Code, 400, recorder.Body.String())
 				assert.Contains(t, recorder.Body.String(), `"error"`)
-				if !strings.HasPrefix(scenario, "invalid-") && scenario != "duplicate-index" && scenario != "missing-index" && scenario != "null-score" && scenario != "negative-usage" && scenario != "missing-usage" {
+				if strings.HasPrefix(scenario, "canonical-") {
+					assert.Equal(t, 502, recorder.Code)
+					assert.NotContains(t, recorder.Body.String(), `"results"`)
+					assert.NotContains(t, recorder.Body.String(), `"relevance_score"`)
+					assert.EqualValues(t, 1, sends.Load())
+				}
+				if !strings.HasPrefix(scenario, "canonical-") && !strings.HasPrefix(scenario, "invalid-") && scenario != "duplicate-index" && scenario != "missing-index" && scenario != "null-score" && scenario != "negative-usage" && scenario != "missing-usage" {
 					assert.Zero(t, sends.Load())
 				}
 			}

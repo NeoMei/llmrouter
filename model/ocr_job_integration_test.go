@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -47,7 +48,7 @@ func TestOCRConfiguredDatabases(t *testing.T) {
 			}
 			require.NoError(t, db.AutoMigrate(&User{}, &Token{}, &Channel{}, &SubscriptionPlan{}))
 			for i := 0; i < 2; i++ {
-				require.NoError(t, db.AutoMigrate(&UserSubscription{}, &OCRJob{}, &OCROperation{}, &OCRAuditEvent{}))
+				require.NoError(t, db.AutoMigrate(&UserSubscription{}, &OCRJob{}, &OCROperation{}, &OCRAuditEvent{}, &OCRResource{}, &OCRResourceGrant{}))
 			}
 			user := User{Username: "ocr-" + uuid.NewString()[:12], AffCode: uuid.NewString()[:16], Quota: 1000, Status: common.UserStatusEnabled, AuthVersion: 1}
 			require.NoError(t, db.Create(&user).Error)
@@ -66,6 +67,8 @@ func TestOCRConfiguredDatabases(t *testing.T) {
 				if len(ids) > 0 {
 					require.NoError(t, db.Where("job_id IN ?", ids).Delete(&OCROperation{}).Error)
 					require.NoError(t, db.Where("job_id IN ?", ids).Delete(&OCRAuditEvent{}).Error)
+					require.NoError(t, db.Where("job_id IN ?", ids).Delete(&OCRResource{}).Error)
+					require.NoError(t, db.Where("job_id IN ?", ids).Delete(&OCRResourceGrant{}).Error)
 					require.NoError(t, db.Where("id IN ?", ids).Delete(&OCRJob{}).Error)
 				}
 				require.NoError(t, db.Delete(&sub).Error)
@@ -156,6 +159,51 @@ func TestOCRConfiguredDatabases(t *testing.T) {
 			var events int64
 			require.NoError(t, db.Model(&OCRAuditEvent{}).Where("job_id IN ?", []string{id, j.ID}).Count(&events).Error)
 			assert.EqualValues(t, 2, events)
+			// New durable execution, refusal rearm and resource CAS on every dialect.
+			a.IdempotencyKey = uuid.NewString()
+			a.Preference = "wallet_only"
+			owned, err := s.CreateIntent(ctx, a)
+			require.NoError(t, err)
+			require.NoError(t, s.ConfigureOCRSubmission(ctx, owned.ID, OCRExecution{JobsURL: "https://supplier.example/api/v2/ocr/jobs", Model: a.Model, InputDigest: "fixture", MaxAttempts: 2}))
+			_, err = s.Reserve(ctx, owned.ID)
+			require.NoError(t, err)
+			first, err := s.ClaimSubmission(ctx, owned.ID, ocrTestSelection(channel.Id))
+			require.NoError(t, err)
+			require.NoError(t, s.RecordOCRRefusal(ctx, first, 429, true))
+			nextSelection := ocrTestSelection(channel.Id)
+			nextSelection.Ref.MemberID = uuid.NewString()
+			second, err := s.ClaimSubmission(ctx, owned.ID, nextSelection)
+			require.NoError(t, err)
+			require.ErrorIs(t, s.RecordSubmission(ctx, first, "late", false), ErrOCRConflict)
+			require.NoError(t, s.RecordSubmission(ctx, second, "accepted", false))
+			require.NoError(t, s.RecordOCRProgress(ctx, owned.ID, second.ClaimID, "done", "https://supplier.example/result", 1, 1))
+			_, err = s.Finish(ctx, owned.ID, "success")
+			require.NoError(t, err)
+			winners := make([]bool, 2)
+			for i := range winners {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					r := OCRResource{ID: uuid.NewString(), JobID: owned.ID, Kind: "jsonl", ObjectKey: "fixture", ContentType: "application/x-ndjson", Size: 10, ExpiresAt: time.Now().Add(time.Hour).Unix()}
+					winners[i], errs[i] = s.PublishOCRResources(ctx, owned.ID, []OCRResource{r}, r.ID)
+				}(i)
+			}
+			wg.Wait()
+			for _, err := range errs {
+				require.NoError(t, err)
+			}
+			assert.NotEqual(t, winners[0], winners[1])
+			var resources int64
+			require.NoError(t, db.Model(&OCRResource{}).Where("job_id = ?", owned.ID).Count(&resources).Error)
+			assert.EqualValues(t, 1, resources)
+			current, err := s.Inspect(ctx, owned.ID)
+			require.NoError(t, err)
+			grant := OCRResourceGrant{ResourceID: current.Job.ResultResourceID, JobID: owned.ID, ExpiresAt: time.Now().Add(time.Hour).Unix(), Digest: strings.Repeat("a", 64)}
+			for i := 0; i < 2; i++ {
+				require.NoError(t, s.PutOCRGrant(ctx, grant, time.Now().Unix()))
+			}
+			require.NoError(t, s.ValidateOCRGrant(ctx, owned.ID, grant.ResourceID, grant.Digest, time.Now().Unix()))
+			require.ErrorIs(t, s.ValidateOCRGrant(ctx, owned.ID, grant.ResourceID, grant.Digest, grant.ExpiresAt), ErrOCRGrant)
 		})
 	}
 }

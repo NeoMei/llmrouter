@@ -31,6 +31,17 @@ type OCRAdmission struct {
 }
 
 type OCRJob struct {
+	Execution        string `gorm:"type:text" json:"-"`
+	Attempts         string `gorm:"type:text" json:"-"`
+	SubmitAttempts   int
+	MaxAttempts      int
+	RetryRefusal     bool
+	ProviderState    string `gorm:"size:24"`
+	TotalPages       int
+	ExtractedPages   int
+	ResultURL        string `gorm:"type:text" json:"-"`
+	ResultResourceID string `gorm:"size:36"`
+
 	ID              string `gorm:"primaryKey;size:36"`
 	UserID          int    `gorm:"uniqueIndex:idx_ocr_owner_key,priority:1"`
 	IdempotencyKey  string `gorm:"size:128;uniqueIndex:idx_ocr_owner_key,priority:2"`
@@ -510,7 +521,7 @@ func (s *OCRBillingStore) ClaimSubmission(ctx context.Context, id string, select
 		if j.ChannelID != ref.ChannelID {
 			return ErrOCRConflict
 		}
-		if j.BillingState != "reserved" || j.SubmissionState != "unclaimed" || j.Decision != "" {
+		if j.BillingState != "reserved" || (j.SubmissionState != "unclaimed" && !(j.SubmissionState == "rejected" && j.RetryRefusal)) || j.Decision != "" {
 			return ErrOCRConflict
 		}
 		for _, kind := range []string{j.Funding, "token"} {
@@ -533,6 +544,30 @@ func (s *OCRBillingStore) ClaimSubmission(ctx context.Context, id string, select
 		if owner.Status != common.UserStatusEnabled || token.UserId != j.UserID || token.Status != common.TokenStatusEnabled || (token.ExpiredTime != -1 && token.ExpiredTime <= time.Now().Unix()) {
 			return ErrOCRConflict
 		}
+		var attempts []OCRSubmissionAttempt
+		if j.Attempts != "" {
+			if err := common.UnmarshalJsonStr(j.Attempts, &attempts); err != nil {
+				return err
+			}
+		}
+		budget := j.MaxAttempts
+		if budget == 0 {
+			budget = 1
+		}
+		if len(attempts) >= budget {
+			return ErrOCRConflict
+		}
+		for _, prior := range attempts {
+			if prior.MemberID == member || prior.HealthMemberID == ref.MemberID {
+				return ErrOCRConflict
+			}
+		}
+		attempts = append(attempts, OCRSubmissionAttempt{ClaimID: claim.ClaimID, MemberID: member, HealthMemberID: ref.MemberID, Binding: binding, State: "submitting", CreatedAt: time.Now().Unix()})
+		encoded, err := common.Marshal(attempts)
+		if err != nil {
+			return err
+		}
+		j.Attempts, j.SubmitAttempts, j.RetryRefusal = string(encoded), len(attempts), false
 		j.SubmissionState = "submitting"
 		j.MemberID = member
 		j.AccountBinding = string(raw)
@@ -567,6 +602,9 @@ func (s *OCRBillingStore) RecordSubmission(ctx context.Context, c OCRClaim, prov
 		} else {
 			j.SubmissionState = "submitted"
 			j.ProviderJobID = providerID
+		}
+		if err := ocrUpdateAttempt(j, j.SubmissionState, 0); err != nil {
+			return err
 		}
 		return ocrSaveJob(tx, j)
 	})
@@ -758,6 +796,10 @@ func (s *OCRBillingStore) RecordSubmissionFailure(ctx context.Context, c OCRClai
 			return ErrOCRConflict
 		}
 		j.SubmissionState = "rejected"
+		j.RetryRefusal = false
+		if err := ocrUpdateAttempt(j, "rejected", 0); err != nil {
+			return err
+		}
 		return ocrSaveJob(tx, j)
 	})
 }

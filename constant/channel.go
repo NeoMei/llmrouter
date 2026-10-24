@@ -59,6 +59,7 @@ const (
 	ChannelTypeCodex          = 57
 	ChannelTypeAdvancedCustom = 58
 	ChannelTypeGateway        = 59
+	ChannelTypePaddleOCR      = 60
 	ChannelTypeDummy          // this one is only for count, do not add any channel after this
 
 )
@@ -124,6 +125,7 @@ var ChannelBaseURLs = []string{
 	"https://chatgpt.com",                       //57
 	"",                                          //58
 	"",                                          //59 Codex Gateway (URL from provider profile)
+	"https://paddleocr.aistudio-app.com",        //60 PaddleOCR
 }
 
 var ChannelTypeNames = map[int]string{
@@ -183,6 +185,7 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeCodex:          "ChatGPT Subscription (Codex)",
 	ChannelTypeAdvancedCustom: "Advanced Custom",
 	ChannelTypeGateway:        "Codex Gateway",
+	ChannelTypePaddleOCR:      "PaddleOCR",
 }
 
 func GetChannelTypeName(channelType int) string {

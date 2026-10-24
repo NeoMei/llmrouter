@@ -41,6 +41,7 @@ func ocrConcurrentFixture(t *testing.T, dialect string) (*OCRBillingStore, OCRAd
 	conn, err := db.DB()
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	require.NoError(t, db.AutoMigrate(&OCRJob{}, &OCRResource{}, &OCRResourceGrant{}))
 	user := User{Username: "ocr-race-" + uuid.NewString()[:10], AffCode: uuid.NewString()[:16], Quota: 1000, Status: common.UserStatusEnabled, AuthVersion: 1}
 	require.NoError(t, db.Create(&user).Error)
 	token := Token{UserId: user.Id, Key: uuid.NewString(), RemainQuota: 1000, Status: common.TokenStatusEnabled, ExpiredTime: -1}

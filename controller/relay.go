@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay"
+	"github.com/QuantumNous/new-api/relay/capability"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -578,11 +580,39 @@ func prepareRouteCandidateForAttempt(c *gin.Context, info *relaycommon.RelayInfo
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeGetChannelFailed)
 	}
-	if candidateChannel.ChannelInfo.IsMultiKey {
+	if common.GetContextKeyBool(c, constant.ContextKeyDeferredModelRoute) {
+		protocol, operation, err := capability.ResolveRequest(c.Request.Method, c.Request.URL.Path)
+		if err != nil || !middleware.ChannelSupportsRequestPath(candidateChannel, c.Request.URL.Path, info.ResolvedModelNameOrOrigin(), protocol, operation) {
+			return types.NewErrorWithStatusCode(errors.New("configured target does not support the request operation/path"), types.ErrorCodeNoCapableChannel, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+	}
+
+	if err := modelcatalog.ValidateChannelOperations(info.ModelCapabilities, candidateChannel.Type); err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+	if candidateChannel.ChannelInfo.IsMultiKey || common.GetContextKeyBool(c, constant.ContextKeyDeferredModelRoute) {
 		if setupErr := middleware.SetupContextForSelectedChannel(c, candidateChannel, info.ResolvedModelNameOrOrigin()); setupErr != nil {
 			return setupErr
 		}
 	}
+	contract := info.ModelCapabilities
+	if len(contract.InputModalities) > 0 || len(contract.OutputModalities) > 0 || len(contract.Operations) > 0 || contract.Streaming != nil || contract.Async != nil || contract.MediaLimits != nil || contract.EmbeddingSpace != nil {
+		// Arbitrary patch operations/templates can inject media or replace an
+		// admitted model/input. Only direct, finite sampling scalars are known
+		// to preserve this contract before final-body media admission exists.
+		for name, value := range common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride) {
+			switch name {
+			case "temperature", "top_p", "seed", "frequency_penalty", "presence_penalty":
+				number, ok := value.(float64)
+				if !ok || math.IsNaN(number) || math.IsInf(number, 0) {
+					return types.NewErrorWithStatusCode(errors.New("model contract requires direct finite scalar parameter overrides"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+				}
+			default:
+				return types.NewErrorWithStatusCode(fmt.Errorf("parameter override %q cannot be proven to preserve the declared model contract", name), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			}
+		}
+	}
+
 	if err := relay.PrepareResponsesContinuityForAttempt(c, info); err != nil {
 		return err
 	}
@@ -975,6 +1005,9 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 		return nil
 	}
 	if model.DB == nil || !model.DB.Migrator().HasTable(&model.ClientModelRoute{}) || !model.DB.Migrator().HasTable(&model.ClientModelTarget{}) {
+		if common.GetContextKeyBool(c, constant.ContextKeyDeferredModelRoute) {
+			return types.NewErrorWithStatusCode(errors.New("configured model route is no longer available"), types.ErrorCodeGetChannelFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
 		return nil
 	}
 
@@ -993,6 +1026,9 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 		return types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
 	}
 	if !hasMatchingClientModelRoute(routes, relayInfo.OriginModelName, client) {
+		if common.GetContextKeyBool(c, constant.ContextKeyDeferredModelRoute) {
+			return types.NewErrorWithStatusCode(errors.New("configured model route is no longer available for this client"), types.ErrorCodeGetChannelFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
 		return nil
 	}
 
@@ -1008,6 +1044,16 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 	resolved, err := catalog.ResolveCandidates(c.Request.Context(), c.GetInt("id"), groups.ownerGroups, relayInfo.OriginModelName, client)
 	if err != nil {
 		return types.NewError(fmt.Errorf("configured model route %s has no available target: %w", relayInfo.OriginModelName, err), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+	}
+	if len(resolved) > 0 {
+		_, operation, operationErr := capability.ResolveRequest(c.Request.Method, c.Request.URL.Path)
+		if operationErr == nil {
+			if err := helper.ValidateModelAdmission(c, relayInfo, resolved[0].Capabilities, operation); err != nil {
+				return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			}
+		} else if len(resolved[0].Capabilities.Operations) > 0 {
+			return types.NewErrorWithStatusCode(operationErr, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
 	}
 	admissionTokens := estimatedInputTokens
 	if !constant.CountToken && estimatedInputTokens == 0 {
@@ -1111,7 +1157,8 @@ func filterRouteCandidatesByContext(candidates []modelcatalog.ResolvedModel, est
 
 func routeCandidateFromResolved(relayInfo *relaycommon.RelayInfo, resolved *modelcatalog.ResolvedModel) (relaycommon.RouteCandidate, error) {
 	candidate := relaycommon.RouteCandidate{
-		RouteID: resolved.RouteID, TargetID: resolved.TargetID, ChannelID: resolved.ChannelID,
+		Capabilities: resolved.Capabilities,
+		RouteID:      resolved.RouteID, TargetID: resolved.TargetID, ChannelID: resolved.ChannelID,
 		UpstreamModel: resolved.UpstreamModel, BillingModel: resolved.BillingModel,
 		SelectedGroup: resolved.SelectedGroup, ContextWindow: resolved.ContextWindow, RequiresKnownContext: resolved.RequiresKnownContext,
 	}
@@ -1147,6 +1194,7 @@ func selectRouteCandidateForAttempt(c *gin.Context, relayInfo *relaycommon.Relay
 	relayInfo.ModelTargetId = candidate.TargetID
 	relayInfo.ResolvedChannelId = candidate.ChannelID
 	relayInfo.SelectedWire = candidate.SelectedWire
+	relayInfo.ModelCapabilities = candidate.Capabilities
 	relayInfo.RouteContextWindow = candidate.ContextWindow
 	if candidate.SelectedGroup != "" {
 		relayInfo.UsingGroup = candidate.SelectedGroup

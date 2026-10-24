@@ -117,7 +117,17 @@ func defaultDeclarations() []Declaration {
 		constant.ChannelTypeCohere,
 		constant.ChannelCloudflare,
 	)
-	support(embeddingCompatible, OperationEmbeddingCreate)
+	// These adapters explicitly reject embedding conversion; a chat wire does
+	// not imply native embedding support. Keep the registry as the sole
+	// operation authority for both metadata admission and distribution.
+	for _, channelType := range embeddingCompatible {
+		switch channelType {
+		case constant.ChannelTypeZhipu, constant.ChannelTypePerplexity, constant.ChannelTypeMistral, constant.ChannelTypeDeepSeek, constant.ChannelTypeBaiduV2, constant.ChannelTypeXai, constant.ChannelTypeSubmodel, constant.ChannelTypeCodex, constant.ChannelTypeVertexAi, constant.ChannelTypeCohere:
+			continue
+		default:
+			support([]int{channelType}, OperationEmbeddingCreate)
+		}
+	}
 
 	support([]int{constant.ChannelTypeOpenAI, constant.ChannelTypeAzure, constant.ChannelTypeAdvancedCustom, constant.ChannelTypeGateway},
 		OperationAudioTranscription, OperationAudioTranslation, OperationAudioSpeech,

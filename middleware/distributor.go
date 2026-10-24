@@ -19,6 +19,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/accountpool"
+	"github.com/QuantumNous/new-api/service/modelcatalog"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -45,6 +46,26 @@ func Distribute() func(c *gin.Context) {
 			abortWithOpenAiMessage(c, http.StatusBadRequest, err.Error(), types.ErrorCodeUnsupportedOperation)
 			return
 		}
+		// Recognition grants no authority. Unsupported handler lifecycles must
+		// fail closed rather than reusing a legacy ability with the same name.
+		canDefer := false
+		switch operation {
+		case capability.OperationChatCreate, capability.OperationCompletionCreate, capability.OperationResponseCreate, capability.OperationResponseCompact, capability.OperationClaudeMessageCreate, capability.OperationEmbeddingCreate, capability.OperationAudioTranscription, capability.OperationAudioTranslation, capability.OperationAudioSpeech, capability.OperationImageGeneration, capability.OperationImageEdit, capability.OperationImageVariation, capability.OperationRerankCreate, capability.OperationGeminiGenerate, capability.OperationGeminiEmbed:
+			canDefer = true
+		}
+		recognized, routeErr := false, error(nil)
+		if shouldSelectChannel {
+			recognized, routeErr = modelcatalog.RecognizesPublicModel(c.Request.Context(), model.DB, modelRequest.Model)
+		}
+		if routeErr != nil {
+			abortWithOpenAiMessage(c, http.StatusInternalServerError, routeErr.Error(), types.ErrorCodeQueryDataError)
+			return
+		}
+		if recognized && !canDefer {
+			abortWithOpenAiMessage(c, http.StatusBadRequest, "configured public model requires a supported catalog relay handler", types.ErrorCodeUnsupportedOperation)
+			return
+		}
+
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
 			if err != nil {
@@ -110,6 +131,14 @@ func Distribute() func(c *gin.Context) {
 						usingGroup = playgroundRequest.Group
 						common.SetContextKey(c, constant.ContextKeyUsingGroup, usingGroup)
 					}
+				}
+
+				if recognized {
+					common.SetContextKey(c, constant.ContextKeyDeferredModelRoute, true)
+					common.SetContextKey(c, constant.ContextKeyOriginalModel, modelRequest.Model)
+					common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
+					c.Next()
+					return
 				}
 
 				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
@@ -207,6 +236,12 @@ func channelSupportsRequestPath(channel *model.Channel, requestPath string, requ
 	}
 	config := channel.GetOtherSettings().AdvancedCustom
 	return config != nil && config.SupportsPathForModel(requestPath, requestModel)
+}
+
+// ChannelSupportsRequestPath shares the distributor's adapter and custom-path
+// authority with public-route admission before any quota reservation.
+func ChannelSupportsRequestPath(channel *model.Channel, path, modelName string, protocol capability.Protocol, operation capability.Operation) bool {
+	return channelSupportsRequestPath(channel, path, modelName, protocol, operation)
 }
 
 // getModelFromRequest 从请求中读取模型信息

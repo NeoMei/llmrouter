@@ -31,6 +31,7 @@ type ClientModelTarget struct {
 	Priority           int    `json:"priority" gorm:"not null;default:0"`
 	Weight             int    `json:"weight" gorm:"not null;default:1"`
 	Enabled            bool   `json:"enabled" gorm:"index;not null;default:true"`
+	Metadata           string `json:"metadata,omitempty" gorm:"type:text"`
 	ContextWindow      int    `json:"context_window"`
 	ContextFitRequired bool   `json:"context_fit_required"`
 

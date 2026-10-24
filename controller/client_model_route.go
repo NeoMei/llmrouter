@@ -186,6 +186,26 @@ func UpdateClientModelRoute(c *gin.Context) {
 		if err := validateClientModelRoutePayload(tx, payload); err != nil {
 			return err
 		}
+		previous, err := modelcatalog.NormalizeModelCapabilities(existing.Metadata)
+		if err != nil {
+			return err
+		}
+		updated, err := modelcatalog.NormalizeModelCapabilities(route.Metadata)
+		if err != nil {
+			return err
+		}
+		if previous.EmbeddingSpace != nil && (updated.EmbeddingSpace == nil || *previous.EmbeddingSpace != *updated.EmbeddingSpace) {
+			oldNames := append(decodeRouteAliases(existing.Aliases), existing.PublicId)
+			newNames := append(append([]string(nil), payload.Aliases...), route.PublicId)
+			for _, oldName := range oldNames {
+				for _, newName := range newNames {
+					if strings.EqualFold(strings.TrimSpace(oldName), strings.TrimSpace(newName)) {
+						return fmt.Errorf("fixed embedding_space cannot change under an existing public model id or alias; use disjoint new names")
+					}
+				}
+			}
+		}
+
 		if err := ensureRouteNameAndAliasesAvailable(tx, payload.ID, payload); err != nil {
 			return err
 		}
@@ -262,6 +282,10 @@ func validateClientModelRoutePayload(tx *gorm.DB, payload clientModelRoutePayloa
 	if route.Client == "" {
 		route.Client = "all"
 	}
+	metadata, err := modelcatalog.NormalizeModelCapabilities(route.Metadata)
+	if err != nil {
+		return err
+	}
 	targets := make([]model.ClientModelTarget, 0, len(payload.Targets))
 	for i, target := range payload.Targets {
 		if target.Id == 0 {
@@ -283,6 +307,9 @@ func validateClientModelRoutePayload(tx *gorm.DB, payload clientModelRoutePayloa
 		}
 		if !helper.HasModelBillingConfig(strings.TrimSpace(target.BillingModel)) {
 			return fmt.Errorf("target %d billing model %q has no billing configuration", target.Id, target.BillingModel)
+		}
+		if err := modelcatalog.ValidateChannelOperations(metadata, channel.Type); err != nil {
+			return err
 		}
 		if err := validateTargetWiresForChannel(target, channel.Type); err != nil {
 			return err

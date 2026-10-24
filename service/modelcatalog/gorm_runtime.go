@@ -30,7 +30,7 @@ func (s GormRuntimeSources) Channel(ctx context.Context, id int) (RuntimeChannel
 		}
 		return RuntimeChannel{}, false, err
 	}
-	return RuntimeChannel{ID: channel.Id, Enabled: channel.Status == common.ChannelStatusEnabled, ModelMapping: channel.GetModelMapping()}, true, nil
+	return RuntimeChannel{Type: channel.Type, ID: channel.Id, Enabled: channel.Status == common.ChannelStatusEnabled, ModelMapping: channel.GetModelMapping()}, true, nil
 }
 
 func (s GormRuntimeSources) Abilities(ctx context.Context, channelID int, upstream string) ([]RuntimeAbility, error) {
@@ -70,4 +70,31 @@ func (s GormRuntimeSources) CanonicalBillingModel(_ context.Context, modelName s
 		}
 	}
 	return "", false, nil
+}
+
+// RecognizesPublicModel is only a distributor deferral hint. It grants no
+// visibility, channel or group authority; the controller must resolve again.
+func RecognizesPublicModel(ctx context.Context, db *gorm.DB, requested string) (bool, error) {
+	if db == nil || !db.Migrator().HasTable(&model.ClientModelRoute{}) || !db.Migrator().HasTable(&model.ClientModelTarget{}) {
+		return false, nil
+	}
+	var routes []model.ClientModelRoute
+	if err := db.WithContext(ctx).Select("public_id", "aliases").Where("enabled = ?", true).Find(&routes).Error; err != nil {
+		return false, err
+	}
+	for _, route := range routes {
+		if strings.EqualFold(strings.TrimSpace(route.PublicId), strings.TrimSpace(requested)) {
+			return true, nil
+		}
+		aliases, err := decodeStrings(route.Aliases)
+		if err != nil {
+			return false, err
+		}
+		for _, alias := range aliases {
+			if strings.EqualFold(strings.TrimSpace(alias), strings.TrimSpace(requested)) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }

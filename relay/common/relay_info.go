@@ -89,6 +89,7 @@ type TokenCountMeta struct {
 // RouteCandidate is the controller-owned, package-neutral state for one
 // authoritative public-model target attempt.
 type RouteCandidate struct {
+	Capabilities         dto.ModelCapabilities
 	RouteID              int
 	TargetID             int
 	ChannelID            int
@@ -125,7 +126,8 @@ type RelayInfo struct {
 	ModelRouteId            int    // 命中的公开模型路由目标 ID
 	ModelTargetId           int    // 当前显式路由目标 ID
 	ResolvedChannelId       int    // 当前显式路由渠道 ID
-	RouteContextWindow      int    // 当前目标的上下文容量
+	ModelCapabilities       dto.ModelCapabilities
+	RouteContextWindow      int // 当前目标的上下文容量
 	RouteCandidates         []RouteCandidate
 	RejectedRouteCandidates []RouteCandidate
 	RouteCandidateIndex     int

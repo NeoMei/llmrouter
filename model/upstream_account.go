@@ -54,6 +54,8 @@ type UpstreamAccountFailure struct {
 	RetryAt time.Time
 }
 
+// Persistence PoolID fields hold exact namespace hashes, not public management
+// labels. Lowercase hex keys have identical equality/order on every SQL collation.
 type UpstreamAccountPool struct {
 	PoolID   string `gorm:"primaryKey;size:112" json:"pool_id"`
 	Sequence int64  `json:"-"`
@@ -90,13 +92,13 @@ func ResolveUpstreamAccountRef(ctx context.Context, db *gorm.DB, poolID string, 
 		return UpstreamAccountRef{}, errors.New("invalid upstream account identity")
 	}
 	digest := accountStateID(poolID, identity)
-	member := UpstreamAccountMember{MemberID: uuid.NewString(), PoolID: poolID, IdentityDigest: digest, QuotaGroup: quotaGroup}
+	member := UpstreamAccountMember{MemberID: uuid.NewString(), PoolID: accountStateID("pool:" + poolID), IdentityDigest: digest, QuotaGroup: quotaGroup}
 	err := db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "pool_id"}, {Name: "identity_digest"}}, DoNothing: true}).Create(&member).Error
 	if err != nil {
 		return UpstreamAccountRef{}, fmt.Errorf("resolve upstream account: %w", err)
 	}
 	member = UpstreamAccountMember{}
-	if err = db.WithContext(ctx).Where("pool_id = ? AND identity_digest = ?", poolID, digest).First(&member).Error; err != nil {
+	if err = db.WithContext(ctx).Where("pool_id = ? AND identity_digest = ?", accountStateID("pool:"+poolID), digest).First(&member).Error; err != nil {
 		return UpstreamAccountRef{}, fmt.Errorf("resolve upstream account: %w", err)
 	}
 	ref.MemberID = member.MemberID
@@ -129,7 +131,7 @@ func SelectUpstreamAccount(ctx context.Context, db *gorm.DB, refs []UpstreamAcco
 			}
 			ids = append(ids, ref.MemberID)
 		}
-		if err := tx.Where("pool_id = ? AND member_id IN ?", poolID, ids).Find(&members).Error; err != nil {
+		if err := tx.Where("pool_id = ? AND member_id IN ?", accountStateID("pool:"+poolID), ids).Find(&members).Error; err != nil {
 			return err
 		}
 		lastSelected := make(map[string]int64, len(members))
@@ -143,10 +145,10 @@ func SelectUpstreamAccount(ctx context.Context, db *gorm.DB, refs []UpstreamAcco
 		if err := lockAccountQuotaGroups(tx, groups); err != nil {
 			return err
 		}
-		namespaces := []string{"pool:" + poolID}
+		namespaces := []string{accountStateID("pool:" + poolID)}
 		for _, group := range groups {
 			if group != "" {
-				namespaces = append(namespaces, "quota:"+group)
+				namespaces = append(namespaces, accountStateID("quota:"+group))
 			}
 		}
 		var states []UpstreamAccountState
@@ -206,7 +208,7 @@ func SelectUpstreamAccount(ctx context.Context, db *gorm.DB, refs []UpstreamAcco
 			}
 			return nil
 		}
-		return tx.Model(&UpstreamAccountMember{}).Where("pool_id = ? AND member_id = ?", poolID, selected.Ref.MemberID).Update("last_selected", revision).Error
+		return tx.Model(&UpstreamAccountMember{}).Where("pool_id = ? AND member_id = ?", accountStateID("pool:"+poolID), selected.Ref.MemberID).Update("last_selected", revision).Error
 	})
 	if err != nil {
 		return UpstreamAccountSelection{}, fmt.Errorf("select upstream account: %w", err)
@@ -278,8 +280,15 @@ func RecordUpstreamAccountSuccess(ctx context.Context, db *gorm.DB, sent Upstrea
 		return errors.New("invalid upstream account receipt")
 	}
 	return accountPoolTransaction(ctx, db, sent.Ref.PoolID, []string{scope.QuotaGroup}, func(tx *gorm.DB, revision int64) error {
-		return tx.Model(&UpstreamAccountState{}).Where("pool_id = ? AND subject = ? AND kind = ? AND revision <= ?", "pool:"+sent.Ref.PoolID, "member:"+sent.Ref.MemberID, UpstreamAccountCooldown, sent.Sequence).
-			Where("(operation = ? OR operation = '') AND (model = ? OR model = '')", scope.Operation, scope.Model).
+		// Scope identifiers encode exact bytes. SQL text comparisons can equate
+		// case, accents and trailing spaces on otherwise supported MySQL collations.
+		ids := []string{
+			accountStateID("pool:"+sent.Ref.PoolID, "member:"+sent.Ref.MemberID, scope.Operation, scope.Model),
+			accountStateID("pool:"+sent.Ref.PoolID, "member:"+sent.Ref.MemberID, scope.Operation, ""),
+			accountStateID("pool:"+sent.Ref.PoolID, "member:"+sent.Ref.MemberID, "", scope.Model),
+			accountStateID("pool:"+sent.Ref.PoolID, "member:"+sent.Ref.MemberID, "", ""),
+		}
+		return tx.Model(&UpstreamAccountState{}).Where("id IN ? AND kind = ? AND revision <= ?", ids, UpstreamAccountCooldown, sent.Sequence).
 			Updates(map[string]interface{}{"kind": "", "reason": "", "retry_at": 0, "revision": revision, "updated_at": now.UnixNano()}).Error
 	})
 }
@@ -332,7 +341,7 @@ func accountPoolTransaction(ctx context.Context, db *gorm.DB, poolID string, gro
 		return errors.New("invalid upstream account database or pool")
 	}
 	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		pool, err := lockAccountCoordinator(tx, "pool:"+poolID)
+		pool, err := lockAccountCoordinator(tx, accountStateID("pool:"+poolID))
 		if err != nil {
 			return err
 		}
@@ -349,14 +358,18 @@ func lockAccountQuotaGroups(tx *gorm.DB, groups []string) error {
 	unique := make(map[string]bool, len(groups))
 	ids := make([]string, 0, len(groups))
 	for _, group := range groups {
-		if group == "" || unique[group] {
+		if group == "" {
 			continue
 		}
 		if !safeAccountID(group) {
 			return errors.New("invalid upstream quota group")
 		}
-		unique[group] = true
-		ids = append(ids, "quota:"+group)
+		id := accountStateID("quota:" + group)
+		if unique[id] {
+			continue
+		}
+		unique[id] = true
+		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 	for _, id := range ids {
@@ -384,7 +397,7 @@ func lockAccountCoordinator(tx *gorm.DB, id string) (UpstreamAccountPool, error)
 }
 
 func loadAccountState(tx *gorm.DB, poolID, subject string, scope UpstreamAccountScope) (UpstreamAccountState, error) {
-	state := UpstreamAccountState{ID: accountStateID(poolID, subject, scope.Operation, scope.Model), PoolID: poolID, Subject: subject, Operation: scope.Operation, Model: scope.Model}
+	state := UpstreamAccountState{ID: accountStateID(poolID, subject, scope.Operation, scope.Model), PoolID: accountStateID(poolID), Subject: subject, Operation: scope.Operation, Model: scope.Model}
 	err := tx.Where("id = ?", state.ID).First(&state).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return state, nil
@@ -409,6 +422,10 @@ func safeAccountID(value string) bool {
 	}) < 0
 }
 func validateAccountRef(ref UpstreamAccountRef) error {
+	memberID, err := uuid.Parse(ref.MemberID)
+	if err != nil || memberID.String() != ref.MemberID {
+		return errors.New("invalid upstream account member ID")
+	}
 	if !safeAccountID(ref.PoolID) || len(ref.MemberID) != 36 || (ref.QuotaGroup != "" && !safeAccountID(ref.QuotaGroup)) || ref.ChannelID <= 0 || ref.KeyIndex < 0 {
 		return errors.New("invalid upstream account reference")
 	}
@@ -441,13 +458,13 @@ func SetUpstreamAccountQuotaGroup(ctx context.Context, db *gorm.DB, ref Upstream
 		return errors.New("invalid upstream quota group")
 	}
 	return accountPoolTransaction(ctx, db, ref.PoolID, nil, func(tx *gorm.DB, _ int64) error {
-		result := tx.Model(&UpstreamAccountMember{}).Where("pool_id = ? AND member_id = ?", ref.PoolID, ref.MemberID).Updates(map[string]interface{}{"quota_group": group, "membership_updated_at": now.UnixNano()})
+		result := tx.Model(&UpstreamAccountMember{}).Where("pool_id = ? AND member_id = ?", accountStateID("pool:"+ref.PoolID), ref.MemberID).Updates(map[string]interface{}{"quota_group": group, "membership_updated_at": now.UnixNano()})
 		if result.Error != nil {
 			return result.Error
 		}
 		// MySQL may report zero changed rows for an idempotent membership update.
 		var count int64
-		if err := tx.Model(&UpstreamAccountMember{}).Where("pool_id = ? AND member_id = ?", ref.PoolID, ref.MemberID).Count(&count).Error; err != nil {
+		if err := tx.Model(&UpstreamAccountMember{}).Where("pool_id = ? AND member_id = ?", accountStateID("pool:"+ref.PoolID), ref.MemberID).Count(&count).Error; err != nil {
 			return err
 		}
 		if count != 1 {

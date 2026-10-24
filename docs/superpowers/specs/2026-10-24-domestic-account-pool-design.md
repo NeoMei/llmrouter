@@ -27,6 +27,7 @@
 9. `dto/openai_request.go` 有 image/audio/video 内容类型，`service/modelcatalog/catalog.go` 的公开模型元数据主要描述上下文、reasoning 与工具，没有完整的多模态输入/输出和媒体约束契约。
 10. `relay/capability/defaults.go` 的图片/语音白名单没有覆盖若干已有国产适配器：Ali 已有图片生成/编辑转换但其音频转换明确不支持，MiniMax/VolcEngine 已有 TTS 分支却不意味着支持 ASR。需要逐操作核验注册与实现的一致性，不能整类放开后由下游报错。
 11. `TaskPrivateData.Key` 与部分查询路径已有创建账号快照机制，但 `InitTask` 当前只为部分渠道保存凭据。多模态任务需要统一绑定实际成员，不能默认用渠道当前 Key 或整个多 Key 字符串查询。
+12. 按用户要求核对本地 `SuperWagie-open` 的资料库与统一模型配置。当前资料库消费 Embedding、Rerank、视觉理解和 PaddleOCR；ASR 模型可由旧安装导入，但扫描器尚未接收音视频，图文向量列为 planned。为这项实际下游需求增加兼容性验收，详见第 9 节。读取该项目未修改其源码或现有配置，也没有读取用户模型凭据。
 
 来源：
 
@@ -88,6 +89,9 @@
 | 能力 | 前端契约 | 模型与账号选择条件 | 首批输出 |
 | --- | --- | --- | --- |
 | 文本/Coding | 现有 Chat / Responses / Messages | 文本、工具、上下文及协议能力 | 文本或流式事件 |
+| 文本向量 | `/v1/embeddings` | 固定向量空间、维度、编码、批量与 query/document 语义 | 顺序与 index 正确的数值向量 |
+| 检索重排 | `/v1/rerank`，并提供下游所需的阿里兼容入口 | query/documents、top_n、返回分数及原文选项 | 原始文档 index 与相关性分数 |
+| 多模态向量 | 显式声明的原生或扩展 Embedding 契约 | 图片/文本/视频输入类型、向量空间与版本 | 带明确定义维度与语义的向量 |
 | 图片理解 | Chat / Responses 中的图像内容 | image 输入、图片数量/格式/像素限制 | 描述、问答或明确配置的 JSON |
 | 图片生成/编辑 | 现有 `/v1/images/generations`、`/v1/images/edits` | image 输出、编辑参考图、尺寸与数量限制 | 兼容的图像结果；异步供应商通过任务契约适配 |
 | 语音识别/转写 | `/v1/audio/transcriptions`，长音频使用任务契约 | 音频格式、时长、语言及同步/异步能力 | 文本；有来源支持时提供片段、时间戳与说话人 |
@@ -125,6 +129,46 @@
 - 用量按实际支持的 token、图像张数/规格、音频时长/字符、视频时长、OCR 页数或供应商明确的请求单位结算，不统一虚算为文本 token。复用现有对应计费路径；缺少可信计费定义的能力先不上线收费。
 - 厂商任务已创建后持久化再进行轮询/回调；任务状态推进、退款与差额结算使用幂等更新。保留超时但执行状态不明的中间状态和对账路径，避免将模糊网络失败直接退款后再次创建同一任务。
 
+### 9. SuperWagie-open 资料库的实际下游要求
+
+核对日期为 2026-10-24。来源是 `/Users/neomei/项目/codexprojects/SuperWagie-open` 的当前磁盘源码，而非仅按其早期功能说明推测。表内模型 ID 是该项目已声明的默认值或推荐值，不构成对供应商在所有地域、套餐和账号均已开放这些 ID 的认证。上线时仍需供应商契约和账号实测。
+
+| 用途 | SuperWagie 当前源码声明 | 当前消费状态 | LLMRouter 必须提供的行为 |
+| --- | --- | --- | --- |
+| 文本 Embedding | 引导默认 `text-embedding-v4`、1024 维；目录另有 `qwen3.7-text-embedding` | 资料入库与语义查询直接依赖 | OpenAI-compatible Embedding，保留 dimensions、批量顺序与 index；轮换账号始终使用同一个实际模型/版本/向量空间 |
+| Rerank | 默认 `qwen3-rerank`；目录另有 `qwen3.7-text-rerank` | hybrid-search 默认启用 rerank | 阿里原生请求 `input.query/documents`、`parameters.top_n/return_documents` 与 `output.results`；同时保留通用 `/v1/rerank` |
+| 视觉理解 | 引导优先配置直连 `deepseek-flash`，或 DashScope 上的 `deepseek-v4.1-flash`，否则用导入的 VLLM；目录另有 `qwen3.8-flash`、`qwen3.7-plus`、`kimi-k3` | 文档内图片描述/VLM 可使用 | Chat 图像输入、图片 URL/Base64、稳定模型标识及用途参数；确认实际供应商和模型具备视觉能力，不凭显示名推断 |
+| OCR / 版面解析 | `PaddleOCR-VL-1.6`，`paddleocr` 协议 | 扫描 PDF/图像解析的现有适配器 | PaddleOCR v2 jobs 的 multipart 创建、轮询、JSONL 结果及其中的文档结构；仅新增 Chat OCR 模型或 `/v1/ocr` 不足以兼容 |
+| 检索后的问答/总结 | 由 SuperWagie/OpenCode 当前 Agent 模型消费 `openchamber_library` 检索片段 | 问答属于 Agent 调用链，资料库搜索本身不调用独立 QA 模型 | 现有 Chat/Responses/Messages、工具调用、长上下文和引用文本保留；导入 KnowledgeQA 记录不代表资料库独立启用了 QA 链 |
+| 文件 ASR | 引导可从旧安装导入 `qwen3-asr-flash`；目录声明 Qwen Audio ASR message/streaming/filetrans，但相关预设标为 requires-adapter | 模型导入路径存在；当前资料库文件扫描尚未开放音频导入，文件转写用途为 planned | 纳入国产语音接入范围，分别实现短音频/实时/文件契约；不能把旧 ASR 记录当作已完成消费验收 |
+| 图文/多模态 Embedding | `qwen3-vl-embedding` | `multimodal-embedding` 明确为 planned；导入的图像向量记录尚未接入资料库 | 单独声明与验证多模态输入、向量空间和检索语义，不将它当作文本向量模型的自动替代 |
+
+代码证据，路径相对 SuperWagie-open：
+
+- `packages/web/server/lib/embedded-knowledge/provision.js:32-38,187-271`：默认 Embedding、Rerank、视觉模型分支和导入 ASR。
+- `packages/web/server/lib/embedded-knowledge/model-bindings.js:6-54,86-98`：4 个当前绑定用途、允许的协议、阿里路径构造和已有索引更换限制。
+- `packages/web/server/lib/embedded-knowledge/client.js:294-307`：混合检索默认携带 `rerank: { enabled: true }`。
+- `packages/web/server/lib/model-configuration/catalog.js:18-29,55-60,73-95,109`：用途消费者、国内模型推荐及 planned/requires-adapter 状态。
+- `packages/web/server/lib/knowledge-library/scan.js:16-35`：现有白名单为 PDF、Office 和文本；独立图片、音频和视频文件未在此入口开放。PDF 内图像和扫描页解析仍使用配置的 VLM/OCR。
+- `packages/web/server/lib/embedded-knowledge/local-defaults.js:174-183`：旧安装可导入模型与尚未实际接入的图像向量/聊天记录。
+- `packages/web/server/lib/embedded-knowledge/DOCUMENTATION.md`：固定的后端 PaddleOCR jobs 适配器和索引保持规则。
+
+接入合同据此增加以下约束：
+
+1. 提供受统一令牌鉴权的兼容入口，让现有知识后端指向 LLMRouter。Embedding/视觉提供 `/v1` 及已声明的 compatible-mode 路径；Rerank 提供阿里 `/api/v1/services/rerank/text-rerank/text-rerank` 兼容路径；PaddleOCR 保持其 v2 jobs 契约。内部仍复用同一账号池、权限、审计和计费，不直接做任意 URL 反向代理。
+2. SuperWagie 当前知识消费者仅接受 `aliyun` Rerank 协议、`paddleocr` OCR 协议；通用 Cohere Rerank 或同步 OCR 结果不能直接冒充这些协议。LLMRouter 兼容入口必须同时通过现有下游的模型检测及实际解析/检索，不能仅返回 HTTP 200。
+3. 现有索引绑定 Embedding 名称、base URL 和维度。即使只是把供应商直连改为网关地址，也会触发 SuperWagie 的更换保护。上线必须显式处理这一迁移：新库可直接使用 LLMRouter，旧库经管理员确认进行一致性验证和迁移/重建；本次不改 SuperWagie 的保护检查，也不自动重建用户资料库。
+4. 同一个向量公共模型 ID 必须绑定实际模型、版本、维度、预处理及 query/document 语义。不能因账号限流就改用另一个向量模型，即使维度相同也不可混入旧索引；升级应使用新公开 ID 和显式重建流程。
+5. PaddleOCR 任务使用平台任务 ID 映射，保存实际成员、上游任务 ID 及结果归属。创建时可选择健康成员，创建后查询、结果与凭据刷新继续绑定同一账号；JSONL 及页面关联保留，下载授权不能泄露平台采购 Token 或开放跨用户任务读取。
+6. PDF/Office 文本抽取由本地 anydoc 解析器承担，不为此强制调用大模型。LLMRouter 提供该管道需要的远程模型能力，文档扫描、分块和索引仍由 SuperWagie 与其嵌入后端负责。
+7. 语音朗读/TTS、图片生成和视频生成属于 SuperWagie 的其他消费者，不当作当前资料库的强制前置依赖；它们继续保留在本设计用户已要求的多模态接入范围。视频理解也是用户明确需求，不因资料库尚未接入视频而移出范围。
+
+现状对应的 LLMRouter 缺口：Embedding 已有 DTO 与请求路径，但缺少向量空间绑定的路由契约；Ali Rerank 已有转换/响应代码，但能力白名单目前不允许 Ali 操作；PaddleOCR v2 jobs 无专用操作/入口；国产 ASR 完整适配及视频理解的模型级声明仍需补齐。上述均为实施待办，不能称为已通过 SuperWagie 端到端验证。
+
+PaddleOCR 官方 API 说明确认了托管文件提交、异步轮询与结果解析的基本形态：[官方 API 概览](https://www.paddleocr.ai/latest/en/version3.x/inference_deployment/serving/paddleocr_official_api/overview.html)。兼容实现的字段细节还应对照 SuperWagie 固定嵌入后端的适配器版本逐项验证。
+
+本次核对运行 SuperWagie `packages/web` 的现有测试：`bun run test server/lib/embedded-knowledge/model-bindings.test.js server/lib/embedded-knowledge/provision.test.js server/lib/knowledge-library/search.test.js server/lib/knowledge-library/scan.test.js`，4 个文件、31 项通过。这些本地测试支持上述绑定、引导、检索和扫描行为的判断，不是 LLMRouter 接入或真实采购账号验收。原始日志为 `/tmp/llmrouter-superwagie-model-requirements-tests.log`。
+
 ## 验收场景
 
 1. 三个独立账号连续请求分配到 A/B/C；禁用 B 后不再向 B 发送。
@@ -142,12 +186,15 @@
 13. 语音操作限流只冷却相应作用域；共享资金耗尽作用于配置的 quota group。不同端点、地域、套餐权限的账号不会互相误用。
 14. 图片/转写/文档任务创建成功后，轮询、下载及恢复均绑定正确成员；超时不明确的创建不重复发送，退款/结算只执行一次。
 15. 媒体超限、畸形元数据、URL 重定向和过期/跨用户文件引用均被正确拒绝；跨账号重试的媒体可重放但不越权，日志中没有密钥或媒体正文。
+16. SuperWagie 通过 LLMRouter 完成“文档解析/OCR、固定模型向量入库、查询向量化、阿里协议重排、带来源片段返回 Agent”的契约测试；测试分别断言数据结构，不能用 `/models` 列表代替。
+17. Embedding A/B 两个账号切换后模型和向量空间一致；错误维度、批量 index 错乱或不可确认的模型版本明确失败，不能生成 ready 索引。
+18. PaddleOCR 创建/轮询/JSONL 下载沿用正确成员与用户归属；已有 SuperWagie 索引在网关切换时触发预期的迁移保护，不自动清库、重建或替换模型。
 
 ## 实施次序
 
 1. 账号池基础：补可复现缺口的真实 HTTP 回归，实现带作用域的健康状态、稳定成员身份、共享配额组与选择器；修复 Gateway 早退归因及跨数据库兼容。
-2. 能力目录与路由：逐项核对既有适配器，补模态/操作元数据与前置能力校验，接入受约束的池内重试，保留用户权限、价格与协议边界。
-3. 图像与 OCR：补齐国产图片理解、生成/编辑路径和 OCR 扩展接口，验收图像/PDF/结构结果及对应计费。原生供应商接口与兼容 Chat 接口分别验证。
+2. 能力目录与路由：逐项核对既有适配器，补模态/操作元数据与前置能力校验，接入受约束的池内重试，保留用户权限、价格与协议边界。优先打通 SuperWagie 文本 Embedding 与阿里协议 Rerank，锁定向量空间契约。
+3. 图像与 OCR：优先补齐 SuperWagie 所需的视觉描述与 PaddleOCR v2 jobs 兼容路径，然后补齐国产图片生成/编辑和通用 OCR 扩展接口，验收图像/PDF/结构结果及对应计费。原生供应商接口与兼容 Chat 接口分别验证。
 4. 语音与视频理解：补齐 ASR、TTS、音频理解及视频理解各自的媒体契约；同时完成大文件、异步任务、账号资源绑定和不明确创建结果的处理。实时 WebSocket 的已建立会话不换账号，实时 RTC/客户端 SDK 产品集成另列范围。
 5. 管理与交付：补多模态模型目录、账号池状态、恢复动作、来源明确的供应商错误分类及操作文档。模块独立审查、跨数据库与完整检查通过后合入本地；真实采购账号由管理员配置后，分别进行图片、语音、视频理解、OCR 和文本调用验收。
 

@@ -1,12 +1,12 @@
 # 国产模型账号池：2026-10-25 本地验证记录
 
-本文对应[接口与运维指南](domestic-model-account-pools.md)，记录本地源码验收，不是生产发布证明。分项审查及最终本地后端/前端/发布契约门禁已通过。首轮发现的四操作契约清单遗漏已修复并独立审查，失败原始证据保留。全分支独立审查、本地合入和证据归档仍由交付负责人执行。
+本文对应[接口与运维指南](domestic-model-account-pools.md)，记录本地源码验收，不是生产发布证明。分项验证和全分支独立审查后，以一次修复处理两项 Important、两项 Minor，范围复审确认四项均解决且无新 Critical/Important/Minor。修复后精确源码的完整后端门禁通过，受影响前端检查与生产构建通过；未受影响的发布契约证据复用。所有早期失败保留。本地合入、资产复制和持久证据归档仍待交付负责人确认，不属于测试自动完成的动作。
 
 ## 源码与证据身份
 
-首轮全量检查 HEAD 为 `3dada17c87dbe52eb4ea8a3089a6efd642946a32`，Git tree 为 `b9bf687651b61f761416f6d1b73f130e911157eb`，开始时工作区干净。相对最后生产代码提交 `1a70e2dc1` 只有文档提交。前端产物来自该生产代码的最终 `bun run build`（2.35 秒），231 个产物文件的逐文件 SHA256 保存在 `source-before.json`；没有用空白占位目录满足 Go embed。最终完整后端验证对应 `6a2db5a395278b9d2b8c15b444acc99e8264e3e8`（tree `8c38555b2a23d04ac75e455605f2967b68a26f2e`），相对首轮只追加 `tests/contracts/provider_fixtures.json` 中遗漏的四操作；没有生产代码变更。`source-final-before.json` 和 `source-after.json` 证明验证前后 HEAD 相同、231 个资产摘要完全一致，未提交差异只有本文与运维指南。
+首轮全量检查 HEAD 为 `3dada17c87dbe52eb4ea8a3089a6efd642946a32`，Git tree 为 `b9bf687651b61f761416f6d1b73f130e911157eb`，开始时工作区干净。相对最后生产代码提交 `1a70e2dc1` 只有文档提交。前端产物来自该生产代码的最终 `bun run build`（2.35 秒），231 个产物文件的逐文件 SHA256 保存在 `source-before.json`；没有用空白占位目录满足 Go embed。最终修复前的完整后端验证对应 `6a2db5a395278b9d2b8c15b444acc99e8264e3e8`（tree `8c38555b2a23d04ac75e455605f2967b68a26f2e`），相对首轮只追加 `tests/contracts/provider_fixtures.json` 中遗漏的四操作；没有生产代码变更。`source-final-before.json` 和 `source-after.json` 证明验证前后 HEAD 相同、231 个资产摘要完全一致，未提交差异只有本文与运维指南。
 
-下面的 `W` 指工作树中的 `.superpowers/sdd/2026-10-24-domestic-multimodal-account-pools`。本轮证据在 `W/evidence/task-10c/`，每个命令分别保留 `.command.json`（cwd/argv/环境/开始时间/HEAD）、`.stdout.log`、`.stderr.log`、`.exit`、`.result.json`（结束时间/耗时）。后端另有 `.phases.log`，通过仅记录命令的 Bash DEBUG trap 留存阶段时间；没有测试过滤或套件排除。交付负责人须在清理工作树前归档整个 W（包括早期失败、审查 overlay、消费者二进制/来源、SQLite、浏览器 trace），并补充持久归档位置。不能只保留本文而删除原始日志。
+下面的 `W` 指工作树中的 `.superpowers/sdd/2026-10-24-domestic-multimodal-account-pools`。本轮证据在 `W/evidence/task-10c/`，每个命令分别保留 `.command.json`（cwd/argv/环境/开始时间/HEAD）、`.stdout.log`、`.stderr.log`、`.exit`、`.result.json`（结束时间/耗时）。后端另有 `.phases.log`，通过仅记录命令的 Bash DEBUG trap 留存阶段时间；没有测试过滤或套件排除。计划持久归档目录为 `/Users/neomei/.codex/artifacts/2026-10-25-llmrouter-domestic-model-account-pools`，实际复制和完整性核对待交付负责人确认。交付负责人须在清理工作树前归档整个 W（包括早期失败、审查 overlay、消费者二进制/来源、SQLite、浏览器 trace），并补充持久归档位置。不能只保留本文而删除原始日志。
 
 环境为 darwin/arm64、Go1.26.10、CGO_ENABLED=1、Bun1.4.3。后端使用 `GOMAXPROCS=4 GOFLAGS=-p=4` 限制本机并行资源，不减少测试。两项 `LLMROUTER_ACCOUNT_POOL_MYSQL_DSN` / `LLMROUTER_ACCOUNT_POOL_POSTGRES_DSN` 指向专用临时 MySQL5.7.44（65380）/PostgreSQL9.6（65381），完整夹具 DSN 仅在原始执行记录保存。未接触用户 `unihub-dev-*` 服务。
 
@@ -16,14 +16,14 @@
 | --- | --- | --- |
 | `bun run lint`（web） | PASS，136 个 warning，全部来自相对原交付基线 `50fd8d427` 未改动的文件；本分支改动文件 0 warning | `task-10c/web-lint.*`、`lint-warning-classification.json` |
 | `bun run test`（web，默认完整发现） | PASS，124 测试、22 suites，0 失败/取消/跳过 | `task-10c/web-test.*` |
-| `GOTOOLCHAIN=go1.26.10 bash scripts/verify-backend.sh`（根目录，另有上述并行/DSN 环境） | 最终 PASS，96.868 秒，全部六阶段通过；首轮 FAIL52.152 秒保留 | `task-10c/backend-final.*`、首轮 `backend.*` |
+| `GOTOOLCHAIN=go1.26.10 bash scripts/verify-backend.sh`（根目录，另有上述并行/DSN 环境） | 修复前 PASS，96.868 秒，全部六阶段通过；首轮 FAIL52.152 秒保留；修复后结果见下节 | `task-10c/backend-final.*`、首轮 `backend.*` |
 | `python3 -m unittest scripts/release_ci_contract_test.py -v`（根目录） | PASS，7 测试 | `task-10c/release-ci.*` |
 | `bash scripts/release_config_test.sh`（根目录） | PASS，夹具配置与 `--check` 预检 | `task-10c/release-config.*` |
 | `bash scripts/release_scripts_test.sh`（根目录） | PASS，包括 `restore_test.sh` 夹具完整性测试 | `task-10c/release-scripts.*` |
 
 首轮唯一失败为 `tests/contracts/completeness_test.go:37` 的 `TestEverySupportedCapabilityHasProviderFixture`：能力注册表为 32 个操作，旧清单仅 28 个，遗漏 `multimodal.embeddings.create`、`ocr.jobs.create`、`ocr.jobs.retrieve`、`ocr.resources.retrieve`。实际对应 HTTP 夹具已存在，需补齐正确映射；不能通过删除能力、忽略测试或只声称 owner 测试通过来关闭全量门禁。首轮失败后未继续执行 vet、race、build、额外 onboarding。独立审查通过的清单修复后，以相同环境完整重跑原脚本，最终 exit0、stderr0 字节。没有重复已通过的前端/发布检查。普通 Go test 合法复用缓存；本轮 race 为实际执行，model66.739秒、router18.231秒、service/ocr5.253秒，没有race诊断。首次非缓存model44.454秒及既有逐项三数据库证据保留，不因缓存摘要重复已通过套件。
 
-最终阶段时间（UTC，Bash阶段日志精度1秒；完整父进程起止为19:34:36.989–19:36:13.865）：
+修复前阶段时间（UTC，Bash阶段日志精度1秒；完整父进程起止为19:34:36.989–19:36:13.865）：
 
 | 阶段 | 开始时间 | 完成依据 |
 | --- | --- | --- |
@@ -36,9 +36,9 @@
 
 发布契约测试没有启动生产 Compose、读取生产配置或部署。`release_gate_test.sh` 与发布门禁实现相对此次基线未改动，本轮没有另跑它；早期已核对的 Docker Go1.26.10 验证也没有因状态汇报重复执行。
 
-复用未改动代码的分项证据：
+修复前的分项证据保留如下；本次改变的 UI 源码由后文最终修复检查覆盖，其余未改动检查继续复用：
 
-| 检查 | 最终结果与证据 |
+| 检查 | 修复前结果与证据 |
 | --- | --- |
 | 前端 typecheck、单独浏览器 spec/config 类型检查 | PASS，`task-9b-fix-round-1/typecheck-final.*`、`fixture-typecheck-final.*` |
 | 全前端格式、copyright、Knip | 格式 PASS1004 文件（`task-9b-fix-round-1/format-check.*`）；copyright PASS971 检查/1 generated skipped（`task-9b/copyright-check.*`）；Knip PASS（`task-9b/knip-green.*`） |
@@ -69,9 +69,36 @@
 
 所有模型名称表示实现选择的协议分支，不保证某个地区、套餐、账号已购买或开通。媒体编码、字节、时长、图片数、视觉用量上限、公开origin/持久grant secret/对象存储及财务不确定状态详见运维指南；不要因局部fixture成功扩大支持范围。
 
+## 全分支审查、一次修复与最终精确验证
+
+全分支审查 `50fd8d427..dc17e2fab66c2f6cb046ec8579a8bd738bfa3f0e` 发现 0 Critical、2 Important、2 Minor。一次修复提交 `0228da9ceb60c9affcf1c6c34b1217be683165ba` 处理四项；`W/final-scoped-rereview.md` 对该精确修复范围复审批准，四项均 ADDRESSED，新发现 0 Critical/Important/Minor。早期全量通过没有覆盖这些新增回归边界，故没有用旧结果替代修复后验证。
+
+| 项目 | 已验证的修复行为 | 证据 |
+| --- | --- | --- |
+| I1 旧路由别名健康作用域 | 健康准入前解析实际模型；同模型别名共享冷却、链终点一致、不同模型独立；目录目标不被再次映射，旧公开/计费身份不变。API/UI 保留已配置一跳目标并增加有效旧路由终点，不扩大任意模型权限 | `final-fix/alias-race-final.*`、`mapping-race-final.*`、`owner-go-final.*`、`verified-ui-browser/` |
+| I2 OCR 结果物理清理后的状态 | 拥有者规范/兼容 GET 在到期及实际 purge 后均410；既有结算/额度/消费日志/回执保持不变，供应商工作不增加；真实查询故障不伪装成到期 | `TestOCRRenewableGrantProjectionAfterRestartAndRetention`、`TestOCRPublicFixedConsumerAndCanonical`，`final-fix/owner-race.*`及本轮完整套件 |
+| M1 原生成功响应退避头 | 流式/非流式 TTS 在实际响应头提交前清除旧 Retry-After，其他前输出原生成功共用完成接口；真实最终429保留退避，HTTP200本身不冒充语义成功 | `TestNativeSuccessClearsOnlyValidatedBackoff`、真实音频 committed-header断言，`final-fix/owner-race.*` |
+| M2 ASR 编码体积夹具 | 8,388,608字节真实PCM WAV由实际解析器验证为约95.108秒，multipart低于10MiB而编码载体11,184,834字节；特定编码超限错误且零发送/预扣 | `final-fix/carrier-guard-removal.*`预期失败、`carrier-guard-present.*`通过；仅移除目标保护会真实发送并扣34，独立证明该边界 |
+
+最终认证 HEAD `0228da9ceb60c9affcf1c6c34b1217be683165ba`，tree `df0548402ee934b0b25fb406bec59c058480c20b`，起始工作区干净。前端 `bun run --cwd web build` 构建2.28秒，231文件、57,413,818字节；`final-fix/final-source-identity.json` 将提交前构建的源码清单绑定到该提交，构建产物清单SHA256为 `b1c3fec4d1c74ce757063265d15d7effd63771fbe3d8e3f4aabcdbc4b838cefa`。`post-final-fix/source-before.json`/`source-after.json`逐文件核对所有产物与作者清单一致，验证期间 HEAD/tree/资产不变，结束后仅两份本文档有未提交编辑；后续纯文档提交不改变本次代码与资产身份。
+
+最终唯一完整命令仍为 `GOTOOLCHAIN=go1.26.10 GOMAXPROCS=4 GOFLAGS=-p=4 bash scripts/verify-backend.sh`，根目录 cwd、相同两项专用最小版本数据库 DSN、消费者 opt-in unset。新原始记录独立放在 `W/evidence/post-final-fix/`，没有覆盖早期失败或通过记录。结果 **PASS，exit0，145.233秒，stderr0字节**。实际普通 model46.116秒/router2.101秒/OCR1.047秒；race66.949秒/19.176秒/5.327秒，无race诊断。额外 onboarding三包亦通过。默认允许有效Go缓存，未强制重跑既已通过的不变用例。
+
+| 最终阶段 | 开始时间UTC | 完成证据 |
+| --- | --- | --- |
+| tracked gofmt / `go test ./...` | 20:08:11 | 格式通过，完整test后20:09:03进入vet |
+| `go vet ./...` | 20:09:03 | 20:09:05进入race |
+| `go test -race ./...` | 20:09:05 | 20:10:23进入build |
+| `go build -trimpath ./...` | 20:10:23 | 20:10:33进入额外onboarding |
+| `go test ./internal/onboarding/... ./cmd/llmrouter-onboard/... -count=1` | 20:10:33 | 父命令20:10:36.325结束exit0；起点20:08:11.083 |
+
+最终修复作者另完成受影响前端3个单元测试、typecheck、lint（仍136条未改文件警告）、format1006文件、3个真实Chrome界面场景及上述新构建；原始命令和source manifest在 `final-fix/ui-*-clean.*`、`verified-ui-browser.*`、`production-build.*`。早期124项默认前端测试、七语言/copyright/Knip与三项发布契约结果保留，未因状态汇报重复执行；新增作用域UI由作者精确检查覆盖。浏览器API仍为隔离夹具，并非部署后的浏览器到DB验收。
+
+本次共 **54条 Ruling**，按原顺序保存。第54条明确旧路由链终点与原目录一跳作用域的最小兼容投影；早期审查的53条是当时的历史计数。全分支审查已决定其余 parked项：额外同组逆序测试和夹具重构保留为后续增强；预期负向SQL/Gin/饱和审计输出不抑制；Gemini原生媒体未启用边界、供应商真实质量/容量、字体渲染和桌面/完整摄入/三DB消费者全链等限制继续保留。TTS退避头及ASR夹具精度现已修复，不再列为未完成项。
+
 ## 待交付负责人处理
 
-- 四操作清单修复和最终完整后端门禁已通过；后续如有代码修复，按实际影响补充验证并更新对应源码身份，不能把旧结果移用于未经验证的新代码。
-- 全分支审查及其必要修复/验证；分项批准不能代替该门禁。
-- 历史 Minor/parked 清单与全部有序 Ruling 保留在 W，交付前逐项决策并按要求披露。原生日志/测试负向场景噪声、TTS 成功响应遗留 Retry-After、ASR encoded-size夹具精度、Gemini未启用原生媒体验证缺口、实际消费者字体/日志限制均不能默默消失。
-- 本地 fast-forward 前确认原工作区无受影响的跟踪修改；保留既有未跟踪法律文档/sidecar。Git 不复制忽略的 web/dist，需另行保存并复制/核对已验证资产；完整证据先归档，再清理托管工作树和仅本轮专用容器。
+- 代码与最终修复范围审查、本地完整后端认证已通过。后续代码变更需按实际影响补充验证并更新源码身份；文档提交单独标明。
+- 计划持久归档到 `/Users/neomei/.codex/artifacts/2026-10-25-llmrouter-domestic-model-account-pools`，完整W（含失败、审查overlay、消费者来源/二进制/SQLite、浏览器trace）和最新dist都需核对后保存。实际归档完成与完整性清单位置由负责人补充。
+- 本地 fast-forward 目标为 `/Users/neomei/项目/codexprojects/llmrouter` 的 `codex/wechat-native-pay`，仅在仍为已知 `50fd8d427` 且没有冲突跟踪修改时执行；保留既有未跟踪法律文档/sidecar。Git不复制忽略的web/dist，须另行复制并逐摘要核对最新产物。合入、复制、托管工作树及本轮专用容器清理由负责人完成后记录。
+- 本次交付为本地代码集成；没有远端push、部署、真实采购账号调用或用户资料库迁移。上述动作不能从测试通过推断为已执行。

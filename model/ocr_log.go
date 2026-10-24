@@ -22,6 +22,16 @@ type OCRLogReceipt struct {
 	LogID   int
 }
 
+// ocrConsumeLoggingEnabled snapshots the live option using the same mutex as
+// updateOptionMap. Release it before database work; startup/test assignment of
+// the existing bool remains compatible when workers are not running.
+func ocrConsumeLoggingEnabled() bool {
+	common.OptionMapRWMutex.RLock()
+	enabled := common.LogConsumeEnabled
+	common.OptionMapRWMutex.RUnlock()
+	return enabled
+}
+
 // DeliverAuditLog projects only allowlisted audit/lifecycle facts. Main-database
 // reads finish before the LogDB transaction. Retrying after either database loses
 // its commit acknowledgement cannot replay funding, counters or supplier work.
@@ -34,7 +44,7 @@ func (s *OCRBillingStore) DeliverAuditLog(ctx context.Context, logDB *gorm.DB, e
 	default:
 		return ErrOCRLogUnsupported
 	}
-	if event.Kind == "success" && !common.LogConsumeEnabled {
+	if event.Kind == "success" && !ocrConsumeLoggingEnabled() {
 		return ErrOCRLogDisabled
 	}
 	if event.ID == "" || len(event.ID) > 36 {
@@ -166,7 +176,7 @@ func (s *OCRBillingStore) ProjectAuditLogs(ctx context.Context, logDB *gorm.DB, 
 		return ErrOCRLogUnsupported
 	}
 	query := s.db.WithContext(ctx).Where("projected_at = ?", 0)
-	if !common.LogConsumeEnabled {
+	if !ocrConsumeLoggingEnabled() {
 		query = query.Where("kind <> ?", "success")
 	}
 	return s.projectAudit(ctx, query, limit, func(ctx context.Context, event OCRAuditEvent) error {

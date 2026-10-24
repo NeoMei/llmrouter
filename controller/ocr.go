@@ -27,6 +27,20 @@ var OCRRuntime *ocr.Runtime // initialized before router construction; closed be
 
 type OCRHandler struct{ Runtime *ocr.Runtime }
 
+// ocrRequestBody counts bytes as the capped wire body is consumed. Counting
+// below the multipart parser includes its buffered read-ahead exactly once.
+// Embedding ReadCloser preserves the underlying request body's Close behavior.
+type ocrRequestBody struct {
+	io.ReadCloser
+	size int64
+}
+
+func (body *ocrRequestBody) Read(p []byte) (int, error) {
+	n, err := body.ReadCloser.Read(p)
+	body.size += int64(n)
+	return n, err
+}
+
 // OCRBodyLimit precedes rate-limit/body parsing, including multipart uploads.
 func OCRBodyLimit(c *gin.Context) {
 	const limit = ocr.MaxInputBytes + (64 << 10)
@@ -34,7 +48,9 @@ func OCRBodyLimit(c *gin.Context) {
 		c.AbortWithStatusJSON(400, gin.H{"error": "OCR request byte limit exceeded"})
 		return
 	}
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
+	body := &ocrRequestBody{ReadCloser: http.MaxBytesReader(c.Writer, c.Request.Body, limit)}
+	c.Request.Body = body
+	c.Set("ocr_request_body", body)
 	defer func() {
 		if c.Request.MultipartForm != nil {
 			_ = c.Request.MultipartForm.RemoveAll()
@@ -108,6 +124,19 @@ func (h *OCRHandler) Create(c *gin.Context) {
 		h.fail(c, 400, "OCR requires multipart or JSON")
 		return
 	}
+	// Multipart parsing stops at its closing boundary. Drain any remaining
+	// epilogue through the same capped reader before authorization, URL fetch,
+	// account selection or money. No second body buffer/media parser is needed.
+	value, ok := c.Get("ocr_request_body")
+	body, valid := value.(*ocrRequestBody)
+	if !ok || !valid {
+		h.fail(c, 400, "OCR bounded request body required")
+		return
+	}
+	if _, err := io.Copy(io.Discard, body); err != nil {
+		h.fail(c, 400, "OCR request byte limit exceeded")
+		return
+	}
 	media.OptionalPayload = in.OptionalPayload
 	in.Model = strings.TrimSpace(in.Model)
 	if in.Model == "" || len(in.Model) > 128 {
@@ -137,6 +166,10 @@ func (h *OCRHandler) Create(c *gin.Context) {
 		}
 		if candidate.Capabilities.Operations != nil && !slices.Contains(candidate.Capabilities.Operations, string(capability.OperationOCRCreate)) {
 			continue
+		}
+		if limits := candidate.Capabilities.MediaLimits; limits != nil && limits.MaxRequestBytes != nil && body.size > *limits.MaxRequestBytes {
+			h.fail(c, 400, "OCR model request byte limit exceeded")
+			return
 		}
 		t, e := h.target(c, candidate)
 		if e != nil {

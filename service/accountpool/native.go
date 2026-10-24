@@ -46,6 +46,9 @@ func CompleteNativeOutcome(c *gin.Context, failure *FailureInput) error {
 		state.Uncertain = false
 		state.UnsafeResponse = false
 	}
+	if failure == nil {
+		c.Writer.Header().Del("Retry-After")
+	}
 	if state.Sent == nil {
 		return nil
 	}

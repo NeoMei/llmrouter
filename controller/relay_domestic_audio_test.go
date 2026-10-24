@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -40,7 +41,7 @@ func TestDomesticAudioHTTP(t *testing.T) {
 		tts  bool
 	}{
 		{"missing-prompt", false}, {"null-completion", false}, {"negative-audio", false}, {"huge-audio", false}, {"bad-seconds", false}, {"missing-seconds", false}, {"json", false}, {"text", false}, {"pool-rate", false}, {"pool-veto", false}, {"bad-wav", false}, {"duration", false}, {"encoded-bound", false}, {"body-bound", false}, {"timestamp", false}, {"duplicate", false}, {"unknown", false}, {"translation", false}, {"bad-model", false}, {"missing-usage", false}, {"zero-usage", false},
-		{"custom-voice", true}, {"http-rate", true}, {"http-500", true}, {"free-price", true}, {"tiny-price", true}, {"missing-base", true}, {"missing-status", true}, {"mp3", true}, {"wav", true}, {"write-failure", true}, {"stream-format", true}, {"stream-conflict", true}, {"stream", true}, {"aggregate", true}, {"stream-error", true}, {"missing-terminal", true}, {"cancel", true}, {"rate", true}, {"veto", true}, {"invalid-key", true}, {"balance", true}, {"credit", true}, {"ambiguous", true}, {"missing-usage", true}, {"negative-usage", true}, {"huge-usage", true}, {"zero-usage", true}, {"metadata-override", true}, {"bad-codec", true}, {"bad-model", true}, {"unpriced", true}, {"too-long", true}, {"bad-option", true}, {"stream-wav", true}, {"override", true},
+		{"custom-voice", true}, {"http-rate", true}, {"stream-rate", true}, {"legacy-alias", true}, {"legacy-chain", true}, {"catalog-chain", true}, {"http-500", true}, {"free-price", true}, {"tiny-price", true}, {"missing-base", true}, {"missing-status", true}, {"mp3", true}, {"wav", true}, {"write-failure", true}, {"stream-format", true}, {"stream-conflict", true}, {"stream", true}, {"aggregate", true}, {"stream-error", true}, {"missing-terminal", true}, {"cancel", true}, {"rate", true}, {"veto", true}, {"invalid-key", true}, {"balance", true}, {"credit", true}, {"ambiguous", true}, {"missing-usage", true}, {"negative-usage", true}, {"huge-usage", true}, {"zero-usage", true}, {"metadata-override", true}, {"bad-codec", true}, {"bad-model", true}, {"unpriced", true}, {"too-long", true}, {"bad-option", true}, {"stream-wav", true}, {"override", true},
 	}
 	for _, tc := range scenarios {
 		kind := "asr"
@@ -98,7 +99,7 @@ func TestDomesticAudioHTTP(t *testing.T) {
 			if tc.name == "wav" || tc.name == "stream-wav" {
 				codec = "wav"
 			}
-			stream := tc.name == "write-failure" || tc.name == "stream-format" || tc.name == "stream-conflict" || tc.name == "stream" || tc.name == "aggregate" || tc.name == "stream-error" || tc.name == "missing-terminal" || tc.name == "cancel" || tc.name == "stream-wav"
+			stream := tc.name == "stream-rate" || tc.name == "write-failure" || tc.name == "stream-format" || tc.name == "stream-conflict" || tc.name == "stream" || tc.name == "aggregate" || tc.name == "stream-error" || tc.name == "missing-terminal" || tc.name == "cancel" || tc.name == "stream-wav"
 			if tc.tts {
 				actual = "speech-2.8-hd"
 				channelType = constant.ChannelTypeMiniMax
@@ -136,13 +137,15 @@ func TestDomesticAudioHTTP(t *testing.T) {
 				assert.NoError(t, err)
 				if n == 1 {
 					firstBody = string(raw)
-				} else {
+				} else if tc.name != "legacy-alias" || n == 2 {
 					assert.JSONEq(t, firstBody, string(raw))
 					assert.Equal(t, "Bearer fixture-B", r.Header.Get("Authorization"))
 				}
 				var sent map[string]any
 				require.NoError(t, common.Unmarshal(raw, &sent))
-				assert.Equal(t, actual, sent["model"])
+				if !tc.tts {
+					assert.Equal(t, actual, sent["model"])
+				}
 				assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
 				if !tc.tts {
 					assert.Equal(t, "/compatible-mode/v1/chat/completions", r.URL.Path)
@@ -180,13 +183,25 @@ func TestDomesticAudioHTTP(t *testing.T) {
 					return
 				}
 				assert.Equal(t, "/v1/t2a_v2", r.URL.Path)
+				expectedModel := actual
+				if tc.name == "legacy-alias" && n == 4 {
+					expectedModel = "speech-2.8-turbo"
+				}
+				assert.Equal(t, expectedModel, sent["model"])
+				if tc.name == "legacy-alias" && n == 3 {
+					assert.Equal(t, "Bearer fixture-B", r.Header.Get("Authorization"))
+				}
+				if tc.name == "legacy-alias" && n == 4 {
+					assert.Equal(t, "Bearer fixture-A", r.Header.Get("Authorization"))
+				}
 				assert.Equal(t, "hello", sent["text"])
 				assert.Equal(t, "hex", sent["output_format"])
 				voice := sent["voice_setting"].(map[string]any)
 				assert.Equal(t, "English_Graceful_Lady", voice["voice_id"])
 				assert.Equal(t, float64(0), voice["pitch"])
 				assert.Equal(t, false, voice["text_normalization"])
-				if tc.name == "http-rate" && n == 1 {
+				if (tc.name == "http-rate" || tc.name == "stream-rate" || tc.name == "legacy-alias" || tc.name == "legacy-chain" || tc.name == "catalog-chain") && n == 1 {
+					assert.Equal(t, "Bearer fixture-A", r.Header.Get("Authorization"))
 					w.WriteHeader(429)
 					io.WriteString(w, `{"error":"throttled"}`)
 					return
@@ -270,10 +285,30 @@ func TestDomesticAudioHTTP(t *testing.T) {
 			if tc.name == "override" {
 				ch.ParamOverride = common.GetPointer(`{"model":"unpriced"}`)
 			}
+			if tc.name == "legacy-alias" || tc.name == "legacy-chain" || tc.name == "catalog-chain" {
+				ch.Models = "audio-alias,audio-other,speech-2.8-turbo"
+				ch.ModelMapping = common.GetPointer(`{"audio-alias":"speech-2.8-hd","audio-other":"speech-2.8-hd","speech-2.8-hd":"speech-2.8-hd"}`)
+				if tc.name == "legacy-chain" {
+					ch.ModelMapping = common.GetPointer(`{"audio-alias":"middle","middle":"speech-2.8-hd","audio-other":"speech-2.8-hd","speech-2.8-hd":"speech-2.8-hd"}`)
+				}
+				if tc.name == "catalog-chain" {
+					ch.ModelMapping = common.GetPointer(`{"audio-alias":"speech-2.8-hd","speech-2.8-hd":"do-not-remap"}`)
+				}
+			}
 			require.NoError(t, db.Create(&ch).Error)
 			require.NoError(t, db.Create(&model.Ability{ChannelId: 921, Group: "default", Model: actual, Enabled: true}).Error)
 			require.NoError(t, db.Create(&model.ClientModelRoute{Id: 931, PublicId: "audio-public", Aliases: `["audio-alias"]`, Enabled: true, Metadata: metadata}).Error)
 			require.NoError(t, db.Create(&model.ClientModelTarget{Id: 932, RouteId: 931, ChannelId: 921, UpstreamModel: actual, BillingModel: actual, PreferredWires: `["openai_chat"]`, Weight: 1, Enabled: true}).Error)
+			if tc.name == "catalog-chain" {
+				require.NoError(t, db.Model(&model.ClientModelTarget{}).Where("id = ?", 932).Update("upstream_model", "audio-alias").Error)
+			}
+			if tc.name == "legacy-alias" || tc.name == "legacy-chain" {
+				require.NoError(t, db.Where("id = ?", 931).Delete(&model.ClientModelRoute{}).Error)
+				for _, name := range []string{"audio-alias", "audio-other", "speech-2.8-turbo"} {
+					require.NoError(t, db.Create(&model.Ability{ChannelId: 921, Group: "default", Model: name, Enabled: true}).Error)
+				}
+				require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"speech-2.8-hd":0.009,"audio-alias":0.001,"audio-other":0.001,"speech-2.8-turbo":0.001}`))
+			}
 			require.NoError(t, db.Callback().Update().Before("gorm:update").Register("audio_money", func(tx *gorm.DB) {
 				if tx.Statement.Table == "users" || tx.Statement.Table == "tokens" {
 					updates.Add(1)
@@ -348,7 +383,19 @@ func TestDomesticAudioHTTP(t *testing.T) {
 					binary.LittleEndian.PutUint32(wav[28:], 2)
 				}
 				if tc.name == "encoded-bound" {
+					header := append([]byte(nil), wav[:44]...)
 					wav = make([]byte, 8<<20)
+					copy(wav, header)
+					binary.LittleEndian.PutUint32(wav[4:], uint32(len(wav)-8))
+					binary.LittleEndian.PutUint32(wav[24:], 44100)
+					binary.LittleEndian.PutUint32(wav[28:], 88200)
+					binary.LittleEndian.PutUint32(wav[40:], uint32(len(wav)-44))
+					require.Greater(t, len("data:audio/wav;base64,")+base64.StdEncoding.EncodedLen(len(wav)), helper.MaxInlineMediaBytes)
+					fact, parseErr := helper.DecodeMediaFact("audio", "data:audio/wav;base64,"+base64.StdEncoding.EncodeToString(wav))
+					require.NoError(t, parseErr)
+					require.Equal(t, "wav", fact.Format, "encoded-size fixture must pass the PCM parser independently")
+					require.Greater(t, fact.Seconds, float64(0))
+					require.LessOrEqual(t, fact.Seconds, float64(300))
 				}
 				if tc.name == "body-bound" {
 					wav = make([]byte, 11<<20)
@@ -356,6 +403,9 @@ func TestDomesticAudioHTTP(t *testing.T) {
 				_, err = file.Write(wav)
 				require.NoError(t, err)
 				require.NoError(t, form.Close())
+				if tc.name == "encoded-bound" {
+					require.Less(t, body.Len(), helper.MaxInlineMediaBytes)
+				}
 				request = httptest.NewRequest("POST", path, &body)
 				request.Header.Set("Content-Type", form.FormDataContentType())
 			}
@@ -380,6 +430,9 @@ func TestDomesticAudioHTTP(t *testing.T) {
 			if failed || tc.name == "free-price" || !tc.tts && tc.name == "zero-usage" {
 				quota = 0
 			}
+			if tc.name == "encoded-bound" {
+				assert.Contains(t, recorder.Body.String(), "encoded ASR audio exceeds 10 MiB")
+			}
 			if rejected {
 				assert.Equal(t, 0, int(sends.Load()), recorder.Body.String())
 				assert.Zero(t, updates.Load(), "rejection before money")
@@ -393,6 +446,9 @@ func TestDomesticAudioHTTP(t *testing.T) {
 				assert.NotContains(t, recorder.Body.String(), "real transcript")
 			}
 			if !failed {
+				if tc.tts {
+					assert.Empty(t, recorder.Result().Header.Get("Retry-After"), "successful audio must not commit stale backoff")
+				}
 				if tc.tts {
 					assert.Equal(t, audioBytes, recorder.Body.Bytes())
 					assert.Contains(t, recorder.Header().Get("Content-Type"), "audio/")
@@ -413,14 +469,18 @@ func TestDomesticAudioHTTP(t *testing.T) {
 			if tc.name == "http-rate" || tc.name == "pool-rate" || tc.name == "rate" || tc.name == "invalid-key" || tc.name == "balance" || tc.name == "credit" {
 				assert.Equal(t, int32(2), sends.Load())
 			}
+			if tc.name == "veto" || tc.name == "pool-veto" {
+				assert.NotEmpty(t, recorder.Result().Header.Get("Retry-After"))
+			}
 			if tc.name == "veto" || tc.name == "pool-veto" || tc.name == "missing-usage" || tc.name == "negative-usage" || tc.name == "huge-usage" || tc.name == "ambiguous" {
 				assert.Equal(t, int32(1), sends.Load())
 			}
 			var states []model.UpstreamAccountState
 			require.NoError(t, db.Find(&states).Error)
-			if tc.name == "http-rate" || tc.name == "rate" || tc.name == "veto" || tc.name == "pool-rate" || tc.name == "pool-veto" {
+			if tc.name == "legacy-alias" || tc.name == "legacy-chain" || tc.name == "catalog-chain" || tc.name == "stream-rate" || tc.name == "http-rate" || tc.name == "rate" || tc.name == "veto" || tc.name == "pool-rate" || tc.name == "pool-veto" {
 				require.Len(t, states, 1)
 				assert.Equal(t, "rate_limit", states[0].Reason)
+				assert.Equal(t, actual, states[0].Model)
 			}
 			if tc.name == "balance" || tc.name == "credit" {
 				require.Len(t, states, 1)
@@ -447,6 +507,9 @@ func TestDomesticAudioHTTP(t *testing.T) {
 			} else {
 				require.Len(t, logs, 1)
 				assert.Equal(t, quota, logs[0].Quota)
+				if tc.name == "legacy-alias" || tc.name == "legacy-chain" {
+					assert.Equal(t, "audio-alias", logs[0].ModelName)
+				}
 				if !tc.tts {
 					assert.Contains(t, logs[0].Other, `"actual_audio_seconds":`)
 				}
@@ -455,6 +518,60 @@ func TestDomesticAudioHTTP(t *testing.T) {
 					assert.Zero(t, logs[0].CompletionTokens)
 					assert.Contains(t, logs[0].Other, `"native_usage_unit":"characters"`)
 				}
+			}
+			if tc.name == "legacy-alias" || tc.name == "legacy-chain" || tc.name == "catalog-chain" {
+				admin := gin.New()
+				admin.GET("/api/channel/:id/account-pool", GetAccountPool)
+				admin.POST("/api/channel/:id/account-pool/recover", MutateAccountPool)
+				projection := httptest.NewRecorder()
+				admin.ServeHTTP(projection, httptest.NewRequest("GET", "/api/channel/921/account-pool?operation=audio.speech.create&model="+actual, nil))
+				var result struct {
+					Success bool                `json:"success"`
+					Data    accountPoolSnapshot `json:"data"`
+				}
+				require.NoError(t, common.Unmarshal(projection.Body.Bytes(), &result))
+				require.True(t, result.Success, projection.Body.String())
+				assert.Equal(t, 1, result.Data.Counts["cooling"])
+				if tc.name == "legacy-alias" {
+					for _, name := range []string{"audio-other", "speech-2.8-turbo"} {
+						next := httptest.NewRequest("POST", path, strings.NewReader(strings.Replace(string(savedBody), "audio-alias", name, 1)))
+						next.Header.Set("Authorization", "Bearer audiotoken")
+						next.Header.Set("Content-Type", "application/json")
+						nextResult := httptest.NewRecorder()
+						engine.ServeHTTP(nextResult, next)
+						require.Equal(t, 200, nextResult.Code, nextResult.Body.String())
+					}
+					assert.Equal(t, int32(4), sends.Load())
+					projection = httptest.NewRecorder()
+					admin.ServeHTTP(projection, httptest.NewRequest("GET", "/api/channel/921/account-pool?operation=audio.speech.create&model="+actual, nil))
+					require.NoError(t, common.Unmarshal(projection.Body.Bytes(), &result))
+					require.True(t, result.Success)
+					assert.Equal(t, 1, result.Data.Counts["cooling"], "success on a different model must not clear canonical cooldown")
+				}
+				var cooling accountPoolRow
+				for _, member := range result.Data.Members {
+					if member.State == "cooling" {
+						cooling = member
+					}
+				}
+				require.NotEmpty(t, cooling.MemberID)
+				raw, err := common.Marshal(accountPoolMutation{Operation: "audio.speech.create", Model: actual, PoolID: result.Data.PoolID, MemberID: cooling.MemberID, GenerationID: cooling.GenerationID, TargetScope: "selected"})
+				require.NoError(t, err)
+				recovered := httptest.NewRecorder()
+				recovery := httptest.NewRequest("POST", "/api/channel/921/account-pool/recover", bytes.NewReader(raw))
+				recovery.Header.Set("Content-Type", "application/json")
+				admin.ServeHTTP(recovered, recovery)
+				var recoveryResult struct {
+					Success bool `json:"success"`
+				}
+				require.NoError(t, common.Unmarshal(recovered.Body.Bytes(), &recoveryResult))
+				require.True(t, recoveryResult.Success, recovered.Body.String())
+				projection = httptest.NewRecorder()
+				admin.ServeHTTP(projection, httptest.NewRequest("GET", "/api/channel/921/account-pool?operation=audio.speech.create&model="+actual, nil))
+				require.NoError(t, common.Unmarshal(projection.Body.Bytes(), &result))
+				require.True(t, result.Success)
+				assert.Zero(t, result.Data.Counts["cooling"])
+				assert.Equal(t, 2, result.Data.Counts["available"])
 			}
 			if tc.name == "http-rate" {
 				second := httptest.NewRequest("POST", path, bytes.NewReader(savedBody))

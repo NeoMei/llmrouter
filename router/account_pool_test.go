@@ -392,3 +392,36 @@ func TestAccountPoolHTTPScopedCountsFailuresAndValidation(t *testing.T) {
 	assert.Empty(t, after.Data.Members)
 	assert.Equal(t, "credential_unavailable", after.Data.Status)
 }
+
+func TestAccountPoolMappedScopesMatchLegacyAndCatalogIdentity(t *testing.T) {
+	f := newPoolHTTPFixture(t)
+	require.NoError(t, f.db.Model(&f.channel).Updates(map[string]interface{}{"models": "alias,second,distinct,self,cycle-a", "model_mapping": `{"alias":"middle","middle":"canonical","second":"canonical","self":"self","cycle-a":"cycle-b","cycle-b":"cycle-a"}`}).Error)
+	for _, tc := range []struct {
+		model   string
+		allowed bool
+	}{
+		{"canonical", true}, {"middle", true}, {"distinct", true}, {"self", true}, {"cycle-b", true}, {"cycle-a", false}, {"alias", false}, {"unconfigured", false},
+	} {
+		t.Run(tc.model, func(t *testing.T) {
+			req := httptest.NewRequest("GET", fmt.Sprintf("/api/channel/%d/account-pool?operation=audio.speech.create&model=%s", f.channel.Id, tc.model), nil)
+			req.Header.Set("Authorization", "Bearer "+f.tokens["read"])
+			w := httptest.NewRecorder()
+			f.engine.ServeHTTP(w, req)
+			var result poolHTTPResponse
+			require.NoError(t, common.Unmarshal(w.Body.Bytes(), &result))
+			assert.Equal(t, tc.allowed, result.Success, w.Body.String())
+			if !tc.allowed {
+				assert.Equal(t, "model_not_in_channel", result.Code)
+			}
+		})
+	}
+	require.NoError(t, f.db.Model(&f.channel).Update("model_mapping", `{"alias":1}`).Error)
+	req := httptest.NewRequest("GET", fmt.Sprintf("/api/channel/%d/account-pool?operation=audio.speech.create&model=canonical", f.channel.Id), nil)
+	req.Header.Set("Authorization", "Bearer "+f.tokens["read"])
+	w := httptest.NewRecorder()
+	f.engine.ServeHTTP(w, req)
+	var result poolHTTPResponse
+	require.NoError(t, common.Unmarshal(w.Body.Bytes(), &result))
+	assert.False(t, result.Success)
+	assert.Equal(t, "configuration_unavailable", result.Code)
+}

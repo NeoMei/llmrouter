@@ -41,6 +41,7 @@ import {
   getAccountPool,
   type PoolSnapshot,
 } from '../../account-pool'
+import { getAccountPoolModels } from '../../account-pool-models'
 import type { Channel } from '../../types'
 import { PoolMemberCard } from './account-pool-member'
 
@@ -57,26 +58,10 @@ export function AccountPoolDialog(props: {
     enabled: canRead,
     retry: false,
   })
-  const models = props.channel.models
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean)
-  let mapping: Record<string, string> = {}
-  try {
-    const parsed: unknown = JSON.parse(props.channel.model_mapping || '{}')
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      mapping = Object.fromEntries(
-        Object.entries(parsed).filter(
-          (entry): entry is [string, string] => typeof entry[1] === 'string'
-        )
-      )
-    }
-  } catch {
-    /* server validates configured models */
-  }
-  const upstreamModels = [
-    ...new Set(models.map((model) => mapping[model] || model)),
-  ]
+  const upstreamModels = getAccountPoolModels(
+    props.channel.models,
+    props.channel.model_mapping || '{}'
+  )
   const [model, setModel] = useState(upstreamModels[0] || '')
   const [operation, setOperation] = useState(
     props.channel.type === 60 ? 'ocr.jobs.create' : 'chat.completions.create'

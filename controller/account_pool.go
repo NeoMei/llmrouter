@@ -87,7 +87,10 @@ func resolveAccountPool(c *gin.Context, db *gorm.DB, ch *model.Channel, profileI
 		if mapped, ok := mapping[name]; ok && mapped != "" {
 			upstream = mapped
 		}
-		if upstream == scope.Model {
+		// Retain the existing one-hop catalog scope and add the legacy relay
+		// chain terminal. Invalid cycles never authorize a legacy terminal.
+		terminal, err := common.ResolveModelMapping(name, mapping)
+		if upstream == scope.Model || (err == nil && terminal == scope.Model) {
 			authorized = true
 			break
 		}

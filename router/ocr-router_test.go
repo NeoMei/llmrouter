@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -269,6 +270,54 @@ func TestOCRPublicFixedConsumerAndCanonical(t *testing.T) {
 	assert.Equal(t, 403, resp.StatusCode)
 	resp.Body.Close()
 	require.NoError(t, db.Model(&token).Update("model_limits", "public-ocr").Error)
+	// Expired published output stays terminal after successful physical cleanup.
+	oldLogDB, oldLogEnabled := model.LOG_DB, common.LogConsumeEnabled
+	model.LOG_DB, common.LogConsumeEnabled = db, true
+	t.Cleanup(func() { model.LOG_DB, common.LogConsumeEnabled = oldLogDB, oldLogEnabled })
+	require.NoError(t, db.AutoMigrate(&model.Log{}, &model.OCRLogReceipt{}))
+	require.NoError(t, billing.ProjectAuditLogs(context.Background(), db, 100))
+	var receiptsBefore []model.OCRLogReceipt
+	var logsBefore []model.Log
+	require.NoError(t, db.Find(&receiptsBefore).Error)
+	require.NoError(t, db.Where("type = ?", model.LogTypeConsume).Find(&logsBefore).Error)
+	require.Len(t, logsBefore, 1)
+	require.Equal(t, 100, logsBefore[0].Quota)
+	require.NotEmpty(t, receiptsBefore)
+	var settledBefore model.OCRJob
+	require.NoError(t, db.First(&settledBefore, "id = ?", id).Error)
+	require.Equal(t, "settled", settledBefore.BillingState)
+	require.NoError(t, db.Model(&model.OCRResource{}).Where("job_id = ?", id).Update("expires_at", time.Now().Unix()-1).Error)
+	beforeSends, beforePolls := sends.Load(), polls.Load()
+	resp = get("/api/v2/ocr/jobs/"+id, token.Key)
+	require.Equal(t, 410, resp.StatusCode)
+	resp.Body.Close()
+	require.NoError(t, svc.PurgeExpiredResources(context.Background(), 100))
+	var remaining int64
+	require.NoError(t, db.Model(&model.OCRResource{}).Where("job_id = ?", id).Count(&remaining).Error)
+	require.Zero(t, remaining)
+	for _, path := range []string{"/api/v2/ocr/jobs/" + id, "/v1/ocr/" + id} {
+		resp = get(path, token.Key)
+		assert.Equal(t, 410, resp.StatusCode)
+		resp.Body.Close()
+	}
+	assert.Equal(t, beforeSends, sends.Load())
+	assert.Equal(t, beforePolls, polls.Load())
+	var settledAfter model.OCRJob
+	require.NoError(t, db.First(&settledAfter, "id = ?", id).Error)
+	assert.Equal(t, settledBefore, settledAfter)
+	require.NoError(t, billing.ProjectAuditLogs(context.Background(), db, 100))
+	var receiptsAfter []model.OCRLogReceipt
+	var logsAfter []model.Log
+	require.NoError(t, db.Find(&receiptsAfter).Error)
+	require.NoError(t, db.Where("type = ?", model.LogTypeConsume).Find(&logsAfter).Error)
+	assert.Equal(t, receiptsBefore, receiptsAfter)
+	assert.Equal(t, logsBefore, logsAfter)
+	var chargedUser model.User
+	var chargedToken model.Token
+	require.NoError(t, db.First(&chargedUser, u.Id).Error)
+	require.NoError(t, db.First(&chargedToken, token.Id).Error)
+	assert.Equal(t, 900, chargedUser.Quota)
+	assert.Equal(t, 900, chargedToken.RemainQuota)
 	// An intentional second create without idempotency creates a different paid job.
 	resp = submit("/v1/ocr", token.Key)
 	require.Equal(t, 202, resp.StatusCode)

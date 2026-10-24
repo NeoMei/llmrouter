@@ -141,6 +141,7 @@ func handleTTSResponse(c *gin.Context, resp *http.Response, info *relaycommon.Re
 				return
 			}
 			if len(audio) > 0 {
+				c.Writer.Header().Del("Retry-After")
 				n, writeErr := c.Writer.Write(audio)
 				if writeErr != nil || n != len(audio) {
 					apiErr = nativeSpeechError()
@@ -182,6 +183,7 @@ func handleTTSResponse(c *gin.Context, resp *http.Response, info *relaycommon.Re
 		}
 		c.Set("binary_stream_content_type", getContentTypeByFormat(info.OutputAudioFormat))
 		c.Header("Content-Type", getContentTypeByFormat(info.OutputAudioFormat))
+		c.Writer.Header().Del("Retry-After")
 		n, err := c.Writer.Write(total)
 		if err != nil || n != len(total) {
 			return nil, nativeSpeechError()

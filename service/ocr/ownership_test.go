@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestOCRURLAdmissionUsesOwnedBytes(t *testing.T) {
@@ -291,9 +292,11 @@ func TestOCRConcurrentIdempotentCreateAndNoRepeatBudget(t *testing.T) {
 }
 
 func TestOCRRenewableGrantProjectionAfterRestartAndRetention(t *testing.T) {
+	var providerCalls atomic.Int32
 	var server *httptest.Server
 	img := pngFixture(t)
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		providerCalls.Add(1)
 		switch r.URL.Path {
 		case "/api/v2/ocr/jobs":
 			_, _ = w.Write([]byte(`{"code":0,"data":{"jobId":"owned"}}`))
@@ -355,4 +358,19 @@ func TestOCRRenewableGrantProjectionAfterRestartAndRetention(t *testing.T) {
 	var resources int64
 	require.NoError(t, svc.db.Model(&model.OCRResource{}).Count(&resources).Error)
 	assert.Zero(t, resources)
+	before := providerCalls.Load()
+	_, err = restarted.Status(ctx, j.JobID, req.Admission.UserID, req.Admission.TokenID)
+	require.ErrorIs(t, err, model.ErrOCRGrant)
+	assert.Equal(t, before, providerCalls.Load(), "terminal purge must not replay any provider work")
+	checkMoney(t, svc, req, 900, 100, 1)
+	// A storage outage is an error, never misclassified as an expired result.
+	outage := fmt.Errorf("resource database unavailable")
+	require.NoError(t, svc.db.Callback().Query().Before("gorm:query").Register("resource_outage", func(tx *gorm.DB) {
+		if tx.Statement.Table == "ocr_resources" {
+			tx.AddError(outage)
+		}
+	}))
+	_, err = restarted.Status(ctx, j.JobID, req.Admission.UserID, req.Admission.TokenID)
+	require.ErrorIs(t, err, outage)
+	require.NoError(t, svc.db.Callback().Query().Remove("resource_outage"))
 }

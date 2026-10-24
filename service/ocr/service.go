@@ -465,6 +465,12 @@ func (s *Service) project(ctx context.Context, j model.OCRJob) (JobStatus, error
 	}
 	if j.ResultResourceID != "" {
 		r, err := s.billing.OCRResource(ctx, j.ID, j.ResultResourceID)
+		// A nonempty publication ID is durable: successful retention cleanup
+		// removes its row, never the settled job's publication receipt. Only
+		// that exact missing published result means gone; DB outages propagate.
+		if errors.Is(err, gorm.ErrRecordNotFound) && j.Decision == "success" && j.BillingState == "settled" {
+			return out, model.ErrOCRGrant
+		}
 		if err != nil {
 			return out, err
 		}

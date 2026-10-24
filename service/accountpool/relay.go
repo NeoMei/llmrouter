@@ -24,6 +24,8 @@ const lifecycleKey = string(constant.ContextKeyAccountPoolLifecycle)
 // Lifecycle is request-local. Selection is prepared before send; Sent is a value
 // copy taken immediately before the transport, never reconstructed from key indexes.
 type Lifecycle struct {
+	// ResolvedRoute is set only after controller catalog admission. Its model is already authoritative.
+	ResolvedRoute              bool
 	NativeAllStatuses          bool
 	NativeAllStatusesRequested bool
 	NativeRequested            bool
@@ -214,8 +216,21 @@ func SetUnavailableHeader(c *gin.Context, err error) {
 
 // SelectChannel preserves raw adapter credentials (including AppID+Token).
 func SelectChannel(c *gin.Context, channel *model.Channel, modelName string) (string, int, error) {
-	scope := RequestScope(c, modelName)
 	state := State(c)
+	if !state.ResolvedRoute {
+		mapping := map[string]string{}
+		if raw := channel.GetModelMapping(); raw != "" && raw != "{}" {
+			if err := common.UnmarshalJsonStr(raw, &mapping); err != nil {
+				return "", 0, errors.New("unmarshal_model_mapping_failed")
+			}
+		}
+		var err error
+		modelName, err = common.ResolveModelMapping(modelName, mapping)
+		if err != nil {
+			return "", 0, err
+		}
+	}
+	scope := RequestScope(c, modelName)
 	refs, keys, err := model.ChannelAccountRefs(c.Request.Context(), model.DB, channel)
 	if err != nil {
 		return "", 0, err

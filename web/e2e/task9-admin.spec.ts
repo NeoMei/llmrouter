@@ -35,6 +35,8 @@ async function fixture(
     operate?: boolean
     write?: boolean
     gateway?: boolean
+    models?: string
+    mapping?: string
   } = {}
 ) {
   const state = {
@@ -159,8 +161,8 @@ async function fixture(
                 key: '',
                 name: 'Fixture pool',
                 status: 1,
-                models: 'ocr-model,text-embedding-v4',
-                model_mapping: '{}',
+                models: options.models || 'ocr-model,text-embedding-v4',
+                model_mapping: options.mapping || '{}',
                 group: 'default',
                 created_time: 0,
                 test_time: 0,
@@ -725,4 +727,46 @@ test('padded fixed identities allow unrelated saves and equivalent whitespace ed
   expect(
     (state.routeWrites[1].targets as { metadata: string }[])[0].metadata
   ).toBe(targetRaw)
+})
+
+test('pool scopes include the legacy chain terminal and the authoritative catalog first hop', async ({
+  page,
+}) => {
+  const state = await fixture(page, {
+    models: 'alias,second,distinct,self,cycle-a',
+    mapping: JSON.stringify({
+      alias: 'middle',
+      middle: 'canonical',
+      second: 'canonical',
+      self: 'self',
+      'cycle-a': 'cycle-b',
+      'cycle-b': 'cycle-a',
+    }),
+  })
+  await openPool(page)
+  const model = page.getByRole('combobox', { name: 'Upstream model' })
+  await expect(model).toHaveValue('canonical')
+  await expect(model.getByRole('option')).toHaveText([
+    'canonical',
+    'middle',
+    'distinct',
+    'self',
+    'cycle-b',
+  ])
+  await expect
+    .poll(() =>
+      state.reads.some(
+        (read) => new URLSearchParams(read).get('model') === 'canonical'
+      )
+    )
+    .toBe(true)
+  await model.selectOption('middle')
+  await page.getByRole('button', { name: 'Refresh scope', exact: true }).click()
+  await expect
+    .poll(() =>
+      state.reads.some(
+        (read) => new URLSearchParams(read).get('model') === 'middle'
+      )
+    )
+    .toBe(true)
 })

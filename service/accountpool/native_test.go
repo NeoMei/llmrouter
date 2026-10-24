@@ -1,6 +1,7 @@
 package accountpool
 
 import (
+	"fmt"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -57,4 +58,24 @@ func TestNativeFundingRefusalUsesReceiptQuotaGroup(t *testing.T) {
 	require.NoError(t, CompleteNativeOutcome(c, &FailureInput{Refusal: RefusalQuotaExhausted, SharedQuota: true}))
 	_, err = model.SelectUpstreamAccount(c.Request.Context(), db, refs[1:], State(c).Scope, nil, time.Now())
 	require.Error(t, err)
+}
+
+func TestNativeSuccessClearsOnlyValidatedBackoff(t *testing.T) {
+	for _, success := range []bool{false, true} {
+		t.Run(fmt.Sprint(success), func(t *testing.T) {
+			c, _, _ := relayPoolFixture(t)
+			c.Header("Retry-After", "60")
+			DeferNativeOutcome(c)
+			require.NoError(t, BeginSend(c))
+			require.NoError(t, Observe(c, &http.Response{StatusCode: 200, Header: http.Header{}}, nil))
+			require.Equal(t, "60", c.Writer.Header().Get("Retry-After"), "HTTP success alone is not semantic success")
+			if success {
+				require.NoError(t, CompleteNativeOutcome(c, nil))
+				assert.Empty(t, c.Writer.Header().Get("Retry-After"))
+			} else {
+				require.NoError(t, CompleteNativeOutcome(c, &FailureInput{StatusCode: 502}))
+				assert.Equal(t, "60", c.Writer.Header().Get("Retry-After"))
+			}
+		})
+	}
 }

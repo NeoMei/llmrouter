@@ -1249,6 +1249,9 @@ func selectRouteCandidateForAttempt(c *gin.Context, relayInfo *relaycommon.Relay
 	relayInfo.ResetChannelAttemptState()
 	relayInfo.RouteCandidateIndex = index
 	relayInfo.ResolvedModelName = candidate.UpstreamModel
+	if c != nil {
+		accountpool.State(c).ResolvedRoute = true
+	}
 	relayInfo.BillingModelName = candidate.BillingModel
 	relayInfo.ModelRouteId = candidate.RouteID
 	relayInfo.ModelTargetId = candidate.TargetID

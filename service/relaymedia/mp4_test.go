@@ -113,3 +113,49 @@ func TestInspectMP4StructuralNegatives(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { _, err := InspectMP4(tc.edit(bytes.Clone(data))); require.Error(t, err) })
 	}
 }
+
+func TestInspectMP4RejectDuplicateSampleOffsets(t *testing.T) {
+	data, e := os.ReadFile("testdata/h264.mp4")
+	require.NoError(t, e)
+	z := bytes.Index(data, []byte("stsz"))
+	firstSize := binary.BigEndian.Uint32(data[z+16:])
+	// Rebuild just sample tables and enclosing lengths: five equal-sized samples,
+	// five chunks all pointing at the same genuine first sample.
+	var rewrite func([]byte) []byte
+	rewrite = func(in []byte) []byte {
+		bs, e := boxes(in, 0)
+		require.NoError(t, e)
+		var out []byte
+		for _, b := range bs {
+			payload := b.data
+			switch b.kind {
+			case "moov", "trak", "mdia", "minf", "stbl":
+				payload = rewrite(payload)
+			case "stsz":
+				payload = make([]byte, 12)
+				binary.BigEndian.PutUint32(payload[4:], firstSize)
+				binary.BigEndian.PutUint32(payload[8:], 5)
+			case "stco":
+				payload = make([]byte, 28)
+				binary.BigEndian.PutUint32(payload[4:], 5)
+			case "stsc":
+				payload = bytes.Clone(payload)
+				binary.BigEndian.PutUint32(payload[12:], 1)
+			}
+			head := make([]byte, 8)
+			binary.BigEndian.PutUint32(head, uint32(8+len(payload)))
+			copy(head[4:], b.kind)
+			out = append(out, head...)
+			out = append(out, payload...)
+		}
+		return out
+	}
+	mutated := rewrite(data)
+	mdat := bytes.Index(mutated, []byte("mdat")) + 4
+	co := bytes.Index(mutated, []byte("stco"))
+	for i := 0; i < 5; i++ {
+		binary.BigEndian.PutUint32(mutated[co+12+i*4:], uint32(mdat))
+	}
+	_, e = InspectMP4(mutated)
+	require.ErrorIs(t, e, ErrInvalidMP4)
+}

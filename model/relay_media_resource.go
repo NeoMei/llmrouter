@@ -45,16 +45,15 @@ func RelayMediaReady(ctx context.Context, db *gorm.DB, id string, now int64) err
 	return nil
 }
 
-// ReadRelayMedia holds the row lock through the bounded object open/read. Revoke
-// wins before a later open, while an already-open immutable read may finish.
+// ReadRelayMedia loads a row snapshot and closes the SQL statement before the
+// callback. Callers acquiring external bytes must recheck a fresh snapshot
+// after I/O: no SQL transaction or row lock may span object-store access.
 func ReadRelayMedia(ctx context.Context, db *gorm.DB, id string, read func(RelayMediaResource) error) error {
-	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var r RelayMediaResource
-		if err := lockForUpdate(tx).Where("id = ?", id).First(&r).Error; err != nil {
-			return err
-		}
-		return read(r)
-	})
+	var r RelayMediaResource
+	if err := db.WithContext(ctx).Where("id = ?", id).First(&r).Error; err != nil {
+		return err
+	}
+	return read(r)
 }
 func RevokeRelayMedia(ctx context.Context, db *gorm.DB, id string, userID, tokenID int) error {
 	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {

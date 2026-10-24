@@ -315,9 +315,6 @@ func InspectMP4(data []byte) (VideoFacts, error) {
 			if size == 0 || pos < uint64(mdat.start+8) || end > uint64(mdat.end) {
 				return bad()
 			}
-			if !validAVCSample(data[int(pos):int(end)], width, height) {
-				return bad()
-			}
 			extents = append(extents, extent{pos, end})
 			pos = end
 			sample++
@@ -329,6 +326,13 @@ func InspectMP4(data []byte) (VideoFacts, error) {
 	sort.Slice(extents, func(i, j int) bool { return extents[i].start < extents[j].start })
 	for i := 1; i < len(extents); i++ {
 		if extents[i].start < extents[i-1].end {
+			return bad()
+		}
+	}
+	// Establish disjoint extents before touching codec payloads. Even invalid
+	// files can now cause at most one AVC inspection per stored payload byte.
+	for _, sample := range extents {
+		if !validAVCSample(data[int(sample.start):int(sample.end)], width, height) {
 			return bad()
 		}
 	}

@@ -35,18 +35,37 @@ func (s *Service) ReadGranted(ctx context.Context, id, token string) ([]byte, er
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	var data []byte
+	var snapshot model.RelayMediaResource
 	err = model.ReadRelayMedia(ctx, s.db, id, func(r model.RelayMediaResource) error {
-		now := s.now().Unix()
-		if r.State != "ready" || r.ExpiresAt <= now || expires <= now || expires > r.ExpiresAt || expires > now+int64(GrantTTL/time.Second) || !hmac.Equal([]byte(s.grant(r, expires)), []byte(token)) {
+		if !s.validGrant(r, expires, token) {
 			return ErrUnavailable
 		}
-		var e error
-		data, e = s.readObject(ctx, r)
-		return e
+		snapshot = r
+		return nil
+	})
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	// Object-store I/O and hashing never retain a SQL transaction or row lock.
+	data, err := s.readObject(ctx, snapshot)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	// Successful final authorization is the acquisition boundary. Revocation,
+	// expiry, deletion or metadata changes during I/O release no bytes.
+	err = model.ReadRelayMedia(ctx, s.db, id, func(r model.RelayMediaResource) error {
+		if r != snapshot || !s.validGrant(r, expires, token) {
+			return ErrUnavailable
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, ErrUnavailable
 	}
 	return data, nil
+}
+
+func (s *Service) validGrant(r model.RelayMediaResource, expires int64, token string) bool {
+	now := s.now().Unix()
+	return r.State == "ready" && r.ExpiresAt > now && expires > now && expires <= r.ExpiresAt && expires <= now+int64(GrantTTL/time.Second) && hmac.Equal([]byte(s.grant(r, expires)), []byte(token))
 }

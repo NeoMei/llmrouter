@@ -174,6 +174,11 @@ func ValidateDomesticImage(c *gin.Context, info *relaycommon.RelayInfo, channelT
 		if !ok || e1 != nil || e2 != nil || width <= 0 || height <= 0 || width*height < 512*512 || width*height > 2048*2048 {
 			return fmt.Errorf("image size requires 262144 to 4194304 pixels")
 		}
+		// The supplier may normalize off-grid editing sizes after execution.
+		// Restrict both operations locally so strict response dimensions are safe.
+		if width%16 != 0 || height%16 != 0 {
+			return fmt.Errorf("image size requires width and height multiples of 16 (gateway restriction)")
+		}
 		native.Parameters.Size = w + "*" + h
 	}
 	if request.ResponseFormat != "" && request.ResponseFormat != "url" {

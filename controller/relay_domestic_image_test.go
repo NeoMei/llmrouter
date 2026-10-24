@@ -33,7 +33,7 @@ import (
 )
 
 func TestDomesticImageHTTP(t *testing.T) {
-	for _, name := range []string{"generation", "header-override", "passthrough", "prompt-extend", "default-n", "plain", "legacy-async", "oversized-price", "usage-null", "usage-negative", "usage-huge", "output-bound", "edit", "six", "one", "pro", "group-rate", "group-funding", "jpeg", "image-bytes", "image-pixels", "duplicate", "null-n", "null-seed", "bad-watermark", "rate", "compatible-rate", "funding", "compatible-funding", "invalid-key", "veto", "unknown", "transport", "cancel", "missing-usage", "mismatch", "missing-image", "bad-url", "bad-dimensions", "zero", "huge", "seven", "size", "prompt", "seed", "parameters", "input", "override", "bad-model", "unpriced", "tiny-price", "free-price", "bad-image", "too-many-images", "remote-image", "stream", "format"} {
+	for _, name := range []string{"generation-grid", "edit-grid", "alias-price-catalog", "alias-price-legacy", "alias-price-group", "generation", "header-override", "passthrough", "prompt-extend", "default-n", "plain", "legacy-async", "oversized-price", "usage-null", "usage-negative", "usage-huge", "output-bound", "edit", "six", "one", "pro", "group-rate", "group-funding", "jpeg", "image-bytes", "image-pixels", "duplicate", "null-n", "null-seed", "bad-watermark", "rate", "compatible-rate", "funding", "compatible-funding", "invalid-key", "veto", "unknown", "transport", "cancel", "missing-usage", "mismatch", "missing-image", "bad-url", "bad-dimensions", "zero", "huge", "seven", "size", "prompt", "seed", "parameters", "input", "override", "bad-model", "unpriced", "tiny-price", "free-price", "bad-image", "too-many-images", "remote-image", "stream", "format"} {
 		t.Run(name, func(t *testing.T) {
 			gin.SetMode(gin.TestMode)
 			db := setupTieredRelayBillingDB(t)
@@ -49,6 +49,11 @@ func TestDomesticImageHTTP(t *testing.T) {
 				model.LOG_DB, common.LogConsumeEnabled, common.MemoryCacheEnabled, common.RetryTimes = oldLogDB, oldLog, oldCache, oldRetry
 			})
 			ratio_setting.InitRatioSettings()
+			oldGroup := ratio_setting.GroupRatio2JSONString()
+			t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(oldGroup)) })
+			if name == "alias-price-group" {
+				require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1.5}`))
+			}
 			oldPrice, oldRatio := ratio_setting.ModelPrice2JSONString(), ratio_setting.ModelRatio2JSONString()
 			price := `{"qwen-image-2.0":0.001,"qwen-image-2.0-pro":0.001,"wan2.1-t2i-turbo":0.001,"unsupported":0.001}`
 			if name == "unpriced" {
@@ -62,6 +67,9 @@ func TestDomesticImageHTTP(t *testing.T) {
 			}
 			if name == "free-price" {
 				price = `{"qwen-image-2.0":0}`
+			}
+			if strings.HasPrefix(name, "alias-price-") {
+				price = `{"image-unit-price":0.001,"dall-e-alias":0.001,"qwen-image-2.0":0.9}`
 			}
 			require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(price))
 			require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"qwen-image-2.0":1,"unsupported":1}`))
@@ -94,6 +102,18 @@ func TestDomesticImageHTTP(t *testing.T) {
 			if name == "bad-model" {
 				actual = "unsupported"
 			}
+			publicAlias := "image-alias"
+			requestSize := "1024x1024"
+			width, height := 1024, 1024
+			if strings.HasPrefix(name, "alias-price-") {
+				publicAlias = "dall-e-alias"
+				requestSize = "512x512"
+				width, height = 512, 512
+			}
+			if name == "generation-grid" || name == "edit-grid" {
+				requestSize = "1033x1032"
+				width, height = 1040, 1024
+			}
 			firstBody := ""
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				n := sends.Add(1)
@@ -114,7 +134,19 @@ func TestDomesticImageHTTP(t *testing.T) {
 				assert.Equal(t, actual, sent["model"])
 				params := sent["parameters"].(map[string]any)
 				assert.Equal(t, float64(count), params["n"])
-				assert.Equal(t, "1024*1024", params["size"])
+				assert.Equal(t, strings.ReplaceAll(requestSize, "x", "*"), params["size"])
+				if strings.HasPrefix(name, "alias-price-") {
+					precharge := 1000
+					if name == "alias-price-group" {
+						precharge = 1500
+					}
+					wallet, token, _ := tieredRelayQuotaState(t, db, 910, 911)
+					assert.Equal(t, 100000-precharge, wallet, "wallet reserved before supplier response")
+					assert.Equal(t, 100000-precharge, token, "token reserved before supplier response")
+					var consumes int64
+					require.NoError(t, db.Model(&model.Log{}).Where("type = ?", model.LogTypeConsume).Count(&consumes).Error)
+					assert.Zero(t, consumes, "no consume log before supplier response")
+				}
 				assert.Equal(t, false, params["watermark"])
 				if name == "prompt-extend" {
 					assert.Equal(t, false, params["prompt_extend"])
@@ -184,7 +216,7 @@ func TestDomesticImageHTTP(t *testing.T) {
 					images[0]["image"] = "file:///tmp/a"
 				}
 				output := map[string]any{"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": images}, "finish_reason": "stop"}}}
-				usage := map[string]any{"image_count": count, "width": 1024, "height": 1024}
+				usage := map[string]any{"image_count": count, "width": width, "height": height}
 				if name == "usage-null" {
 					usage["image_count"] = nil
 				}
@@ -219,6 +251,12 @@ func TestDomesticImageHTTP(t *testing.T) {
 			if name == "override" {
 				ch.ParamOverride = common.GetPointer(`{"parameters.n":6}`)
 			}
+			abilityModel := actual
+			if name == "alias-price-legacy" {
+				abilityModel = publicAlias
+				ch.Models = publicAlias
+				ch.ModelMapping = common.GetPointer(`{"dall-e-alias":"qwen-image-2.0"}`)
+			}
 			require.NoError(t, db.Create(&ch).Error)
 			if name == "group-rate" || name == "group-funding" {
 				for i, key := range []string{"fixture-A", "fixture-B"} {
@@ -228,9 +266,18 @@ func TestDomesticImageHTTP(t *testing.T) {
 				}
 			}
 
-			require.NoError(t, db.Create(&model.Ability{ChannelId: 921, Group: "default", Model: actual, Enabled: true}).Error)
-			require.NoError(t, db.Create(&model.ClientModelRoute{Id: 931, PublicId: "image-public", Aliases: `["image-alias"]`, Enabled: true, Metadata: `{"input_modalities":["text","image"],"output_modalities":["image"],"operations":["images.generations.create","images.edits.create"],"streaming":false,"async":false}`}).Error)
-			require.NoError(t, db.Create(&model.ClientModelTarget{Id: 932, RouteId: 931, ChannelId: 921, UpstreamModel: actual, BillingModel: actual, PreferredWires: `["openai_chat"]`, Weight: 1, Enabled: true}).Error)
+			require.NoError(t, db.Create(&model.Ability{ChannelId: 921, Group: "default", Model: abilityModel, Enabled: true}).Error)
+			if name != "alias-price-legacy" {
+				aliases, err := common.Marshal([]string{publicAlias})
+				require.NoError(t, err)
+				billing := actual
+				if strings.HasPrefix(name, "alias-price-") {
+					billing = "image-unit-price"
+				}
+				require.NoError(t, db.Create(&model.ClientModelRoute{Id: 931, PublicId: "image-public", Aliases: string(aliases), Enabled: true, Metadata: `{"input_modalities":["text","image"],"output_modalities":["image"],"operations":["images.generations.create","images.edits.create"],"streaming":false,"async":false}`}).Error)
+				require.NoError(t, db.Create(&model.ClientModelTarget{Id: 932, RouteId: 931, ChannelId: 921, UpstreamModel: actual, BillingModel: billing, PreferredWires: `["openai_chat"]`, Weight: 1, Enabled: true}).Error)
+			}
+
 			require.NoError(t, db.Callback().Update().Before("gorm:update").Register("image_money", func(tx *gorm.DB) {
 				if tx.Statement.Table == "users" || tx.Statement.Table == "tokens" {
 					updates.Add(1)
@@ -242,7 +289,7 @@ func TestDomesticImageHTTP(t *testing.T) {
 			for _, p := range []string{"/v1/images/generations", "/v1/images/edits"} {
 				engine.POST(p, middleware.TokenAuth(), middleware.Distribute(), func(c *gin.Context) { Relay(c, types.RelayFormatOpenAIImage) })
 			}
-			fields := map[string]any{"model": "image-alias", "prompt": "draw a cat", "n": count, "size": "1024x1024", "watermark": false, "seed": 0}
+			fields := map[string]any{"model": publicAlias, "prompt": "draw a cat", "n": count, "size": requestSize, "watermark": false, "seed": 0}
 			switch name {
 			case "prompt-extend":
 				fields["prompt_extend"] = false
@@ -283,7 +330,7 @@ func TestDomesticImageHTTP(t *testing.T) {
 			require.NoError(t, err)
 			path := "/v1/images/generations"
 			contentType := "application/json"
-			if name == "edit" || name == "jpeg" || name == "image-bytes" || name == "image-pixels" || name == "bad-image" || name == "too-many-images" {
+			if name == "edit-grid" || name == "edit" || name == "jpeg" || name == "image-bytes" || name == "image-pixels" || name == "bad-image" || name == "too-many-images" {
 				path = "/v1/images/edits"
 				var buf bytes.Buffer
 				form := multipart.NewWriter(&buf)
@@ -323,7 +370,7 @@ func TestDomesticImageHTTP(t *testing.T) {
 			request.Header.Set("Content-Type", contentType)
 			recorder := httptest.NewRecorder()
 			engine.ServeHTTP(recorder, request)
-			rejected := map[string]bool{"header-override": true, "passthrough": true, "legacy-async": true, "oversized-price": true, "duplicate": true, "null-n": true, "null-seed": true, "bad-watermark": true, "image-bytes": true, "image-pixels": true, "zero": true, "huge": true, "seven": true, "size": true, "prompt": true, "seed": true, "parameters": true, "input": true, "override": true, "bad-model": true, "unpriced": true, "tiny-price": true, "bad-image": true, "too-many-images": true, "remote-image": true, "stream": true, "format": true}[name]
+			rejected := map[string]bool{"generation-grid": true, "edit-grid": true, "header-override": true, "passthrough": true, "legacy-async": true, "oversized-price": true, "duplicate": true, "null-n": true, "null-seed": true, "bad-watermark": true, "image-bytes": true, "image-pixels": true, "zero": true, "huge": true, "seven": true, "size": true, "prompt": true, "seed": true, "parameters": true, "input": true, "override": true, "bad-model": true, "unpriced": true, "tiny-price": true, "bad-image": true, "too-many-images": true, "remote-image": true, "stream": true, "format": true}[name]
 			failed := rejected || map[string]bool{"usage-null": true, "usage-negative": true, "usage-huge": true, "output-bound": true, "group-funding": true, "veto": true, "unknown": true, "transport": true, "cancel": true, "missing-usage": true, "mismatch": true, "missing-image": true, "bad-url": true, "bad-dimensions": true}[name]
 			if rejected {
 				assert.Zero(t, sends.Load(), recorder.Body.String())
@@ -346,6 +393,9 @@ func TestDomesticImageHTTP(t *testing.T) {
 			assert.NotContains(t, recorder.Body.String(), "secret")
 			require.Eventually(t, func() bool { return gopool.WorkerCount() == 0 }, 2*time.Second, time.Millisecond)
 			quota := 500 * count
+			if name == "alias-price-group" {
+				quota = 1500
+			}
 			if failed || name == "free-price" {
 				quota = 0
 			}

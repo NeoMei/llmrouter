@@ -555,6 +555,20 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 }
 
 func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) *types.NewAPIError {
+	// Native per-image pricing uses the validated selected model contract. The
+	// public alias may resemble DALL·E and carry unrelated size/quality ratios.
+	if c.GetInt("channel_type") == constant.ChannelTypeAli {
+		if _, image := info.Request.(*dto.ImageRequest); image {
+			if value, exists := c.Get(helper.DomesticImageRequestKey); exists {
+				native := value.(helper.DomesticImageRequest)
+				normalized := *meta
+				normalized.ImagePriceRatio = 1
+				normalized.BillingRatios = map[string]float64{"n": float64(native.Parameters.N)}
+				meta = &normalized
+			}
+		}
+	}
+
 	priceData, err := helper.ModelPriceHelper(c, info, promptTokens, meta)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest), types.ErrOptionWithSkipRetry())

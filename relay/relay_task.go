@@ -2,12 +2,14 @@ package relay
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -19,6 +21,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/accountpool"
 	"github.com/gin-gonic/gin"
 )
 
@@ -88,11 +91,20 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 		return service.TaskErrorWrapperLocal(errors.New("the channel of the origin task is disabled"), "task_channel_disable", http.StatusBadRequest)
 	}
 	info.LockedChannel = ch
+	accountpool.State(c).TaskBound = true
+	if originTask.PrivateData.Account != nil {
+		ref := *originTask.PrivateData.Account
+		selected, err := model.SelectUpstreamAccount(c.Request.Context(), model.DB, []model.UpstreamAccountRef{ref}, accountpool.RequestScope(c, info.OriginModelName), accountpool.State(c).Excluded, time.Now())
+		if err != nil {
+			return service.TaskErrorWrapperLocal(err, "task_account_unavailable", http.StatusConflict)
+		}
+		accountpool.Prepare(c, model.DB, selected, accountpool.RequestScope(c, info.OriginModelName))
+	}
 
-	if originTask.ChannelId != info.ChannelId {
-		key, _, newAPIError := ch.GetNextEnabledKey()
-		if newAPIError != nil {
-			return service.TaskErrorWrapper(newAPIError, "channel_no_available_key", newAPIError.StatusCode)
+	if originTask.ChannelId != info.ChannelId || ch.ChannelInfo.IsMultiKey {
+		key, err := model.TaskAccountKey(c.Request.Context(), model.DB, ch, originTask)
+		if err != nil {
+			return service.TaskErrorWrapperLocal(err, "task_account_unavailable", http.StatusConflict)
 		}
 		common.SetContextKey(c, constant.ContextKeyChannelKey, key)
 		common.SetContextKey(c, constant.ContextKeyChannelType, ch.Type)
@@ -447,7 +459,11 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 		return nil
 	}
 
-	resp, err := adaptor.FetchTask(baseURL, channelModel.Key, map[string]any{
+	key, err := model.TaskAccountKey(context.Background(), model.DB, channelModel, task)
+	if err != nil {
+		return nil
+	}
+	resp, err := adaptor.FetchTask(baseURL, key, map[string]any{
 		"task_id": task.GetUpstreamTaskID(),
 		"action":  task.Action,
 	}, proxy)

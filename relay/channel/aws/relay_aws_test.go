@@ -7,9 +7,13 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service/accountpool"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -51,4 +55,20 @@ func TestDoAwsClientRequest_AppliesRuntimeHeaderOverrideToAnthropicBeta(t *testi
 	values, ok := anthropicBeta.([]any)
 	require.True(t, ok)
 	require.Equal(t, []any{"computer-use-2025-01-24"}, values)
+}
+
+func TestPooledBedrockSDKRejectsBeforeClientConstruction(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	accountpool.State(c).Selected = &model.UpstreamAccountSelection{}
+	adaptor := &Adaptor{ClientMode: ClientModeAKSK}
+	// No SDK client/configuration is supplied: rejection precedes all SDK setup.
+	response, err := adaptor.DoRequest(c, &relaycommon.RelayInfo{}, bytes.NewBufferString(`{}`))
+	require.Nil(t, response)
+	var apiErr *types.NewAPIError
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, types.ErrorCodeUnsupportedOperation, apiErr.GetErrorCode())
+	assert.True(t, types.IsSkipRetryError(apiErr))
+	assert.Nil(t, adaptor.AwsClient)
+	assert.Zero(t, accountpool.State(c).Sends)
 }

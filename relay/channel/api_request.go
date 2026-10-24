@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/accountpool"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -327,6 +328,14 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	if err != nil {
 		return nil, err
 	}
+	if accountpool.State(c).Selected != nil {
+		for key := range headerOverride {
+			switch strings.ToLower(key) {
+			case "authorization", "x-api-key", "x-goog-api-key":
+				return nil, errors.New("pooled account authentication cannot be overridden")
+			}
+		}
+	}
 	applyHeaderOverrideToRequest(req, headerOverride)
 	resp, err := doRequest(c, req, info)
 	if err != nil {
@@ -359,6 +368,14 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 	if err != nil {
 		return nil, err
 	}
+	if accountpool.State(c).Selected != nil {
+		for key := range headerOverride {
+			switch strings.ToLower(key) {
+			case "authorization", "x-api-key", "x-goog-api-key":
+				return nil, errors.New("pooled account authentication cannot be overridden")
+			}
+		}
+	}
 	applyHeaderOverrideToRequest(req, headerOverride)
 	resp, err := doRequest(c, req, info)
 	if err != nil {
@@ -368,6 +385,9 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 }
 
 func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*websocket.Conn, error) {
+	if accountpool.State(c).Selected != nil {
+		return nil, types.NewError(errors.New("pooled realtime requires an account-aware websocket transport"), types.ErrorCodeUnsupportedOperation, types.ErrOptionWithSkipRetry())
+	}
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
 		return nil, fmt.Errorf("get request url failed: %w", err)
@@ -377,6 +397,10 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	if err != nil {
 		return nil, fmt.Errorf("setup request header failed: %w", err)
 	}
+	if accountpool.State(c).Selected != nil {
+		return nil, types.NewError(errors.New("pooled realtime requires an account-aware websocket transport"), types.ErrorCodeUnsupportedOperation, types.ErrOptionWithSkipRetry())
+	}
+
 	// 在 SetupRequestHeader 之后应用 Header Override，确保用户设置优先级最高
 	// 这样可以覆盖默认的 Authorization header 设置
 	headerOverride, err := processHeaderOverride(info, c)
@@ -423,7 +447,26 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		}
 	}
 
-	resp, err := client.Do(req)
+	if err := accountpool.ValidateOutboundResources(c, req); err != nil {
+		accountpool.State(c).ResourceRejected = true
+		return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusConflict, types.ErrOptionWithSkipRetry())
+	}
+	if err := accountpool.BeginSend(c); err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req.WithContext(c.Request.Context()))
+	if observeErr := accountpool.Observe(c, resp, err); observeErr != nil {
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
+		return nil, observeErr
+	}
+	if accountpool.State(c).Uncertain {
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
+		return nil, types.NewErrorWithStatusCode(errors.New("upstream execution uncertain; automatic resubmission is disabled"), types.ErrorCode("upstream_execution_uncertain"), http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+	}
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())
 		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: do request failed"))

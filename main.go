@@ -344,11 +344,7 @@ func InitResources() error {
 	// Initialize codex-gateway provider subsystem (profile loader + platform key
 	// pool). Each component is optional and degrades gracefully when unset; see
 	// gateway.InitFromEnv. Needs both the SQL DB and Redis client.
-	if sqlDB, dbErr := model.DB.DB(); dbErr == nil {
-		gateway.InitFromEnv(common.RDB, sqlDB)
-	} else {
-		common.SysError("failed to obtain *sql.DB for gateway init: " + dbErr.Error())
-	}
+	gateway.InitFromEnv(common.RDB, model.DB)
 
 	perfmetrics.Init()
 

@@ -22,6 +22,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/helper"
 	relayprotocol "github.com/QuantumNous/new-api/relay/protocol"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/accountpool"
 	"github.com/QuantumNous/new-api/service/modelcatalog"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -222,6 +223,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		RequestPath: c.Request.URL.Path,
 		Retry:       common.GetPointer(0),
 	}
+	accountpool.State(c).MaxSends = common.RetryTimes + 1
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
 	preparedCandidateIndex := -1
@@ -235,6 +237,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			if relayInfo.RouteCandidateIndex != preparedCandidateIndex {
 				if candidateErr := prepareRouteCandidateForAttempt(c, relayInfo, relayInfo.RouteCandidateIndex, tokens, meta); candidateErr != nil {
 					newAPIError = candidateErr
+					var unavailable *model.UpstreamAccountUnavailable
+					if errors.As(candidateErr.Err, &unavailable) && advanceRouteCandidate(relayInfo) {
+						retryParam.ResetRetryNextTry()
+						continue
+					}
 					if candidateErr.GetErrorCode() == types.ErrorCodeGetChannelFailed &&
 						relayInfo.RouteCandidateIndex >= 0 && relayInfo.RouteCandidateIndex < len(relayInfo.RouteCandidates) {
 						candidate := relayInfo.RouteCandidates[relayInfo.RouteCandidateIndex]
@@ -271,6 +278,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			}
 			break
 		}
+		if len(relayInfo.RouteCandidates) > 0 {
+			if err := accountpool.ValidateResources(c); err != nil {
+				newAPIError = types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusConflict, types.ErrOptionWithSkipRetry())
+				break
+			}
+		}
 		if len(relayInfo.RouteCandidates) == 0 {
 			relayInfo.ResolvedChannelId = channel.Id
 			if legacyContinuityChannelID != channel.Id {
@@ -279,6 +292,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 					break
 				}
 				legacyContinuityChannelID = channel.Id
+			}
+			if err := accountpool.ValidateResources(c); err != nil {
+				newAPIError = types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusConflict, types.ErrOptionWithSkipRetry())
+				break
 			}
 			if !legacyPricingPrepared {
 				if billingErr := prepareAttemptBilling(c, relayInfo, tokens, meta); billingErr != nil {
@@ -314,8 +331,37 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 
+		// Gateway resolves credentials at header construction. Exhaustion there
+		// has sent nothing, so an authorized route fallback still has its budget.
+		var unavailable *model.UpstreamAccountUnavailable
+		if errors.As(newAPIError.Err, &unavailable) && accountpool.RetryAllowed(c) {
+			if len(relayInfo.RouteCandidates) > 0 {
+				if advanceRouteCandidate(relayInfo) {
+					retryParam.ResetRetryNextTry()
+					continue
+				}
+			} else {
+				next, selectionErr := middleware.FallbackAccountChannel(c, channel, relayInfo.ResolvedModelNameOrOrigin(), retryParam, newAPIError)
+				if selectionErr == nil {
+					relayInfo.UsingGroup = common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+					accountpool.State(c).RetryChannel = next
+					retryParam.ResetRetryNextTry()
+					continue
+				}
+				newAPIError = selectionErr
+			}
+		}
+
 		if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) {
 			break
+		}
+		samePool, poolErr := accountpool.PrepareNext(c)
+		if poolErr != nil {
+			break
+		}
+		if samePool {
+			accountpool.State(c).RetryChannel = channel
+			continue
 		}
 		if len(relayInfo.RouteCandidates) > 0 {
 			if !advanceRouteCandidate(relayInfo) {
@@ -414,6 +460,26 @@ func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 }
 
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
+	if prior := accountpool.State(c).RetryChannel; prior != nil {
+		accountpool.State(c).RetryChannel = nil
+		channel, err := model.GetChannelById(prior.Id, true)
+		if err != nil || channel == nil || channel.Status != common.ChannelStatusEnabled {
+			return nil, types.NewError(errors.New("retry channel unavailable"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		}
+		if len(info.RouteCandidates) > 0 {
+			if err := revalidateRouteCandidateAbility(c, info.RouteCandidates[info.RouteCandidateIndex]); err != nil {
+				return nil, types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+			}
+		} else if !model.IsChannelEnabledForGroupModel(info.UsingGroup, info.ResolvedModelNameOrOrigin(), channel.Id) {
+			return nil, types.NewError(errors.New("retry channel authorization changed"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		}
+		if err := middleware.SetupContextForSelectedChannel(c, channel, info.ResolvedModelNameOrOrigin()); err != nil {
+			return nil, err
+		}
+		info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
+		return channel, nil
+	}
+
 	if len(info.RouteCandidates) > 0 {
 		if info.RouteCandidateIndex < 0 || info.RouteCandidateIndex >= len(info.RouteCandidates) {
 			return nil, types.NewError(fmt.Errorf("resolved route candidate index %d is invalid", info.RouteCandidateIndex), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
@@ -438,6 +504,14 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		return channel, nil
 	}
 	if info.ChannelMeta == nil {
+		if selected := accountpool.State(c).Selected; selected != nil {
+			channel, err := model.GetChannelById(selected.Ref.ChannelID, true)
+			if err != nil {
+				return nil, types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+			}
+			info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
+			return channel, nil
+		}
 		autoBan := c.GetBool("auto_ban")
 		autoBanInt := 1
 		if !autoBan {
@@ -461,7 +535,7 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		return nil, types.NewError(fmt.Errorf("分组 %s 下模型 %s 的可用渠道不存在（retry）", selectGroup, info.ResolvedModelNameOrOrigin()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 
-	newAPIError := middleware.SetupContextForSelectedChannel(c, channel, info.ResolvedModelNameOrOrigin())
+	channel, newAPIError := middleware.SetupAvailableAccountChannel(c, channel, info.ResolvedModelNameOrOrigin(), retryParam)
 	if newAPIError != nil {
 		return nil, newAPIError
 	}
@@ -500,8 +574,20 @@ func prepareRouteCandidateForAttempt(c *gin.Context, info *relaycommon.RelayInfo
 	if err := revalidateRouteCandidateAbility(c, info.RouteCandidates[index]); err != nil {
 		return types.NewError(err, types.ErrorCodeGetChannelFailed)
 	}
+	candidateChannel, err := model.GetChannelById(info.RouteCandidates[index].ChannelID, true)
+	if err != nil {
+		return types.NewError(err, types.ErrorCodeGetChannelFailed)
+	}
+	if candidateChannel.ChannelInfo.IsMultiKey {
+		if setupErr := middleware.SetupContextForSelectedChannel(c, candidateChannel, info.ResolvedModelNameOrOrigin()); setupErr != nil {
+			return setupErr
+		}
+	}
 	if err := relay.PrepareResponsesContinuityForAttempt(c, info); err != nil {
 		return err
+	}
+	if err := accountpool.ValidateResources(c); err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusConflict, types.ErrOptionWithSkipRetry())
 	}
 	return prepareAttemptBilling(c, info, promptTokens, meta)
 }
@@ -537,7 +623,7 @@ func revalidateRouteCandidateAbility(c *gin.Context, candidate relaycommon.Route
 }
 
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
-	if openaiErr == nil {
+	if openaiErr == nil || retryTimes <= 0 || !accountpool.RetryAllowed(c) {
 		return false
 	}
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
@@ -572,7 +658,7 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(err.Error())))
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
 	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
-	if service.ShouldDisableChannel(err) && channelError.AutoBan {
+	if accountpool.State(c).Sent == nil && service.ShouldDisableChannel(err) && channelError.AutoBan {
 		gopool.Go(func() {
 			service.DisableChannel(channelError, err.ErrorWithStatusCode())
 		})
@@ -717,6 +803,7 @@ func RelayTask(c *gin.Context) {
 		Retry:       common.GetPointer(0),
 	}
 
+	accountpool.State(c).MaxSends = common.RetryTimes + 1
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		var channel *model.Channel
 
@@ -765,6 +852,13 @@ func RelayTask(c *gin.Context) {
 		if !shouldRetryTaskRelay(c, channel.Id, taskErr, common.RetryTimes-retryParam.GetRetry()) {
 			break
 		}
+		samePool, poolErr := accountpool.PrepareNext(c)
+		if poolErr != nil {
+			break
+		}
+		if samePool {
+			accountpool.State(c).RetryChannel = channel
+		}
 	}
 
 	useChannel := c.GetStringSlice("use_channel")
@@ -782,6 +876,15 @@ func RelayTask(c *gin.Context) {
 
 		task := model.InitTask(result.Platform, relayInfo)
 		task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
+		if sent := accountpool.State(c).Sent; sent != nil {
+			ref := sent.Ref
+			task.PrivateData.Account = &ref
+			if owner := accountpool.State(c).Owner; owner != nil {
+				ownerCopy := *owner
+				task.PrivateData.Account = &ownerCopy
+			}
+			task.PrivateData.Key = ""
+		}
 		task.PrivateData.BillingSource = relayInfo.BillingSource
 		task.PrivateData.SubscriptionId = relayInfo.SubscriptionId
 		task.PrivateData.TokenId = relayInfo.TokenId
@@ -816,6 +919,9 @@ func respondTaskError(c *gin.Context, taskErr *dto.TaskError) {
 }
 
 func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError, retryTimes int) bool {
+	if retryTimes <= 0 || !accountpool.RetryAllowed(c) || accountpool.State(c).TaskBound {
+		return false
+	}
 	if taskErr == nil {
 		return false
 	}

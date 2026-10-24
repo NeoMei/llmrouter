@@ -13,14 +13,15 @@ import (
 )
 
 type RetryParam struct {
-	Ctx          *gin.Context
-	TokenGroup   string
-	ModelName    string
-	RequestPath  string
-	Protocol     capability.Protocol
-	Operation    capability.Operation
-	Retry        *int
-	resetNextTry bool
+	ExcludedChannels map[int]bool
+	Ctx              *gin.Context
+	TokenGroup       string
+	ModelName        string
+	RequestPath      string
+	Protocol         capability.Protocol
+	Operation        capability.Operation
+	Retry            *int
+	resetNextTry     bool
 }
 
 func (p *RetryParam) GetRetry() int {
@@ -166,10 +167,13 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 }
 
 func (p *RetryParam) channelPredicate() model.ChannelPredicate {
-	if p == nil || p.Operation == "" {
+	if p == nil {
+		return nil
+	}
+	if p.Operation == "" && len(p.ExcludedChannels) == 0 {
 		return nil
 	}
 	return func(channel *model.Channel) bool {
-		return channel != nil && capability.DefaultRegistry().Supports(channel.Type, p.Protocol, p.Operation)
+		return channel != nil && !p.ExcludedChannels[channel.Id] && (p.Operation == "" || capability.DefaultRegistry().Supports(channel.Type, p.Protocol, p.Operation))
 	}
 }

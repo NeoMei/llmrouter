@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"gorm.io/gorm"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -9,13 +10,15 @@ import (
 )
 
 // GormProfileQuerier implements profile.DBQuerier using the GORM DB.
-type GormProfileQuerier struct{}
+type GormProfileQuerier struct{ db *gorm.DB }
 
-func NewGormProfileQuerier() *GormProfileQuerier { return &GormProfileQuerier{} }
+func NewGormProfileQuerier() *GormProfileQuerier { return &GormProfileQuerier{db: DB} }
+
+func NewGormProfileQuerierForDB(db *gorm.DB) *GormProfileQuerier { return &GormProfileQuerier{db: db} }
 
 func (q *GormProfileQuerier) QueryModelProfile(ctx context.Context, modelID string) (*profile.ModelProfile, error) {
 	var pm ProviderModel
-	err := DB.WithContext(ctx).
+	err := q.db.WithContext(ctx).
 		Where("model_id = ? AND status = 'active'", modelID).
 		First(&pm).Error
 	if err != nil {
@@ -23,7 +26,7 @@ func (q *GormProfileQuerier) QueryModelProfile(ctx context.Context, modelID stri
 	}
 
 	var pp ProviderProfile
-	err = DB.WithContext(ctx).
+	err = q.db.WithContext(ctx).
 		Where("id = ? AND status = 'active'", pm.ProfileId).
 		First(&pp).Error
 	if err != nil {

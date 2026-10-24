@@ -1,7 +1,7 @@
 package gateway
 
 import (
-	"database/sql"
+	"gorm.io/gorm"
 	"os"
 
 	"github.com/QuantumNous/new-api/common"
@@ -37,7 +37,7 @@ func AESGCM() *crypto.AESGCM {
 }
 
 // InitFromEnv wires GlobalLoader and GlobalKeySel from runtime infrastructure.
-func InitFromEnv(rdb *redis.Client, db *sql.DB) {
+func InitFromEnv(rdb *redis.Client, db *gorm.DB) {
 	var keySel *KeySelector
 	if aesKey := os.Getenv("GATEWAY_AES_KEY"); aesKey != "" {
 		keyBytes := decodeAESKey(aesKey)
@@ -52,7 +52,7 @@ func InitFromEnv(rdb *redis.Client, db *sql.DB) {
 	// Wire the profile loader with the GORM-backed querier.
 	// This requires model.DB to be initialized before InitFromEnv is called.
 	var loader *profile.Loader
-	if querier := model.NewGormProfileQuerier(); querier != nil {
+	if querier := model.NewGormProfileQuerierForDB(db); db != nil {
 		loader = profile.NewLoader(rdb, querier)
 	}
 

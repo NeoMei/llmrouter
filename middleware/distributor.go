@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/capability"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/accountpool"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -173,7 +174,17 @@ func Distribute() func(c *gin.Context) {
 			}
 		}
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
-		SetupContextForSelectedChannel(c, channel, modelRequest.Model)
+		var setupErr *types.NewAPIError
+		if ok {
+			setupErr = SetupContextForSelectedChannel(c, channel, modelRequest.Model)
+		} else {
+			channel, setupErr = SetupAvailableAccountChannel(c, channel, modelRequest.Model, &service.RetryParam{Ctx: c, TokenGroup: common.GetContextKeyString(c, constant.ContextKeyUsingGroup), ModelName: modelRequest.Model, RequestPath: c.Request.URL.Path, Protocol: protocol, Operation: operation, Retry: common.GetPointer(0)})
+		}
+		if setupErr != nil {
+			abortWithOpenAiMessage(c, setupErr.StatusCode, setupErr.Error(), setupErr.GetErrorCode())
+			return
+		}
+
 		c.Next()
 		if channel != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest {
 			service.RecordChannelAffinity(c, channel.Id)
@@ -476,7 +487,30 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	common.SetContextKey(c, constant.ContextKeyChannelModelMapping, channel.GetModelMapping())
 	common.SetContextKey(c, constant.ContextKeyChannelStatusCodeMapping, channel.GetStatusCodeMapping())
 
-	key, index, newAPIError := channel.GetNextEnabledKey()
+	if !channel.ChannelInfo.IsMultiKey {
+		accountpool.ResetSelection(c)
+	}
+	key, index, newAPIError := channel.Key, 0, (*types.NewAPIError)(nil)
+	if channel.ChannelInfo.IsMultiKey {
+		_, operation, _ := capability.ResolveRequest(c.Request.Method, c.Request.URL.Path)
+		if operation == capability.OperationRealtimeConnect {
+			return types.NewErrorWithStatusCode(errors.New("pooled realtime transport is not supported"), types.ErrorCodeUnsupportedOperation, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		switch channel.Type {
+		case constant.ChannelTypeXunfei, constant.ChannelTypeMidjourney, constant.ChannelTypeMidjourneyPlus:
+			return types.NewErrorWithStatusCode(errors.New("account pools are not supported by this legacy transport or task store"), types.ErrorCodeUnsupportedOperation, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		case constant.ChannelTypeAws:
+			if channel.GetOtherSettings().AwsKeyType != dto.AwsKeyTypeApiKey {
+				return types.NewErrorWithStatusCode(errors.New("account pools require the AWS API-key HTTP transport; Bedrock SDK credentials are not supported"), types.ErrorCodeUnsupportedOperation, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			}
+		}
+		var err error
+		key, index, err = accountpool.SelectChannel(c, channel, modelName)
+		newAPIError = nil
+		if err != nil {
+			newAPIError = types.NewErrorWithStatusCode(err, types.ErrorCodeChannelNoAvailableKey, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+		}
+	}
 	if newAPIError != nil {
 		return newAPIError
 	}

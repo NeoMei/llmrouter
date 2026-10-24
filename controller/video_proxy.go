@@ -147,8 +147,8 @@ func VideoProxy(c *gin.Context) {
 
 	switch channel.Type {
 	case constant.ChannelTypeGemini:
-		apiKey := task.PrivateData.Key
-		if apiKey == "" {
+		apiKey, keyErr := model.TaskAccountKey(ctx, model.DB, channel, task)
+		if keyErr != nil || apiKey == "" {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("Missing stored API key for Gemini task %s", taskID))
 			videoProxyError(c, http.StatusInternalServerError, "server_error", "API key not stored for task")
 			return
@@ -169,7 +169,12 @@ func VideoProxy(c *gin.Context) {
 		}
 	case constant.ChannelTypeOpenAI, constant.ChannelTypeSora:
 		videoURL = fmt.Sprintf("%s/v1/videos/%s/content", baseURL, task.GetUpstreamTaskID())
-		req.Header.Set("Authorization", "Bearer "+channel.Key)
+		key, keyErr := model.TaskAccountKey(ctx, model.DB, channel, task)
+		if keyErr != nil {
+			videoProxyError(c, http.StatusConflict, "account_unavailable", "Task account unavailable")
+			return
+		}
+		req.Header.Set("Authorization", "Bearer "+key)
 	default:
 		// Video URL is stored in PrivateData.ResultURL (fallback to FailReason for old data)
 		videoURL = task.GetResultURL()

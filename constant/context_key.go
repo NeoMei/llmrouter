@@ -96,3 +96,6 @@ const (
 	// choice snapshot for the current upstream attempt.
 	ContextKeyToolPolicy ContextKey = "tool_policy"
 )
+
+// ContextKeyAccountPoolLifecycle is owned by service/accountpool; values are typed lifecycle pointers.
+const ContextKeyAccountPoolLifecycle ContextKey = "internal.upstream_account_lifecycle"

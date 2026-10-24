@@ -149,7 +149,7 @@ Execution split: 9a implements safe complete admin pool snapshots/actions with p
 - [x] Validate minimum database dialect features through MySQL 5.7/PostgreSQL 9.6 where images run; if platform runtime prevents these versions, record exact tested newer version and remaining limit, do not fake a minimum-version pass.
 - [x] Run `GOTOOLCHAIN=go1.26.10 bash scripts/verify-backend.sh`, frontend build/typecheck/lint/format, affected release checks and two-instance state fixtures. Stop for real failures and fix them through task owners.
 - [x] Obtain final whole-branch independent review on the most capable available model, resolve findings, record exact evidence and runtime limits. Mark task completion only with passing checks and acceptance mapping.
-- [ ] Commit delivery docs and locally fast-forward original `codex/wechat-native-pay` only if it remains at the known unchanged base with no tracked edits; retain original untracked files. No remote push, deployment or live paid calls.
+- [x] Commit delivery docs and locally fast-forward original `codex/wechat-native-pay` only if it remains at the known unchanged base with no tracked edits; retain original untracked files. No remote push, deployment or live paid calls.
 
 
 ## Spec coverage self-review

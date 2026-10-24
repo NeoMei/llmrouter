@@ -257,7 +257,7 @@ Gateway 的 `member_id` 是稳定账号拥有者，`generation_id` 是当前凭�
 
 ## 验证范围
 
-[2026-10-25 验证记录](2026-10-25-domestic-model-validation.md)列出精确源码、命令、原始证据、每项 HTTP/消费者/数据库/浏览器边界、已通过的最终代码门禁与尚待确认的本地交付动作。真实临时数据库为 SQLite、MySQL 5.7.44、PostgreSQL 9.6；并发与恢复使用独立连接/选择实例。它们不证明实际供应商账号容量或生产多节点部署。
+[2026-10-25 验证记录](2026-10-25-domestic-model-validation.md)列出精确源码、命令、原始证据、每项 HTTP/消费者/数据库/浏览器边界、已通过的最终代码门禁、本地交付记录及持久证据索引。真实临时数据库为 SQLite、MySQL 5.7.44、PostgreSQL 9.6；并发与恢复使用独立连接/选择实例。它们不证明实际供应商账号容量或生产多节点部署。
 
 固定消费者验收使用隔离的 `NeoMei/embedded-knowledge` 提交 `f5adb9eac166e7d3da7dceed7aa50049d4c4db1f`：真实 Paddle reader、OpenAI embedding client、DashScope reranker、SQLite vec0/FTS5 repository，经过生产网关鉴权/路由/计费并持久化引用位置。两页夹具文档通过 OCR、1024 维文档/查询向量、检索与重排，回读原文、页码、范围和框坐标；失败账号切换、密钥重排后归属与一次结算均有断言。总额度 570（OCR500、文档向量20、查询向量10、重排40），恰好四条消费记录和一份 OCR 去重回执。
 

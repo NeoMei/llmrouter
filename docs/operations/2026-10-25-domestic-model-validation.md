@@ -1,12 +1,12 @@
 # 国产模型账号池：2026-10-25 本地验证记录
 
-本文对应[接口与运维指南](domestic-model-account-pools.md)，记录本地源码验收，不是生产发布证明。分项验证和全分支独立审查后，以一次修复处理两项 Important、两项 Minor，范围复审确认四项均解决且无新 Critical/Important/Minor。修复后精确源码的完整后端门禁通过，受影响前端检查与生产构建通过；未受影响的发布契约证据复用。所有早期失败保留。本地合入、资产复制和持久证据归档仍待交付负责人确认，不属于测试自动完成的动作。
+本文对应[接口与运维指南](domestic-model-account-pools.md)，记录本地源码验收，不是生产发布证明。分项验证和全分支独立审查后，以一次修复处理两项 Important、两项 Minor，范围复审确认四项均解决且无新 Critical/Important/Minor。修复后精确源码的完整后端门禁通过，受影响前端检查与生产构建通过；未受影响的发布契约证据复用。所有早期失败保留。原项目已完成本地快进、231个资产逐摘要复制和合入后全量普通测试；完整证据与产物的持久交付索引见下文。
 
 ## 源码与证据身份
 
 首轮全量检查 HEAD 为 `3dada17c87dbe52eb4ea8a3089a6efd642946a32`，Git tree 为 `b9bf687651b61f761416f6d1b73f130e911157eb`，开始时工作区干净。相对最后生产代码提交 `1a70e2dc1` 只有文档提交。前端产物来自该生产代码的最终 `bun run build`（2.35 秒），231 个产物文件的逐文件 SHA256 保存在 `source-before.json`；没有用空白占位目录满足 Go embed。最终修复前的完整后端验证对应 `6a2db5a395278b9d2b8c15b444acc99e8264e3e8`（tree `8c38555b2a23d04ac75e455605f2967b68a26f2e`），相对首轮只追加 `tests/contracts/provider_fixtures.json` 中遗漏的四操作；没有生产代码变更。`source-final-before.json` 和 `source-after.json` 证明验证前后 HEAD 相同、231 个资产摘要完全一致，未提交差异只有本文与运维指南。
 
-下面的 `W` 指工作树中的 `.superpowers/sdd/2026-10-24-domestic-multimodal-account-pools`。本轮证据在 `W/evidence/task-10c/`，每个命令分别保留 `.command.json`（cwd/argv/环境/开始时间/HEAD）、`.stdout.log`、`.stderr.log`、`.exit`、`.result.json`（结束时间/耗时）。后端另有 `.phases.log`，通过仅记录命令的 Bash DEBUG trap 留存阶段时间；没有测试过滤或套件排除。计划持久归档目录为 `/Users/neomei/.codex/artifacts/2026-10-25-llmrouter-domestic-model-account-pools`，实际复制和完整性核对待交付负责人确认。交付负责人须在清理工作树前归档整个 W（包括早期失败、审查 overlay、消费者二进制/来源、SQLite、浏览器 trace），并补充持久归档位置。不能只保留本文而删除原始日志。
+下面的 `W` 指工作树中的 `.superpowers/sdd/2026-10-24-domestic-multimodal-account-pools`。本轮证据在 `W/evidence/task-10c/`，每个命令分别保留 `.command.json`（cwd/argv/环境/开始时间/HEAD）、`.stdout.log`、`.stderr.log`、`.exit`、`.result.json`（结束时间/耗时）。后端另有 `.phases.log`，通过仅记录命令的 Bash DEBUG trap 留存阶段时间；没有测试过滤或套件排除。完整W和构建产物的持久交付目录为 `/Users/neomei/.codex/artifacts/2026-10-25-llmrouter-domestic-model-account-pools`。其中 `workspace/` 对应完整W（包括早期失败、审查overlay、消费者二进制/来源、SQLite、浏览器trace），`web-dist/` 保存实际构建产物；根目录 `README.md` 与 `workspace-manifest.json`、`web-dist-manifest.json` 记录最终归档状态及逐文件完整性。清理仅在这些校验通过后执行。
 
 环境为 darwin/arm64、Go1.26.10、CGO_ENABLED=1、Bun1.4.3。后端使用 `GOMAXPROCS=4 GOFLAGS=-p=4` 限制本机并行资源，不减少测试。两项 `LLMROUTER_ACCOUNT_POOL_MYSQL_DSN` / `LLMROUTER_ACCOUNT_POOL_POSTGRES_DSN` 指向专用临时 MySQL5.7.44（65380）/PostgreSQL9.6（65381），完整夹具 DSN 仅在原始执行记录保存。未接触用户 `unihub-dev-*` 服务。
 
@@ -96,9 +96,10 @@
 
 本次共 **54条 Ruling**，按原顺序保存。第54条明确旧路由链终点与原目录一跳作用域的最小兼容投影；早期审查的53条是当时的历史计数。全分支审查已决定其余 parked项：额外同组逆序测试和夹具重构保留为后续增强；预期负向SQL/Gin/饱和审计输出不抑制；Gemini原生媒体未启用边界、供应商真实质量/容量、字体渲染和桌面/完整摄入/三DB消费者全链等限制继续保留。TTS退避头及ASR夹具精度现已修复，不再列为未完成项。
 
-## 待交付负责人处理
+## 本地交付记录
 
-- 代码与最终修复范围审查、本地完整后端认证已通过。后续代码变更需按实际影响补充验证并更新源码身份；文档提交单独标明。
-- 计划持久归档到 `/Users/neomei/.codex/artifacts/2026-10-25-llmrouter-domestic-model-account-pools`，完整W（含失败、审查overlay、消费者来源/二进制/SQLite、浏览器trace）和最新dist都需核对后保存。实际归档完成与完整性清单位置由负责人补充。
-- 本地 fast-forward 目标为 `/Users/neomei/项目/codexprojects/llmrouter` 的 `codex/wechat-native-pay`，仅在仍为已知 `50fd8d427` 且没有冲突跟踪修改时执行；保留既有未跟踪法律文档/sidecar。Git不复制忽略的web/dist，须另行复制并逐摘要核对最新产物。合入、复制、托管工作树及本轮专用容器清理由负责人完成后记录。
-- 本次交付为本地代码集成；没有远端push、部署、真实采购账号调用或用户资料库迁移。上述动作不能从测试通过推断为已执行。
+- 原项目 `/Users/neomei/项目/codexprojects/llmrouter` 的 `codex/wechat-native-pay` 从已核对的 `50fd8d427` 本地快进到 `6ed213439974c493e4b34ee1b38d26051d656341`；后续交付记录提交仅改变文档。合入前后均没有跟踪文件修改，三个原有未跟踪文件保持原摘要。
+- Git不复制忽略的web/dist：另行复制231文件、57,413,818字节，并与最终构建清单逐项SHA256一致。原项目使用这些真实资源再次运行 `go test ./...`，同样配置两专用最小版本数据库；PASS、exit0、56.412秒、stderr0字节。原始命令、完整输出、合入与复制记录在 `W/evidence/local-delivery/`；没有把工作树测试冒称为原项目测试。
+- 全部54项实施决策及代价见[决策记录](2026-10-25-domestic-model-decisions.md)。原始审查、失败和全部证据随完整W保留。持久交付根目录的 `source-delivery.json`、`original-after.json` 和 README 记录最后文档提交及原项目状态，避免自引用提交哈希。
+- 完整归档校验后才移除本计划临时目录、归档托管工作树并清理两项本轮专用数据库容器；不清理其他项目或既有用户服务。完成状态以持久交付README为准。
+- 本次交付为本地代码集成；没有远端push、部署、真实采购账号调用或用户资料库迁移。真实账号可用容量和媒体质量仍需按运维指南逐项验收；账号池不能在所有账号均不可用时保证成功。

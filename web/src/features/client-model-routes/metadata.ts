@@ -126,6 +126,25 @@ const SPACE_FIELDS = [
   'dimensions',
   'input_semantics',
 ] as const
+
+// Match Go strings.TrimSpace on copies only: Unicode White_Space includes
+// U+0085, but excludes U+FEFF (unlike JavaScript String.trim).
+function normalizedEmbeddingSpace(
+  value: Record<string, unknown> | undefined
+): Record<string, unknown> | undefined {
+  if (!value) return value
+  const normalized = { ...value }
+  for (const key of SPACE_FIELDS) {
+    if (key !== 'dimensions' && typeof normalized[key] === 'string') {
+      normalized[key] = normalized[key].replaceAll(
+        /^\p{White_Space}+|\p{White_Space}+$/gu,
+        ''
+      )
+    }
+  }
+  return normalized
+}
+
 export function validateFixedSpace(
   raw: string,
   targets: { upstream_model: string; metadata?: string }[],
@@ -133,14 +152,16 @@ export function validateFixedSpace(
 ): string {
   try {
     const metadata = readMetadata(raw)
-    const space = metadata.embedding_space as
-      | Record<string, unknown>
-      | undefined
-    const previous = original
-      ? (readMetadata(original).embedding_space as
-          | Record<string, unknown>
-          | undefined)
-      : undefined
+    const space = normalizedEmbeddingSpace(
+      metadata.embedding_space as Record<string, unknown> | undefined
+    )
+    const previous = normalizedEmbeddingSpace(
+      original
+        ? (readMetadata(original).embedding_space as
+            | Record<string, unknown>
+            | undefined)
+        : undefined
+    )
     if (
       previous &&
       SPACE_FIELDS.some((key) => previous[key] !== space?.[key])
@@ -152,7 +173,7 @@ export function validateFixedSpace(
       (SPACE_FIELDS.some(
         (key) =>
           key !== 'dimensions' &&
-          (typeof space[key] !== 'string' || !String(space[key]).trim())
+          (typeof space[key] !== 'string' || !space[key])
       ) ||
         !Number.isInteger(space.dimensions) ||
         Number(space.dimensions) < 1 ||
@@ -161,8 +182,11 @@ export function validateFixedSpace(
       return 'Complete the fixed embedding identity'
     }
     for (const target of targets) {
-      const targetSpace = readMetadata(target.metadata || '')
-        .embedding_space as Record<string, unknown> | undefined
+      const targetSpace = normalizedEmbeddingSpace(
+        readMetadata(target.metadata || '').embedding_space as
+          | Record<string, unknown>
+          | undefined
+      )
       if (space && target.upstream_model !== space.model) {
         return 'Target model must match the fixed embedding identity'
       }

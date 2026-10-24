@@ -30,7 +30,12 @@ const space = {
 }
 async function fixture(
   page: Page,
-  options: { operate?: boolean; write?: boolean; gateway?: boolean } = {}
+  options: {
+    read?: boolean
+    operate?: boolean
+    write?: boolean
+    gateway?: boolean
+  } = {}
 ) {
   const state = {
     writes: [] as { action: string; body: Record<string, unknown> }[],
@@ -675,4 +680,49 @@ test('pause and global health recovery keep manual pause distinct from scoped re
       account.getByRole('button', { name: 'Resume manual pause' })
     ).toBeEnabled()
   }
+})
+
+test('padded fixed identities allow unrelated saves and equivalent whitespace edits without rewriting other metadata', async ({
+  page,
+}) => {
+  const state = await fixture(page)
+  const padded = {
+    ...space,
+    provider: ' aliyun ',
+    model: ' text-embedding-v4 ',
+    version: '\u0085v4\u3000',
+    input_semantics: ' text/query-document-v1 ',
+  }
+  const raw = `{ "future":900719925474099312345,"zero":0,"embedding_space":${JSON.stringify(padded)}}`
+  const targetRaw = JSON.stringify({
+    embedding_space: { ...padded, model: '\ttext-embedding-v4\n' },
+  })
+  state.routes[0].metadata = raw
+  state.routes[0].targets[0].metadata = targetRaw
+  await page.goto('/client-model-routes')
+  await page.getByRole('button', { name: 'Edit', exact: true }).click()
+  const editor = page.getByRole('region', {
+    name: 'Model capabilities',
+    exact: true,
+  })
+  await editor.getByLabel('streaming', { exact: true }).selectOption('false')
+  await page.getByRole('button', { name: 'Save route' }).click()
+  await expect(page.getByRole('button', { name: 'Save route' })).toBeEnabled()
+  expect(state.routeWrites[0].metadata).toBe(
+    `${raw.slice(0, -1)},"streaming":false}`
+  )
+  expect(
+    (state.routeWrites[0].targets as { metadata: string }[])[0].metadata
+  ).toBe(targetRaw)
+  await page.getByRole('button', { name: 'Edit', exact: true }).click()
+  const normalized = `{ "future":900719925474099312345,"zero":0,"embedding_space":${JSON.stringify(space)},"streaming":false}`
+  await editor
+    .getByRole('textbox', { name: 'Metadata (JSON)', exact: true })
+    .fill(normalized)
+  await page.getByRole('button', { name: 'Save route' }).click()
+  await expect(page.getByRole('button', { name: 'Save route' })).toBeEnabled()
+  expect(state.routeWrites[1].metadata).toBe(normalized)
+  expect(
+    (state.routeWrites[1].targets as { metadata: string }[])[0].metadata
+  ).toBe(targetRaw)
 })

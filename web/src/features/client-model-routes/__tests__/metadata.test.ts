@@ -125,3 +125,95 @@ test('nonfinite typed numeric input never becomes a silent null', () => {
     )
   )
 })
+
+const paddedSpace = {
+  provider: ' aliyun ',
+  model: '\ttext-embedding-v4 \n',
+  version: '\u0085v4\u3000',
+  dimensions: 1024,
+  input_semantics: ' text/query-document-v1 ',
+}
+const paddedMetadata = `{ "future":900719925474099312345,"streaming":true,"zero":0,"embedding_space":${JSON.stringify(paddedSpace)}}`
+
+test('unchanged padded identity permits unrelated edits without rewriting raw metadata', () => {
+  const edited = patchMetadata(paddedMetadata, ['streaming'], false)
+  assert.equal(
+    validateFixedSpace(
+      edited,
+      [{ upstream_model: space.model }],
+      paddedMetadata
+    ),
+    ''
+  )
+  assert.equal(
+    edited,
+    paddedMetadata.replace('"streaming":true', '"streaming":false')
+  )
+})
+
+test('equivalent padded target identity matches the normalized route identity', () => {
+  const targetMetadata = JSON.stringify({ embedding_space: paddedSpace })
+  assert.equal(
+    validateFixedSpace(JSON.stringify({ embedding_space: space }), [
+      { upstream_model: space.model, metadata: targetMetadata },
+    ]),
+    ''
+  )
+  assert.equal(targetMetadata, JSON.stringify({ embedding_space: paddedSpace }))
+})
+
+test('whitespace-only identity edits match the persisted padded identity', () => {
+  const normalized = patchMetadata(paddedMetadata, ['embedding_space'], space)
+  assert.equal(
+    validateFixedSpace(
+      normalized,
+      [{ upstream_model: space.model }],
+      paddedMetadata
+    ),
+    ''
+  )
+  assert.ok(normalized.includes('"future":900719925474099312345'))
+  assert.ok(normalized.includes('"zero":0'))
+})
+
+for (const [field, value] of Object.entries({
+  provider: 'Aliyun',
+  model: 'TEXT-EMBEDDING-V4',
+  version: 'v5',
+  dimensions: 2048,
+  input_semantics: 'text/query-document-v2',
+})) {
+  test(`actual ${field} identity changes remain blocked after normalization`, () => {
+    const changed = JSON.stringify({
+      embedding_space: { ...space, [field]: value },
+    })
+    assert.equal(
+      validateFixedSpace(changed, [], paddedMetadata),
+      'Changed vector spaces require a new public route and disjoint aliases'
+    )
+    assert.equal(
+      validateFixedSpace(JSON.stringify({ embedding_space: space }), [
+        { upstream_model: space.model, metadata: changed },
+      ]),
+      'Target embedding identity must match the route'
+    )
+  })
+}
+
+test('BOM is not trimmed as Go identity whitespace and upstream model remains exact', () => {
+  const bomMetadata = JSON.stringify({
+    embedding_space: { ...space, provider: '\ufeffaliyun' },
+  })
+  assert.equal(
+    validateFixedSpace(bomMetadata, [], paddedMetadata),
+    'Changed vector spaces require a new public route and disjoint aliases'
+  )
+  assert.equal(
+    validateFixedSpace(
+      paddedMetadata,
+      [{ upstream_model: ' text-embedding-v4 ' }],
+      paddedMetadata
+    ),
+    'Target model must match the fixed embedding identity'
+  )
+})

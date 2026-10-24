@@ -58,3 +58,85 @@ func TestGatewayManagementIncludesAllStatesWithoutSelecting(t *testing.T) {
 	require.NoError(t, db.First(&persisted, rows[0].Id).Error)
 	assert.Nil(t, persisted.LastUsedAt)
 }
+
+func TestGatewayRelayCannotOverwriteCommittedAdminGroup(t *testing.T) {
+	dir := t.TempDir()
+	open := func() *gorm.DB {
+		db, err := gorm.Open(sqlite.Open(filepath.Join(dir, "interleaving.db")), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+		require.NoError(t, err)
+		sqlDB, err := db.DB()
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+		return db
+	}
+	adminDB, relayDB := open(), open()
+	require.NoError(t, adminDB.AutoMigrate(&model.Channel{}, &model.ProviderKeyPool{}, &model.UpstreamAccountPool{}, &model.UpstreamAccountMember{}, &model.UpstreamAccountState{}))
+	ch := model.Channel{Key: "fixture", Models: "fixture"}
+	require.NoError(t, adminDB.Create(&ch).Error)
+	c, err := crypto.NewAESGCM([]byte("0123456789abcdef0123456789abcdef"))
+	require.NoError(t, err)
+	encrypted, err := c.Encrypt([]byte("fixture-generation-A"))
+	require.NoError(t, err)
+	key := model.ProviderKeyPool{ProfileId: 44, Status: "active", EncryptedKey: encrypted}
+	require.NoError(t, adminDB.Create(&key).Error)
+	ctx := context.Background()
+	adminSel, relaySel := NewKeySelector(adminDB, c), NewKeySelector(relayDB, c)
+	rows, err := adminSel.ManagementAccounts(ctx, adminDB, 44, ch.Id, time.Now())
+	require.NoError(t, err)
+	owner, health := rows[0].Ref, rows[0].Health
+	group, expected := "new-admin-group", ""
+	scope := model.UpstreamAccountScope{Operation: "audio.speech.create", Model: "fixture"}
+	fired := false
+	require.NoError(t, relayDB.Callback().Query().After("gorm:query").Register("fixture_admin_after_owner_read", func(tx *gorm.DB) {
+		member, ok := tx.Statement.Dest.(*model.UpstreamAccountMember)
+		if !ok || fired || member.MemberID != owner.MemberID {
+			return
+		}
+		fired = true
+		require.NoError(t, model.WithAccountManagementChannel(ctx, adminDB, ch.Id, func(db *gorm.DB, current *model.Channel) error {
+			currentRows, err := adminSel.ManagementAccounts(ctx, db, 44, current.Id, time.Now())
+			if err != nil {
+				return err
+			}
+			if err = model.MutateManagedAccount(ctx, db, currentRows[0].Ref, currentRows[0].Health, "quota-group", model.UpstreamAccountScope{}, &group, &expected, time.Now()); err != nil {
+				return err
+			}
+			ref := currentRows[0].Health
+			ref.QuotaGroup = group
+			groupScope := scope
+			groupScope.QuotaGroup = group
+			return model.RecordUpstreamAccountFailure(ctx, db, model.UpstreamAccountSelection{Ref: ref}, groupScope, model.UpstreamAccountFailure{Kind: model.UpstreamAccountCooldown, Reason: "quota_exhausted", RetryAt: time.Now().Add(time.Hour)}, time.Now())
+		}))
+	}))
+	selected, _, err := relaySel.SelectPlatformAccount(ctx, 44, ch.Id, scope, nil)
+	var unavailable *model.UpstreamAccountUnavailable
+	require.ErrorAs(t, err, &unavailable, "current selected-scope group refusal must prevent admission")
+	assert.Empty(t, selected.Ref.MemberID)
+	assert.True(t, fired)
+	var storedOwner, storedHealth model.UpstreamAccountMember
+	require.NoError(t, adminDB.First(&storedOwner, "member_id = ?", owner.MemberID).Error)
+	require.NoError(t, adminDB.First(&storedHealth, "member_id = ?", health.MemberID).Error)
+	assert.Equal(t, group, storedOwner.QuotaGroup)
+	assert.Equal(t, group, storedHealth.QuotaGroup)
+	require.NoError(t, relayDB.Callback().Query().Remove("fixture_admin_after_owner_read"))
+	// A distinct operation remains eligible, credential refresh inherits the same
+	// group, and the stable owner's manual pause still blocks that new generation.
+	other := model.UpstreamAccountScope{Operation: "chat.completions.create", Model: "fixture"}
+	selected, credential, err := relaySel.SelectPlatformAccount(ctx, 44, ch.Id, other, nil)
+	require.NoError(t, err)
+	assert.Equal(t, group, selected.Ref.QuotaGroup)
+	assert.Equal(t, "fixture-generation-A", credential)
+	encrypted, err = c.Encrypt([]byte("fixture-generation-B"))
+	require.NoError(t, err)
+	require.NoError(t, adminDB.Model(&key).Update("encrypted_key", encrypted).Error)
+	refreshed, credential, err := relaySel.SelectPlatformAccount(ctx, 44, ch.Id, other, nil)
+	require.NoError(t, err)
+	assert.NotEqual(t, selected.Ref.MemberID, refreshed.Ref.MemberID)
+	assert.Equal(t, group, refreshed.Ref.QuotaGroup)
+	assert.Equal(t, "fixture-generation-B", credential)
+	_, _, err = relaySel.SelectPlatformAccount(ctx, 44, ch.Id, scope, nil)
+	require.ErrorAs(t, err, &unavailable)
+	require.NoError(t, model.SetUpstreamAccountPaused(ctx, adminDB, owner, true, time.Now()))
+	_, _, err = relaySel.SelectPlatformAccount(ctx, 44, ch.Id, other, nil)
+	require.ErrorAs(t, err, &unavailable)
+}

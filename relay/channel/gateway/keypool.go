@@ -57,16 +57,11 @@ func (ks *KeySelector) PlatformAccounts(ctx context.Context, profileID, channelI
 			}
 			continue
 		}
-		ref, err := model.ResolveUpstreamAccountRef(ctx, ks.db, owner.PoolID, channelID, row.Id, fmt.Sprintf("provider-key:%d:credential:%s", row.Id, key), owner.QuotaGroup)
+		ref, err := model.SyncUpstreamAccountGeneration(ctx, ks.db, owner, fmt.Sprintf("provider-key:%d:credential:%s", row.Id, key), now)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		if ref.QuotaGroup != owner.QuotaGroup {
-			if err := model.SetUpstreamAccountQuotaGroup(ctx, ks.db, ref, owner.QuotaGroup, now); err != nil {
-				return nil, nil, nil, err
-			}
-			ref.QuotaGroup = owner.QuotaGroup
-		}
+		owner.QuotaGroup = ref.QuotaGroup
 		refs, keys[row.Id], owners[row.Id] = append(refs, ref), key, owner
 	}
 	if len(refs) == 0 {

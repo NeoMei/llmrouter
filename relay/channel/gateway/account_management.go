@@ -48,15 +48,9 @@ func (ks *KeySelector) ManagementAccounts(ctx context.Context, db *gorm.DB, prof
 				}
 			}
 			if key != "" {
-				item.Health, err = model.ResolveUpstreamAccountRef(ctx, db, owner.PoolID, channelID, row.Id, fmt.Sprintf("provider-key:%d:credential:%s", row.Id, key), owner.QuotaGroup)
+				item.Health, err = model.SyncUpstreamAccountGeneration(ctx, db, owner, fmt.Sprintf("provider-key:%d:credential:%s", row.Id, key), now)
 				if err != nil {
 					return err
-				}
-				if item.Health.QuotaGroup != owner.QuotaGroup {
-					if err = model.SetUpstreamAccountQuotaGroup(ctx, db, item.Health, owner.QuotaGroup, now); err != nil {
-						return err
-					}
-					item.Health.QuotaGroup = owner.QuotaGroup
 				}
 			}
 			result = append(result, item)

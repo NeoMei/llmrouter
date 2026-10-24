@@ -47,11 +47,12 @@ func TestDomesticUnderstandingHTTP(t *testing.T) {
 	copy(wav[36:], "data")
 	binary.LittleEndian.PutUint32(wav[40:], 16000)
 	audioURI := "data:audio/wav;base64," + base64.StdEncoding.EncodeToString(wav)
-	for _, tc := range []struct {
-		name, part, limits string
-		responses, denied  bool
-		quota              int
-	}{
+	type understandingScenario struct {
+		name, part, limits, actualUsage string
+		responses, denied               bool
+		quota                           int
+	}
+	scenarios := []understandingScenario{
 		{name: "image", part: `{"type":"image_url","image_url":{"url":"` + imageURI + `","detail":"low"}}`, limits: `{"max_pixels":256,"formats":["png"]}`, quota: 20},
 		{name: "audio", part: `{"type":"input_audio","input_audio":{"data":"` + audioURI + `"}}`, limits: `{"max_audio_seconds":1,"formats":["wav"]}`, quota: 34},
 		{name: "mixed-visual-audio", part: `{"type":"input_audio","input_audio":{"data":"` + audioURI + `"}}`, quota: 34},
@@ -83,7 +84,56 @@ func TestDomesticUnderstandingHTTP(t *testing.T) {
 		{name: "audio-output", part: `{"type":"input_audio","input_audio":{"data":"` + audioURI + `"}}`, denied: true},
 		{name: "remote-facts", part: `{"type":"image_url","image_url":{"url":"https://example.test/a.png"}}`, limits: `{"max_pixels":256}`, denied: true},
 		{name: "video-track-unknown", part: `{"type":"video_url","video_url":{"url":"https://example.test/clip","fps":0}}`, limits: `{"video_audio":false}`, denied: true},
+	}
+	for _, responses := range []bool{false, true} {
+		wire := "chat"
+		fields := []string{"prompt_tokens", "completion_tokens", "total_tokens"}
+		usage := `{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"prompt_tokens_details":{"audio_tokens":7},"completion_tokens_details":{"text_tokens":2,"reasoning_tokens":3}}`
+		part := `{"type":"input_audio","input_audio":{"data":"` + audioURI + `"}}`
+		if responses {
+			wire = "responses"
+			fields = []string{"input_tokens", "output_tokens", "total_tokens"}
+			usage = `{"input_tokens":10,"output_tokens":5,"total_tokens":15,"input_tokens_details":{"audio_tokens":7},"output_tokens_details":{"text_tokens":2,"reasoning_tokens":3}}`
+			part = `{"type":"input_audio","audio_url":"https://example.test/a.wav","format":"wav"}`
+		}
+		for _, field := range fields {
+			for _, null := range []bool{false, true} {
+				var rawUsage map[string]any
+				require.NoError(t, common.Unmarshal([]byte(usage), &rawUsage))
+				name := "missing-aggregate-" + wire + "-" + field
+				delete(rawUsage, field)
+				if null {
+					rawUsage[field] = nil
+					name = "null-aggregate-" + wire + "-" + field
+				}
+				// Keep the remaining aggregates consistent with the omitted value's old
+				// zero default, so rejection proves presence rather than arithmetic.
+				if field == fields[0] {
+					rawUsage[fields[1]] = 15
+					delete(rawUsage, strings.Replace(fields[0], "tokens", "tokens_details", 1))
+				} else if field == fields[1] {
+					rawUsage[fields[0]] = 15
+					delete(rawUsage, strings.Replace(fields[1], "tokens", "tokens_details", 1))
+				}
+				encoded, err := common.Marshal(rawUsage)
+				require.NoError(t, err)
+				scenarios = append(scenarios, understandingScenario{name: name, part: part, responses: responses, actualUsage: string(encoded), denied: true})
+			}
+		}
+		zero := `{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0,"prompt_tokens_details":{"audio_tokens":0}}`
+		zeroPrompt := `{"prompt_tokens":0,"completion_tokens":5,"total_tokens":5,"prompt_tokens_details":{"audio_tokens":0}}`
+		if responses {
+			zero = `{"input_tokens":0,"output_tokens":0,"total_tokens":0,"input_tokens_details":{"audio_tokens":0}}`
+			zeroPrompt = `{"input_tokens":0,"output_tokens":5,"total_tokens":5,"input_tokens_details":{"audio_tokens":0}}`
+		}
+		scenarios = append(scenarios, understandingScenario{name: "explicit-zero-" + wire, part: part, responses: responses, actualUsage: zero}, understandingScenario{name: "explicit-zero-fixed-price-" + wire, part: part, responses: responses, actualUsage: zero, quota: 500}, understandingScenario{name: "zero-prompt-" + wire, part: part, responses: responses, actualUsage: zeroPrompt, quota: 10})
+	}
+	for _, carrier := range []struct{ name, fields string }{
+		{"data-remote", `"data":"https://example.test/a.wav"`}, {"data-naked", `"data":"` + base64.StdEncoding.EncodeToString(wav) + `"`}, {"data-null", `"data":null`}, {"data-number", `"data":123`}, {"url-null", `"audio_url":null`}, {"url-object", `"audio_url":{"url":"https://example.test/a.wav"}`}, {"url-data-uri", `"audio_url":"` + audioURI + `"`}, {"conflict-null", `"data":null,"audio_url":"https://example.test/a.wav"`}, {"conflict-valid", `"data":"` + audioURI + `","audio_url":"https://example.test/a.wav"`}, {"data-unsupported-uri", `"data":"data:application/octet-stream;base64,AAAA"`},
 	} {
+		scenarios = append(scenarios, understandingScenario{name: "carrier-" + carrier.name, part: `{"type":"input_audio",` + carrier.fields + `,"format":"wav"}`, responses: true, denied: true})
+	}
+	for _, tc := range scenarios {
 		t.Run(tc.name, func(t *testing.T) {
 			gin.SetMode(gin.TestMode)
 			db := setupTieredRelayBillingDB(t)
@@ -104,7 +154,7 @@ func TestDomesticUnderstandingHTTP(t *testing.T) {
 			require.NoError(t, ratio_setting.UpdateCompletionRatioByJSONString(`{"qwen3.8-omni-flash":2,"qwen3.8-max":2}`))
 			require.NoError(t, ratio_setting.UpdateAudioRatioByJSONString(`{"qwen3.8-omni-flash":3}`))
 			require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{}`))
-			if tc.name == "fixed-price" {
+			if tc.name == "fixed-price" || strings.Contains(tc.name, "zero-fixed-price") {
 				require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"qwen3.8-omni-flash":0.001}`))
 			}
 			t.Cleanup(func() {
@@ -176,6 +226,15 @@ func TestDomesticUnderstandingHTTP(t *testing.T) {
 					assert.Equal(t, "Bearer fixture-B", r.Header.Get("Authorization"))
 				}
 				w.Header().Set("Content-Type", "application/json")
+				if tc.actualUsage != "" {
+					if tc.responses {
+						io.WriteString(w, `{"id":"resp_actual","object":"response","status":"completed","model":"qwen3.8-omni-flash","output":[{"type":"message","id":"msg1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"actual fixture answer","annotations":[]}]}],"usage":`+tc.actualUsage+`}`)
+					} else {
+						io.WriteString(w, `{"id":"chat_actual","object":"chat.completion","model":"qwen3.8-omni-flash","choices":[{"index":0,"message":{"role":"assistant","content":"actual fixture answer"},"finish_reason":"stop"}],"usage":`+tc.actualUsage+`}`)
+					}
+					return
+				}
+
 				if tc.name == "missing-audio-usage" {
 					io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"INVALID MUST NOT ESCAPE"}}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`)
 					return
@@ -216,7 +275,7 @@ func TestDomesticUnderstandingHTTP(t *testing.T) {
 			if tc.name == "passthrough-unsupported" || tc.name == "responses-passthrough-unsupported" {
 				channel.Setting = common.GetPointer(`{"pass_through_body_enabled":true}`)
 			}
-			if strings.HasPrefix(tc.name, "pool-") || tc.name == "invalid-usage" {
+			if strings.HasPrefix(tc.name, "pool-") || tc.name == "invalid-usage" || strings.Contains(tc.name, "aggregate-") {
 				channel.Key = "fixture-A\nfixture-B"
 				channel.ChannelInfo = model.ChannelInfo{IsMultiKey: true, MultiKeyMode: constant.MultiKeyModePolling}
 			}
@@ -297,8 +356,12 @@ func TestDomesticUnderstandingHTTP(t *testing.T) {
 					require.GreaterOrEqual(t, recorder.Code, 400, recorder.Body.String())
 				}
 				assert.NotContains(t, recorder.Body.String(), "INVALID MUST NOT ESCAPE")
+				assert.NotContains(t, recorder.Body.String(), "actual fixture answer")
 				expectedSends := 0
 				if tc.name == "pool-veto" || tc.name == "pool-first-output" || tc.name == "pool-cancel" || (tc.name == "invalid-usage" || tc.name == "negative-usage" || tc.name == "overflow-usage" || tc.name == "responses-invalid-usage" || tc.name == "missing-audio-usage") {
+					expectedSends = 1
+				}
+				if strings.Contains(tc.name, "aggregate-") {
 					expectedSends = 1
 				}
 				assert.EqualValues(t, expectedSends, sends.Load())
@@ -317,7 +380,16 @@ func TestDomesticUnderstandingHTTP(t *testing.T) {
 				assert.Equal(t, 100000-tc.quota, w)
 				assert.Equal(t, 100000-tc.quota, k)
 				assert.Equal(t, tc.quota, u)
-				assert.Contains(t, recorder.Body.String(), `"total_tokens":15`)
+				if tc.actualUsage != "" {
+					assert.Contains(t, recorder.Body.String(), "actual fixture answer")
+					var actual map[string]any
+					require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &actual))
+					var expected any
+					require.NoError(t, common.Unmarshal([]byte(tc.actualUsage), &expected))
+					assert.Equal(t, expected, actual["usage"])
+				} else {
+					assert.Contains(t, recorder.Body.String(), `"total_tokens":15`)
+				}
 			}
 			var logs []model.Log
 			require.NoError(t, db.Where("type = ?", model.LogTypeConsume).Find(&logs).Error)
@@ -326,8 +398,21 @@ func TestDomesticUnderstandingHTTP(t *testing.T) {
 			} else {
 				require.Len(t, logs, 1)
 				assert.Equal(t, tc.quota, logs[0].Quota)
-				assert.Equal(t, 10, logs[0].PromptTokens)
-				assert.Equal(t, 5, logs[0].CompletionTokens)
+				prompt, completion := 10, 5
+				if strings.HasPrefix(tc.name, "explicit-zero") {
+					prompt, completion = 0, 0
+				}
+				if strings.HasPrefix(tc.name, "zero-prompt") {
+					prompt = 0
+				}
+				assert.Equal(t, prompt, logs[0].PromptTokens)
+				assert.Equal(t, completion, logs[0].CompletionTokens)
+				if strings.HasPrefix(tc.name, "explicit-zero") || strings.HasPrefix(tc.name, "zero-prompt") {
+					assert.NotContains(t, logs[0].Content, "上游超时")
+					var user model.User
+					require.NoError(t, db.First(&user, 910).Error)
+					assert.Equal(t, 1, user.RequestCount)
+				}
 				if tc.name == "mixed-visual-audio" || tc.name == "video" {
 					var other map[string]any
 					require.NoError(t, common.Unmarshal([]byte(logs[0].Other), &other))

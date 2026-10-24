@@ -235,7 +235,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		return nil
 	}
 
-	if strings.HasPrefix(info.OriginModelName, "gpt-4o-audio") || (info.ChannelType == appconstant.ChannelTypeAli && info.UpstreamModelName == "qwen3.8-omni-flash" && usageDto.PromptTokensDetails.AudioTokens > 0) {
+	if strings.HasPrefix(info.OriginModelName, "gpt-4o-audio") || (info.ChannelType == appconstant.ChannelTypeAli && info.UpstreamModelName == "qwen3.8-omni-flash" && info.ActualUsageValidated) {
 		service.PostAudioConsumeQuota(c, info, usageDto, "")
 	} else {
 		service.PostTextConsumeQuota(c, info, usageDto, nil)

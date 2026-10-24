@@ -149,7 +149,7 @@ func ValidateModelAdmission(c *gin.Context, info *relaycommon.RelayInfo, m dto.M
 		}
 		for _, modality := range []string{"image", "audio", "video"} {
 			requiresFacts := len(l.Formats) > 0 || (modality == "image" && l.MaxPixels != nil) || (modality == "audio" && l.MaxAudioSeconds != nil) || (modality == "video" && l.MaxVideoSeconds != nil)
-			if requiresFacts && counts[modality] > verifiedInputs[modality] {
+			if requiresFacts && (counts[modality] > verifiedInputs[modality] || (modalities[modality] && verifiedInputs[modality] == 0)) {
 				return fmt.Errorf("declared media bounds require verified media metadata")
 			}
 		}

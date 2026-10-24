@@ -39,6 +39,27 @@ func validateUnderstandingResponse(resp *http.Response, info *relaycommon.RelayI
 		storage.Close()
 		return fail(err)
 	}
+	var aggregates struct {
+		Usage struct {
+			Prompt     *int `json:"prompt_tokens"`
+			Completion *int `json:"completion_tokens"`
+			Total      *int `json:"total_tokens"`
+			Input      *int `json:"input_tokens"`
+			Output     *int `json:"output_tokens"`
+		} `json:"usage"`
+	}
+	if err := common.Unmarshal(raw, &aggregates); err != nil {
+		storage.Close()
+		return fail(err)
+	}
+	promptCount, completionCount := aggregates.Usage.Prompt, aggregates.Usage.Completion
+	if info.RelayFormat == types.RelayFormatOpenAIResponses {
+		promptCount, completionCount = aggregates.Usage.Input, aggregates.Usage.Output
+	}
+	if promptCount == nil || completionCount == nil || aggregates.Usage.Total == nil {
+		storage.Close()
+		return fail(fmt.Errorf("Omni actual usage requires non-null aggregate fields"))
+	}
 	facts, err := helper.InspectRequestMedia(info.Request)
 	if err != nil {
 		storage.Close()
@@ -96,7 +117,7 @@ func validateUnderstandingResponse(resp *http.Response, info *relaycommon.RelayI
 	}
 	prompt := usage.PromptTokensDetails
 	completion := usage.CompletionTokenDetails
-	if usage.PromptTokens == 0 || usage.TotalTokens == 0 || int64(usage.PromptTokens)+int64(usage.CompletionTokens) != int64(usage.TotalTokens) || int64(prompt.TextTokens)+int64(prompt.AudioTokens)+int64(prompt.ImageTokens)+int64(prompt.VideoTokens) > int64(usage.PromptTokens) || prompt.CachedTokens > usage.PromptTokens || int64(completion.TextTokens)+int64(completion.AudioTokens)+int64(completion.ImageTokens)+int64(completion.ReasoningTokens) > int64(usage.CompletionTokens) {
+	if int64(usage.PromptTokens)+int64(usage.CompletionTokens) != int64(usage.TotalTokens) || int64(prompt.TextTokens)+int64(prompt.AudioTokens)+int64(prompt.ImageTokens)+int64(prompt.VideoTokens) > int64(usage.PromptTokens) || prompt.CachedTokens > usage.PromptTokens || int64(completion.TextTokens)+int64(completion.AudioTokens)+int64(completion.ImageTokens)+int64(completion.ReasoningTokens) > int64(usage.CompletionTokens) {
 		storage.Close()
 		return fail(fmt.Errorf("inconsistent Omni actual usage"))
 	}
@@ -112,5 +133,6 @@ func validateUnderstandingResponse(resp *http.Response, info *relaycommon.RelayI
 		return fail(err)
 	}
 	resp.Body = reader
+	info.ActualUsageValidated = true
 	return storage, nil
 }

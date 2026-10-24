@@ -62,6 +62,8 @@ type ResponsesUsageInfo struct {
 }
 
 type ChannelMeta struct {
+	// ActualUsageValidated is set only by a pre-output actual-usage gate.
+	ActualUsageValidated bool
 	ChannelType          int
 	ChannelId            int
 	ChannelIsMultiKey    bool

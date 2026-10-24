@@ -102,3 +102,15 @@ func TestUncertifiedWAVKeepsLegacyCarrier(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, fact.Format)
 }
+
+func TestUncertifiedMultipartAudioStrictAdmission(t *testing.T) {
+	for _, operation := range []capability.Operation{capability.OperationAudioTranscription, capability.OperationAudioTranslation} {
+		t.Run(string(operation), func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest("POST", "/v1/audio/transcriptions", strings.NewReader("multipart bytes"))
+			info := &relaycommon.RelayInfo{Request: &dto.AudioRequest{Model: "fixture"}}
+			require.Error(t, ValidateModelAdmission(c, info, dto.ModelCapabilities{MediaLimits: &dto.MediaLimits{MaxAudioSeconds: common.GetPointer(1.0), Formats: []string{"wav"}}}, operation))
+			require.Nil(t, info.Billing)
+		})
+	}
+}

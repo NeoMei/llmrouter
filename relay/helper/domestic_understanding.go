@@ -2,6 +2,8 @@ package helper
 
 import (
 	"fmt"
+	"net/url"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -147,6 +149,27 @@ func ValidateDomesticUnderstanding(request dto.Request, channelType int, model s
 					return fmt.Errorf("Omni Responses audio/video inputs require user role")
 				}
 				if kind == "input_audio" {
+					data, hasData := part["data"]
+					remote, hasRemote := part["audio_url"]
+					if hasData == hasRemote {
+						return fmt.Errorf("Omni Responses audio requires exactly one of data or audio_url")
+					}
+					if hasData {
+						carrier, ok := data.(string)
+						if !ok || (!strings.HasPrefix(carrier, "data:audio/wav;base64,") && !strings.HasPrefix(carrier, "data:audio/mp3;base64,") && !strings.HasPrefix(carrier, "data:audio/mpeg;base64,")) {
+							return fmt.Errorf("Omni Responses data requires supported complete audio Data URI")
+						}
+					}
+					if hasRemote {
+						carrier, ok := remote.(string)
+						if !ok {
+							return fmt.Errorf("Omni Responses audio_url requires HTTP(S) URL")
+						}
+						parsed, err := url.ParseRequestURI(carrier)
+						if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+							return fmt.Errorf("Omni Responses audio_url requires HTTP(S) URL")
+						}
+					}
 					if multichannel, exists := part["use_multichannel"]; exists {
 						enabled, valid := multichannel.(bool)
 						if !valid || enabled {

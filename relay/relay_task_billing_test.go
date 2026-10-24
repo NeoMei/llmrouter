@@ -15,6 +15,8 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/types"
+	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -50,6 +52,9 @@ func TestRelayTaskSubmitRetryReservesBeforeUpstream(t *testing.T) {
 			common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
 			common.RedisEnabled, common.BatchUpdateEnabled = false, false
 			t.Cleanup(func() {
+				// A completed database refund can still have a queued cache update.
+				// Drain those workers before restoring the globals they read.
+				require.Eventually(t, func() bool { return gopool.WorkerCount() == 0 }, 2*time.Second, time.Millisecond)
 				model.DB, model.LOG_DB = savedDB, savedLogDB
 				common.RedisEnabled, common.BatchUpdateEnabled = savedRedis, savedBatch
 				common.SetDatabaseTypes(savedDBType, savedLogDBType)
@@ -113,6 +118,11 @@ func TestRelayTaskSubmitRetryReservesBeforeUpstream(t *testing.T) {
 				require.NotNil(t, taskErr)
 				assert.Equal(t, "insufficient_user_quota", taskErr.Code)
 				assert.Equal(t, 403, taskErr.StatusCode)
+				assert.True(t, taskErr.LocalError)
+				var apiErr *types.NewAPIError
+				require.ErrorAs(t, taskErr.Error, &apiErr)
+				assert.True(t, types.IsSkipRetryError(apiErr))
+				assert.False(t, types.IsRecordErrorLog(apiErr))
 				assert.Len(t, actualSent, 1, "unfunded retry must never reach upstream")
 				assert.Equal(t, 20000, info.Billing.GetPreConsumedQuota())
 			} else {

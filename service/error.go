@@ -223,6 +223,9 @@ func TaskErrorFromAPIError(apiErr *types.NewAPIError) *dto.TaskError {
 		Code:       string(apiErr.GetErrorCode()),
 		Message:    apiErr.Err.Error(),
 		StatusCode: apiErr.StatusCode,
-		Error:      apiErr.Err,
+		// Billing failures are local admission errors. Keep the typed error so
+		// retry and logging policies survive the task boundary.
+		LocalError: true,
+		Error:      apiErr,
 	}
 }

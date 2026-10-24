@@ -201,7 +201,7 @@ func (s *OCRBillingStore) applyOCRCacheOperation(ctx context.Context, id, kind, 
 	}
 	if op.Amount == 0 {
 		return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			locked, err := ocrLockJob(tx, id)
+			locked, err := ocrLockJobAndFundingOwner(tx, id)
 			if err != nil {
 				return err
 			}
@@ -237,7 +237,7 @@ func (s *OCRBillingStore) applyOCRCacheOperation(ctx context.Context, id, kind, 
 		}
 		attempt := uuid.NewString()
 		err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			current, err := ocrLockJob(tx, id)
+			current, err := ocrLockJobAndFundingOwner(tx, id)
 			if err != nil {
 				return err
 			}
@@ -294,7 +294,7 @@ func (s *OCRBillingStore) applyOCRCacheOperation(ctx context.Context, id, kind, 
 		}
 	}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		current, err := ocrLockJob(tx, id)
+		current, err := ocrLockJobAndFundingOwner(tx, id)
 		if err != nil {
 			return err
 		}
@@ -328,7 +328,7 @@ func (s *OCRBillingStore) reserveRedis(ctx context.Context, id string) (OCRJob, 
 		return snap.Job, err
 	}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		j, err := ocrLockJob(tx, id)
+		j, err := ocrLockJobAndFundingOwner(tx, id)
 		if err != nil {
 			return err
 		}
@@ -356,7 +356,7 @@ func (s *OCRBillingStore) reserveRedis(ctx context.Context, id string) (OCRJob, 
 			err = s.applyOCRCacheOperation(ctx, id, "wallet", "reserve")
 			if errors.Is(err, ErrOCRInsufficient) && snap.Job.Preference == "wallet_first" {
 				err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-					j, err := ocrLockJob(tx, id)
+					j, err := ocrLockJobAndFundingOwner(tx, id)
 					if err != nil {
 						return err
 					}
@@ -383,7 +383,7 @@ func (s *OCRBillingStore) reserveRedis(ctx context.Context, id string) (OCRJob, 
 	}
 	if err == nil {
 		err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			j, err := ocrLockJob(tx, id)
+			j, err := ocrLockJobAndFundingOwner(tx, id)
 			if err != nil {
 				return err
 			}
@@ -425,7 +425,7 @@ func (s *OCRBillingStore) refundRedis(ctx context.Context, id string) (OCRJob, e
 		}
 		if op.Kind == "subscription" {
 			err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-				_, err := ocrLockJob(tx, id)
+				_, err := ocrLockJobAndFundingOwner(tx, id)
 				if err != nil {
 					return err
 				}
@@ -461,7 +461,7 @@ func (s *OCRBillingStore) refundRedis(ctx context.Context, id string) (OCRJob, e
 		}
 	}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		j, err := ocrLockJob(tx, id)
+		j, err := ocrLockJobAndFundingOwner(tx, id)
 		if err != nil {
 			return err
 		}

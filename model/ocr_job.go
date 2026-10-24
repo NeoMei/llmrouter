@@ -176,6 +176,21 @@ func (s *OCRBillingStore) Inspect(ctx context.Context, id string) (OCRJournal, e
 	err = s.db.WithContext(ctx).Where("job_id = ?", id).Order("kind, phase").Find(&j.Operations).Error
 	return j, err
 }
+
+// Every OCR financial transaction takes the same cross-job coordination lock:
+// job, then its user funding owner, then subscription/wallet and token rows.
+// This prevents wallet-first and subscription-first fallback from acquiring
+// User and UserSubscription in opposite orders. Unscoped is accounting-only;
+// admission and submission independently validate current authorization.
+func ocrLockJobAndFundingOwner(tx *gorm.DB, id string) (*OCRJob, error) {
+	j, err := ocrLockJob(tx, id)
+	if err != nil {
+		return j, err
+	}
+	var owner User
+	err = lockForUpdate(tx).Unscoped().Select("id").First(&owner, j.UserID).Error
+	return j, err
+}
 func ocrLockJob(tx *gorm.DB, id string) (*OCRJob, error) {
 	var j OCRJob
 	err := lockForUpdate(tx).Where("id = ?", id).First(&j).Error
@@ -340,7 +355,7 @@ func (s *OCRBillingStore) Reserve(ctx context.Context, id string) (OCRJob, error
 		return s.reserveRedis(ctx, id)
 	}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		j, err := ocrLockJob(tx, id)
+		j, err := ocrLockJobAndFundingOwner(tx, id)
 		if err != nil {
 			return err
 		}
@@ -446,7 +461,7 @@ func (s *OCRBillingStore) ClaimSubmission(ctx context.Context, id string, select
 	}
 	claim := OCRClaim{JobID: id, ClaimID: uuid.NewString(), MemberID: member}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		j, err := ocrLockJob(tx, id)
+		j, err := ocrLockJobAndFundingOwner(tx, id)
 		if err != nil {
 			return err
 		}
@@ -589,7 +604,7 @@ func (s *OCRBillingStore) Finish(ctx context.Context, id, outcome string) (OCRJo
 		return mode.Job, ErrOCRReconciliation
 	}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		j, err := ocrLockJob(tx, id)
+		j, err := ocrLockJobAndFundingOwner(tx, id)
 		if err != nil {
 			return err
 		}
@@ -645,7 +660,7 @@ func (s *OCRBillingStore) Finish(ctx context.Context, id, outcome string) (OCRJo
 		return s.refundRedis(ctx, id)
 	}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		j, err := ocrLockJob(tx, id)
+		j, err := ocrLockJobAndFundingOwner(tx, id)
 		if err != nil {
 			return err
 		}

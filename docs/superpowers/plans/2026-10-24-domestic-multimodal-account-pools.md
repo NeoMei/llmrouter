@@ -110,12 +110,14 @@ require.Len(t, result.Data[0].Embedding, 1024)
 
 **Interfaces:** At least one fully tested domestic path per image understanding/generation/editing, ASR, audio understanding, TTS and video understanding. Qwen-compatible ASR routes `/v1/audio/transcriptions` to the actual supported provider audio contract; native MiniMax TTS preserves voice/encoding/stream options; Chat/Responses media retain video/audio data and supported fps/detail fields. All use Task 2 receipts and operation-level health.
 
-- [ ] Verify current official primary-source contracts before selecting model/version-specific native payloads; record immutable fixtures/docs links. Do not make registration alone a support claim.
-- [ ] Red actual HTTP fixtures: image understanding vs output image; generation plus reference edit; WAV multipart to ASR text/timestamp outputs; TTS MP3 and streaming; audio semantic question; video URL+fps+question with preserved input, separately declared audio-track support.
-- [ ] Add exact operation declarations only for tested branches; reject unsupported format/size/duration/model before charging/sending. Unsafe image creation replay is denied after unknown outcome; authorized media body replay remains bounded.
-- [ ] Native streaming must use shared stop/join/writer/delivery policy and no post-output account switch. Run owning adapter, helper/controller/capability/converter suites and race; root reviews and commits.
+- [x] Verify current official primary-source contracts before selecting model/version-specific native payloads; record immutable fixtures/docs links. Do not make registration alone a support claim.
+- [x] Red actual HTTP fixtures: image understanding vs output image; generation plus reference edit; WAV multipart to ASR text/timestamp outputs; TTS MP3 and streaming; audio semantic question; video URL+fps+question with preserved input, separately declared audio-track support.
+- [x] Add exact operation declarations only for tested branches; reject unsupported format/size/duration/model before charging/sending. Unsafe image creation replay is denied after unknown outcome; authorized media body replay remains bounded.
+- [x] Native streaming must use shared stop/join/writer/delivery policy and no post-output account switch. Run owning adapter, helper/controller/capability/converter suites and race; root reviews and commits.
 
 ## Task 8: Multimodal Embedding contract
+
+Execution split: 8a adds the bounded immutable MP4 snapshot/grant service required by URL-only supplier video input; 8b implements the typed vector endpoints and billing. Both require independent approval before Task 8 completes. Reuse object storage/protected fetch/existing MP4 library, with independent relay-media configuration; no public upload product.
 
 **Files:** Create multimodal-vector DTO/validator and relay helper; extend Ali adaptor or focused native client, route/capability declarations and tests. Do not weaken text Embedding parsing to accept arbitrary nontext input silently.
 

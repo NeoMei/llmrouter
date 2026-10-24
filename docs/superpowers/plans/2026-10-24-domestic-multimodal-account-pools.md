@@ -79,9 +79,9 @@ require.Len(t, result.Data[0].Embedding, 1024)
 
 **Interfaces:** Serve protected standard `/v1/embeddings`, `/v1/rerank` plus `/compatible-mode/v1/embeddings`, `/compatible-mode/v1/chat/completions`, and Ali `/api/v1/services/rerank/text-rerank/text-rerank`. Native Ali request maps to canonical Rerank request before existing distribution/admission, canonical response maps back to `output.results` only for the compatibility path. Preserve query/document ordering, top_n and return_documents.
 
-- [ ] Red fixtures send exact SuperWagie shapes to a real Gin router and loopback Ali server. Assert native input/output compatibility and common bearer auth; unauthorized tokens/groups and malformed nested input must reject before sends.
-- [ ] Enable Ali rerank only after exercising its actual converter; replace direct encoding/json calls in touched business paths. Return structured errors consistently, keep proper usage and quota. Embedding dimensions must pass through unchanged.
-- [ ] Probe results must parse actual vectors/rank indices, not merely list models. Run affected router/middleware/relay/controller and billing tests; root reviews and commits.
+- [x] Red fixtures send exact SuperWagie shapes to a real Gin router and loopback Ali server. Assert native input/output compatibility and common bearer auth; unauthorized tokens/groups and malformed nested input must reject before sends.
+- [x] Enable Ali rerank only after exercising its actual converter; replace direct encoding/json calls in touched business paths. Return structured errors consistently, keep proper usage and quota. Embedding dimensions must pass through unchanged.
+- [x] Probe results must parse actual vectors/rank indices, not merely list models. Run affected router/middleware/relay/controller and billing tests; root reviews and commits.
 
 ## Task 5: PaddleOCR supplier adapter and durable owned jobs
 

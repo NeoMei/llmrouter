@@ -129,6 +129,8 @@ Execution split: 8a adds the bounded immutable MP4 snapshot/grant service requir
 
 ## Task 9: Admin account-pool and multimodal catalog UI
 
+Execution split: 9a implements safe complete admin pool snapshots/actions with permission and audit gates; 9b integrates them and the reviewed modality contracts into existing frontend pages, metadata editing and i18n/browser acceptance. Both require independent approval.
+
 **Files:** Create focused `controller/account_pool.go`, protected admin routes in `router/channel-router.go`, API tests; enhance existing `web/src/features/channels/components/dialogs/multi-key-*`, channel API/types; update `web/src/features/client-model-routes` metadata editor/projection; locale JSON/static keys and owning test directories.
 
 **Interfaces:** Admin-only list/recovery/quota-group actions use stable opaque member handles, return available/cooling/isolated/paused counts, reason codes and retry times. Model metadata fields expose input/output, supported operation/constraints and embedding-space configuration. Never return fingerprint/key or provider error body. Respect existing ChannelRead/Operate/Write permissions and audit.

@@ -17,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -27,7 +28,7 @@ import (
 // wallet/token settlement, so invalid vectors cannot pass by validating a DTO
 // after the ready response or the charge has already escaped.
 func TestEmbeddingFixedSpaceHTTP(t *testing.T) {
-	for _, scenario := range []string{"numeric", "override-input", "override-safe-scalar", "ordered-batch", "missing-index", "duplicate-index", "missing-item", "nonfinite", "dimension-mismatch", "declared-space-mismatch", "invalid-dimensions", "requested-space-mismatch", "wrong-model", "null-vector", "alias", "default-dimensions", "alias-token-denied", "alias-group-denied", "alias-route-deleted", "legacy-numeric", "legacy-base64"} {
+	for _, scenario := range []string{"numeric", "override-input", "override-safe-scalar", "ordered-batch", "reversed-batch", "out-of-range-index", "missing-index", "duplicate-index", "missing-item", "nonfinite", "dimension-mismatch", "declared-space-mismatch", "invalid-dimensions", "requested-space-mismatch", "wrong-model", "null-vector", "alias", "default-dimensions", "alias-token-denied", "alias-group-denied", "alias-route-deleted", "legacy-numeric", "legacy-base64"} {
 		t.Run(scenario, func(t *testing.T) {
 			gin.SetMode(gin.TestMode)
 			db := setupTieredRelayBillingDB(t)
@@ -53,8 +54,14 @@ func TestEmbeddingFixedSpaceHTTP(t *testing.T) {
 			second := make([]float64, 1024)
 			second[0] = 0.75
 			data := []dto.EmbeddingResponseItem{{Object: "embedding", Index: 0, Embedding: vector}}
-			if scenario == "ordered-batch" || scenario == "duplicate-index" || scenario == "missing-item" {
+			if scenario == "ordered-batch" || scenario == "reversed-batch" || scenario == "duplicate-index" || scenario == "missing-item" {
 				data = append(data, dto.EmbeddingResponseItem{Object: "embedding", Index: 1, Embedding: second})
+			}
+			if scenario == "reversed-batch" {
+				data[0], data[1] = data[1], data[0]
+			}
+			if scenario == "out-of-range-index" {
+				data[0].Index = 1
 			}
 			if scenario == "duplicate-index" {
 				data[1].Index = 0
@@ -67,6 +74,11 @@ func TestEmbeddingFixedSpaceHTTP(t *testing.T) {
 			}
 			raw, err := common.Marshal(dto.EmbeddingResponse{Object: "list", Model: "text-embedding-v4", Data: data, Usage: dto.Usage{PromptTokens: 10, TotalTokens: 10}})
 			require.NoError(t, err)
+			if scenario == "reversed-batch" {
+				raw = []byte(strings.Replace(string(raw), `"index":0,`, `"index":0,"vendor_item":{"large":9007199254740993},`, 1))
+				raw = []byte("  \n" + strings.Replace(string(raw), "0.25", "0.25000000000000000000001", 1) + "\n  ")
+			}
+
 			if scenario == "missing-index" {
 				raw = []byte(strings.Replace(string(raw), `"index":0,`, "", 1))
 			}
@@ -89,6 +101,14 @@ func TestEmbeddingFixedSpaceHTTP(t *testing.T) {
 				if scenario != "legacy-base64" {
 					assert.Contains(t, string(requestRaw), `"dimensions":1024`)
 				}
+				if scenario == "reversed-batch" {
+					w.Header().Set("Content-Encoding", "identity")
+					w.Header().Set("ETag", `"upstream-vector"`)
+					w.Header().Set("Content-MD5", "upstream-digest")
+					w.Header().Set("Digest", "sha-256=upstream-digest")
+					w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
+				}
+
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = w.Write(raw)
 			}))
@@ -145,7 +165,7 @@ func TestEmbeddingFixedSpaceHTTP(t *testing.T) {
 				Relay(c, types.RelayFormatEmbedding)
 			})
 			body := `{"model":"text-embedding-v4","input":"hello","dimensions":1024}`
-			if scenario == "ordered-batch" || scenario == "duplicate-index" || scenario == "missing-item" {
+			if scenario == "ordered-batch" || scenario == "reversed-batch" || scenario == "duplicate-index" || scenario == "missing-item" {
 				body = `{"model":"text-embedding-v4","input":["hello","world"],"dimensions":1024}`
 			}
 			if scenario == "default-dimensions" {
@@ -166,8 +186,26 @@ func TestEmbeddingFixedSpaceHTTP(t *testing.T) {
 			request := httptest.NewRequest("POST", "/v1/embeddings", strings.NewReader(body))
 			request.Header.Set("Content-Type", "application/json")
 			recorder := httptest.NewRecorder()
-			engine.ServeHTTP(recorder, request)
-			valid := scenario == "numeric" || scenario == "ordered-batch" || scenario == "legacy-base64" || scenario == "legacy-numeric" || scenario == "alias" || scenario == "default-dimensions" || scenario == "override-safe-scalar"
+			if scenario == "reversed-batch" {
+				frontend := httptest.NewServer(engine)
+				defer frontend.Close()
+				response, err := http.Post(frontend.URL+"/v1/embeddings", "application/json", strings.NewReader(body))
+				require.NoError(t, err)
+				defer response.Body.Close()
+				frontendBody, err := io.ReadAll(response.Body)
+				require.NoError(t, err, "rewritten length must match actual wire body")
+				recorder.Code = response.StatusCode
+				recorder.HeaderMap = response.Header.Clone()
+				_, err = recorder.Body.Write(frontendBody)
+				require.NoError(t, err)
+				assert.Equal(t, strconv.Itoa(len(frontendBody)), response.Header.Get("Content-Length"))
+				for _, name := range []string{"Content-Encoding", "ETag", "Content-MD5", "Digest"} {
+					assert.Empty(t, response.Header.Get(name), name)
+				}
+			} else {
+				engine.ServeHTTP(recorder, request)
+			}
+			valid := scenario == "numeric" || scenario == "ordered-batch" || scenario == "reversed-batch" || scenario == "legacy-base64" || scenario == "legacy-numeric" || scenario == "alias" || scenario == "default-dimensions" || scenario == "override-safe-scalar"
 			if valid {
 				require.Equal(t, 200, recorder.Code, recorder.Body.String())
 				assert.EqualValues(t, 1, sends.Load())
@@ -178,10 +216,14 @@ func TestEmbeddingFixedSpaceHTTP(t *testing.T) {
 					require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
 					require.Len(t, response.Data[0].Embedding, 1024)
 					assert.Equal(t, 0.25, response.Data[0].Embedding[0])
-					if scenario == "ordered-batch" {
+					if scenario == "ordered-batch" || scenario == "reversed-batch" {
 						require.Len(t, response.Data, 2)
 						assert.Equal(t, []int{0, 1}, []int{response.Data[0].Index, response.Data[1].Index})
 						assert.Equal(t, 0.75, response.Data[1].Embedding[0])
+						if scenario == "reversed-batch" {
+							assert.Contains(t, recorder.Body.String(), "0.25000000000000000000001")
+							assert.Contains(t, recorder.Body.String(), `"vendor_item":{"large":9007199254740993}`)
+						}
 					}
 				}
 				wallet, token, used := tieredRelayQuotaState(t, db, 910, 911)

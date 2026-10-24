@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -133,7 +134,8 @@ func EmbeddingHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		if countErr != nil {
 			return types.NewErrorWithStatusCode(countErr, types.ErrorCodeBadResponseBody, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
 		}
-		if err := validateEmbeddingResponse(gate.body.Bytes(), *space, count); err != nil || gate.overflow {
+		normalized, err := normalizeEmbeddingResponse(gate.body.Bytes(), *space, count)
+		if err != nil || gate.overflow {
 			if err == nil {
 				err = fmt.Errorf("embedding response exceeds size limit")
 			}
@@ -142,8 +144,14 @@ func EmbeddingHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		for key, values := range gate.header {
 			c.Writer.Header()[key] = values
 		}
+		// This is an uncompressed validated JSON representation. Upstream
+		// encodings and representation validators no longer describe its bytes.
+		for _, name := range []string{"Content-Encoding", "ETag", "Content-MD5", "Digest", "Content-Digest", "Repr-Digest", "Last-Modified"} {
+			c.Writer.Header().Del(name)
+		}
+		c.Writer.Header().Set("Content-Length", strconv.Itoa(len(normalized)))
 		c.Writer.WriteHeader(gate.status)
-		if _, err := c.Writer.Write(gate.body.Bytes()); err != nil {
+		if _, err := c.Writer.Write(normalized); err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
 		}
 	}

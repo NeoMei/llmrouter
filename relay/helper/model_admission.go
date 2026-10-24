@@ -26,6 +26,9 @@ func ValidateModelAdmission(c *gin.Context, info *relaycommon.RelayInfo, m dto.M
 	}
 	// These operations create asynchronous resources rather than a ready response.
 	isAsync := operation == capability.OperationVideoCreate || operation == capability.OperationMidjourneySubmit || operation == capability.OperationSunoSubmit
+	if request, ok := info.Request.(*dto.OpenAIResponsesRequest); ok && request.Background != nil && *request.Background {
+		isAsync = true
+	}
 	if m.Async != nil && isAsync && !*m.Async {
 		return fmt.Errorf("model synchronous/asynchronous contract does not support operation %s", operation)
 	}
@@ -71,6 +74,25 @@ func ValidateModelAdmission(c *gin.Context, info *relaycommon.RelayInfo, m dto.M
 			}
 		}
 	}
+	hostedImageOutput := false
+	if request, ok := info.Request.(*dto.OpenAIResponsesRequest); ok && len(request.Tools) > 0 {
+		// Only recognized hosted tool declarations imply model-produced media.
+		// Function schemas, descriptions and call arguments remain opaque user data.
+		var tools []struct {
+			Type string `json:"type"`
+		}
+		if err := common.Unmarshal(request.Tools, &tools); err != nil {
+			return fmt.Errorf("invalid Responses tools: %w", err)
+		}
+		for _, tool := range tools {
+			if tool.Type == "image_generation" {
+				hostedImageOutput = true
+				outputs = append(outputs, "image")
+				break
+			}
+		}
+	}
+
 	for _, output := range outputs {
 		if len(m.OutputModalities) > 0 && !containsCapability(m.OutputModalities, output) {
 			return fmt.Errorf("model does not support %s output", output)
@@ -101,6 +123,9 @@ func ValidateModelAdmission(c *gin.Context, info *relaycommon.RelayInfo, m dto.M
 			if n > uint(*l.MaxImages) {
 				return fmt.Errorf("image output count exceeds declared max_images")
 			}
+		}
+		if l.MaxImages != nil && hostedImageOutput {
+			return fmt.Errorf("declared hosted-image count requires verified media metadata")
 		}
 		if l.MaxImages != nil && (operation == capability.OperationImageEdit || operation == capability.OperationImageVariation) {
 			return fmt.Errorf("declared reference-image count requires verified media metadata")

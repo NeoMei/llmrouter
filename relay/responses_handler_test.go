@@ -280,7 +280,7 @@ func TestNewResponsesPassthroughBodyUsesNormalizedPreparedRequest(t *testing.T) 
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			rawRequest := `{
-				"model":"model-a",
+				"model":"legacy-model-alias",
 				"previous_response_id":"resp_parent",
 				"input":[{"type":"message","role":"user","content":"unexpanded"}],
 				"background":true,
@@ -300,13 +300,14 @@ func TestNewResponsesPassthroughBodyUsesNormalizedPreparedRequest(t *testing.T) 
 				Store: tt.store,
 			}
 			normalizeResponsesStore(request)
-			body, _, getBody, closer, err := newResponsesPassthroughBody(c, request, true)
+			body, _, getBody, closer, err := newResponsesPassthroughBody(c, request, true, false)
 			require.NoError(t, err)
 			defer closer.Close()
 			first, err := io.ReadAll(body)
 			require.NoError(t, err)
 			var captured map[string]json.RawMessage
 			require.NoError(t, common.Unmarshal(first, &captured))
+			assert.JSONEq(t, `"legacy-model-alias"`, string(captured["model"]), "unresolved legacy passthrough retains its raw model")
 			assert.Contains(t, captured, "store")
 			assert.JSONEq(t, string(tt.wantStore), string(captured["store"]))
 			assert.NotContains(t, string(first), "previous_response_id")

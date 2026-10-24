@@ -24,24 +24,25 @@ const lifecycleKey = string(constant.ContextKeyAccountPoolLifecycle)
 // Lifecycle is request-local. Selection is prepared before send; Sent is a value
 // copy taken immediately before the transport, never reconstructed from key indexes.
 type Lifecycle struct {
-	DB               *gorm.DB
-	Candidates       []model.UpstreamAccountRef
-	Random           bool
-	Sends            int
-	MaxSends         int
-	ResourceRejected bool
-	RetryChannel     *model.Channel
-	TaskBound        bool
-	Selected         *model.UpstreamAccountSelection
-	Sent             *model.UpstreamAccountSelection
-	Owner            *model.UpstreamAccountRef
-	Scope            model.UpstreamAccountScope
-	Excluded         map[string]bool
-	Veto             bool
-	Unsafe           bool
-	Uncertain        bool
-	UnsafeResponse   bool
-	PersistenceError error
+	DB                  *gorm.DB
+	Candidates          []model.UpstreamAccountRef
+	Random              bool
+	Sends               int
+	MaxSends            int
+	ResourceRejected    bool
+	RetryChannel        *model.Channel
+	TaskBound           bool
+	Selected            *model.UpstreamAccountSelection
+	Sent                *model.UpstreamAccountSelection
+	Owner               *model.UpstreamAccountRef
+	Scope               model.UpstreamAccountScope
+	Excluded            map[string]bool
+	Veto                bool
+	Unsafe              bool
+	ResponsesBackground bool
+	Uncertain           bool
+	UnsafeResponse      bool
+	PersistenceError    error
 }
 
 func State(c *gin.Context) *Lifecycle {
@@ -87,7 +88,7 @@ func BeginSend(c *gin.Context) error {
 	state.Veto, state.Uncertain, state.UnsafeResponse = false, false, false
 	state.Sent = nil
 	_, operation, operationErr := capability.ResolveRequest(c.Request.Method, c.Request.URL.Path)
-	state.Unsafe = false
+	state.Unsafe = operation == capability.OperationResponseCreate && state.ResponsesBackground
 	switch operation {
 	case capability.OperationImageGeneration, capability.OperationImageEdit, capability.OperationImageVariation,
 		capability.OperationVideoCreate, capability.OperationVideoRemix,
@@ -357,13 +358,19 @@ func openAIAccountErrors(channelType int) bool {
 
 // ValidateOutboundResources checks the final adapter body too: administrator
 // parameter overrides and conversions must not reintroduce account-bound IDs
-// after request-side continuity checks.
+// after request-side continuity checks. Responses background mode is taken
+// from this final body before BeginSend, so asynchronous work uses the existing
+// execution-uncertainty/no-replay policy even on an otherwise synchronous path.
 func ValidateOutboundResources(c *gin.Context, request *http.Request) error {
-	if State(c).Selected == nil || !strings.Contains(request.Header.Get("Content-Type"), "json") || request.Body == nil {
+	state := State(c)
+	state.ResponsesBackground = false
+	_, operation, _ := capability.ResolveRequest(c.Request.Method, c.Request.URL.Path)
+	inspectResponses := operation == capability.OperationResponseCreate
+	if (state.Selected == nil && !inspectResponses) || (!strings.Contains(request.Header.Get("Content-Type"), "json") && !inspectResponses) || request.Body == nil {
 		return nil
 	}
 	if request.GetBody == nil {
-		return errors.New("pooled JSON transport requires a replayable body for resource ownership validation")
+		return errors.New("validated JSON transport requires a replayable body for resource and asynchronous admission")
 	}
 	body, err := request.GetBody()
 	if err != nil {
@@ -374,7 +381,18 @@ func ValidateOutboundResources(c *gin.Context, request *http.Request) error {
 	if err := common.DecodeJson(body, &value); err != nil {
 		return err
 	}
-	if containsOwnedResource(value) {
+	if inspectResponses {
+		if object, ok := value.(map[string]any); ok {
+			if background, exists := object["background"]; exists && background != nil {
+				flag, ok := background.(bool)
+				if !ok {
+					return errors.New("background must be a boolean")
+				}
+				state.ResponsesBackground = flag
+			}
+		}
+	}
+	if state.Selected != nil && containsOwnedResource(value) {
 		return errors.New("final upstream body contains an unbound account resource")
 	}
 	return nil

@@ -42,42 +42,65 @@ func (w *embeddingResponseGate) Write(p []byte) (int, error) {
 }
 func (w *embeddingResponseGate) WriteString(s string) (int, error) { return w.Write([]byte(s)) }
 
-func validateEmbeddingResponse(raw []byte, space dto.EmbeddingSpace, count int) error {
+// normalizeEmbeddingResponse validates vectors and arranges complete indexed
+// batches in input order. Whole raw items retain vendor extensions and numeric
+// lexemes; float decoding below is validation only, never output serialization.
+func normalizeEmbeddingResponse(raw []byte, space dto.EmbeddingSpace, count int) ([]byte, error) {
 	if err := toolpolicy.ValidateRawResponseJSON(raw); err != nil {
-		return err
+		return nil, err
 	}
 	var response struct {
-		Model string `json:"model"`
-		Data  []struct {
-			Index     *int              `json:"index"`
-			Embedding []json.RawMessage `json:"embedding"`
-		} `json:"data"`
+		Model string            `json:"model"`
+		Data  []json.RawMessage `json:"data"`
 	}
 	if err := common.Unmarshal(raw, &response); err != nil {
-		return fmt.Errorf("invalid numeric embedding response: %w", err)
+		return nil, fmt.Errorf("invalid numeric embedding response: %w", err)
 	}
 	if response.Model != space.Model {
-		return fmt.Errorf("embedding response model differs from fixed embedding_space")
+		return nil, fmt.Errorf("embedding response model differs from fixed embedding_space")
 	}
 	if len(response.Data) != count {
-		return fmt.Errorf("embedding response cardinality differs from input batch")
+		return nil, fmt.Errorf("embedding response cardinality differs from input batch")
 	}
-	for i, item := range response.Data {
-		if item.Index == nil || *item.Index != i {
-			return fmt.Errorf("embedding response indices must be present, unique and ordered")
+	ordered := make([]json.RawMessage, count)
+	needsOrder := false
+	for position, rawItem := range response.Data {
+		var item struct {
+			Index     *int              `json:"index"`
+			Embedding []json.RawMessage `json:"embedding"`
+		}
+		if err := common.Unmarshal(rawItem, &item); err != nil {
+			return nil, fmt.Errorf("invalid numeric embedding result: %w", err)
+		}
+		if item.Index == nil || *item.Index < 0 || *item.Index >= count || ordered[*item.Index] != nil {
+			return nil, fmt.Errorf("embedding response indices must be present, unique and within the input batch")
 		}
 		if len(item.Embedding) != space.Dimensions {
-			return fmt.Errorf("embedding response dimensions differ from fixed embedding_space")
+			return nil, fmt.Errorf("embedding response dimensions differ from fixed embedding_space")
 		}
 		for _, rawValue := range item.Embedding {
 			if len(rawValue) == 0 || bytes.Equal(rawValue, []byte("null")) {
-				return fmt.Errorf("embedding values must be finite numbers")
+				return nil, fmt.Errorf("embedding values must be finite numbers")
 			}
 			var value float64
 			if err := common.Unmarshal(rawValue, &value); err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
-				return fmt.Errorf("embedding values must be finite numbers")
+				return nil, fmt.Errorf("embedding values must be finite numbers")
 			}
 		}
+		ordered[*item.Index] = rawItem
+		needsOrder = needsOrder || *item.Index != position
 	}
-	return nil
+	if !needsOrder {
+		return raw, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := common.Unmarshal(raw, &fields); err != nil {
+		return nil, err
+	}
+	orderedJSON, err := common.Marshal(ordered)
+	if err != nil {
+		return nil, err
+	}
+	fields["data"] = orderedJSON
+	return common.Marshal(fields)
 }

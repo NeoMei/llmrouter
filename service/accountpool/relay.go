@@ -323,7 +323,7 @@ func containsOwnedResource(value any) bool {
 		}
 		for key, item := range value {
 			switch key {
-			case "previous_response_id", "file_id", "file_uri", "fileUri", "encrypted_content", "video_id", "task_id":
+			case "previous_response_id", "file_id", "file_uri", "fileUri", "encrypted_content", "video_id", "task_id", "continue_clip_id":
 				if text, ok := item.(string); ok && text != "" {
 					return true
 				}

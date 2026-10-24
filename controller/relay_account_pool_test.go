@@ -1,9 +1,8 @@
 package controller
 
 import (
-	"github.com/QuantumNous/new-api/pkg/crypto"
-	"github.com/QuantumNous/new-api/relay/channel/gateway"
-	"github.com/QuantumNous/new-api/relay/profile"
+	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,14 +10,20 @@ import (
 	"testing"
 	"time"
 
-	"context"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/crypto"
+	"github.com/QuantumNous/new-api/relay/channel"
+	"github.com/QuantumNous/new-api/relay/channel/gateway"
+	"github.com/QuantumNous/new-api/relay/channel/openai"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/profile"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/accountpool"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/bytedance/gopkg/util/gopool"
@@ -149,6 +154,10 @@ func testRelayAccountPoolHTTP(t *testing.T, mode, scenario string) {
 			require.NoError(t, db.Create(&model.ClientModelTarget{Id: 942, RouteId: 931, ChannelId: 941, UpstreamModel: "gpt-pool", BillingModel: "gpt-pool", PreferredWires: `["openai_chat"]`, Enabled: true, Priority: 10}).Error)
 		}
 	}
+	if mode == "cache-legacy" {
+		common.MemoryCacheEnabled = true
+		model.InitChannelCache()
+	}
 	service.InitHttpClient()
 	service.InitTokenEncoders()
 	engine := gin.New()
@@ -173,6 +182,13 @@ func testRelayAccountPoolHTTP(t *testing.T, mode, scenario string) {
 		repeats = 2
 	}
 	for request := 0; request < repeats; request++ {
+		if mode == "cache-legacy" && request == 1 {
+			require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 921).Update("key", "account-B\naccount-A").Error)
+			model.InitChannelCache()
+			refreshed, err := model.CacheGetChannel(921)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"account-B", "account-A"}, refreshed.GetKeys())
+		}
 		recorder := httptest.NewRecorder()
 		body := `{"model":"gpt-pool","messages":[{"role":"user","content":"hi"}],"max_tokens":10}`
 		if scenario == "resources" {
@@ -232,4 +248,64 @@ func testRelayAccountPoolHTTP(t *testing.T, mode, scenario string) {
 	if repeats > 1 {
 		assert.Equal(t, 15, logs[1].Quota)
 	}
+}
+
+func TestPooledAzureAuthenticationCannotBeOverridden(t *testing.T) {
+	service.InitHttpClient()
+	for _, form := range []bool{false, true} {
+		for _, rule := range []string{"fixed", "explicit-passthrough", "wildcard", "regex"} {
+			t.Run(fmt.Sprintf("form=%t/%s", form, rule), func(t *testing.T) {
+				var mu sync.Mutex
+				keys := []string{}
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					mu.Lock()
+					keys = append(keys, r.Header.Get("api-key"))
+					mu.Unlock()
+					w.WriteHeader(400)
+				}))
+				defer upstream.Close()
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
+				c.Request.Header.Set("api-key", "account-B")
+				c.Request.Header.Set("Content-Type", "application/json")
+				defer common.CleanupBodyStorage(c)
+				accountpool.State(c).Selected = &model.UpstreamAccountSelection{}
+				override := map[string]any{"Api-Key": "account-B"}
+				switch rule {
+				case "explicit-passthrough":
+					override = map[string]any{"Api-Key": "{client_header:api-key}"}
+				case "wildcard":
+					override = map[string]any{"*": ""}
+				case "regex":
+					override = map[string]any{"re:.*": ""}
+				}
+				info := &relaycommon.RelayInfo{RequestURLPath: "/v1/chat/completions", ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeAzure, ChannelBaseUrl: upstream.URL, ApiKey: "account-A", HeadersOverride: override}}
+				adaptor := &openai.Adaptor{}
+				var resp *http.Response
+				var err error
+				if form {
+					resp, err = channel.DoFormRequest(adaptor, c, info, strings.NewReader(`{}`))
+				} else {
+					resp, err = channel.DoApiRequest(adaptor, c, info, strings.NewReader(`{}`))
+				}
+				if resp != nil {
+					resp.Body.Close()
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				if rule == "fixed" || rule == "explicit-passthrough" {
+					require.Error(t, err)
+					assert.Empty(t, keys)
+					assert.Zero(t, accountpool.State(c).Sends)
+				} else {
+					require.NoError(t, err)
+					assert.Equal(t, []string{"account-A"}, keys, "wildcard and regex must exclude client credentials")
+				}
+			})
+		}
+	}
+}
+
+func TestRelayAccountPoolNativeCacheRefresh(t *testing.T) {
+	testRelayAccountPoolHTTP(t, "cache-legacy", "failover")
 }

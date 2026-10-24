@@ -2,6 +2,7 @@ package channel
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/accountpool"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -123,4 +125,62 @@ func TestLatePooledRealtimeRejectsBeforeDial(t *testing.T) {
 	assert.Equal(t, types.ErrorCodeUnsupportedOperation, apiErr.GetErrorCode())
 	assert.Zero(t, sends.Load())
 	assert.Zero(t, accountpool.State(c).Sends)
+}
+
+func TestPooledRedirectsCannotHideAdditionalSends(t *testing.T) {
+	settings := system_setting.GetFetchSetting()
+	previous := *settings
+	settings.AllowPrivateIp, settings.AllowedPorts = true, []string{"1-65535"}
+	t.Cleanup(func() { *settings = previous })
+	service.InitHttpClient()
+	for _, status := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		for _, scenario := range []string{"budget-zero", "unsafe-veto", "legacy"} {
+			t.Run(fmt.Sprintf("%d/%s", status, scenario), func(t *testing.T) {
+				var initial, redirected atomic.Int32
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path == "/redirected" {
+						redirected.Add(1)
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					initial.Add(1)
+					w.Header().Set("Location", "/redirected")
+					w.Header().Set("X-Should-Retry", "false")
+					w.WriteHeader(status)
+				}))
+				defer upstream.Close()
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				path := "/v1/chat/completions"
+				if scenario == "unsafe-veto" {
+					path = "/v1/edits"
+				}
+				c.Request = httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+				defer common.CleanupBodyStorage(c)
+				state := accountpool.State(c)
+				state.MaxSends = 1 // RetryTimes=0 means the initial send only.
+				if scenario == "unsafe-veto" {
+					state.MaxSends = 2 // The veto must survive even when another send is budgeted.
+				}
+				if scenario != "legacy" {
+					state.Selected = &model.UpstreamAccountSelection{}
+				}
+				req, err := http.NewRequest(http.MethodPost, upstream.URL, strings.NewReader(`{}`))
+				require.NoError(t, err)
+				resp, err := DoRequest(c, req, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}})
+				require.NoError(t, err)
+				defer resp.Body.Close()
+				assert.Equal(t, int32(1), initial.Load())
+				if scenario == "legacy" {
+					assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+					assert.Equal(t, int32(1), redirected.Load(), "ordinary clients retain redirect behavior")
+					return
+				}
+				assert.Equal(t, status, resp.StatusCode)
+				assert.Zero(t, redirected.Load())
+				assert.Equal(t, 1, state.Sends)
+				assert.True(t, state.Veto)
+				assert.False(t, accountpool.RetryAllowed(c))
+			})
+		}
+	}
 }

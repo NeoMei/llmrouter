@@ -276,9 +276,8 @@ func updateSunoTasks(ctx context.Context, channelId int, taskIds []string, taskM
 		}
 		return err
 	}
-	if !ch.ChannelInfo.IsMultiKey {
-		return updateSunoAccountTasks(ctx, ch, taskIds, taskM)
-	}
+	// Persisted ownership survives channel mode changes. Unowned legacy
+	// single-key tasks still resolve locally without requiring pool tables.
 	groups := map[string][]string{}
 	for _, taskID := range taskIds {
 		task := taskM[taskID]

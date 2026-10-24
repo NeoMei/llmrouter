@@ -205,3 +205,25 @@ func TestUpstreamAccountQuotaMembershipIsPersistedAuthority(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, resolved.QuotaGroup)
 }
+
+func TestUpstreamAccountExactScopesSQLite(t *testing.T) {
+	db, second, refs := accountPoolFixture(t)
+	testAccountExactScopes(t, db, second, refs[0], time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC))
+}
+
+func TestUpstreamAccountRejectsCaseAliasedMemberHandle(t *testing.T) {
+	db, _, _ := accountPoolFixture(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC)
+	ref := UpstreamAccountRef{PoolID: "channel:17", MemberID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", ChannelID: 17, KeyIndex: 3}
+	require.NoError(t, db.Create(&UpstreamAccountMember{MemberID: ref.MemberID, PoolID: accountStateID("pool:" + ref.PoolID), IdentityDigest: strings.Repeat("a", 64)}).Error)
+	aliased := ref
+	aliased.MemberID = strings.ToUpper(ref.MemberID)
+	require.Error(t, SetUpstreamAccountQuotaGroup(ctx, db, aliased, "unrelated-account", now))
+	require.Error(t, SetUpstreamAccountPaused(ctx, db, aliased, true, now))
+	_, err := SelectUpstreamAccount(ctx, db, []UpstreamAccountRef{ref}, UpstreamAccountScope{}, nil, now)
+	require.NoError(t, err)
+	var member UpstreamAccountMember
+	require.NoError(t, db.First(&member, "member_id = ?", ref.MemberID).Error)
+	assert.Empty(t, member.QuotaGroup)
+}

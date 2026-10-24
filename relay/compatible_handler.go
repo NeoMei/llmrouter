@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -116,6 +117,34 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		info.UpstreamRequestBodySize = storage.Size()
 		info.UpstreamRequestGetBody = storage.NewReader
 		requestBody = common.ReaderOnly(storage)
+		if info.ModelRouteId > 0 && strings.HasPrefix(c.Request.URL.Path, "/compatible-mode/v1/") {
+			// Catalog authority selected the actual model. Preserve all other raw
+			// fields, including vendor numeric lexemes, on this compatible alias.
+			raw, err := storage.Bytes()
+			if err != nil {
+				return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			}
+			var fields map[string]json.RawMessage
+			if err := common.Unmarshal(raw, &fields); err != nil {
+				return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			}
+			fields["model"], err = common.Marshal(request.Model)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			}
+			raw, err = common.Marshal(fields)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			}
+			body, size, getBody, closer, err := relaycommon.NewOutboundJSONBody(raw)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			}
+			defer closer.Close()
+			info.UpstreamRequestBodySize, info.UpstreamRequestGetBody = size, getBody
+			requestBody = body
+		}
+
 	} else {
 		convertedRequest, err := adaptor.ConvertOpenAIRequest(c, info, request)
 		if err != nil {

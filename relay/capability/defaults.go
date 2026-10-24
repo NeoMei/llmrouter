@@ -135,7 +135,7 @@ func defaultDeclarations() []Declaration {
 	)
 	support([]int{constant.ChannelTypeOpenAI}, OperationImageVariation)
 
-	support([]int{constant.ChannelTypeCohere, constant.ChannelTypeJina, constant.ChannelTypeSiliconFlow}, OperationRerankCreate)
+	support([]int{constant.ChannelTypeCohere, constant.ChannelTypeJina, constant.ChannelTypeSiliconFlow, constant.ChannelTypeAli}, OperationRerankCreate)
 
 	support([]int{
 		constant.ChannelTypeKling,

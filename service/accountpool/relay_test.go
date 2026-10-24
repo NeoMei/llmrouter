@@ -212,3 +212,26 @@ func TestPooledResourcesAllowOnlyPreparedTextHistory(t *testing.T) {
 		})
 	}
 }
+
+// Persist a scoped rate refusal via one public path and select via its alias.
+// The same account must remain cooled, while other operation/model scopes work.
+func TestKnowledgeAliasesShareAccountCooldown(t *testing.T) {
+	for _, paths := range [][2]string{{"/v1/rerank", "/api/v1/services/rerank/text-rerank/text-rerank"}, {"/v1/embeddings", "/compatible-mode/v1/embeddings"}, {"/v1/chat/completions", "/compatible-mode/v1/chat/completions"}} {
+		t.Run(paths[1], func(t *testing.T) {
+			c, db, refs := relayPoolFixture(t)
+			c.Request.URL.Path = paths[0]
+			scope := RequestScope(c, "fixed-model")
+			selected, err := model.SelectUpstreamAccount(c.Request.Context(), db, refs[:1], scope, nil, time.Now())
+			require.NoError(t, err)
+			Prepare(c, db, selected, scope)
+			require.NoError(t, BeginSend(c))
+			require.NoError(t, Observe(c, &http.Response{StatusCode: 429, Header: http.Header{"Retry-After": []string{"120"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"code":"rate_limit_exceeded"}}`))}, nil))
+			c.Request.URL.Path = paths[1]
+			assert.Equal(t, scope, RequestScope(c, "fixed-model"))
+			_, err = model.SelectUpstreamAccount(c.Request.Context(), db, refs[:1], RequestScope(c, "fixed-model"), nil, time.Now())
+			require.Error(t, err)
+			_, err = model.SelectUpstreamAccount(c.Request.Context(), db, refs[:1], RequestScope(c, "other-model"), nil, time.Now())
+			require.NoError(t, err)
+		})
+	}
+}

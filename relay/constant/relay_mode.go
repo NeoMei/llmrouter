@@ -56,6 +56,10 @@ const (
 )
 
 func Path2RelayMode(path string) int {
+	path = strings.TrimPrefix(path, "/compatible-mode")
+	if path == "/api/v1/services/rerank/text-rerank/text-rerank" {
+		return RelayModeRerank
+	}
 	relayMode := RelayModeUnknown
 	if strings.HasPrefix(path, "/v1/chat/completions") || strings.HasPrefix(path, "/pg/chat/completions") {
 		relayMode = RelayModeChatCompletions

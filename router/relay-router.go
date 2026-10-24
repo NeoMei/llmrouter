@@ -160,6 +160,15 @@ func SetRelayRouter(router *gin.Engine) {
 		})
 	}
 
+	compatible := router.Group("/compatible-mode/v1")
+	compatible.Use(middleware.RouteTag("relay"), middleware.SystemPerformanceCheck(), middleware.TokenOrUserAuth(), middleware.DistributedRateLimit(), middleware.ModelRequestRateLimit(), middleware.Distribute())
+	compatible.POST("/embeddings", func(c *gin.Context) { controller.Relay(c, types.RelayFormatEmbedding) })
+	compatible.POST("/chat/completions", func(c *gin.Context) { controller.Relay(c, types.RelayFormatOpenAI) })
+
+	nativeRerank := router.Group("/api/v1/services/rerank/text-rerank")
+	nativeRerank.Use(middleware.RouteTag("relay"), middleware.SystemPerformanceCheck(), middleware.TokenOrUserAuth(), middleware.AliNativeRerank(), middleware.DistributedRateLimit(), middleware.ModelRequestRateLimit(), middleware.Distribute())
+	nativeRerank.POST("/text-rerank", func(c *gin.Context) { controller.Relay(c, types.RelayFormatRerank) })
+
 	relayMjRouter := router.Group("/mj")
 	relayMjRouter.Use(middleware.RouteTag("relay"))
 	relayMjRouter.Use(middleware.SystemPerformanceCheck())

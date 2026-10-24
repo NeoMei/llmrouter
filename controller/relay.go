@@ -596,7 +596,7 @@ func prepareRouteCandidateForAttempt(c *gin.Context, info *relaycommon.RelayInfo
 		}
 	}
 	contract := info.ModelCapabilities
-	if len(contract.InputModalities) > 0 || len(contract.OutputModalities) > 0 || len(contract.Operations) > 0 || contract.Streaming != nil || contract.Async != nil || contract.MediaLimits != nil || contract.EmbeddingSpace != nil {
+	if common.GetContextKeyBool(c, constant.ContextKeyAliNativeRerank) || len(contract.InputModalities) > 0 || len(contract.OutputModalities) > 0 || len(contract.Operations) > 0 || contract.Streaming != nil || contract.Async != nil || contract.MediaLimits != nil || contract.EmbeddingSpace != nil {
 		// Arbitrary patch operations/templates can inject media or replace an
 		// admitted model/input. Only direct, finite sampling scalars are known
 		// to preserve this contract before final-body media admission exists.

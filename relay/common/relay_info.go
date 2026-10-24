@@ -565,6 +565,9 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		info.RelayMode = c.GetInt("relay_mode")
 	}
 
+	if strings.HasPrefix(c.Request.URL.Path, "/compatible-mode/v1/") {
+		info.RequestURLPath = strings.TrimPrefix(info.RequestURLPath, "/compatible-mode")
+	}
 	if strings.HasPrefix(c.Request.URL.Path, "/pg") {
 		info.IsPlayground = true
 		info.RequestURLPath = strings.TrimPrefix(info.RequestURLPath, "/pg")

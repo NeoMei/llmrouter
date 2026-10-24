@@ -1,10 +1,12 @@
 package ali
 
 import (
-	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
@@ -16,8 +18,7 @@ import (
 func ConvertRerankRequest(request dto.RerankRequest) *AliRerankRequest {
 	returnDocuments := request.ReturnDocuments
 	if returnDocuments == nil {
-		t := true
-		returnDocuments = &t
+		returnDocuments = common.GetPointer(true)
 	}
 	return &AliRerankRequest{
 		Model: request.Model,
@@ -40,7 +41,7 @@ func RerankHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayI
 	service.CloseResponseBodyGracefully(resp)
 
 	var aliResponse AliRerankResponse
-	err = json.Unmarshal(responseBody, &aliResponse)
+	err = common.Unmarshal(responseBody, &aliResponse)
 	if err != nil {
 		return types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError), nil
 	}
@@ -54,6 +55,20 @@ func RerankHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayI
 		}, resp.StatusCode), nil
 	}
 
+	if common.GetContextKeyBool(c, constant.ContextKeyAliNativeRerank) {
+		var wire struct {
+			Usage struct {
+				TotalTokens *int `json:"total_tokens"`
+			} `json:"usage"`
+		}
+		if err := common.Unmarshal(responseBody, &wire); err != nil {
+			return types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway), nil
+		}
+		if wire.Usage.TotalTokens == nil || *wire.Usage.TotalTokens < 0 {
+			return types.NewOpenAIError(fmt.Errorf("native rerank response requires nonnegative usage.total_tokens"), types.ErrorCodeBadResponseBody, http.StatusBadGateway), nil
+		}
+	}
+
 	usage := dto.Usage{
 		PromptTokens:     aliResponse.Usage.TotalTokens,
 		CompletionTokens: 0,
@@ -64,7 +79,7 @@ func RerankHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayI
 		Usage:   usage,
 	}
 
-	jsonResponse, err := json.Marshal(rerankResponse)
+	jsonResponse, err := common.Marshal(rerankResponse)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
 	}

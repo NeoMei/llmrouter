@@ -62,16 +62,16 @@ assert.Equal(t, wantMember, selected.Ref.MemberID)
 
 **Interfaces:** Existing route `Metadata` JSON gains optional `input_modalities`, `output_modalities`, `operations`, `streaming`, `async`, `media_limits` and `embedding_space` with fixed model/version/provider/declared dimensions and input semantics. Absent fields preserve legacy behavior; explicit declarations are enforced before preconsume/send. Expose normalized capability metadata through the authorized catalog only.
 
-- [ ] Add fixtures rejecting image input for explicitly text-only routes, invalid/negative limits, advertised unsupported operation, and embedding route candidates with different model/declared vector-space identities. Metadata omission remains backwards compatible.
-- [ ] Add exact embedding fixtures for requested 1024 dimensions, a batch with stable indices, invalid dimensions, missing/duplicated indices, nonfinite values and declared-space mismatch. Preserve existing numeric output and usage billing.
+- [x] Add fixtures rejecting image input for explicitly text-only routes, invalid/negative limits, advertised unsupported operation, and embedding route candidates with different model/declared vector-space identities. Metadata omission remains backwards compatible.
+- [x] Add exact embedding fixtures for requested 1024 dimensions, a batch with stable indices, invalid dimensions, missing/duplicated indices, nonfinite values and declared-space mismatch. Preserve existing numeric output and usage billing.
 
 ```go
 assert.Equal(t, []int{0, 1}, []int{result.Data[0].Index, result.Data[1].Index})
 require.Len(t, result.Data[0].Embedding, 1024)
 ```
 
-- [ ] Implement typed metadata normalization and operation/media admission, including video/audio-in-chat distinctions and bounds. Retain auth/pricing model identity and routing scope. Actual opaque provider weight revision cannot be inferred: enforce declared configuration and known version, never fabricate proof.
-- [ ] Run metadata/embedding/tool-policy and controller regressions; root reviews and commits.
+- [x] Implement typed metadata normalization and operation/media admission, including video/audio-in-chat distinctions and bounds. Retain auth/pricing model identity and routing scope. Actual opaque provider weight revision cannot be inferred: enforce declared configuration and known version, never fabricate proof.
+- [x] Run metadata/embedding/tool-policy and controller regressions; root reviews and commits.
 
 ## Task 4: SuperWagie Embedding, Ali rerank and compatible routes
 

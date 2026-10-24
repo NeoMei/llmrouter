@@ -16,6 +16,13 @@ import (
 // no URL is fetched and no capability is guessed from a model name.
 func ValidateModelAdmission(c *gin.Context, info *relaycommon.RelayInfo, m dto.ModelCapabilities, operation capability.Operation) error {
 	facts, mediaErr := InspectRequestMedia(info.Request)
+	if _, audio := info.Request.(*dto.AudioRequest); audio && c.GetString(DomesticASRDataKey) != "" {
+		fact, err := DecodeMediaFact("audio", c.GetString(DomesticASRDataKey))
+		if err != nil {
+			return err
+		}
+		facts = append(facts, fact)
+	}
 	if mediaErr != nil {
 		return mediaErr
 	}

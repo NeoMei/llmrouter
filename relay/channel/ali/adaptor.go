@@ -136,6 +136,9 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
 	req.Set("Authorization", "Bearer "+info.ApiKey)
+	if info.RelayMode == constant.RelayModeAudioTranscription {
+		req.Set("Content-Type", "application/json")
+	}
 	if info.IsStream {
 		req.Set("X-DashScope-SSE", "enable")
 	}
@@ -234,6 +237,9 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 }
 
 func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
+	if info.RelayMode == constant.RelayModeAudioTranscription {
+		return convertTranscription(c, request)
+	}
 	return nil, channel.ErrUnsupportedOperation
 }
 
@@ -246,6 +252,9 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 }
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
+	if info.RelayMode == constant.RelayModeAudioTranscription {
+		return transcriptionResponse(c, resp, info)
+	}
 	if info.UpstreamModelName == "qwen3.8-omni-flash" {
 		storage, validationErr := validateUnderstandingResponse(resp, info)
 		if validationErr != nil {

@@ -125,6 +125,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			common.SetContextKey(c, constant.ContextKeyRelayFailed, true)
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
 			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
+			if c.Writer.Written() && c.GetString("binary_stream_content_type") != "" {
+				c.Abort()
+				return
+			}
 			if relayFormat != types.RelayFormatOpenAIRealtime && c.Writer.Written() && strings.HasPrefix(c.Writer.Header().Get("Content-Type"), "text/event-stream") {
 				writeRelayStreamError(c, relayFormat, newAPIError)
 				return
@@ -554,6 +558,9 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 	priceData, err := helper.ModelPriceHelper(c, info, promptTokens, meta)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest), types.ErrOptionWithSkipRetry())
+	}
+	if err := helper.ValidateNativeSpeechPrice(c, info); err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 	}
 	if priceData.FreeModel {
 		logger.LogInfo(c, fmt.Sprintf("模型 %s 免费，跳过预扣费", info.OriginModelName))
@@ -1057,6 +1064,15 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 	if len(resolved) > 0 {
 		_, operation, operationErr := capability.ResolveRequest(c.Request.Method, c.Request.URL.Path)
 		if operationErr == nil {
+			if _, audio := relayInfo.Request.(*dto.AudioRequest); audio {
+				selectedChannel, err := model.GetChannelById(resolved[0].ChannelID, true)
+				if err != nil {
+					return types.NewError(err, types.ErrorCodeGetChannelFailed)
+				}
+				if err := helper.ValidateDomesticAudio(c, relayInfo, selectedChannel.Type, resolved[0].UpstreamModel, resolved[0].BillingModel); err != nil {
+					return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+				}
+			}
 			if err := helper.ValidateModelAdmission(c, relayInfo, resolved[0].Capabilities, operation); err != nil {
 				return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 			}
@@ -1274,7 +1290,7 @@ func expectedWireForFormat(format types.RelayFormat) modelcatalog.WireProtocol {
 // and legacy selection. Mapping is evaluated on a private copy so pricing and
 // the original request retain their existing authoritative identities.
 func validateDomesticUnderstandingForAttempt(c *gin.Context, info *relaycommon.RelayInfo, channel *model.Channel) *types.NewAPIError {
-	if channel.Type != constant.ChannelTypeAli {
+	if channel.Type != constant.ChannelTypeAli && channel.Type != constant.ChannelTypeMiniMax {
 		return nil
 	}
 	selectedModel := info.ResolvedModelNameOrOrigin()
@@ -1285,6 +1301,25 @@ func validateDomesticUnderstandingForAttempt(c *gin.Context, info *relaycommon.R
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
 		selectedModel = mapped.UpstreamModelName
+	}
+	if _, audio := info.Request.(*dto.AudioRequest); audio {
+		if channel.Type == constant.ChannelTypeMiniMax {
+			voice := info.Request.(*dto.AudioRequest).Voice
+			// Public system IDs explicitly documented by the selected native API.
+			// Cloned/generated/unknown IDs need an owner binding not implemented here.
+			switch voice {
+			case "English_Graceful_Lady", "English_Insightful_Speaker", "English_radiant_girl", "English_Persuasive_Man", "Chinese (Mandarin)_Lyrical_Voice", "Chinese (Mandarin)_HK_Flight_Attendant":
+			default:
+				return types.NewErrorWithStatusCode(errors.New("speech requires a verified public system voice; custom voice ownership is unavailable"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			}
+		}
+		if err := helper.ValidateDomesticAudio(c, info, channel.Type, selectedModel, info.BillingModelNameOrOrigin()); err != nil {
+			return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		if channel.GetSetting().PassThroughBodyEnabled || model_setting.GetGlobalSettings().PassThroughRequestEnabled || len(channel.GetParamOverride()) > 0 {
+			return types.NewErrorWithStatusCode(errors.New("native audio requires typed requests without parameter overrides"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		return nil
 	}
 	if err := helper.ValidateDomesticUnderstanding(info.Request, channel.Type, selectedModel); err != nil {
 		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())

@@ -24,25 +24,29 @@ const lifecycleKey = string(constant.ContextKeyAccountPoolLifecycle)
 // Lifecycle is request-local. Selection is prepared before send; Sent is a value
 // copy taken immediately before the transport, never reconstructed from key indexes.
 type Lifecycle struct {
-	DB                  *gorm.DB
-	Candidates          []model.UpstreamAccountRef
-	Random              bool
-	Sends               int
-	MaxSends            int
-	ResourceRejected    bool
-	RetryChannel        *model.Channel
-	TaskBound           bool
-	Selected            *model.UpstreamAccountSelection
-	Sent                *model.UpstreamAccountSelection
-	Owner               *model.UpstreamAccountRef
-	Scope               model.UpstreamAccountScope
-	Excluded            map[string]bool
-	Veto                bool
-	Unsafe              bool
-	ResponsesBackground bool
-	Uncertain           bool
-	UnsafeResponse      bool
-	PersistenceError    error
+	NativeAllStatuses          bool
+	NativeAllStatusesRequested bool
+	NativeRequested            bool
+	NativePending              bool
+	DB                         *gorm.DB
+	Candidates                 []model.UpstreamAccountRef
+	Random                     bool
+	Sends                      int
+	MaxSends                   int
+	ResourceRejected           bool
+	RetryChannel               *model.Channel
+	TaskBound                  bool
+	Selected                   *model.UpstreamAccountSelection
+	Sent                       *model.UpstreamAccountSelection
+	Owner                      *model.UpstreamAccountRef
+	Scope                      model.UpstreamAccountScope
+	Excluded                   map[string]bool
+	Veto                       bool
+	Unsafe                     bool
+	ResponsesBackground        bool
+	Uncertain                  bool
+	UnsafeResponse             bool
+	PersistenceError           error
 }
 
 func State(c *gin.Context) *Lifecycle {
@@ -86,10 +90,16 @@ func BeginSend(c *gin.Context) error {
 		}
 	}
 	state.Veto, state.Uncertain, state.UnsafeResponse = false, false, false
+	state.NativeAllStatuses = state.NativeAllStatusesRequested
+	state.NativeAllStatusesRequested = false
+	state.NativePending = state.NativeRequested
+	state.NativeRequested = false
 	state.Sent = nil
 	_, operation, operationErr := capability.ResolveRequest(c.Request.Method, c.Request.URL.Path)
 	state.Unsafe = operation == capability.OperationResponseCreate && state.ResponsesBackground
 	switch operation {
+	case capability.OperationAudioSpeech:
+		state.Unsafe = state.NativePending
 	case capability.OperationImageGeneration, capability.OperationImageEdit, capability.OperationImageVariation,
 		capability.OperationVideoCreate, capability.OperationVideoRemix,
 		capability.OperationMidjourneySubmit, capability.OperationSunoSubmit:
@@ -126,6 +136,10 @@ func Observe(c *gin.Context, response *http.Response, transportErr error) error 
 	state.Veto = strings.EqualFold(strings.TrimSpace(response.Header.Get("X-Should-Retry")), "false")
 	state.Uncertain = state.Unsafe && response.StatusCode >= 500
 	state.UnsafeResponse = state.Unsafe && response.StatusCode != http.StatusUnauthorized && response.StatusCode != http.StatusTooManyRequests
+	if state.NativePending && (state.NativeAllStatuses || response.StatusCode >= 200 && response.StatusCode < 300) {
+		return nil
+	}
+	state.NativePending = false
 	if state.Sent == nil {
 		return nil
 	}

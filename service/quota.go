@@ -307,7 +307,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	}
 
 	billingModel := relayInfo.OriginModelName
-	if relayInfo.ChannelType == constant.ChannelTypeAli && relayInfo.UpstreamModelName == "qwen3.8-omni-flash" {
+	if relayInfo.ActualUsageValidated {
 		billingModel = relayInfo.BillingModelNameOrOrigin()
 	}
 	tokenName := ctx.GetString("token_name")
@@ -351,9 +351,9 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		logContent = fmt.Sprintf("模型价格 %.2f，分组倍率 %.2f", modelPrice, groupRatio)
 	}
 
-	validatedOmniUsage := relayInfo.ActualUsageValidated && relayInfo.ChannelType == constant.ChannelTypeAli && relayInfo.UpstreamModelName == "qwen3.8-omni-flash"
+	validatedActualUsage := relayInfo.ActualUsageValidated
 	// record all the consume log even if quota is 0
-	if totalTokens == 0 && !validatedOmniUsage {
+	if totalTokens == 0 && !validatedActualUsage {
 		// in this case, must be some error happened
 		// we cannot just return, because we may have to return the pre-consumed quota
 		quota = 0
@@ -361,7 +361,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, relayInfo.OriginModelName, relayInfo.FinalPreConsumedQuota))
 	} else {
-		if totalTokens == 0 && validatedOmniUsage && !usePrice {
+		if totalTokens == 0 && validatedActualUsage && !usePrice {
 			quota = 0
 		}
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
@@ -384,6 +384,14 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		other["reasoning_output"] = usage.CompletionTokenDetails.ReasoningTokens
 		other["non_audio_input_billing_units"] = textInputTokens
 		other["non_audio_output_billing_units"] = textOutTokens
+	}
+	if relayInfo.ActualAudioSeconds != nil {
+		other["actual_audio_seconds"] = *relayInfo.ActualAudioSeconds
+	}
+	if relayInfo.NativeUsageCharacters != nil {
+		other["native_usage_unit"] = "characters"
+		other["native_usage_characters"] = *relayInfo.NativeUsageCharacters
+		other["native_pricing"] = "configured_per_request"
 	}
 	if tieredResult != nil {
 		InjectTieredBillingInfo(other, relayInfo, tieredResult)

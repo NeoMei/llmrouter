@@ -184,7 +184,11 @@ func SetEventStreamHeaders(c *gin.Context) {
 	// 设置标志，表示头部已经设置过
 	c.Set("event_stream_headers_set", true)
 
-	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	if contentType := c.GetString("binary_stream_content_type"); contentType != "" {
+		c.Writer.Header().Set("Content-Type", contentType)
+	} else {
+		c.Writer.Header().Set("Content-Type", "text/event-stream")
+	}
 	c.Writer.Header().Set("Cache-Control", "no-cache")
 	c.Writer.Header().Set("Connection", "keep-alive")
 	c.Writer.Header().Set("Transfer-Encoding", "chunked")

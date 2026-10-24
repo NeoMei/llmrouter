@@ -63,6 +63,9 @@ type ResponsesUsageInfo struct {
 
 type ChannelMeta struct {
 	// ActualUsageValidated is set only by a pre-output actual-usage gate.
+	NativeUsageCharacters *int64
+	ActualAudioSeconds    *float64
+
 	ActualUsageValidated bool
 	ChannelType          int
 	ChannelId            int

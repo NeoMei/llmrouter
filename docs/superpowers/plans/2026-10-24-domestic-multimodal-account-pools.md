@@ -135,9 +135,9 @@ Execution split: 9a implements safe complete admin pool snapshots/actions with p
 
 **Interfaces:** Admin-only list/recovery/quota-group actions use stable opaque member handles, return available/cooling/isolated/paused counts, reason codes and retry times. Model metadata fields expose input/output, supported operation/constraints and embedding-space configuration. Never return fingerprint/key or provider error body. Respect existing ChannelRead/Operate/Write permissions and audit.
 
-- [ ] Red API permission tests and frontend user behavior tests cover status counts, expiry display, resume mutation failure, loading/empty/error states, quota group edits and embedding identity validation. User-facing strings use English-source i18n keys.
-- [ ] Read relevant UI/i18n project skills and `web/AGENTS.md`; reuse existing UI components and API/query patterns, with no new dependency unless demonstrably required.
-- [ ] Run affected test files, `bun run typecheck`, changed-file lint/format and i18n checks. Root reviews and commits.
+- [x] Red API permission tests and frontend user behavior tests cover status counts, expiry display, resume mutation failure, loading/empty/error states, quota group edits and embedding identity validation. User-facing strings use English-source i18n keys.
+- [x] Read relevant UI/i18n project skills and `web/AGENTS.md`; reuse existing UI components and API/query patterns, with no new dependency unless demonstrably required.
+- [x] Run affected test files, `bun run typecheck`, changed-file lint/format and i18n checks. Root reviews and commits.
 
 ## Task 10: Cross-database, SuperWagie contract certification and local delivery
 

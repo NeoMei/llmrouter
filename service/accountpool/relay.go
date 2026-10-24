@@ -155,6 +155,9 @@ func Observe(c *gin.Context, response *http.Response, transportErr error) error 
 		if response.Body != nil && response.StatusCode >= 400 {
 			prefix, readErr := io.ReadAll(io.LimitReader(response.Body, 8193))
 			response.Body = &restoredBody{Reader: io.MultiReader(bytes.NewReader(prefix), response.Body), closer: response.Body}
+			if readErr == nil && c.GetInt("channel_type") == constant.ChannelTypeAli {
+				input, _ = AliFailure(response.StatusCode, response.Header.Get("Retry-After"), prefix)
+			}
 			if readErr == nil && len(prefix) <= 8192 && openAIAccountErrors(c.GetInt("channel_type")) {
 				var envelope struct {
 					Error struct {
@@ -178,7 +181,11 @@ func Observe(c *gin.Context, response *http.Response, transportErr error) error 
 			SetUnavailableHeader(c, &model.UpstreamAccountUnavailable{RetryAt: decision.Failure.RetryAt})
 		}
 		if decision.Failure.Kind != "" {
-			err = model.RecordUpstreamAccountFailure(ctx, state.DB, *state.Sent, state.Scope, decision.Failure, now)
+			scope := state.Scope
+			if decision.SharedQuota {
+				scope = model.UpstreamAccountScope{QuotaGroup: state.Sent.Ref.QuotaGroup}
+			}
+			err = model.RecordUpstreamAccountFailure(ctx, state.DB, *state.Sent, scope, decision.Failure, now)
 		}
 	}
 	state.PersistenceError = err

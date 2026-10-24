@@ -135,7 +135,7 @@ func defaultDeclarations() []Declaration {
 		OperationImageGeneration, OperationImageEdit,
 	)
 	support([]int{constant.ChannelTypeOpenAI}, OperationImageVariation)
-	support([]int{constant.ChannelTypeAli}, OperationAudioTranscription)
+	support([]int{constant.ChannelTypeAli}, OperationAudioTranscription, OperationImageGeneration, OperationImageEdit)
 	support([]int{constant.ChannelTypeMiniMax}, OperationAudioSpeech)
 
 	support([]int{constant.ChannelTypeCohere, constant.ChannelTypeJina, constant.ChannelTypeSiliconFlow, constant.ChannelTypeAli}, OperationRerankCreate)

@@ -15,7 +15,9 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/accountpool"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -63,7 +65,7 @@ var syncModels = []string{
 }
 
 func isSyncImageModel(modelName string) bool {
-	return model_setting.IsSyncImageModel(modelName)
+	return modelName == "qwen-image-2.0" || modelName == "qwen-image-2.0-pro" || model_setting.IsSyncImageModel(modelName)
 }
 
 func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dto.GeminiChatRequest) (any, error) {
@@ -110,15 +112,15 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		case constant.RelayModeResponses:
 			fullRequestURL = fmt.Sprintf("%s/api/v2/apps/protocols/compatible-mode/v1/responses", info.ChannelBaseUrl)
 		case constant.RelayModeImagesGenerations:
-			if isSyncImageModel(info.OriginModelName) {
+			if isSyncImageModel(info.UpstreamModelName) {
 				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/multimodal-generation/generation", info.ChannelBaseUrl)
 			} else {
 				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/text2image/image-synthesis", info.ChannelBaseUrl)
 			}
 		case constant.RelayModeImagesEdits:
-			if isOldWanModel(info.OriginModelName) {
+			if isOldWanModel(info.UpstreamModelName) {
 				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/image2image/image-synthesis", info.ChannelBaseUrl)
-			} else if isWanModel(info.OriginModelName) {
+			} else if isWanModel(info.UpstreamModelName) {
 				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/image-generation/generation", info.ChannelBaseUrl)
 			} else {
 				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/multimodal-generation/generation", info.ChannelBaseUrl)
@@ -146,14 +148,14 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 		req.Set("X-DashScope-Plugin", c.GetString("plugin"))
 	}
 	if info.RelayMode == constant.RelayModeImagesGenerations {
-		if isSyncImageModel(info.OriginModelName) {
+		if isSyncImageModel(info.UpstreamModelName) {
 
 		} else {
 			req.Set("X-DashScope-Async", "enable")
 		}
 	}
 	if info.RelayMode == constant.RelayModeImagesEdits {
-		if isWanModel(info.OriginModelName) {
+		if isWanModel(info.UpstreamModelName) {
 			req.Set("X-DashScope-Async", "enable")
 		}
 		req.Set("Content-Type", "application/json")
@@ -185,8 +187,18 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 }
 
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
+	if value, ok := c.Get(helper.DomesticImageRequestKey); ok {
+		native := value.(helper.DomesticImageRequest)
+		if native.Model != request.Model {
+			return nil, errors.New("validated image model changed")
+		}
+		a.IsSyncImageModel = true
+		accountpool.DeferAllStatusNativeOutcome(c)
+		return native, nil
+	}
+
 	if info.RelayMode == constant.RelayModeImagesGenerations {
-		if isSyncImageModel(info.OriginModelName) {
+		if isSyncImageModel(info.UpstreamModelName) {
 			a.IsSyncImageModel = true
 		}
 		aliRequest, err := oaiImage2AliImageRequest(info, request, a.IsSyncImageModel)
@@ -195,11 +207,11 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		}
 		return aliRequest, nil
 	} else if info.RelayMode == constant.RelayModeImagesEdits {
-		if isOldWanModel(info.OriginModelName) {
+		if isOldWanModel(info.UpstreamModelName) {
 			return oaiFormEdit2WanxImageEdit(c, info, request)
 		}
-		if isSyncImageModel(info.OriginModelName) {
-			if isWanModel(info.OriginModelName) {
+		if isSyncImageModel(info.UpstreamModelName) {
+			if isWanModel(info.UpstreamModelName) {
 				a.IsSyncImageModel = false
 			} else {
 				a.IsSyncImageModel = true

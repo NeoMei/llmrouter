@@ -24,6 +24,7 @@ import (
 type textQuotaSummary struct {
 	PromptTokens             int
 	CompletionTokens         int
+	NativeImages             int
 	TotalTokens              int
 	CacheTokens              int
 	CacheCreationTokens      int
@@ -60,7 +61,7 @@ type textQuotaSummary struct {
 // hasBillableUsage includes Claude cache tokens, which are reported separately
 // from ordinary input/output counts, and separately charged tool calls.
 func (s *textQuotaSummary) hasBillableUsage() bool {
-	return s.TotalTokens > 0 ||
+	return s.NativeImages > 0 || s.TotalTokens > 0 ||
 		(s.IsClaudeUsageSemantic && (s.CacheTokens > 0 || s.CacheCreationTokens > 0 || s.CacheCreationTokens5m > 0 || s.CacheCreationTokens1h > 0)) ||
 		!s.ToolCallSurchargeQuota.IsZero()
 }
@@ -215,6 +216,9 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	summary.PromptTokens = usage.PromptTokens
 	summary.CompletionTokens = usage.CompletionTokens
 	summary.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	if relayInfo.ChannelMeta != nil && relayInfo.NativeUsageImages != nil {
+		summary.NativeImages = *relayInfo.NativeUsageImages
+	}
 	summary.CacheTokens = usage.PromptTokensDetails.CachedTokens
 	summary.CacheCreationTokens = usage.PromptTokensDetails.CacheCreationTokensTotal()
 	summary.CacheCreationTokens5m = usage.ClaudeCacheCreation5mTokens
@@ -431,6 +435,11 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other["usage_semantic"] = "anthropic"
 	} else {
 		other = GenerateTextOtherInfo(ctx, relayInfo, summary.ModelRatio, summary.GroupRatio, summary.CompletionRatio, summary.CacheTokens, summary.CacheRatio, summary.ModelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
+	}
+	if relayInfo.ChannelMeta != nil && relayInfo.NativeUsageImages != nil {
+		other["native_usage_unit"] = "images"
+		other["native_usage_images"] = *relayInfo.NativeUsageImages
+		other["native_pricing"] = "configured_per_image"
 	}
 	appendUsageBillingPathForLog(other, common.GetContextKeyBool(ctx, constant.ContextKeyLocalCountTokens), originUsage)
 	if adminRejectReason != "" {

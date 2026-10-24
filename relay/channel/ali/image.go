@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 
@@ -284,6 +285,9 @@ func responseAli2OpenAIImage(c *gin.Context, response *AliResponse, originBody [
 }
 
 func aliImageHandler(a *Adaptor, c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.Usage) {
+	if _, ok := c.Get(helper.DomesticImageRequestKey); ok {
+		return qwenImageHandler(c, resp, info)
+	}
 	responseFormat := c.GetString("response_format")
 
 	var aliTaskResponse AliResponse

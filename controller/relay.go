@@ -559,6 +559,9 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest), types.ErrOptionWithSkipRetry())
 	}
+	if err := helper.ValidateNativeImagePrice(c, info); err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
 	if err := helper.ValidateNativeSpeechPrice(c, info); err != nil {
 		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 	}
@@ -1301,6 +1304,19 @@ func validateDomesticUnderstandingForAttempt(c *gin.Context, info *relaycommon.R
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
 		selectedModel = mapped.UpstreamModelName
+	}
+	if _, image := info.Request.(*dto.ImageRequest); image && channel.Type == constant.ChannelTypeAli {
+		if err := helper.ValidateDomesticImage(c, info, channel.Type, selectedModel, info.BillingModelNameOrOrigin()); err != nil {
+			return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		overrides := channel.GetParamOverride()
+		if merged, applied := service.ApplyChannelAffinityOverrideTemplate(c, overrides); applied {
+			overrides = merged
+		}
+		if channel.GetSetting().PassThroughBodyEnabled || model_setting.GetGlobalSettings().PassThroughRequestEnabled || len(overrides) > 0 || len(common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride)) > 0 || len(channel.GetHeaderOverride()) > 0 || len(common.GetContextKeyStringMap(c, constant.ContextKeyChannelHeaderOverride)) > 0 {
+			return types.NewErrorWithStatusCode(errors.New("native images require typed requests without parameter overrides"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		return nil
 	}
 	if _, audio := info.Request.(*dto.AudioRequest); audio {
 		if channel.Type == constant.ChannelTypeMiniMax {

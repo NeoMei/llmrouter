@@ -177,19 +177,65 @@ func (s *OCRBillingStore) Inspect(ctx context.Context, id string) (OCRJournal, e
 	return j, err
 }
 
-// Every OCR financial transaction takes the same cross-job coordination lock:
-// job, then its user funding owner, then subscription/wallet and token rows.
-// This prevents wallet-first and subscription-first fallback from acquiring
-// User and UserSubscription in opposite orders. Unscoped is accounting-only;
-// admission and submission independently validate current authorization.
+// User-only phases must not subsequently acquire a subscription row. Funding
+// phases use ocrLockJobForFunding, matching legacy subscription -> User writers.
 func ocrLockJobAndFundingOwner(tx *gorm.DB, id string) (*OCRJob, error) {
 	j, err := ocrLockJob(tx, id)
 	if err != nil {
 		return j, err
 	}
+	return j, lockOCRFundingOwner(tx, j.UserID)
+}
+func lockOCRFundingOwner(tx *gorm.DB, userID int) error {
 	var owner User
-	err = lockForUpdate(tx).Unscoped().Select("id").First(&owner, j.UserID).Error
-	return j, err
+	return lockForUpdate(tx).Unscoped().Select("id").First(&owner, userID).Error
+}
+
+// Freeze and lock the subscription candidates before User. Exact primary-key
+// reads revalidate rows after concurrent invalidation/deletion; selection uses
+// this snapshot exclusively and never locks a new candidate after User.
+func ocrLockJobForFunding(tx *gorm.DB, id string) (*OCRJob, []UserSubscription, error) {
+	j, err := ocrLockJob(tx, id)
+	if err != nil {
+		return j, nil, err
+	}
+	var subs []UserSubscription
+	if j.Decision != "" {
+		var reserve OCROperation
+		result := tx.Where("job_id = ? AND kind = ? AND phase = ? AND state = ?", id, "subscription", "reserve", "applied").Limit(1).Find(&reserve)
+		if result.Error != nil {
+			return j, nil, result.Error
+		}
+		if result.RowsAffected > 0 {
+			var original UserSubscription
+			if err := lockForUpdate(tx).First(&original, reserve.OwnerID).Error; err != nil {
+				return j, nil, err
+			}
+		}
+	} else if j.Quota > 0 && j.Preference != "wallet_only" {
+		var candidates []UserSubscription
+		now := time.Now().Unix()
+		if err := tx.Where("user_id = ? AND status = ? AND end_time > ?", j.UserID, "active", now).Order("end_time asc, id asc").Find(&candidates).Error; err != nil {
+			return j, nil, err
+		}
+		for _, candidate := range candidates {
+			var current UserSubscription
+			err := lockForUpdate(tx).First(&current, candidate.Id).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+			if err != nil {
+				return j, nil, err
+			}
+			if current.UserId == j.UserID && current.Status == "active" && current.EndTime > now {
+				subs = append(subs, current)
+			}
+		}
+	}
+	if err := lockOCRFundingOwner(tx, j.UserID); err != nil {
+		return j, nil, err
+	}
+	return j, subs, nil
 }
 func ocrLockJob(tx *gorm.DB, id string) (*OCRJob, error) {
 	var j OCRJob
@@ -222,7 +268,7 @@ func ocrApplied(tx *gorm.DB, op *OCROperation) error {
 
 // Subscription selection and journal are in the caller's transaction. This does
 // not call the legacy preconsume helper, whose transaction is independently owned.
-func reserveOCRSubscriptionTx(tx *gorm.DB, j *OCRJob) (bool, error) {
+func reserveOCRSubscriptionTx(tx *gorm.DB, j *OCRJob, subs []UserSubscription) (bool, error) {
 	op, err := ocrOperation(tx, j.ID, "subscription", "reserve")
 	if err != nil {
 		return false, err
@@ -230,10 +276,6 @@ func reserveOCRSubscriptionTx(tx *gorm.DB, j *OCRJob) (bool, error) {
 	if op.State == "applied" {
 		j.Funding = "subscription"
 		return true, nil
-	}
-	var subs []UserSubscription
-	if err := lockForUpdate(tx).Where("user_id = ? AND status = ? AND end_time > ?", j.UserID, "active", time.Now().Unix()).Order("end_time asc, id asc").Find(&subs).Error; err != nil {
-		return false, err
 	}
 	overflow := true
 	for _, sub := range subs {
@@ -355,7 +397,7 @@ func (s *OCRBillingStore) Reserve(ctx context.Context, id string) (OCRJob, error
 		return s.reserveRedis(ctx, id)
 	}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		j, err := ocrLockJobAndFundingOwner(tx, id)
+		j, subs, err := ocrLockJobForFunding(tx, id)
 		if err != nil {
 			return err
 		}
@@ -368,7 +410,7 @@ func (s *OCRBillingStore) Reserve(ctx context.Context, id string) (OCRJob, error
 		if j.Quota == 0 {
 			j.Funding = "wallet"
 		} else if j.Preference == "subscription_only" || j.Preference == "subscription_first" {
-			selected, err := reserveOCRSubscriptionTx(tx, j)
+			selected, err := reserveOCRSubscriptionTx(tx, j, subs)
 			if err != nil {
 				return err
 			}
@@ -390,7 +432,7 @@ func (s *OCRBillingStore) Reserve(ctx context.Context, id string) (OCRJob, error
 				if e := tx.Save(op).Error; e != nil {
 					return e
 				}
-				selected, e := reserveOCRSubscriptionTx(tx, j)
+				selected, e := reserveOCRSubscriptionTx(tx, j, subs)
 				if e != nil {
 					return e
 				}
@@ -660,7 +702,7 @@ func (s *OCRBillingStore) Finish(ctx context.Context, id, outcome string) (OCRJo
 		return s.refundRedis(ctx, id)
 	}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		j, err := ocrLockJobAndFundingOwner(tx, id)
+		j, _, err := ocrLockJobForFunding(tx, id)
 		if err != nil {
 			return err
 		}

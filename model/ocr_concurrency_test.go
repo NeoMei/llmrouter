@@ -83,7 +83,7 @@ func TestOCRMixedPreferenceFundingLocks(t *testing.T) {
 			a.Price = 300
 			subscription, err := s.CreateIntent(ctx, a)
 			require.NoError(t, err)
-			walletLocked, subscriptionApproachingUser := make(chan struct{}), make(chan struct{})
+			walletLocked, subscriptionApproachingFunding := make(chan struct{}), make(chan struct{})
 			var walletOnce, subscriptionOnce sync.Once
 			require.NoError(t, s.db.Callback().Query().After("gorm:query").Register("ocr_wallet_lock_barrier", func(tx *gorm.DB) {
 				if tx.Statement.Context.Value(ocrRaceContextKey{}) != "wallet" {
@@ -93,7 +93,7 @@ func TestOCRMixedPreferenceFundingLocks(t *testing.T) {
 					walletOnce.Do(func() {
 						close(walletLocked)
 						select {
-						case <-subscriptionApproachingUser:
+						case <-subscriptionApproachingFunding:
 						case <-ctx.Done():
 							tx.AddError(ctx.Err())
 						}
@@ -104,8 +104,8 @@ func TestOCRMixedPreferenceFundingLocks(t *testing.T) {
 				if tx.Statement.Context.Value(ocrRaceContextKey{}) != "subscription" {
 					return
 				}
-				if _, ok := tx.Statement.Dest.(*User); ok {
-					subscriptionOnce.Do(func() { close(subscriptionApproachingUser) })
+				if _, ok := tx.Statement.Dest.(*UserSubscription); ok {
+					subscriptionOnce.Do(func() { close(subscriptionApproachingFunding) })
 				}
 			}))
 			walletResult := make(chan error, 1)
@@ -423,6 +423,146 @@ func TestOCRResetRefundSerialization(t *testing.T) {
 					journal, err := s.Inspect(ctx, j.ID)
 					require.NoError(t, err)
 					assert.Equal(t, "refunded", journal.Job.BillingState)
+				})
+			}
+		})
+	}
+}
+
+func TestOCRLegacySubscriptionGroupMutationLocks(t *testing.T) {
+	for _, dialect := range []string{"mysql57", "postgres96"} {
+		t.Run(dialect, func(t *testing.T) {
+			for _, mutation := range []string{"invalidate", "delete", "expire"} {
+				t.Run(mutation, func(t *testing.T) {
+					for _, operation := range []string{"reserve", "refund"} {
+						if mutation == "expire" && operation == "reserve" {
+							continue
+						}
+						t.Run(operation, func(t *testing.T) {
+							s, a, sub, _ := ocrConcurrentFixture(t, dialect)
+							a.Preference = "subscription_only"
+							require.NoError(t, s.db.Model(&User{}).Where("id = ?", a.UserID).Update("group", "ocr-upgraded").Error)
+							require.NoError(t, s.db.Model(&sub).Updates(map[string]any{"upgrade_group": "ocr-upgraded", "downgrade_group": "default", "prev_user_group": "default"}).Error)
+							ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+							defer cancel()
+							j, err := s.CreateIntent(ctx, a)
+							require.NoError(t, err)
+							if operation == "refund" {
+								_, err = s.Reserve(ctx, j.ID)
+								require.NoError(t, err)
+							}
+							var otherExpired UserSubscription
+							if mutation == "expire" {
+								require.NoError(t, s.db.Model(&sub).Update("end_time", time.Now().Add(-time.Minute).Unix()).Error)
+								otherExpired = UserSubscription{UserId: a.UserID, PlanId: sub.PlanId, AmountTotal: 1000, AmountUsed: 17, AllowWalletOverflow: true, Status: "active", EndTime: time.Now().Add(-2 * time.Minute).Unix(), UpgradeGroup: "ocr-upgraded", DowngradeGroup: "default"}
+								require.NoError(t, s.db.Create(&otherExpired).Error)
+								t.Cleanup(func() { require.NoError(t, s.db.Delete(&otherExpired).Error) })
+							}
+							oldDB, oldType, oldRedis := DB, common.MainDatabaseType(), common.RedisEnabled
+							DB = s.db.WithContext(context.WithValue(ctx, ocrRaceContextKey{}, "legacy"))
+							if dialect == "postgres96" {
+								common.SetMainDatabaseType(common.DatabaseTypePostgreSQL)
+							} else {
+								common.SetMainDatabaseType(common.DatabaseTypeMySQL)
+							}
+							initCol()
+							common.RedisEnabled = false
+							t.Cleanup(func() { DB = oldDB; common.SetMainDatabaseType(oldType); common.RedisEnabled = oldRedis; initCol() })
+							legacySubLocked, ocrApproachingSub := make(chan struct{}), make(chan struct{})
+							var legacyOnce, ocrOnce sync.Once
+							require.NoError(t, s.db.Callback().Query().After("gorm:query").Register("ocr_legacy_sub_locked", func(tx *gorm.DB) {
+								if tx.Statement.Context.Value(ocrRaceContextKey{}) != "legacy" {
+									return
+								}
+								if _, ok := tx.Statement.Clauses["FOR"]; !ok {
+									return
+								}
+								if _, ok := tx.Statement.Dest.(*UserSubscription); ok {
+									legacyOnce.Do(func() {
+										close(legacySubLocked)
+										select {
+										case <-ocrApproachingSub:
+										case <-ctx.Done():
+											tx.AddError(ctx.Err())
+										}
+									})
+								}
+							}))
+							require.NoError(t, s.db.Callback().Update().After("gorm:update").Register("ocr_legacy_expiry_locked", func(tx *gorm.DB) {
+								if mutation != "expire" || tx.Statement.Context.Value(ocrRaceContextKey{}) != "legacy" || tx.Statement.Table != "user_subscriptions" {
+									return
+								}
+								legacyOnce.Do(func() {
+									close(legacySubLocked)
+									select {
+									case <-ocrApproachingSub:
+									case <-ctx.Done():
+										tx.AddError(ctx.Err())
+									}
+								})
+							}))
+							require.NoError(t, s.db.Callback().Query().Before("gorm:query").Register("ocr_approaches_legacy_sub", func(tx *gorm.DB) {
+								if tx.Statement.Context.Value(ocrRaceContextKey{}) != "ocr" {
+									return
+								}
+								if _, ok := tx.Statement.Clauses["FOR"]; !ok {
+									return
+								}
+								switch tx.Statement.Dest.(type) {
+								case *UserSubscription, *[]UserSubscription:
+									ocrOnce.Do(func() { close(ocrApproachingSub) })
+								}
+							}))
+							legacyResult := make(chan error, 1)
+							go func() {
+								var e error
+								switch mutation {
+								case "invalidate":
+									_, e = AdminInvalidateUserSubscription(sub.Id)
+								case "delete":
+									_, e = AdminDeleteUserSubscription(sub.Id)
+								case "expire":
+									_, e = ExpireDueSubscriptions(200)
+								}
+								legacyResult <- e
+							}()
+							select {
+							case <-legacySubLocked:
+							case <-ctx.Done():
+								t.Fatal(ctx.Err())
+							}
+							callCtx := context.WithValue(ctx, ocrRaceContextKey{}, "ocr")
+							var out OCRJob
+							var ocrErr error
+							if operation == "reserve" {
+								out, ocrErr = s.Reserve(callCtx, j.ID)
+							} else {
+								out, ocrErr = s.Finish(callCtx, j.ID, "cancel")
+							}
+							legacyErr := <-legacyResult
+							require.NoError(t, legacyErr, "the actual legacy mutation must not deadlock")
+							if operation == "reserve" {
+								require.ErrorIs(t, ocrErr, ErrOCRInsufficient)
+								ocrBalances(t, s, a, 1000, 1000, 0)
+							} else if mutation == "delete" {
+								require.ErrorIs(t, ocrErr, gorm.ErrRecordNotFound)
+								assert.NotEqual(t, "refunded", out.BillingState)
+								ocrBalances(t, s, a, 1000, 900, 100)
+							} else {
+								require.NoError(t, ocrErr)
+								assert.Equal(t, "refunded", out.BillingState)
+								ocrBalances(t, s, a, 1000, 1000, 0)
+							}
+							var user User
+							require.NoError(t, s.db.First(&user, a.UserID).Error)
+							assert.Equal(t, "default", user.Group)
+							if mutation == "expire" {
+								require.NoError(t, s.db.First(&otherExpired, otherExpired.Id).Error)
+								assert.Equal(t, "expired", otherExpired.Status)
+								assert.EqualValues(t, 17, otherExpired.AmountUsed)
+							}
+						})
+					}
 				})
 			}
 		})

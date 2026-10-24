@@ -328,7 +328,7 @@ func (s *OCRBillingStore) reserveRedis(ctx context.Context, id string) (OCRJob, 
 		return snap.Job, err
 	}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		j, err := ocrLockJobAndFundingOwner(tx, id)
+		j, subs, err := ocrLockJobForFunding(tx, id)
 		if err != nil {
 			return err
 		}
@@ -340,7 +340,7 @@ func (s *OCRBillingStore) reserveRedis(ctx context.Context, id string) (OCRJob, 
 		}
 		j.Funding = "wallet"
 		if j.Quota > 0 && (j.Preference == "subscription_first" || j.Preference == "subscription_only") {
-			selected, err := reserveOCRSubscriptionTx(tx, j)
+			selected, err := reserveOCRSubscriptionTx(tx, j, subs)
 			if err != nil {
 				return err
 			}
@@ -356,14 +356,14 @@ func (s *OCRBillingStore) reserveRedis(ctx context.Context, id string) (OCRJob, 
 			err = s.applyOCRCacheOperation(ctx, id, "wallet", "reserve")
 			if errors.Is(err, ErrOCRInsufficient) && snap.Job.Preference == "wallet_first" {
 				err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-					j, err := ocrLockJobAndFundingOwner(tx, id)
+					j, subs, err := ocrLockJobForFunding(tx, id)
 					if err != nil {
 						return err
 					}
 					if j.Decision != "" {
 						return ErrOCRConflict
 					}
-					selected, err := reserveOCRSubscriptionTx(tx, j)
+					selected, err := reserveOCRSubscriptionTx(tx, j, subs)
 					if err != nil {
 						return err
 					}
@@ -425,7 +425,7 @@ func (s *OCRBillingStore) refundRedis(ctx context.Context, id string) (OCRJob, e
 		}
 		if op.Kind == "subscription" {
 			err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-				_, err := ocrLockJobAndFundingOwner(tx, id)
+				_, _, err := ocrLockJobForFunding(tx, id)
 				if err != nil {
 					return err
 				}

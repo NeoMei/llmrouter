@@ -18,8 +18,11 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 	pdfmodel "github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
+	"slices"
 )
 
 const (
@@ -203,4 +206,82 @@ func (s *Service) fetch(ctx context.Context, raw string, limit int64) ([]byte, e
 		return nil, errors.New("OCR download byte bound exceeded")
 	}
 	return data, nil
+}
+
+// validateContract uses measured immutable media, before any financial intent.
+func validateContract(in validatedInput, c dto.ModelCapabilities) error {
+	if c.EmbeddingSpace != nil {
+		return errors.New("OCR does not support embedding space contract")
+	}
+	if c.Async != nil && !*c.Async {
+		return errors.New("OCR model does not allow asynchronous jobs")
+	}
+	if c.Operations != nil && !slices.Contains(c.Operations, OCROperation) {
+		return errors.New("OCR operation not allowed")
+	}
+	modality, format := "image", "png"
+	switch in.contentType {
+	case "application/pdf":
+		modality, format = "document", "pdf"
+	case "image/jpeg":
+		format = "jpeg"
+	}
+	if c.InputModalities != nil && !slices.Contains(c.InputModalities, modality) {
+		return errors.New("OCR input modality not allowed")
+	}
+	if c.OutputModalities != nil && !slices.Contains(c.OutputModalities, "text") {
+		return errors.New("OCR text output not allowed")
+	}
+	l := c.MediaLimits
+	if l == nil {
+		return nil
+	}
+	if l.MaxRequestBytes != nil && int64(len(in.data)) > *l.MaxRequestBytes {
+		return errors.New("OCR model byte limit exceeded")
+	}
+	if l.MaxPages != nil && in.pages > *l.MaxPages {
+		return errors.New("OCR model page limit exceeded")
+	}
+	if len(l.Formats) > 0 && !slices.Contains(l.Formats, format) && !slices.Contains(l.Formats, in.contentType) && !(format == "jpeg" && slices.Contains(l.Formats, "jpg")) {
+		return errors.New("OCR model format not allowed")
+	}
+	if modality == "image" {
+		if l.MaxImages != nil && *l.MaxImages < 1 {
+			return errors.New("OCR model image limit exceeded")
+		}
+		if l.MaxPixels != nil {
+			cfg, _, err := image.DecodeConfig(bytes.NewReader(in.data))
+			if err != nil || int64(cfg.Width)*int64(cfg.Height) > *l.MaxPixels {
+				return errors.New("OCR model pixel limit exceeded")
+			}
+		}
+	}
+	return nil
+}
+
+// CheckTarget checks current eligibility without sending or reserving money.
+func (s *Service) CheckTarget(ctx context.Context, userID, channelID int, target Target, billingModel string) error {
+	ch, err := s.channel(ctx, channelID, target.ProfileID)
+	if err != nil {
+		return err
+	}
+	if target.ProfileID != 0 {
+		key, err := s.keys.GetBYOKKey(ctx, userID, target.ProfileID)
+		if err != nil {
+			return err
+		}
+		if key != "" {
+			return errors.New("OCR BYOK owned jobs unsupported")
+		}
+	}
+	var refs []model.UpstreamAccountRef
+	if target.ProfileID != 0 {
+		refs, _, _, err = s.keys.PlatformAccounts(ctx, target.ProfileID, ch.Id)
+	} else {
+		refs, _, err = model.ChannelAccountRefs(ctx, s.db, ch)
+	}
+	if err != nil {
+		return err
+	}
+	return model.CheckUpstreamAccounts(ctx, s.db, refs, model.UpstreamAccountScope{Operation: OCROperation, Model: billingModel}, time.Now())
 }

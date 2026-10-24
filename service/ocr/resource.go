@@ -119,8 +119,13 @@ func (s *Service) preserveResults(ctx context.Context, j model.OCRJob) error {
 	published := false
 	defer func() {
 		if !published {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
 			for _, r := range resources {
-				_ = s.objects.Delete(context.WithoutCancel(ctx), r.ObjectKey)
+				if cleanupCtx.Err() != nil {
+					break
+				}
+				_ = s.objects.Delete(cleanupCtx, r.ObjectKey)
 			}
 		}
 	}()

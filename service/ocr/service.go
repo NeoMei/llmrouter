@@ -10,6 +10,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel/gateway"
 	"github.com/QuantumNous/new-api/relay/channel/paddleocr"
@@ -21,6 +22,8 @@ import (
 
 const OCROperation = "ocr.jobs.create"
 
+var ErrInvalidInput = errors.New("invalid OCR input")
+
 // Target is trusted, authorized catalog data, never decoded directly from a
 // client. Cross-channel fallback after intent creation is deliberately forbidden.
 type Target struct {
@@ -28,9 +31,11 @@ type Target struct {
 	ProfileID      int
 }
 type CreateRequest struct {
-	Admission AuthorizedAdmission
-	Target    Target
-	Input     Input
+	Capabilities   dto.ModelCapabilities
+	RequestedModel string
+	Admission      AuthorizedAdmission
+	Target         Target
+	Input          Input
 	// Remaining actual-send budget after any caller activity. 0 uses RetryTimes+1.
 	MaxAttempts  int
 	DisableRetry bool
@@ -123,7 +128,10 @@ type JobStatus struct {
 func (s *Service) Create(ctx context.Context, req CreateRequest) (JobStatus, error) {
 	input, err := s.validateInput(ctx, req.Input)
 	if err != nil {
-		return JobStatus{}, err
+		return JobStatus{}, errors.Join(ErrInvalidInput, err)
+	}
+	if err = validateContract(input, req.Capabilities); err != nil {
+		return JobStatus{}, errors.Join(ErrInvalidInput, err)
 	}
 	targetURL, err := url.Parse(req.Target.JobsURL)
 	if err != nil || targetURL.Host == "" || targetURL.User != nil || targetURL.RawQuery != "" || targetURL.Fragment != "" || (targetURL.Scheme != "https" && targetURL.Scheme != "http") || !strings.HasSuffix(targetURL.Path, "/api/v2/ocr/jobs") || req.Target.Model == "" {
@@ -154,7 +162,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (JobStatus, err
 	if err != nil {
 		return JobStatus{}, err
 	}
-	execution := model.OCRExecution{JobsURL: req.Target.JobsURL, Model: req.Target.Model, ProfileID: req.Target.ProfileID, InputDigest: input.digest, InputPages: input.pages, MaxAttempts: maxAttempts}
+	execution := model.OCRExecution{RequestedModel: req.RequestedModel, JobsURL: req.Target.JobsURL, Model: req.Target.Model, ProfileID: req.Target.ProfileID, InputDigest: input.digest, InputPages: input.pages, MaxAttempts: maxAttempts}
 	if err = s.billing.ConfigureOCRSubmission(ctx, j.ID, execution); err != nil {
 		return JobStatus{}, err
 	}
@@ -420,6 +428,9 @@ func (s *Service) Status(ctx context.Context, id string, userID, tokenID int) (J
 			return JobStatus{}, err
 		}
 		if j.ResultResourceID == "" {
+			if j.CreatedAt+int64(s.retention/time.Second) <= s.now().Unix() {
+				return JobStatus{}, model.ErrOCRGrant
+			}
 			if err = s.preserveResults(ctx, j); err != nil {
 				return JobStatus{}, err
 			}

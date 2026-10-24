@@ -39,6 +39,7 @@ func defaultDeclarations() []Declaration {
 		}
 	}
 
+	support([]int{constant.ChannelTypePaddleOCR, constant.ChannelTypeGateway}, OperationOCRCreate, OperationOCRRetrieve, OperationOCRResource)
 	allChannels := constant.AllChannelTypes()
 	support(allChannels, OperationModelList, OperationModelRetrieve, OperationModelDelete)
 

@@ -3,6 +3,7 @@ package constant
 type EndpointType string
 
 const (
+	EndpointTypePaddleOCR             EndpointType = "paddleocr_jobs"
 	EndpointTypeOpenAI                EndpointType = "openai"
 	EndpointTypeOpenAIResponse        EndpointType = "openai-response"
 	EndpointTypeOpenAIResponseCompact EndpointType = "openai-response-compact"

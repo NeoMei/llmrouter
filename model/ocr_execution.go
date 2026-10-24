@@ -10,12 +10,13 @@ import (
 // OCRExecution is frozen before reservation. Channel/model/group/price remain
 // the funding contract; post-reservation cross-channel fallback is unsupported.
 type OCRExecution struct {
-	JobsURL     string `json:"jobs_url"`
-	Model       string `json:"model"`
-	ProfileID   int    `json:"profile_id"`
-	InputPages  int    `json:"input_pages"`
-	InputDigest string `json:"input_digest"`
-	MaxAttempts int    `json:"max_attempts"`
+	RequestedModel string `json:"requested_model,omitempty"`
+	JobsURL        string `json:"jobs_url"`
+	Model          string `json:"model"`
+	ProfileID      int    `json:"profile_id"`
+	InputPages     int    `json:"input_pages"`
+	InputDigest    string `json:"input_digest"`
+	MaxAttempts    int    `json:"max_attempts"`
 }
 type OCRSubmissionAttempt struct {
 	ClaimID        string            `json:"claim_id"`

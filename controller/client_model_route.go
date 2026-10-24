@@ -98,6 +98,9 @@ func ListClientModelRouteOptions(c *gin.Context) {
 	for _, channel := range channels {
 		models := normalizeClientModelOptionNames(channel.GetModels())
 		wires := make([]string, 0, 3)
+		if registry.Supports(channel.Type, capability.ProtocolPaddleOCR, capability.OperationOCRCreate) {
+			wires = append(wires, string(modelcatalog.WirePaddleOCR))
+		}
 		if registry.Supports(channel.Type, capability.ProtocolOpenAI, capability.OperationResponseCreate) {
 			wires = append(wires, string(modelcatalog.WireResponses))
 		}
@@ -354,6 +357,10 @@ func validateTargetWiresForChannel(target model.ClientModelTarget, channelType i
 	registry := capability.DefaultRegistry()
 	for _, raw := range wires {
 		switch modelcatalog.WireProtocol(strings.ToLower(strings.TrimSpace(raw))) {
+		case modelcatalog.WirePaddleOCR:
+			if !registry.Supports(channelType, capability.ProtocolPaddleOCR, capability.OperationOCRCreate) {
+				return fmt.Errorf("target %d channel does not support PaddleOCR jobs", target.Id)
+			}
 		case modelcatalog.WireResponses:
 			if !registry.Supports(channelType, capability.ProtocolOpenAI, capability.OperationResponseCreate) {
 				return fmt.Errorf("target %d channel does not support responses", target.Id)

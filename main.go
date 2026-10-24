@@ -29,6 +29,7 @@ import (
 	"github.com/QuantumNous/new-api/router"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/QuantumNous/new-api/service/ocr"
 	_ "github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
@@ -61,6 +62,9 @@ func main() {
 	}
 
 	defer func() {
+		if err := controller.OCRRuntime.Close(); err != nil {
+			common.SysError("OCR runtime close failed")
+		}
 		err := model.CloseDB()
 		if err != nil {
 			common.FatalLog("failed to close database: " + err.Error())
@@ -345,6 +349,10 @@ func InitResources() error {
 	// pool). Each component is optional and degrades gracefully when unset; see
 	// gateway.InitFromEnv. Needs both the SQL DB and Redis client.
 	gateway.InitFromEnv(common.RDB, model.DB)
+	controller.OCRRuntime, err = ocr.RuntimeFromEnv(model.DB)
+	if err != nil {
+		return fmt.Errorf("OCR runtime initialization: %w", err)
+	}
 
 	perfmetrics.Init()
 

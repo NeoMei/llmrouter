@@ -110,6 +110,17 @@ func ResolveUpstreamAccountRef(ctx context.Context, db *gorm.DB, poolID string, 
 // caller. Exclusion and credential/authorization filtering are request-owned.
 // The transaction ends before the caller performs any network I/O.
 func SelectUpstreamAccount(ctx context.Context, db *gorm.DB, refs []UpstreamAccountRef, scope UpstreamAccountScope, excluded map[string]bool, now time.Time) (UpstreamAccountSelection, error) {
+	return selectUpstreamAccount(ctx, db, refs, scope, excluded, now, true)
+}
+
+// CheckUpstreamAccounts checks live eligibility under the same pool/group locks
+// without advancing member rotation. It is admission only, never a send receipt.
+func CheckUpstreamAccounts(ctx context.Context, db *gorm.DB, refs []UpstreamAccountRef, scope UpstreamAccountScope, now time.Time) error {
+	_, err := selectUpstreamAccount(ctx, db, refs, scope, nil, now, false)
+	return err
+}
+
+func selectUpstreamAccount(ctx context.Context, db *gorm.DB, refs []UpstreamAccountRef, scope UpstreamAccountScope, excluded map[string]bool, now time.Time, rotate bool) (UpstreamAccountSelection, error) {
 	if len(refs) == 0 {
 		return UpstreamAccountSelection{}, &UpstreamAccountUnavailable{}
 	}
@@ -206,6 +217,9 @@ func SelectUpstreamAccount(ctx context.Context, db *gorm.DB, refs []UpstreamAcco
 			if earliest > 0 {
 				unavailable.RetryAt = time.Unix(0, earliest).UTC()
 			}
+			return nil
+		}
+		if !rotate {
 			return nil
 		}
 		return tx.Model(&UpstreamAccountMember{}).Where("pool_id = ? AND member_id = ?", accountStateID("pool:"+poolID), selected.Ref.MemberID).Update("last_selected", revision).Error

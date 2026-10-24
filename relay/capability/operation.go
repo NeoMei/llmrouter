@@ -10,16 +10,20 @@ import (
 type Protocol string
 
 const (
-	ProtocolOpenAI   Protocol = "openai"
-	ProtocolClaude   Protocol = "claude"
-	ProtocolGemini   Protocol = "gemini"
-	ProtocolTask     Protocol = "task"
-	ProtocolInternal Protocol = "internal"
+	ProtocolPaddleOCR Protocol = "paddleocr_jobs"
+	ProtocolOpenAI    Protocol = "openai"
+	ProtocolClaude    Protocol = "claude"
+	ProtocolGemini    Protocol = "gemini"
+	ProtocolTask      Protocol = "task"
+	ProtocolInternal  Protocol = "internal"
 )
 
 type Operation string
 
 const (
+	OperationOCRCreate           Operation = "ocr.jobs.create"
+	OperationOCRRetrieve         Operation = "ocr.jobs.retrieve"
+	OperationOCRResource         Operation = "ocr.resources.retrieve"
 	OperationModelList           Operation = "models.list"
 	OperationModelRetrieve       Operation = "models.retrieve"
 	OperationModelDelete         Operation = "models.delete"
@@ -51,6 +55,7 @@ const (
 )
 
 var allOperations = []Operation{
+	OperationOCRCreate, OperationOCRRetrieve, OperationOCRResource,
 	OperationModelList, OperationModelRetrieve, OperationModelDelete,
 	OperationChatCreate, OperationCompletionCreate, OperationResponseCreate, OperationResponseCompact,
 	OperationRealtimeConnect, OperationClaudeMessageCreate, OperationEmbeddingCreate,
@@ -68,6 +73,8 @@ func AllOperations() []Operation {
 
 func ProtocolForOperation(operation Operation) Protocol {
 	switch operation {
+	case OperationOCRCreate, OperationOCRRetrieve, OperationOCRResource:
+		return ProtocolPaddleOCR
 	case OperationClaudeMessageCreate:
 		return ProtocolClaude
 	case OperationGeminiGenerate, OperationGeminiEmbed:
@@ -111,6 +118,11 @@ func PublicRouteManifest() []RouteManifestEntry {
 }
 
 var publicRoutes = []routeSpec{
+	route(http.MethodPost, `^/api/v2/ocr/jobs$`, OperationOCRCreate),
+	route(http.MethodGet, `^/api/v2/ocr/jobs/[^/]+$`, OperationOCRRetrieve),
+	route(http.MethodPost, `^/v1/ocr$`, OperationOCRCreate),
+	route(http.MethodGet, `^/v1/ocr/[^/]+$`, OperationOCRRetrieve),
+	route(http.MethodGet, `^/api/ocr/jobs/[^/]+/resources/[^/]+$`, OperationOCRResource),
 	route(http.MethodGet, `^/v1/models$`, OperationModelList),
 	route(http.MethodGet, `^/v1/models/[^/]+$`, OperationModelRetrieve),
 	route(http.MethodDelete, `^/v1/models/[^/]+$`, OperationModelDelete),

@@ -78,6 +78,9 @@ func TestUpstreamAccountConfiguredDatabases(t *testing.T) {
 				require.NoError(t, err)
 			}
 			scope := UpstreamAccountScope{Operation: "speech", Model: "m"}
+			// Admission probes use the same live scope checks without consuming rotation.
+			require.NoError(t, CheckUpstreamAccounts(ctx, db, refs, scope, now))
+			require.NoError(t, CheckUpstreamAccounts(ctx, second, refs, scope, now))
 			var first UpstreamAccountSelection
 			for i := range refs {
 				sent, err := SelectUpstreamAccount(ctx, handles[i%2], refs, scope, nil, now)
@@ -92,6 +95,7 @@ func TestUpstreamAccountConfiguredDatabases(t *testing.T) {
 			_, err := SelectUpstreamAccount(ctx, second, refs[:1], scope, nil, now)
 			var unavailable *UpstreamAccountUnavailable
 			require.ErrorAs(t, err, &unavailable)
+			require.ErrorAs(t, CheckUpstreamAccounts(ctx, db, refs[:1], scope, now), &unavailable)
 			_, err = SelectUpstreamAccount(ctx, db, refs[:1], UpstreamAccountScope{Operation: "text"}, nil, now)
 			require.NoError(t, err)
 			_, err = SelectUpstreamAccount(ctx, second, refs[:1], scope, nil, now.Add(time.Minute))

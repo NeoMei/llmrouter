@@ -120,7 +120,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
 		response := StreamResponseClaude2OpenAI(&claudeResponse)
 
-		if !FormatClaudeResponseInfo(&claudeResponse, response, claudeInfo) {
+		if !FormatClaudeResponseInfo(&claudeResponse, response, claudeInfo) || response == nil {
 			return nil
 		}
 
@@ -133,20 +133,23 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 }
 
 func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo) {
-	if claudeInfo.Usage.PromptTokens == 0 {
-		//上游出错
-	}
-	if claudeInfo.Usage.CompletionTokens == 0 || !claudeInfo.Done {
+	// Claude input excludes cache reads and writes; a fully cached prompt
+	// legitimately has zero ordinary input. Zero output with no content is also
+	// valid (for example, an upstream refusal).
+	missingInputUsage := buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage).PromptTokens == 0
+	missingOutputUsage := claudeInfo.Usage.CompletionTokens == 0 && claudeInfo.ResponseText.Len() > 0
+	estimated := missingInputUsage || missingOutputUsage || !claudeInfo.Done
+	if estimated {
 		if common.DebugEnabled {
 			common.SysLog("claude response usage is not complete, maybe upstream error")
 		}
 		// 只补缺失字段，不整份覆盖——保留 message_start 已拿到的 cache 字段
 		fallback := service.ResponseText2Usage(c, claudeInfo.ResponseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-		if claudeInfo.Usage.CompletionTokens == 0 ||
+		if missingOutputUsage ||
 			(!claudeInfo.Done && fallback.CompletionTokens > claudeInfo.Usage.CompletionTokens) {
 			claudeInfo.Usage.CompletionTokens = fallback.CompletionTokens
 		}
-		if claudeInfo.Usage.PromptTokens == 0 {
+		if missingInputUsage {
 			claudeInfo.Usage.PromptTokens = fallback.PromptTokens
 		}
 		claudeInfo.Usage.TotalTokens = claudeInfo.Usage.PromptTokens + claudeInfo.Usage.CompletionTokens
@@ -154,8 +157,15 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 	if claudeInfo.Usage != nil {
 		claudeInfo.Usage.UsageSemantic = "anthropic"
 	}
-	if claudeInfo.Usage != nil && claudeInfo.Usage.BillingUsage == nil {
-		claudeInfo.Usage.BillingUsage = dto.NewClaudeMessagesBillingUsage(buildMessageDeltaPatchUsage(nil, claudeInfo))
+	if claudeInfo.Usage != nil {
+		// Stream parsing snapshots upstream usage before fallback counting. Refresh
+		// canonical billing usage so settlement sees the finalized token counts.
+		finalUsage := buildMessageDeltaPatchUsage(nil, claudeInfo)
+		finalUsage.OutputTokens = claudeInfo.Usage.CompletionTokens
+		claudeInfo.Usage.BillingUsage = dto.NewClaudeMessagesBillingUsage(finalUsage)
+		if claudeInfo.Usage.BillingUsage != nil {
+			claudeInfo.Usage.BillingUsage.Estimated = estimated
+		}
 	}
 
 	if info.RelayFormat == types.RelayFormatClaude {

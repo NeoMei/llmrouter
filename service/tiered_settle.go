@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service/relayconvert"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
@@ -85,8 +86,13 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	cc1h := float64(0)
 
 	if usage.UsageSemantic == "anthropic" {
-		cc1h = float64(usage.ClaudeCacheCreation1hTokens)
-		cc5m = float64(usage.ClaudeCacheCreation5mTokens)
+		// Treat unlabelled cache-write tokens as the default five-minute TTL.
+		tokens5m, tokens1h := relayconvert.NormalizeCacheCreationSplit(
+			usage.PromptTokensDetails.CacheCreationTokensTotal(),
+			usage.ClaudeCacheCreation5mTokens,
+			usage.ClaudeCacheCreation1hTokens,
+		)
+		cc5m, cc1h = float64(tokens5m), float64(tokens1h)
 	}
 
 	img := float64(usage.PromptTokensDetails.ImageTokens)

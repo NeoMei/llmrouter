@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -33,6 +34,18 @@ func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycom
 			http.StatusBadRequest,
 			types.ErrOptionWithSkipRetry(),
 		)
+	}
+	// Retries reuse the same funding/token reservation and must cover a higher
+	// selected price before sending another request upstream.
+	if relayInfo != nil && relayInfo.Billing != nil {
+		if err := relayInfo.Billing.Reserve(preConsumedQuota); err != nil {
+			var apiErr *types.NewAPIError
+			if errors.As(err, &apiErr) {
+				return apiErr
+			}
+			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+		}
+		return nil
 	}
 	session, apiErr := NewBillingSession(c, relayInfo, preConsumedQuota)
 	if apiErr != nil {

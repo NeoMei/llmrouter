@@ -130,7 +130,7 @@ func OpenaiSTTHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 		Duration *float64   `json:"duration"`
 	}
 	parseErr := common.Unmarshal(responseBody, &responseData)
-	if parseErr == nil && responseData.Duration != nil {
+	if parseErr == nil && responseData.Duration != nil && (info.NativeBilling == nil || info.NativeBilling.Price.Policy == "provider_reported_v1") {
 		info.ActualAudioSeconds = responseData.Duration
 		info.AudioDurationSource = "provider_reported"
 	}

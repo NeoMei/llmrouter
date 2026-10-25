@@ -1,0 +1,62 @@
+package service
+
+import (
+	"github.com/QuantumNous/new-api/pkg/metering"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"testing"
+)
+
+func mediaPrice(op, policy, key, unit string) metering.Price {
+	return metering.Price{Version: "metered_v2", Operation: op, Policy: policy, Terms: []metering.Term{{Key: key, Unit: unit, Price: metering.Rational{Numerator: "1", Denominator: "1"}}}}
+}
+func TestNativeSpeechCharacters(t *testing.T) {
+	p := mediaPrice("speech", "unicode_scalar_v1", "characters", "character")
+	for _, tt := range []struct {
+		text  string
+		count string
+	}{{"中文🙂e\u0301", "5"}, {"", "0"}} {
+		u := NativeSpeechUsage(p, tt.text, nil, true)
+		require.NoError(t, metering.ValidateUsage(p, u))
+		assert.Equal(t, tt.count, u.Measurements[0].Quantity.Value)
+	}
+	p.Policy = "provider_reported_v1"
+	assert.Equal(t, "missing", NativeSpeechUsage(p, "estimated", nil, true).State)
+	n := int64(2)
+	u := NativeSpeechUsage(p, "estimated", &n, true)
+	assert.Equal(t, "2", u.Measurements[0].Quantity.Value)
+	assert.Equal(t, "incomplete", NativeSpeechUsage(p, "estimated", &n, false).State)
+}
+func TestNativeAudioSeconds(t *testing.T) {
+	p := mediaPrice("transcription", "provider_reported_v1", "audio", "audio_second")
+	for _, tt := range []struct {
+		seconds float64
+		value   string
+		scale   int
+	}{{.1, "1", 1}, {1, "1", 0}, {1.001, "1001", 3}, {0, "0", 0}} {
+		u := NativeAudioUsage(p, &tt.seconds, true)
+		require.NoError(t, metering.ValidateUsage(p, u))
+		assert.Equal(t, metering.Quantity{Value: tt.value, Scale: tt.scale}, u.Measurements[0].Quantity)
+	}
+	n := -1.
+	assert.Equal(t, "invalid", NativeAudioUsage(p, &n, true).State)
+}
+func TestNativeCompletedImages(t *testing.T) {
+	p := mediaPrice("image_generation", "successful_outputs_v1", "images", "image")
+	for _, tt := range []struct {
+		outputs      []NativeImageOutput
+		final        bool
+		state, count string
+	}{{[]NativeImageOutput{{ID: "a"}, {ID: "b"}}, true, "confirmed", "2"}, {[]NativeImageOutput{}, true, "confirmed", "0"}, {[]NativeImageOutput{{ID: "a"}, {ID: "a"}}, true, "confirmed", "1"}, {[]NativeImageOutput{{ID: "a"}}, false, "incomplete", ""}} {
+		u := NativeImageUsage(p, tt.outputs, tt.final)
+		assert.Equal(t, tt.state, u.State)
+		if tt.count != "" {
+			require.NoError(t, metering.ValidateUsage(p, u))
+			assert.Equal(t, tt.count, u.Measurements[0].Quantity.Value)
+		}
+	}
+	p.Terms[0].Key = "1024x1024"
+	assert.Equal(t, "missing", NativeImageUsage(p, []NativeImageOutput{{ID: "a"}}, true).State)
+	assert.Equal(t, "confirmed", NativeImageUsage(p, []NativeImageOutput{{ID: "a", Width: 1024, Height: 1024}}, true).State)
+	assert.Equal(t, "invalid", NativeImageUsage(p, []NativeImageOutput{{ID: "a", Width: 512, Height: 512}}, true).State)
+}

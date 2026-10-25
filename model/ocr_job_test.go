@@ -415,3 +415,50 @@ func TestOCRStableOwnerMayDifferFromHealthGeneration(t *testing.T) {
 	require.NotNil(t, binding.Owner)
 	assert.Equal(t, owner, *binding.Owner)
 }
+
+// Existing installations can contain int64 quota balances from before the
+// int32 billing guard. A free request has no monetary delta to clamp or rewrite.
+func TestOCRFreeLegacyBalancesRemainUnchanged(t *testing.T) {
+	for _, cached := range []bool{false, true} {
+		t.Run(fmt.Sprintf("redis=%t", cached), func(t *testing.T) {
+			var s *OCRBillingStore
+			var a OCRAdmission
+			if cached {
+				s, a, _ = ocrRedisFixture(t)
+			} else {
+				s, a = ocrFixture(t)
+			}
+			legacy := int(common.MaxQuota) + 1000
+			require.NoError(t, s.db.Model(&User{}).Where("id = ?", a.UserID).Updates(map[string]any{"quota": legacy, "used_quota": legacy}).Error)
+			require.NoError(t, s.db.Model(&Token{}).Where("id = ?", a.TokenID).Updates(map[string]any{"remain_quota": legacy, "used_quota": legacy}).Error)
+			require.NoError(t, s.db.Model(&Channel{}).Where("id = ?", a.ChannelID).Update("used_quota", legacy).Error)
+			a.Price = 0
+			ctx := context.Background()
+			job, err := s.CreateIntent(ctx, a)
+			require.NoError(t, err)
+			reserved, err := s.Reserve(ctx, job.ID)
+			require.NoError(t, err)
+			assert.Equal(t, "reserved", reserved.BillingState)
+			claim, err := s.ClaimSubmission(ctx, job.ID, ocrTestSelection(a.ChannelID))
+			require.NoError(t, err)
+			require.NoError(t, s.RecordSubmission(ctx, claim, "free-provider-job", false))
+			done, err := s.Finish(ctx, job.ID, "success")
+			require.NoError(t, err)
+			assert.Equal(t, "settled", done.BillingState)
+			_, err = s.Finish(ctx, job.ID, "success")
+			require.NoError(t, err)
+			ocrBalances(t, s, a, legacy, legacy, legacy)
+			var u User
+			require.NoError(t, s.db.First(&u, a.UserID).Error)
+			assert.Equal(t, 1, u.RequestCount)
+			// Nonzero charges must retain the bounded-arithmetic gate.
+			a.IdempotencyKey = uuid.NewString()
+			a.Price = 0.0002
+			paid, err := s.CreateIntent(ctx, a)
+			require.NoError(t, err)
+			_, err = s.Reserve(ctx, paid.ID)
+			require.ErrorIs(t, err, ErrOCRReconciliation)
+			ocrBalances(t, s, a, legacy, legacy, legacy)
+		})
+	}
+}

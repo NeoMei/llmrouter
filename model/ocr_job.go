@@ -351,7 +351,8 @@ func applyOCRQuotaTx(tx *gorm.DB, j *OCRJob, op *OCROperation, cacheAdmitted boo
 			return ErrOCRInsufficient
 		}
 		after := int64(owner.Quota) + int64(delta)
-		if after < common.MinQuota || after > common.MaxQuota {
+		// A zero-price operation must not rewrite or normalize legacy balances.
+		if delta != 0 && (after < common.MinQuota || after > common.MaxQuota) {
 			return ErrOCRReconciliation
 		}
 		if delta != 0 {
@@ -378,7 +379,7 @@ func applyOCRQuotaTx(tx *gorm.DB, j *OCRJob, op *OCROperation, cacheAdmitted boo
 			return ErrOCRInsufficient
 		}
 		remain, used := int64(token.RemainQuota)+int64(delta), int64(token.UsedQuota)-int64(delta)
-		if remain < common.MinQuota || remain > common.MaxQuota || used < 0 || used > common.MaxQuota {
+		if delta != 0 && (remain < common.MinQuota || remain > common.MaxQuota || used < 0 || used > common.MaxQuota) {
 			return ErrOCRReconciliation
 		}
 		if delta != 0 {
@@ -644,7 +645,7 @@ func ocrFinalizeTx(tx *gorm.DB, j *OCRJob) error {
 		if err := lockForUpdate(tx).Select("id", "used_quota").First(&ch, j.ChannelID).Error; err != nil {
 			return err
 		}
-		if int64(user.UsedQuota)+int64(j.Quota) > common.MaxQuota || user.RequestCount >= common.MaxQuota || int64(ch.UsedQuota)+int64(j.Quota) > common.MaxQuota {
+		if user.RequestCount >= common.MaxQuota || (j.Quota != 0 && (int64(user.UsedQuota)+int64(j.Quota) > common.MaxQuota || int64(ch.UsedQuota)+int64(j.Quota) > common.MaxQuota)) {
 			return ErrOCRReconciliation
 		}
 		if err := tx.Unscoped().Model(&User{}).Where("id = ?", j.UserID).Updates(map[string]any{"used_quota": gorm.Expr("used_quota + ?", j.Quota), "request_count": gorm.Expr("request_count + 1")}).Error; err != nil {

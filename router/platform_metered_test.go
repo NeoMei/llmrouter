@@ -23,6 +23,8 @@ import (
 
 func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 	for _, tc := range []struct{ op, path, body, response, unit, key, policy string }{
+		{"chat", "/chat/completions", `{"model":"platform-test","messages":[{"role":"user","content":"hello"}],"max_tokens":10}`, `{"id":"chat","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`, "token", "input", "sum"},
+		{"responses", "/responses", `{"model":"platform-test","input":"hello","max_output_tokens":10}`, `{"id":"resp","object":"response","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`, "token", "input", "sum"},
 		{"embedding", "/embeddings", `{"model":"platform-test","input":"hello"}`, `{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1]}],"model":"platform-test","usage":{"prompt_tokens":1,"total_tokens":1}}`, "token", "input", "sum"},
 		{"speech", "/audio/speech", `{"model":"platform-test","input":"hello","voice":"alloy"}`, "audio-bytes", "character", "characters", "unicode_scalar_v1"},
 		{"image_generation", "/images/generations", `{"model":"platform-test","prompt":"hello","n":1}`, `{"created":1,"data":[{"b64_json":"aGVsbG8="}]}`, "image", "images", "successful_outputs_v1"},
@@ -37,7 +39,11 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 				_, _ = w.Write([]byte(tc.response))
 			}))
 			defer up.Close()
-			price := metering.Price{Version: "metered_v2", Operation: tc.op, Policy: tc.policy, Terms: []metering.Term{{Key: tc.key, Unit: tc.unit, Price: metering.Rational{Numerator: "1", Denominator: "1"}}}}
+			terms := []metering.Term{{Key: tc.key, Unit: tc.unit, Price: metering.Rational{Numerator: "1", Denominator: "1"}}}
+			if tc.op == "chat" || tc.op == "responses" {
+				terms = []metering.Term{{Key: "input", Unit: "token", Price: metering.Rational{Numerator: "1", Denominator: "1"}}, {Key: "output", Unit: "token", Price: metering.Rational{Numerator: "1", Denominator: "1"}}}
+			}
+			price := metering.Price{Version: "metered_v2", Operation: tc.op, Policy: tc.policy, Terms: terms}
 			rate := platformbilling.Rate{ID: "rate", Model: "platform-test", Asset: "CREDIT/6", Status: "published", Semantics: "metered_v2", Metered: &price}
 			var remote platformbilling.RemoteCall
 			hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

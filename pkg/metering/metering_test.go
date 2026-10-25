@@ -138,3 +138,46 @@ func TestWireFixtures(t *testing.T) {
 		})
 	}
 }
+
+func TestIntegerTariffQuantities(t *testing.T) {
+	for _, tc := range []struct{ op, unit, key string }{{"chat", "token", "input"}, {"speech", "character", "characters"}, {"image_generation", "image", "large"}, {"ocr", "request", "requests"}} {
+		for _, field := range []string{"step", "minimum"} {
+			t.Run(tc.unit+field, func(t *testing.T) {
+				term := Term{Key: tc.key, Unit: tc.unit, Price: Rational{"1", "1"}}
+				fractional := Quantity{"1", 1}
+				if field == "step" {
+					term.Step = &fractional
+				} else {
+					term.Minimum = &fractional
+				}
+				require.Error(t, ValidatePrice(Price{Version: "metered_v2", Operation: tc.op, Policy: "sum", Terms: []Term{term}}))
+			})
+		}
+	}
+}
+func TestUnknownNonTokenDimensions(t *testing.T) {
+	for _, tc := range []struct{ op, unit string }{{"speech", "character"}, {"transcription", "audio_second"}, {"ocr", "request"}, {"video", "video_second"}, {"video", "provider_unit"}} {
+		t.Run(tc.unit, func(t *testing.T) {
+			require.Error(t, ValidatePrice(Price{Version: "metered_v2", Operation: tc.op, Policy: "sum", Terms: []Term{{Key: "bogus", Unit: tc.unit, ProviderUnit: "vendor:unit", Price: Rational{"1", "1"}}}}))
+		})
+	}
+}
+func TestExactSumAndBoundaries(t *testing.T) {
+	p := Price{Version: "metered_v2", Operation: "chat", Policy: "sum", Terms: []Term{{Key: "input", Unit: "token", Price: Rational{"1", "3"}}, {Key: "output", Unit: "token", Price: Rational{"1", "2"}}}}
+	u := Usage{Version: "metered_v2", Operation: "chat", State: "confirmed", Measurements: []Measurement{{Key: "output", Unit: "token", Quantity: Quantity{"1", 0}}, {Key: "input", Unit: "token", Quantity: Quantity{"1", 0}}}}
+	got, err := Calculate(p, u)
+	require.NoError(t, err)
+	assert.Equal(t, "5/6", got.RatString())
+	p = Price{Version: "metered_v2", Operation: "video", Policy: "sum", Terms: []Term{{Key: "video", Unit: "video_second", Price: Rational{"1", "1"}, Step: &Quantity{"1", 9}, Minimum: &Quantity{"1", 9}}}}
+	u = Usage{Version: "metered_v2", Operation: "video", State: "confirmed", Measurements: []Measurement{{Key: "video", Unit: "video_second", Quantity: Quantity{"99999999999999999999999999999999999999", 9}}}}
+	got, err = Calculate(p, u)
+	require.NoError(t, err)
+	assert.Equal(t, "99999999999999999999999999999999999999/1000000000", got.RatString())
+	u.Measurements[0].Quantity = Quantity{"0", 9}
+	got, err = Calculate(p, u)
+	require.NoError(t, err)
+	assert.Equal(t, "0", got.RatString())
+	u.Measurements[0].Quantity.Scale = -1
+	_, err = Calculate(p, u)
+	require.Error(t, err)
+}

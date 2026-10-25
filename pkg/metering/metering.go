@@ -83,7 +83,7 @@ func ValidatePrice(p Price) error {
 		if !compatible {
 			return errors.New("operation/unit mismatch")
 		}
-		if t.Unit == "token" && t.Key != "input" && t.Key != "output" && t.Key != "cache_read" && t.Key != "cache_write" && t.Key != "reasoning" {
+		if (t.Unit == "token" && t.Key != "input" && t.Key != "output" && t.Key != "cache_read" && t.Key != "cache_write" && t.Key != "reasoning") || (t.Unit == "character" && t.Key != "characters") || (t.Unit == "audio_second" && t.Key != "audio") || (t.Unit == "request" && t.Key != "requests") || (t.Unit == "video_second" && t.Key != "video") || (t.Unit == "provider_unit" && t.Key != "provider") {
 			return errors.New("unknown token dimension")
 		}
 
@@ -99,6 +99,9 @@ func ValidatePrice(p Price) error {
 			return errors.New("provider namespace required")
 		}
 		if t.Step != nil {
+			if (t.Unit == "token" || t.Unit == "character" || t.Unit == "image" || t.Unit == "request") && t.Step.Scale != 0 {
+				return errors.New("integer scale")
+			}
 			if _, e := parseQuantity(*t.Step); e != nil {
 				return e
 			}
@@ -107,6 +110,9 @@ func ValidatePrice(p Price) error {
 			}
 		}
 		if t.Minimum != nil {
+			if (t.Unit == "token" || t.Unit == "character" || t.Unit == "image" || t.Unit == "request") && t.Minimum.Scale != 0 {
+				return errors.New("integer scale")
+			}
 			if _, e := parseQuantity(*t.Minimum); e != nil {
 				return e
 			}

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -309,6 +310,19 @@ func TestAccountPoolHTTPGatewayGenerationAndUnavailable(t *testing.T) {
 
 func TestAccountPoolHTTPScopedCountsFailuresAndValidation(t *testing.T) {
 	f := newPoolHTTPFixture(t)
+	var failStateWrite, failStateRead atomic.Bool
+	// Install callbacks before requests can enqueue asynchronous audit writes.
+	// Toggle only the fault flags while the shared GORM processors are in use.
+	require.NoError(t, f.db.Callback().Create().Before("gorm:create").Register("admin_fixture_write_failure", func(tx *gorm.DB) {
+		if failStateWrite.Load() && tx.Statement.Table == "upstream_account_states" {
+			tx.AddError(fmt.Errorf("PRIVATE database diagnostic"))
+		}
+	}))
+	require.NoError(t, f.db.Callback().Query().Before("gorm:query").Register("admin_fixture_read_failure", func(tx *gorm.DB) {
+		if failStateRead.Load() && tx.Statement.Table == "upstream_account_states" {
+			tx.AddError(fmt.Errorf("PRIVATE database diagnostic"))
+		}
+	}))
 	ctx := context.Background()
 	require.NoError(t, f.db.Model(&model.Channel{}).Where("id = ?", f.channel.Id).Updates(map[string]interface{}{"key": "private-A\nprivate-B", "channel_info": model.ChannelInfo{IsMultiKey: true}}).Error)
 	var ch model.Channel
@@ -364,28 +378,20 @@ func TestAccountPoolHTTPScopedCountsFailuresAndValidation(t *testing.T) {
 		assert.Less(t, w.Code, 500)
 	}
 	// A failed state write must not be reported as applied or mutate the pause.
-	require.NoError(t, f.db.Callback().Create().Before("gorm:create").Register("admin_fixture_write_failure", func(tx *gorm.DB) {
-		if tx.Statement.Table == "upstream_account_states" {
-			tx.AddError(fmt.Errorf("PRIVATE database diagnostic"))
-		}
-	}))
+	failStateWrite.Store(true)
 	w, failure := f.request(t, "operate", "pause", payload)
 	assert.Equal(t, 503, w.Code)
 	assert.Equal(t, "state_unavailable", failure.Code)
 	assert.NotContains(t, w.Body.String(), "PRIVATE")
-	require.NoError(t, f.db.Callback().Create().Remove("admin_fixture_write_failure"))
+	failStateWrite.Store(false)
 	_, after = f.request(t, "read", "", nil)
 	assert.Equal(t, "available", after.Data.Members[0].State)
-	require.NoError(t, f.db.Callback().Query().Before("gorm:query").Register("admin_fixture_read_failure", func(tx *gorm.DB) {
-		if tx.Statement.Table == "upstream_account_states" {
-			tx.AddError(fmt.Errorf("PRIVATE database diagnostic"))
-		}
-	}))
+	failStateRead.Store(true)
 	w, failure = f.request(t, "read", "", nil)
 	assert.Equal(t, 503, w.Code)
 	assert.Equal(t, "state_unavailable", failure.Code)
 	assert.NotContains(t, w.Body.String(), "PRIVATE")
-	require.NoError(t, f.db.Callback().Query().Remove("admin_fixture_read_failure"))
+	failStateRead.Store(false)
 	require.NoError(t, f.db.Model(&model.Channel{}).Where("id = ?", f.channel.Id).Update("key", "").Error)
 	w, after = f.request(t, "read", "", nil)
 	require.Equal(t, 200, w.Code)

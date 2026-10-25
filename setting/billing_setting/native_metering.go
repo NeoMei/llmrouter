@@ -132,7 +132,7 @@ func ValidateModelNativePricing(c map[string]map[string]metering.Price) error {
 			case "ocr":
 				policyOK = p.Policy == "success_request"
 			case "video":
-				policyOK = p.Policy == "provider_reported_v1" || p.Policy == "successful_outputs_v1" || p.Policy == "sora_completed_seconds_v1" || p.Policy == "kling_final_units_v1" || p.Policy == "doubao_completion_tokens_v1" || p.Policy == "ali_video_duration_v1" || p.Policy == "ali_wan26_t2v_billable_duration_v1" || p.Policy == "veo_output_probe_v1"
+				policyOK = ValidateNativeVideoPrice(p) == nil
 			}
 			if !policyOK {
 				return errors.New("unsupported native measurement policy")
@@ -148,6 +148,30 @@ func ValidateModelNativePricing(c map[string]map[string]metering.Price) error {
 		}
 	}
 	return nil
+}
+
+// ValidateNativeVideoPrice only enables receipt contracts implemented by the
+// video producers. Generic or unmeasured policies cannot reserve user funds.
+func ValidateNativeVideoPrice(p metering.Price) error {
+	if p.Operation != "video" || len(p.Terms) != 1 || metering.ValidatePrice(p) != nil {
+		return errors.New("unsupported native video tariff")
+	}
+	term := p.Terms[0]
+	switch p.Policy {
+	case "sora_completed_seconds_v1", "ali_video_duration_v1", "ali_wan26_t2v_billable_duration_v1":
+		if term.Unit == "video_second" {
+			return nil
+		}
+	case "kling_final_units_v1":
+		if term.Unit == "provider_unit" && term.ProviderUnit == "kling.final_unit_deduction" {
+			return nil
+		}
+	case "doubao_completion_tokens_v1":
+		if term.Unit == "provider_unit" && term.ProviderUnit == "doubao.completion_tokens" {
+			return nil
+		}
+	}
+	return errors.New("unsupported native video receipt policy or unit")
 }
 
 // ValidateNativeImageTiers matches the output classifier used by native image

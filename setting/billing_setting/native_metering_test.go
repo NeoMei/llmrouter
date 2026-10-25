@@ -47,3 +47,14 @@ func TestNativeImageTiersRejectUnsupportedOrOverlappingClassifiers(t *testing.T)
 	p := metering.Price{Version: "metered_v2", Operation: "image_generation", Policy: "successful_outputs_v1", Terms: []metering.Term{{Key: "1024x1024", Unit: "image", Price: metering.Rational{Numerator: "1", Denominator: "1"}}, {Key: "1536x1024", Unit: "image", Price: metering.Rational{Numerator: "2", Denominator: "1"}}}}
 	require.NoError(t, ValidateModelNativePricing(map[string]map[string]metering.Price{"image-model": {"image_generation": p}}))
 }
+
+func TestNativeVideoRequiresImplementedReceiptPolicyAndUnit(t *testing.T) {
+	p := metering.Price{Version: "metered_v2", Operation: "video", Policy: "sora_completed_seconds_v1", Terms: []metering.Term{{Key: "video", Unit: "video_second", Price: metering.Rational{Numerator: "1", Denominator: "1"}}}}
+	require.NoError(t, ValidateNativeVideoPrice(p))
+	for _, policy := range []string{"provider_reported_v1", "successful_outputs_v1", "veo_output_probe_v1", "kling_final_units_v1"} {
+		p.Policy = policy
+		require.Error(t, ValidateNativeVideoPrice(p))
+	}
+	p.Terms[0].Key, p.Terms[0].Unit, p.Terms[0].ProviderUnit = "provider", "provider_unit", "kling.final_unit_deduction"
+	require.NoError(t, ValidateNativeVideoPrice(p))
+}

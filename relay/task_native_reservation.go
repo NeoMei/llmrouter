@@ -17,8 +17,8 @@ import (
 // This is an admission cap, never final usage. No provider-unit guess is made.
 func NativeVideoReservation(c *gin.Context, modelName string, price metering.Price) (metering.Usage, error) {
 	u := metering.Usage{Version: "metered_v2", Operation: "video", State: "incomplete", Source: "reservation_bound"}
-	if price.Policy == "veo_output_probe_v1" {
-		return u, errors.New("native Veo output probing is not enabled")
+	if err := billing_setting.ValidateNativeVideoPrice(price); err != nil {
+		return u, err
 	}
 	req, err := relaycommon.GetTaskRequest(c)
 	if err != nil {
@@ -29,11 +29,15 @@ func NativeVideoReservation(c *gin.Context, modelName string, price metering.Pri
 	// each provider's output array is measured.
 	for _, key := range []string{"n", "sampleCount", "sample_count", "video_count", "number_of_videos"} {
 		if raw, ok := req.Metadata[key]; ok {
-			if n, ok := raw.(float64); ok && n > 1 {
-				return u, errors.New("native video multiple outputs are unsupported")
+			single := false
+			switch count := raw.(type) {
+			case float64:
+				single = count == 1
+			case int:
+				single = count == 1
 			}
-			if n, ok := raw.(int); ok && n > 1 {
-				return u, errors.New("native video multiple outputs are unsupported")
+			if !single {
+				return u, errors.New("native video output count must be exactly one")
 			}
 		}
 	}

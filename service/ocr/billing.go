@@ -5,6 +5,8 @@ package ocr
 import (
 	"context"
 	"errors"
+	"github.com/QuantumNous/new-api/pkg/metering"
+	base "github.com/QuantumNous/new-api/service"
 	"math"
 
 	"github.com/QuantumNous/new-api/common"
@@ -17,6 +19,10 @@ import (
 // AuthorizedAdmission must be built after normal user/token/model/group/channel
 // authorization. No raw media, token secret or provider credential is accepted.
 type AuthorizedAdmission struct {
+	PlatformCallID                                  string
+	PlatformPrice                                   *metering.Price
+	Dispatch                                        func(context.Context) error
+	BindTask                                        func(context.Context, string) error
 	IdempotencyKey                                  string
 	UserID, TokenID, ChannelID                      int
 	Model, UserGroup, UsingGroup, BillingPreference string
@@ -39,6 +45,21 @@ func (e *PriceError) Audit() map[string]any {
 
 func ResolveAdmission(in AuthorizedAdmission) (model.OCRAdmission, error) {
 	a := model.OCRAdmission{IdempotencyKey: in.IdempotencyKey, UserID: in.UserID, TokenID: in.TokenID, ChannelID: in.ChannelID, Model: in.Model, Group: in.UsingGroup, Preference: in.BillingPreference, QuotaPerUnit: common.QuotaPerUnit}
+	if in.PlatformCallID != "" {
+		a.PlatformCallID = in.PlatformCallID
+		a.PlatformPrice = in.PlatformPrice
+		a.Price = 0
+		a.GroupRatio = 0
+		return a, nil
+	}
+	if native, ok := billing_setting.ResolveModelNativePrice(in.Model, "ocr"); ok {
+		a.NativePrice = &native
+		a.GroupRatio = ratio_setting.GetGroupRatio(in.UsingGroup)
+		if ratio, ok := ratio_setting.GetGroupGroupRatio(in.UserGroup, in.UsingGroup); ok {
+			a.GroupRatio = ratio
+		}
+		return a, nil
+	}
 	if billing_setting.GetBillingMode(in.Model) == billing_setting.BillingModeTieredExpr {
 		return a, &PriceError{Reason: "OCR requires native request pricing; token expressions are incompatible"}
 	}
@@ -116,4 +137,32 @@ func (b *Billing) OwnedStatus(ctx context.Context, id string, userID, tokenID in
 		return OwnedStatus{}, model.ErrOCRConflict
 	}
 	return OwnedStatus{ID: j.Job.ID, Model: j.Job.Model, BillingState: j.Job.BillingState, SubmissionState: j.Job.SubmissionState, Reason: j.Job.Reason, Quota: j.Job.Quota}, nil
+}
+
+// Finish retains the OCR lifecycle and delegates only financial authority. The
+// model persisted the terminal intent first; retries replay one UniHub command.
+func (b *Billing) Finish(ctx context.Context, id, outcome string) (model.OCRJob, error) {
+	j, err := b.OCRBillingStore.Finish(ctx, id, outcome)
+	if err != nil || j.Funding != "platform" {
+		return j, err
+	}
+	if j.BillingState == "settled" || j.BillingState == "refunded" {
+		return j, nil
+	}
+	if base.PlatformTaskObserver == nil {
+		return j, errors.New("platform OCR observer unavailable")
+	}
+	u := metering.Usage{Version: "metered_v2", Operation: "ocr", State: "incomplete", Source: "success_request", ProviderRequestID: j.ProviderJobID}
+	if outcome == "success" {
+		u.State = "confirmed"
+		u.Measurements = []metering.Measurement{{Key: "requests", Unit: "request", Quantity: metering.Quantity{Value: "1"}}}
+	}
+	if err = base.PlatformTaskObserver(ctx, j.PlatformCallID, j.ProviderJobID, u); err != nil {
+		return j, err
+	}
+	// Failure/uncertain output stays held; no automatic platform refund.
+	if outcome != "success" {
+		return j, nil
+	}
+	return b.CompletePlatformOCR(ctx, id)
 }

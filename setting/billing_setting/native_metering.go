@@ -43,7 +43,7 @@ func ValidateModelNativePricing(c map[string]map[string]metering.Price) error {
 			case "ocr":
 				policyOK = p.Policy == "success_request"
 			case "video":
-				policyOK = p.Policy == "provider_reported_v1" || p.Policy == "successful_outputs_v1"
+				policyOK = p.Policy == "provider_reported_v1" || p.Policy == "successful_outputs_v1" || p.Policy == "sora_completed_seconds_v1" || p.Policy == "kling_final_units_v1" || p.Policy == "doubao_completion_tokens_v1" || p.Policy == "ali_video_duration_v1" || p.Policy == "ali_wan26_t2v_billable_duration_v1" || p.Policy == "veo_output_probe_v1"
 			}
 			if !policyOK {
 				return errors.New("unsupported native measurement policy")

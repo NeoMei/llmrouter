@@ -162,6 +162,9 @@ func (s *OCRBillingStore) validateCacheReceipts(ctx context.Context, id string) 
 	if err != nil {
 		return err
 	}
+	if snap.Job.Funding == "platform" {
+		return nil
+	}
 	if snap.Job.Redis != (s.cache != nil) {
 		return ErrOCRReconciliation
 	}

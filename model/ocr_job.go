@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strconv"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/pkg/metering"
 	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -24,10 +26,13 @@ var (
 // Callers must resolve current configured pricing and authorization before create.
 // It contains no media, credentials or provider identity.
 type OCRAdmission struct {
+	NativePrice                     *metering.Price `json:"native_price,omitempty"`
 	IdempotencyKey                  string
 	UserID, TokenID, ChannelID      int
 	Model, Group, Preference        string
 	Price, GroupRatio, QuotaPerUnit float64
+	PlatformCallID                  string          `json:"platform_call_id,omitempty"`
+	PlatformPrice                   *metering.Price `json:"platform_price,omitempty"`
 }
 
 type OCRJob struct {
@@ -54,6 +59,8 @@ type OCRJob struct {
 	Quota           int
 	Redis           bool
 	Funding         string `gorm:"size:32"`
+	PlatformCallID  string `gorm:"size:128;index"`
+	PlatformPrice   string `gorm:"type:text"`
 	BillingState    string `gorm:"size:32;index"`
 	SubmissionState string `gorm:"size:32"`
 	MemberID        string `gorm:"size:128"`
@@ -126,8 +133,16 @@ func (s *OCRBillingStore) Close() error {
 }
 
 func (s *OCRBillingStore) CreateIntent(ctx context.Context, a OCRAdmission) (OCRJob, error) {
-	if a.UserID <= 0 || a.TokenID <= 0 || a.ChannelID <= 0 || len(a.IdempotencyKey) == 0 || len(a.IdempotencyKey) > 128 || len(a.Model) == 0 || len(a.Model) > 128 || len(a.Group) > 128 {
+	if a.UserID <= 0 || (a.TokenID <= 0 && a.PlatformCallID == "") || a.ChannelID <= 0 || len(a.IdempotencyKey) == 0 || len(a.IdempotencyKey) > 128 || len(a.Model) == 0 || len(a.Model) > 128 || len(a.Group) > 128 {
 		return OCRJob{}, ErrOCRConflict
+	}
+	if a.PlatformCallID != "" || a.PlatformPrice != nil {
+		if a.PlatformCallID == "" || len(a.PlatformCallID) > 128 || a.PlatformPrice == nil || a.PlatformPrice.Operation != "ocr" || a.PlatformPrice.Policy != "success_request" || metering.ValidatePrice(*a.PlatformPrice) != nil {
+			return OCRJob{}, ErrOCRConflict
+		}
+		a.Price = 0
+		a.GroupRatio = 0
+		a.QuotaPerUnit = 1
 	}
 	for _, v := range []float64{a.Price, a.GroupRatio, a.QuotaPerUnit} {
 		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
@@ -144,12 +159,38 @@ func (s *OCRBillingStore) CreateIntent(ctx context.Context, a OCRAdmission) (OCR
 	if quota == 0 && a.Price > 0 && a.GroupRatio > 0 {
 		return OCRJob{}, errors.New("OCR price below quota unit")
 	}
+	if a.NativePrice != nil && a.PlatformCallID == "" {
+		if a.NativePrice.Operation != "ocr" || a.NativePrice.Policy != "success_request" {
+			return OCRJob{}, ErrOCRConflict
+		}
+		native := NativeAdmission{Price: *a.NativePrice, GroupRatio: strconv.FormatFloat(a.GroupRatio, 'f', -1, 64), QuotaPerUnit: strconv.FormatFloat(a.QuotaPerUnit, 'f', -1, 64)}
+		usage := metering.Usage{Version: "metered_v2", Operation: "ocr", State: "confirmed", Source: "success_request", Measurements: []metering.Measurement{{Key: "requests", Unit: "request", Quantity: metering.Quantity{Value: "1"}}}}
+		var err error
+		quota, clamp, err = NativeQuota(native, usage, false)
+		if err != nil {
+			return OCRJob{}, err
+		}
+		if clamp != nil {
+			return OCRJob{}, clamp
+		}
+	}
 	a.Preference = common.NormalizeBillingPreference(a.Preference)
 	raw, err := common.Marshal(a)
 	if err != nil {
 		return OCRJob{}, err
 	}
-	job := OCRJob{ID: uuid.NewString(), UserID: a.UserID, TokenID: a.TokenID, ChannelID: a.ChannelID, IdempotencyKey: a.IdempotencyKey, Contract: string(raw), Model: a.Model, BillingGroup: a.Group, Preference: a.Preference, Quota: quota, Redis: s.cache != nil, BillingState: "pending", SubmissionState: "unclaimed", CreatedAt: time.Now().Unix(), UpdatedAt: time.Now().Unix()}
+	funding := ""
+	platformCall, platformPrice := "", ""
+	if a.PlatformCallID != "" || a.PlatformPrice != nil {
+		funding = "platform"
+		platformCall = a.PlatformCallID
+		if a.PlatformPrice != nil {
+			b, _ := common.Marshal(a.PlatformPrice)
+			platformPrice = string(b)
+		}
+		quota = 0
+	}
+	job := OCRJob{ID: uuid.NewString(), UserID: a.UserID, TokenID: a.TokenID, ChannelID: a.ChannelID, IdempotencyKey: a.IdempotencyKey, Contract: string(raw), Model: a.Model, BillingGroup: a.Group, Preference: a.Preference, Quota: quota, PlatformCallID: platformCall, PlatformPrice: platformPrice, Funding: funding, Redis: s.cache != nil, BillingState: "pending", SubmissionState: "unclaimed", CreatedAt: time.Now().Unix(), UpdatedAt: time.Now().Unix()}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&job)
 		if result.Error != nil {
@@ -163,6 +204,9 @@ func (s *OCRBillingStore) CreateIntent(ctx context.Context, a OCRAdmission) (OCR
 			return ErrOCRConflict
 		}
 		job = existing
+		if job.Funding == "platform" {
+			return nil
+		}
 		for _, kind := range []string{"wallet", "subscription", "token"} {
 			owner := a.UserID
 			if kind == "token" {
@@ -194,6 +238,9 @@ func ocrLockJobAndFundingOwner(tx *gorm.DB, id string) (*OCRJob, error) {
 	j, err := ocrLockJob(tx, id)
 	if err != nil {
 		return j, err
+	}
+	if j.Funding == "platform" {
+		return j, nil
 	}
 	return j, lockOCRFundingOwner(tx, j.UserID)
 }
@@ -402,6 +449,27 @@ func (s *OCRBillingStore) Reserve(ctx context.Context, id string) (OCRJob, error
 	if err != nil {
 		return OCRJob{}, err
 	}
+	if snapshot.Job.Funding == "platform" {
+		err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			j, err := ocrLockJob(tx, id)
+			if err != nil {
+				return err
+			}
+			if j.BillingState == "reserved" {
+				return nil
+			}
+			if j.BillingState != "pending" {
+				return ErrOCRConflict
+			}
+			j.BillingState = "reserved"
+			return ocrSaveJob(tx, j)
+		})
+		out, readErr := s.Inspect(ctx, id)
+		if err != nil {
+			return out.Job, err
+		}
+		return out.Job, readErr
+	}
 	if snapshot.Job.Redis != (s.cache != nil) {
 		return snapshot.Job, ErrOCRReconciliation
 	}
@@ -525,25 +593,27 @@ func (s *OCRBillingStore) ClaimSubmission(ctx context.Context, id string, select
 		if j.BillingState != "reserved" || (j.SubmissionState != "unclaimed" && !(j.SubmissionState == "rejected" && j.RetryRefusal)) || j.Decision != "" {
 			return ErrOCRConflict
 		}
-		for _, kind := range []string{j.Funding, "token"} {
-			op, err := ocrOperation(tx, id, kind, "reserve")
-			if err != nil {
+		if j.Funding != "platform" {
+			for _, kind := range []string{j.Funding, "token"} {
+				op, err := ocrOperation(tx, id, kind, "reserve")
+				if err != nil {
+					return err
+				}
+				if op.State != "applied" {
+					return ErrOCRReconciliation
+				}
+			}
+			var owner User
+			if err := lockForUpdate(tx).First(&owner, j.UserID).Error; err != nil {
 				return err
 			}
-			if op.State != "applied" {
-				return ErrOCRReconciliation
+			var token Token
+			if err := lockForUpdate(tx).First(&token, j.TokenID).Error; err != nil {
+				return err
 			}
-		}
-		var owner User
-		if err := lockForUpdate(tx).First(&owner, j.UserID).Error; err != nil {
-			return err
-		}
-		var token Token
-		if err := lockForUpdate(tx).First(&token, j.TokenID).Error; err != nil {
-			return err
-		}
-		if owner.Status != common.UserStatusEnabled || token.UserId != j.UserID || token.Status != common.TokenStatusEnabled || (token.ExpiredTime != -1 && token.ExpiredTime <= time.Now().Unix()) {
-			return ErrOCRConflict
+			if owner.Status != common.UserStatusEnabled || token.UserId != j.UserID || token.Status != common.TokenStatusEnabled || (token.ExpiredTime != -1 && token.ExpiredTime <= time.Now().Unix()) {
+				return ErrOCRConflict
+			}
 		}
 		var attempts []OCRSubmissionAttempt
 		if j.Attempts != "" {
@@ -681,6 +751,37 @@ func (s *OCRBillingStore) Finish(ctx context.Context, id, outcome string) (OCRJo
 	if err != nil {
 		return OCRJob{}, err
 	}
+	if mode.Job.Funding == "platform" {
+		err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			j, err := ocrLockJob(tx, id)
+			if err != nil {
+				return err
+			}
+			if j.Decision != "" {
+				if j.Decision != outcome {
+					return ErrOCRConflict
+				}
+				return nil
+			}
+			if outcome == "success" && (j.SubmissionState != "submitted" || j.ProviderState != "done") {
+				return ErrOCRConflict
+			}
+			if outcome == "failure" && j.ProviderState != "failed" && j.SubmissionState != "rejected" {
+				return ErrOCRConflict
+			}
+			if outcome == "cancel" && j.SubmissionState != "unclaimed" {
+				return ErrOCRConflict
+			}
+			j.Decision = outcome
+			j.BillingState = "platform_pending"
+			return ocrSaveJob(tx, j)
+		})
+		out, readErr := s.Inspect(ctx, id)
+		if err != nil {
+			return out.Job, err
+		}
+		return out.Job, readErr
+	}
 	if mode.Job.Redis != (s.cache != nil) {
 		return mode.Job, ErrOCRReconciliation
 	}
@@ -803,4 +904,31 @@ func (s *OCRBillingStore) RecordSubmissionFailure(ctx context.Context, c OCRClai
 		}
 		return ocrSaveJob(tx, j)
 	})
+}
+
+// CompletePlatformOCR acknowledges a delivered UniHub settlement without any
+// local quota or request-count mutation.
+func (s *OCRBillingStore) CompletePlatformOCR(ctx context.Context, id string) (OCRJob, error) {
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		j, err := ocrLockJob(tx, id)
+		if err != nil {
+			return err
+		}
+		if j.Funding != "platform" || j.Decision != "success" {
+			return ErrOCRConflict
+		}
+		if j.BillingState == "settled" {
+			return nil
+		}
+		if j.BillingState != "platform_pending" {
+			return ErrOCRConflict
+		}
+		j.BillingState = "settled"
+		return ocrSaveJob(tx, j)
+	})
+	out, readErr := s.Inspect(ctx, id)
+	if err != nil {
+		return out.Job, err
+	}
+	return out.Job, readErr
 }

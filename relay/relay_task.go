@@ -22,6 +22,8 @@ import (
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/accountpool"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -189,45 +191,81 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		info.PublicTaskID = model.GenerateTaskID()
 	}
 
+	// Native funding is admitted once, independently of legacy per-call prices.
+	if !info.PlatformMode && info.NativeBilling == nil {
+		if price, ok := billing_setting.ResolveModelNativePrice(modelName, "video"); ok {
+			if info.Action == constant.TaskActionRemix {
+				return nil, service.TaskErrorWrapperLocal(errors.New("native extension/remix billing policy is not enabled"), "native_policy", 400)
+			}
+			reserve, err := NativeVideoReservation(c, modelName, price)
+			if err != nil {
+				return nil, service.TaskErrorWrapperLocal(err, "native_reservation", 400)
+			}
+			ratio := ratio_setting.GetGroupRatio(info.UsingGroup)
+			if special, ok := ratio_setting.GetGroupGroupRatio(info.UserGroup, info.UsingGroup); ok {
+				ratio = special
+			}
+			admission := model.NativeAdmission{CallID: info.PublicTaskID, UserID: info.UserId, TokenID: info.TokenId, ChannelID: info.ChannelId, Model: modelName, Group: info.UsingGroup, Preference: info.UserSetting.BillingPreference, Price: price, GroupRatio: strconv.FormatFloat(ratio, 'f', -1, 64), QuotaPerUnit: strconv.FormatFloat(common.QuotaPerUnit, 'f', -1, 64), Reservation: reserve}
+			if err := service.BeginNativeBillingForRelay(c, info, admission); err != nil {
+				return nil, service.TaskErrorWrapperLocal(err, "native_admission", 400)
+			}
+		}
+	}
 	// 4. 价格计算：基础模型价格
-	info.OriginModelName = modelName
-	priceData, err := helper.ModelPriceHelperPerCall(c, info)
-	if err != nil {
-		return nil, service.TaskErrorWrapper(err, "model_price_error", http.StatusBadRequest)
-	}
-	info.PriceData = priceData
-
-	// 5. 计费估算：让适配器根据用户请求提供 OtherRatios（时长、分辨率等）
-	//    必须在 ModelPriceHelperPerCall 之后调用（它会重建 PriceData）。
-	//    ResolveOriginTask 可能已在 remix 路径中预设了 OtherRatios，此处合并。
-	if estimatedRatios := adaptor.EstimateBilling(c, info); len(estimatedRatios) > 0 {
-		for k, v := range estimatedRatios {
-			info.PriceData.AddOtherRatio(k, v)
+	if info.NativeBilling == nil {
+		info.OriginModelName = modelName
+		priceData, err := helper.ModelPriceHelperPerCall(c, info)
+		if err != nil {
+			return nil, service.TaskErrorWrapper(err, "model_price_error", http.StatusBadRequest)
 		}
-	}
+		info.PriceData = priceData
 
-	// 6. 将 OtherRatios 应用到基础额度（饱和转换，防止溢出成负数）
-	if !common.StringsContains(constant.TaskPricePatches, modelName) {
-		quotaWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.Quota))
-		quota, clamp := common.QuotaFromFloatChecked(quotaWithRatios)
-		info.PriceData.Quota = quota
-		noteTaskQuotaClamp(info, clamp)
-	}
-
-	// 7. 每次尝试在发送前预留当前价格；重试复用会话并补足更高价格。
-	if info.Billing != nil || !info.PriceData.FreeModel {
-		info.ForcePreConsume = true
-		if apiErr := service.PreConsumeBilling(c, info.PriceData.Quota, info); apiErr != nil {
-			return nil, service.TaskErrorFromAPIError(apiErr)
+		// 5. 计费估算：让适配器根据用户请求提供 OtherRatios（时长、分辨率等）
+		//    必须在 ModelPriceHelperPerCall 之后调用（它会重建 PriceData）。
+		//    ResolveOriginTask 可能已在 remix 路径中预设了 OtherRatios，此处合并。
+		if estimatedRatios := adaptor.EstimateBilling(c, info); len(estimatedRatios) > 0 {
+			for k, v := range estimatedRatios {
+				info.PriceData.AddOtherRatio(k, v)
+			}
 		}
-	}
 
+		// 6. 将 OtherRatios 应用到基础额度（饱和转换，防止溢出成负数）
+		if !common.StringsContains(constant.TaskPricePatches, modelName) {
+			quotaWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.Quota))
+			quota, clamp := common.QuotaFromFloatChecked(quotaWithRatios)
+			info.PriceData.Quota = quota
+			noteTaskQuotaClamp(info, clamp)
+		}
+
+		// 7. 每次尝试在发送前预留当前价格；重试复用会话并补足更高价格。
+		if info.Billing != nil || !info.PriceData.FreeModel {
+			info.ForcePreConsume = true
+			if apiErr := service.PreConsumeBilling(c, info.PriceData.Quota, info); apiErr != nil {
+				return nil, service.TaskErrorFromAPIError(apiErr)
+			}
+		}
+
+	}
 	// 8. 构建请求体
 	requestBody, err := adaptor.BuildRequestBody(c, info)
 	if err != nil {
 		return nil, service.TaskErrorWrapper(err, "build_request_failed", http.StatusInternalServerError)
 	}
 
+	// Fence the attempt before any supplier send. Native retries require proof of
+	// nonexecution and are not implicitly reopened by the legacy retry loop.
+	if info.PlatformMode {
+		if info.PlatformBilling == nil {
+			return nil, service.TaskErrorWrapperLocal(errors.New("platform session missing"), "platform_session", 500)
+		}
+		if err := info.PlatformBilling.Dispatch(c, info.ChannelId); err != nil {
+			return nil, service.TaskErrorWrapperLocal(err, "platform_dispatch", 409)
+		}
+	} else if info.NativeBilling != nil {
+		if err := service.MarkNativeBillingDispatched(c, info); err != nil {
+			return nil, service.TaskErrorWrapperLocal(err, "native_dispatch", 409)
+		}
+	}
 	// 9. 发送请求
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
@@ -253,9 +291,14 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, taskErr
 	}
 
+	if info.PlatformMode {
+		if err := info.PlatformBilling.BindTask(c, upstreamTaskID); err != nil {
+			return nil, service.TaskErrorWrapperLocal(err, "platform_bind_task", 500)
+		}
+	}
 	// 11. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios
 	finalQuota := info.PriceData.Quota
-	if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); len(adjustedRatios) > 0 {
+	if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); info.NativeBilling == nil && len(adjustedRatios) > 0 {
 		if adjustedQuota, ok := recalcQuotaFromRatios(info, adjustedRatios); ok {
 			// 基于调整后的 ratios 重新计算 quota
 			finalQuota = adjustedQuota

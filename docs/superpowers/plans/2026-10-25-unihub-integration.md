@@ -71,4 +71,4 @@
 - [x] Exercise product identity and UI against actual local UniHub/Casdoor if available; otherwise use explicit controlled HTTP fixtures and record that boundary. No credentials or actual provider keys in reports.
 - [x] Document exact llmrouter client/Origin/redirect, scopes, funding profiles/rates, internal service networking, fixed routing identity, token lifecycle, supported protocols, legacy-account migration boundary and rollback for new traffic.
 - [x] Run necessary affected tests/builds, resolve scoped-review findings, record exact results and leave reviewable committed local branches and an honest acceptance report.
-- [ ] Complete the final whole-branch diff review and resolve any resulting important findings (Task 4 remaining gate; no deployment/publication authorized).
+- [x] Complete the final whole-branch diff review and resolve any resulting important findings. Final independent review approved LLMRouter251c476e1 / UniHub54da524; subsequent changes only untrack coordination evidence and finish acceptance documentation. No deployment/publication performed.

@@ -8,8 +8,7 @@ import (
 	"io"
 	"mime"
 	"mime/multipart"
-	"net/http"
-	"strconv"
+
 	"strings"
 	"unicode/utf8"
 
@@ -20,9 +19,9 @@ import (
 // Duration/provider-unit operations require a configured cap enforced by their
 // producer; absence rejects admission before reserving funds.
 type OperationLimits struct {
-	MaxBodyBytes int64
-	MaxQuantity  int
-	Policy       string
+	MaxBodyBytes int64  `json:"max_body_bytes"`
+	MaxQuantity  int    `json:"max_quantity"`
+	Policy       string `json:"policy"`
 }
 type operationRequest struct {
 	Model     string
@@ -260,6 +259,3 @@ func ValidatedContentType(v string) string {
 	}
 	return ""
 }
-
-var _ = http.MethodPost
-var _ = strconv.Itoa

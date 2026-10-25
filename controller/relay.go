@@ -583,6 +583,21 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 		if info.PlatformBilling == nil {
 			return types.NewError(errors.New("platform billing missing"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		}
+		// Platform funding is owned by UniHub. Construct the neutral context
+		// from the frozen remote tariff before any helper can enter a provider;
+		// no local price/quota reservation is consulted.
+		price, ok := info.PlatformBilling.MeteredPrice()
+		if !ok {
+			// exclusive_v1 remains supported only by its Chat helper, which owns
+			// Session.Dispatch and raw usage observation.
+			return nil
+		}
+		if info.NativeBilling == nil {
+			info.NativeBilling = &relaycommon.NativeBillingContext{
+				CallID: info.PlatformBilling.CallID(), Platform: true, Price: price,
+				Observe: info.PlatformBilling.ObserveMetering,
+			}
+		}
 		return nil
 	}
 

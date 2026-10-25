@@ -1,7 +1,9 @@
 package controller
 
 import (
+	"context"
 	"errors"
+	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"io"
 	"net/http"
 	"slices"
@@ -144,6 +146,11 @@ func (h *OCRHandler) Create(c *gin.Context) {
 		return
 	}
 	key := c.GetHeader("Idempotency-Key")
+	if value, platform := c.Get("platform_billing"); platform {
+		if session, ok := value.(*platformbilling.Session); ok {
+			key = session.CallID()
+		}
+	}
 	if key == "" {
 		key = uuid.NewString()
 	}
@@ -205,9 +212,30 @@ func (h *OCRHandler) Create(c *gin.Context) {
 		return
 	}
 	admission := ocr.AuthorizedAdmission{IdempotencyKey: key, UserID: user.Id, TokenID: token.Id, ChannelID: selected.ChannelID, Model: selected.BillingModel, UserGroup: user.Group, UsingGroup: selected.SelectedGroup, BillingPreference: user.GetSetting().BillingPreference}
+	if value, platform := c.Get("platform_billing"); platform {
+		session, ok := value.(*platformbilling.Session)
+		if !ok {
+			h.fail(c, 400, "platform billing missing")
+			return
+		}
+		price, ok := session.MeteredPrice()
+		if !ok || price.Operation != "ocr" {
+			h.fail(c, 400, "platform OCR tariff required")
+			return
+		}
+		admission.PlatformCallID = session.CallID()
+		admission.PlatformPrice = &price
+		admission.Dispatch = func(ctx context.Context) error { return session.Dispatch(ctx, selected.ChannelID) }
+		admission.BindTask = session.BindTask
+	}
 	status, err := h.Runtime.Service.Create(c.Request.Context(), ocr.CreateRequest{Admission: admission, RequestedModel: in.Model, Target: target, Capabilities: selected.Capabilities, Input: media, DisableRetry: strings.EqualFold(c.GetHeader("X-Should-Retry"), "false")})
 	if err != nil {
 		h.serviceError(c, err, 502)
+		return
+	}
+	if value, platform := c.Get("platform_billing"); platform {
+		session := value.(*platformbilling.Session)
+		c.JSON(202, gin.H{"id": session.CallID(), "job_id": status.JobID, "state": status.State, "status_url": "/platform/v1/ocr/jobs/" + session.CallID()})
 		return
 	}
 	h.respond(c, status, in.Model, true)
@@ -218,7 +246,7 @@ func (h *OCRHandler) Status(c *gin.Context) {
 		return
 	}
 	var job model.OCRJob
-	if err := h.Runtime.DB.WithContext(c.Request.Context()).Where("id = ? AND user_id = ? AND token_id = ?", c.Param("id"), c.GetInt("id"), c.GetInt("token_id")).First(&job).Error; err != nil {
+	if err := h.Runtime.DB.WithContext(c.Request.Context()).Where("id = ? AND user_id = ? AND token_id = ? AND funding <> 'platform'", c.Param("id"), c.GetInt("id"), c.GetInt("token_id")).First(&job).Error; err != nil {
 		h.fail(c, 404, "OCR job not found")
 		return
 	}
@@ -273,21 +301,32 @@ func (h *OCRHandler) candidates(c *gin.Context, name string) ([]modelcatalog.Res
 	if err := db.First(&user, c.GetInt("id")).Error; err != nil {
 		return nil, user, token, err
 	}
-	if err := db.First(&token, c.GetInt("token_id")).Error; err != nil {
-		return nil, user, token, err
-	}
-	if user.Status != common.UserStatusEnabled || token.UserId != user.Id || (token.Status != common.TokenStatusEnabled && !(c.Request.Method == http.MethodGet && token.Status == common.TokenStatusExhausted)) || token.ExpiredTime != -1 && token.ExpiredTime < time.Now().Unix() {
-		return nil, user, token, denied
-	}
-	if token.ModelLimitsEnabled && !token.GetModelLimitsMap()[name] {
-		return nil, user, token, denied
-	}
 	group := user.Group
-	if token.Group != "" {
-		if _, ok := service.GetUserUsableGroups(user.Group)[token.Group]; !ok {
+	if _, platform := c.Get("platform_billing"); platform {
+		if user.Status != common.UserStatusEnabled {
 			return nil, user, token, denied
 		}
-		group = token.Group
+		group = common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+		if group == "" || group == "auto" {
+			return nil, user, token, denied
+		}
+	} else {
+		if err := db.First(&token, c.GetInt("token_id")).Error; err != nil {
+			return nil, user, token, err
+		}
+		if user.Status != common.UserStatusEnabled || token.UserId != user.Id || (token.Status != common.TokenStatusEnabled && !(c.Request.Method == http.MethodGet && token.Status == common.TokenStatusExhausted)) || token.ExpiredTime != -1 && token.ExpiredTime < time.Now().Unix() {
+			return nil, user, token, denied
+		}
+		if token.ModelLimitsEnabled && !token.GetModelLimitsMap()[name] {
+			return nil, user, token, denied
+		}
+		group = user.Group
+		if token.Group != "" {
+			if _, ok := service.GetUserUsableGroups(user.Group)[token.Group]; !ok {
+				return nil, user, token, denied
+			}
+			group = token.Group
+		}
 	}
 	groups := []string{group}
 	if group == "auto" {

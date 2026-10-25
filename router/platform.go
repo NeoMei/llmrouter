@@ -38,6 +38,9 @@ func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 		}
 		c.JSON(200, receipt)
 	})
+	registerPlatformOperation(engine, adapter, "/platform/v1/videos", "video", "/v1/videos", types.RelayFormatTask)
+	registerPlatformOperation(engine, adapter, "/platform/v1/ocr/jobs", "ocr", "/v1/ocr", types.RelayFormat("platform_ocr"))
+	registerPlatformTaskReads(engine, adapter)
 	registerPlatformOperation(engine, adapter, "/platform/v1/responses", "responses", "/v1/responses", types.RelayFormatOpenAIResponses)
 	registerPlatformOperation(engine, adapter, "/platform/v1/embeddings", "embedding", "/v1/embeddings", types.RelayFormatEmbedding)
 	registerPlatformOperation(engine, adapter, "/platform/v1/audio/speech", "speech", "/v1/audio/speech", types.RelayFormatOpenAIAudio)
@@ -144,5 +147,25 @@ func registerPlatformOperation(engine *gin.Engine, adapter *platformbilling.Adap
 			}
 		}()
 		c.Next()
-	}, middleware.Distribute(), func(c *gin.Context) { controller.Relay(c, format) })
+	}, func(c *gin.Context) {
+		if operation == "ocr" {
+			c.Next()
+			return
+		}
+		middleware.Distribute()(c)
+	}, func(c *gin.Context) {
+		if operation == "video" {
+			controller.RelayTask(c)
+			return
+		}
+		if operation == "ocr" {
+			controller.OCRBodyLimit(c)
+			return
+		}
+		controller.Relay(c, format)
+	}, func(c *gin.Context) {
+		if operation == "ocr" {
+			(&controller.OCRHandler{Runtime: controller.OCRRuntime}).Create(c)
+		}
+	})
 }

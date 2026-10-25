@@ -94,7 +94,18 @@ func VideoProxy(c *gin.Context) {
 	}
 
 	userID := c.GetInt("id")
-	task, exists, err := model.GetByTaskId(userID, taskID)
+	var task *model.Task
+	var exists bool
+	var err error
+	if value, platform := c.Get("platform_verified_video_task"); platform {
+		task, exists = value.(*model.Task)
+		if !exists || task.FundingOwner != "platform" || task.TaskID != taskID {
+			videoProxyError(c, 404, "invalid_request_error", "Task not found")
+			return
+		}
+	} else {
+		task, exists, err = model.GetByTaskId(userID, taskID)
+	}
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to query task %s: %s", taskID, err.Error()))
 		videoProxyError(c, http.StatusInternalServerError, "server_error", "Failed to query task")

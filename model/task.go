@@ -47,6 +47,7 @@ const (
 const TaskRefundLegacyCutoff int64 = 1740182400 // 2025-02-22 00:00:00 UTC
 
 type Task struct {
+	PlatformCallID string `json:"-" gorm:"size:128;index"`
 	// NativePending is an indexed durable settlement outbox, written with terminal status.
 	NativePending  bool                  `json:"-" gorm:"index"`
 	NativeEvidence string                `json:"-" gorm:"type:text"`
@@ -226,6 +227,7 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 		t.FundingOwner = "native"
 		if n.Platform {
 			t.FundingOwner = "platform"
+			t.PlatformCallID = n.CallID
 			t.PrivateData.BillingContext.PlatformCallID = n.CallID
 			t.PrivateData.BillingContext.NativeCallID = ""
 			t.PrivateData.Key = ""

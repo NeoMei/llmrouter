@@ -62,7 +62,10 @@ func NativeAudioUsage(p metering.Price, seconds *float64, terminal bool) meterin
 	val := s
 	if len(parts) == 2 {
 		scale = len(parts[1])
-		val = parts[0] + parts[1]
+		val = strings.TrimLeft(parts[0]+parts[1], "0")
+		if val == "" {
+			val = "0"
+		}
 	}
 	u.State = "confirmed"
 	u.Measurements = []metering.Measurement{{Key: "audio", Unit: "audio_second", Quantity: metering.Quantity{Value: val, Scale: scale}}}

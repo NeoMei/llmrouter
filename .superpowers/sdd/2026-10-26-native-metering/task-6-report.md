@@ -9,4 +9,4 @@ Commit `b87c8d9f4` wires frozen native task contracts into `TaskBillingContext`,
 Validation: `go test ./relay/channel/task/... ./service ./model ./service/ocr ./relay ./controller -count=1` passed, including `TestPlatformOCRNeverCreatesLocalMoneyOperations` and video native evidence fixtures.
 
 ## Concerns
-Platform controller must supply the `PlatformTaskObserver`; platform adapter must expose trusted no-output release for failed OCR/video terminals. Provider-unit caps require `LLMROUTER_NATIVE_VIDEO_PROVIDER_CAPS` per model/policy; absent cap rejects admission. Veo remains pending until bounded media probing is implemented. No paid/provider calls were made.
+Platform controller must supply the `PlatformTaskObserver`; platform adapter must install `PlatformTaskRelease` for trusted no-output release for failed OCR/video terminals. Provider-unit caps require `LLMROUTER_NATIVE_VIDEO_PROVIDER_CAPS` per model/policy; absent cap rejects admission. Veo is admission-disabled/pending until bounded media probing is implemented; no fallback estimate is allowed. No paid/provider calls were made.

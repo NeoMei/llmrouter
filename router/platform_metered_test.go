@@ -32,27 +32,38 @@ import (
 )
 
 func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
-	for _, tc := range []struct{ op, path, body, response, unit, key, policy string }{
-		{"video", "/videos", `{"model":"platform-test","prompt":"hello","seconds":"4","size":"720x1280"}`, "", "video_second", "video", "sora_completed_seconds_v1"},
-		{"ocr", "/ocr/jobs", "", "", "request", "requests", "success_request"},
-		{"chat", "/chat/completions", `{"model":"platform-test","messages":[{"role":"user","content":"hello"}],"max_tokens":10}`, `{"id":"chat","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`, "token", "input", "sum"},
-		{"responses", "/responses", `{"model":"platform-test","input":"hello","max_output_tokens":10}`, `{"id":"resp","object":"response","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`, "token", "input", "sum"},
-		{"transcription", "/audio/transcriptions", "", `{"text":"hello"}`, "audio_second", "audio", "server_audio_measurement_v1"},
-		{"image_edit", "/images/edits", "", `{"created":1,"data":[{"b64_json":"aGVsbG8="}]}`, "image", "images", "successful_outputs_v1"},
-		{"embedding", "/embeddings", `{"model":"platform-test","input":"hello"}`, `{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1]}],"model":"platform-test","usage":{"prompt_tokens":1,"total_tokens":1}}`, "token", "input", "sum"},
-		{"speech", "/audio/speech", `{"model":"platform-test","input":"hello","voice":"alloy"}`, "audio-bytes", "character", "characters", "unicode_scalar_v1"},
-		{"image_generation", "/images/generations", `{"model":"platform-test","prompt":"hello","n":1}`, `{"created":1,"data":[{"b64_json":"aGVsbG8="}]}`, "image", "images", "successful_outputs_v1"},
+	for _, tc := range []struct {
+		op, path, body, response, unit, key, policy string
+		failed                                      bool
+	}{
+		{"video", "/videos", `{"model":"platform-test","prompt":"hello","seconds":"4","size":"720x1280"}`, "", "video_second", "video", "sora_completed_seconds_v1", false},
+		{"video", "/videos", `{"model":"platform-test","prompt":"hello","seconds":"4","size":"720x1280"}`, "", "video_second", "video", "sora_completed_seconds_v1", true},
+		{"ocr", "/ocr/jobs", "", "", "request", "requests", "success_request", false},
+		{"ocr", "/ocr/jobs", "", "", "request", "requests", "success_request", true},
+		{"chat", "/chat/completions", `{"model":"platform-test","messages":[{"role":"user","content":"hello"}],"max_tokens":10}`, `{"id":"chat","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`, "token", "input", "sum", false},
+		{"responses", "/responses", `{"model":"platform-test","input":"hello","max_output_tokens":10}`, `{"id":"resp","object":"response","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`, "token", "input", "sum", false},
+		{"transcription", "/audio/transcriptions", "", `{"text":"hello"}`, "audio_second", "audio", "server_audio_measurement_v1", false},
+		{"image_edit", "/images/edits", "", `{"created":1,"data":[{"b64_json":"aGVsbG8="}]}`, "image", "images", "successful_outputs_v1", false},
+		{"embedding", "/embeddings", `{"model":"platform-test","input":"hello"}`, `{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1]}],"model":"platform-test","usage":{"prompt_tokens":1,"total_tokens":1}}`, "token", "input", "sum", false},
+		{"speech", "/audio/speech", `{"model":"platform-test","input":"hello","voice":"alloy"}`, "audio-bytes", "character", "characters", "unicode_scalar_v1", false},
+		{"image_generation", "/images/generations", `{"model":"platform-test","prompt":"hello","n":1}`, `{"created":1,"data":[{"b64_json":"aGVsbG8="}]}`, "image", "images", "successful_outputs_v1", false},
 	} {
-		t.Run(tc.op, func(t *testing.T) {
+		name := tc.op
+		if tc.failed {
+			name += "_no_output"
+		}
+		t.Run(name, func(t *testing.T) {
 			require.NoError(t, i18n.Init())
 			gin.SetMode(gin.TestMode)
-			sends, settles := 0, 0
+			sends, settles, releases := 0, 0, 0
 			var up *httptest.Server
 			up = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if tc.op == "video" {
 					if r.Method == "POST" {
 						sends++
 						_, _ = w.Write([]byte(`{"id":"provider-video","object":"video","status":"queued","model":"platform-test"}`))
+					} else if tc.failed {
+						_, _ = w.Write([]byte(`{"id":"provider-video","status":"failed","videos":[],"error":{"code":"content_policy_violation","message":"rejected"}}`))
 					} else {
 						_, _ = w.Write([]byte(`{"id":"provider-video","object":"video","status":"completed","seconds":"4","progress":100,"model":"platform-test"}`))
 					}
@@ -64,6 +75,10 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 						sends++
 						_, _ = w.Write([]byte(`{"code":0,"data":{"jobId":"provider-owned"}}`))
 					case "/api/v2/ocr/jobs/provider-owned":
+						if tc.failed {
+							_, _ = w.Write([]byte(`{"code":0,"data":{"state":"failed"}}`))
+							return
+						}
 						fmt.Fprintf(w, `{"code":0,"data":{"state":"done","extractProgress":{"totalPages":1,"extractedPages":1},"resultUrl":{"jsonUrl":%q}}}`, up.URL+"/results")
 					case "/results":
 						_, _ = w.Write([]byte(`{"result":{"layoutParsingResults":[{"markdown":{"text":"hello","images":{}}}]}}` + "\n"))
@@ -88,7 +103,13 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 				var out any
 				switch r.URL.Path {
 				case "/internal/v1/model-credentials/verify":
-					out = platformbilling.Claims{ID: "credential", Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: "origin", Models: []string{"platform-test"}, TaskID: "task", ExpiresAt: time.Now().Add(time.Hour)}
+					var input map[string]string
+					require.NoError(t, common.DecodeJson(r.Body, &input))
+					account := "account"
+					if input["token"] == "uh_model_other" {
+						account = "other"
+					}
+					out = platformbilling.Claims{ID: "credential", Audience: "llmrouter", ActorID: "actor", AccountID: account, OriginProductID: "origin", Models: []string{"platform-test"}, TaskID: "task", ExpiresAt: time.Now().Add(time.Hour)}
 				case "/internal/v1/rates":
 					out = []platformbilling.Rate{rate}
 				case "/internal/v1/calls/reserve":
@@ -101,6 +122,7 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 					remote.Status = "SETTLED"
 					out = remote
 				case "/internal/v1/calls/call/release":
+					releases++
 					remote.Status = "RELEASED"
 					out = remote
 				default:
@@ -231,6 +253,7 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 				oldLimit := constant.TaskQueryLimit
 				constant.TaskQueryLimit = 100
 				service.RunTaskPollingOnce(context.Background(), nil)
+				service.RunTaskPollingOnce(context.Background(), nil)
 				constant.TaskQueryLimit = oldLimit
 				r := httptest.NewRequest("GET", "/platform/v1/videos/call", nil)
 				r.Header.Set("Authorization", "Bearer uh_model_token")
@@ -242,8 +265,38 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 			require.Equal(t, 1, sends)
 			var call platformbilling.Call
 			require.NoError(t, db.First(&call).Error)
-			assert.Equal(t, "SETTLED", call.Status, call.Evidence)
-			assert.Equal(t, 1, settles)
+			if tc.failed {
+				assert.Equal(t, "RELEASED", call.Status, call.Evidence)
+				assert.Equal(t, 1, releases)
+				assert.Zero(t, settles)
+			} else {
+				assert.Equal(t, "SETTLED", call.Status, call.Evidence)
+				assert.Equal(t, 1, settles)
+			}
+			if tc.op == "ocr" || tc.op == "video" {
+				path := "/platform/v1/videos/call"
+				if tc.op == "ocr" {
+					path = "/platform/v1/ocr/jobs/call"
+				}
+				for _, suffix := range []string{"", "/result", "/cancel"} {
+					method := "GET"
+					if suffix == "/cancel" {
+						method = "POST"
+					}
+					r := httptest.NewRequest(method, path+suffix, nil)
+					r.Header.Set("Authorization", "Bearer uh_model_other")
+					r.Header.Set("X-UniHub-Task-ID", "task")
+					denied := httptest.NewRecorder()
+					engine.ServeHTTP(denied, r)
+					assert.Equal(t, 404, denied.Code)
+				}
+				r := httptest.NewRequest("POST", path+"/cancel", nil)
+				r.Header.Set("Authorization", "Bearer uh_model_token")
+				r.Header.Set("X-UniHub-Task-ID", "task")
+				unsupported := httptest.NewRecorder()
+				engine.ServeHTTP(unsupported, r)
+				assert.Equal(t, 501, unsupported.Code)
+			}
 			w = send()
 			assert.Equal(t, 409, w.Code)
 			assert.Equal(t, 1, sends)

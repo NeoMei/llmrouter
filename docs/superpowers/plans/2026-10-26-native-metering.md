@@ -186,4 +186,3 @@ assert.Equal(t, heldBalance, userBalance())
 - [ ] Run `bun run typecheck`, focused tests/lint and build; run backend tests and both repositories' unit/schema tests.
 - [ ] Execute isolated actual UniHub HTTP/PostgreSQL/ledger integration with synthetic providers for six units, both assets, replay, loss/restart, and native balance isolation. Record real supplier calls separately and do not fabricate acceptance.
 - [ ] Broad final review against approved spec, fix findings, save verification evidence and commit only task-owned files.
-

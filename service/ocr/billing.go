@@ -149,6 +149,15 @@ func (b *Billing) Finish(ctx context.Context, id, outcome string) (model.OCRJob,
 	if j.BillingState == "settled" || j.BillingState == "refunded" {
 		return j, nil
 	}
+	if outcome != "success" {
+		if j.ProviderState != "failed" || j.ProviderJobID == "" || base.PlatformTaskRelease == nil {
+			return j, errors.New("platform OCR no-output release pending")
+		}
+		if err = base.PlatformTaskRelease(ctx, j.PlatformCallID, j.ProviderJobID); err != nil {
+			return j, err
+		}
+		return b.CompletePlatformOCR(ctx, id)
+	}
 	if base.PlatformTaskObserver == nil {
 		return j, errors.New("platform OCR observer unavailable")
 	}
@@ -160,9 +169,6 @@ func (b *Billing) Finish(ctx context.Context, id, outcome string) (model.OCRJob,
 	if err = base.PlatformTaskObserver(ctx, j.PlatformCallID, j.ProviderJobID, u); err != nil {
 		return j, err
 	}
-	// Failure/uncertain output stays held; no automatic platform refund.
-	if outcome != "success" {
-		return j, nil
-	}
+
 	return b.CompletePlatformOCR(ctx, id)
 }

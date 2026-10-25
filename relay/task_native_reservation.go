@@ -5,6 +5,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/metering"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/gin-gonic/gin"
 	"os"
 	"strconv"
@@ -16,6 +17,9 @@ import (
 // This is an admission cap, never final usage. No provider-unit guess is made.
 func NativeVideoReservation(c *gin.Context, modelName string, price metering.Price) (metering.Usage, error) {
 	u := metering.Usage{Version: "metered_v2", Operation: "video", State: "incomplete", Source: "reservation_bound"}
+	if price.Policy == "veo_output_probe_v1" {
+		return u, errors.New("native Veo output probing is not enabled")
+	}
 	req, err := relaycommon.GetTaskRequest(c)
 	if err != nil {
 		return u, err
@@ -38,18 +42,22 @@ func NativeVideoReservation(c *gin.Context, modelName string, price metering.Pri
 	}
 	term := price.Terms[0]
 	if term.Unit == "provider_unit" {
-		var caps map[string]struct {
-			Policy   string            `json:"policy"`
-			Quantity metering.Quantity `json:"quantity"`
+		if configured, ok := billing_setting.ResolveModelNativeReservationLimit(modelName, "video"); ok {
+			q = configured
+		} else {
+			var caps map[string]struct {
+				Policy   string            `json:"policy"`
+				Quantity metering.Quantity `json:"quantity"`
+			}
+			if common.UnmarshalUnique([]byte(os.Getenv("LLMROUTER_NATIVE_VIDEO_PROVIDER_CAPS")), &caps) != nil {
+				return u, errors.New("native provider-unit reservation cap not configured")
+			}
+			cap, ok := caps[modelName]
+			if !ok || cap.Policy != price.Policy || cap.Quantity.Value == "0" {
+				return u, errors.New("native provider-unit reservation policy mismatch")
+			}
+			q = cap.Quantity
 		}
-		if common.UnmarshalUnique([]byte(os.Getenv("LLMROUTER_NATIVE_VIDEO_PROVIDER_CAPS")), &caps) != nil {
-			return u, errors.New("native provider-unit reservation cap not configured")
-		}
-		cap, ok := caps[modelName]
-		if !ok || cap.Policy != price.Policy || cap.Quantity.Value == "0" {
-			return u, errors.New("native provider-unit reservation policy mismatch")
-		}
-		q = cap.Quantity
 	}
 	u.Measurements = []metering.Measurement{{Key: term.Key, Unit: term.Unit, ProviderUnit: term.ProviderUnit, Quantity: q}}
 	check := u

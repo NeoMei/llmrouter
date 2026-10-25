@@ -14,9 +14,13 @@ func VideoNativeUsage(price metering.Price, body []byte, providerID string) mete
 	var r struct {
 		Status  string          `json:"status"`
 		Seconds json.RawMessage `json:"seconds"`
+		Videos  json.RawMessage `json:"videos"`
 		Data    struct {
 			Status string          `json:"task_status"`
 			Units  json.RawMessage `json:"final_unit_deduction"`
+			Result struct {
+				Videos json.RawMessage `json:"videos"`
+			} `json:"task_result"`
 		} `json:"data"`
 		Output struct {
 			Status string `json:"task_status"`
@@ -27,8 +31,19 @@ func VideoNativeUsage(price metering.Price, body []byte, providerID string) mete
 			Duration      json.RawMessage `json:"duration"`
 		} `json:"usage"`
 	}
-	if common.Unmarshal(body, &r) != nil {
+	if common.UnmarshalUnique(body, &r) != nil {
 		u.State = "invalid"
+		return u
+	}
+	// A failure alone can also represent an unknown transport outcome. Release
+	// only an explicit terminal receipt with an empty output collection.
+	outputs := r.Videos
+	if price.Policy == "kling_final_units_v1" {
+		outputs = r.Data.Result.Videos
+	}
+	if (r.Status == "failed" || r.Data.Status == "failed" || r.Output.Status == "FAILED") && string(outputs) == "[]" {
+		u.State = "incomplete"
+		u.Source = "provider_confirmed_no_output"
 		return u
 	}
 	var raw json.RawMessage

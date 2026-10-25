@@ -12,6 +12,7 @@ func TestVideoNativeFinalEvidence(t *testing.T) {
 		policy, unit, namespace, body, state, value string
 		scale                                       int
 	}{
+		{"sora_completed_seconds_v1", "video_second", "", `{"status":"completed","seconds":"5","seconds":"0"}`, "invalid", "", 0},
 		{"sora_completed_seconds_v1", "video_second", "", `{"status":"completed","seconds":"5"}`, "confirmed", "5", 0},
 		{"sora_completed_seconds_v1", "video_second", "", `{"status":"queued","seconds":"10"}`, "missing", "", 0},
 		{"sora_completed_seconds_v1", "video_second", "", `{"status":"completed"}`, "missing", "", 0},
@@ -38,4 +39,11 @@ func TestVideoNativeFinalEvidence(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestVideoNativeNoOutputRequiresExplicitEmptyCollection(t *testing.T) {
+	p := metering.Price{Policy: "sora_completed_seconds_v1"}
+	assert.NotEqual(t, "provider_confirmed_no_output", VideoNativeUsage(p, []byte(`{"status":"failed"}`), "id").Source)
+	assert.Equal(t, "provider_confirmed_no_output", VideoNativeUsage(p, []byte(`{"status":"failed","videos":[]}`), "id").Source)
+	assert.NotEqual(t, "provider_confirmed_no_output", VideoNativeUsage(p, []byte(`{"status":"failed","videos":[{"id":"output"}]}`), "id").Source)
 }

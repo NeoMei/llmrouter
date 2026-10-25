@@ -43,8 +43,14 @@ func prepareNativeTaskIntent(task *model.Task, body []byte) error {
 	return nil
 }
 func settleNativeTask(ctx context.Context, task *model.Task) error {
+	if err := model.DB.WithContext(ctx).First(task, task.ID).Error; err != nil {
+		return err
+	}
 	if !task.NativePending {
 		return nil
+	}
+	if task.NativeConflictEvidence != "" {
+		return errors.New("native task evidence conflict pending reconciliation")
 	}
 	bc := task.PrivateData.BillingContext
 	if bc == nil || bc.NativePrice == nil {
@@ -55,6 +61,15 @@ func settleNativeTask(ctx context.Context, task *model.Task) error {
 		return err
 	}
 	if task.FundingOwner == "platform" {
+		if task.Status == model.TaskStatusFailure && u.Source == "provider_confirmed_no_output" {
+			if PlatformTaskRelease == nil {
+				return errors.New("platform task release unavailable")
+			}
+			if err := PlatformTaskRelease(ctx, bc.PlatformCallID, task.GetUpstreamTaskID()); err != nil {
+				return err
+			}
+			goto clear
+		}
 		if u.State == "confirmed" && len(u.Measurements) == 0 && PlatformTaskRelease != nil {
 			return PlatformTaskRelease(ctx, bc.PlatformCallID, task.GetUpstreamTaskID())
 		}
@@ -79,6 +94,8 @@ func settleNativeTask(ctx context.Context, task *model.Task) error {
 	if u.State != "confirmed" {
 		return nil
 	}
+
+clear:
 	// Unknown evidence is durably held in the owner journal; it is not a final
 	// debit or refund. Avoid indefinitely polling the supplier for the same data.
 	result := model.DB.WithContext(ctx).Model(&model.Task{}).Where("id = ? AND native_evidence = ?", task.ID, task.NativeEvidence).Update("native_pending", false)
@@ -87,14 +104,24 @@ func settleNativeTask(ctx context.Context, task *model.Task) error {
 	}
 	return result.Error
 }
+
+// Each run advances through the complete ordered snapshot, rather than letting
+// permanent measurement holds occupy the first page forever.
 func recoverNativeTasks(ctx context.Context) {
-	var tasks []model.Task
-	if model.DB.WithContext(ctx).Where("native_pending = ?", true).Order("id").Limit(100).Find(&tasks).Error != nil {
-		return
-	}
-	for i := range tasks {
-		if err := settleNativeTask(ctx, &tasks[i]); err != nil {
-			common.SysError("native task settlement pending: " + err.Error())
+	var after int64
+	for ctx.Err() == nil {
+		var tasks []model.Task
+		if model.DB.WithContext(ctx).Where("native_pending = ? AND id > ?", true, after).Order("id").Limit(100).Find(&tasks).Error != nil {
+			return
+		}
+		for i := range tasks {
+			if err := settleNativeTask(ctx, &tasks[i]); err != nil {
+				common.SysError("native task settlement pending: " + err.Error())
+			}
+			after = tasks[i].ID
+		}
+		if len(tasks) < 100 {
+			return
 		}
 	}
 }

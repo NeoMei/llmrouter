@@ -914,16 +914,19 @@ func (s *OCRBillingStore) CompletePlatformOCR(ctx context.Context, id string) (O
 		if err != nil {
 			return err
 		}
-		if j.Funding != "platform" || j.Decision != "success" {
+		if j.Funding != "platform" || (j.Decision != "success" && j.Decision != "failure" && j.Decision != "cancel") {
 			return ErrOCRConflict
 		}
-		if j.BillingState == "settled" {
+		if j.BillingState == "settled" || j.BillingState == "refunded" {
 			return nil
 		}
 		if j.BillingState != "platform_pending" {
 			return ErrOCRConflict
 		}
 		j.BillingState = "settled"
+		if j.Decision != "success" {
+			j.BillingState = "refunded"
+		}
 		return ocrSaveJob(tx, j)
 	})
 	out, readErr := s.Inspect(ctx, id)

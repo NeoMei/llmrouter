@@ -371,6 +371,11 @@ func updateSunoAccountTasks(ctx context.Context, ch *model.Channel, taskIds []st
 		if err != nil {
 			logger.LogError(ctx, fmt.Sprintf("UpdateSunoTask task %s error: %v", task.TaskID, err))
 		} else if !won {
+			if task.NativeEvidence != "" {
+				if conflictErr := model.RecordNativeTaskConflict(task.ID, task.NativeEvidence); conflictErr != nil {
+					logger.LogError(ctx, fmt.Sprintf("Task %s native conflict persistence failed: %s", task.TaskID, conflictErr.Error()))
+				}
+			}
 			logger.LogWarn(ctx, fmt.Sprintf("Task %s CAS lost or no-op update, skip billing", task.TaskID))
 		} else if isFailure && prevStatus != model.TaskStatusFailure && task.Quota != 0 {
 			RefundTaskQuota(ctx, task, task.FailReason)

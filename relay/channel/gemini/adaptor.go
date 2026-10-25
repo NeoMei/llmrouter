@@ -250,6 +250,9 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
+	if info.NativeBilling != nil && (info.NativeBilling.Price.Operation == "embedding" || strings.Contains(info.RequestURLPath, ":embedContent") || strings.Contains(info.RequestURLPath, ":batchEmbedContents")) {
+		return nil, errors.New("Gemini embedding does not provide actual token billing evidence")
+	}
 	return channel.DoApiRequest(a, c, info, requestBody)
 }
 

@@ -358,6 +358,9 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 }
 
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
+	if relayInfo != nil && relayInfo.NativeBilling != nil {
+		return
+	}
 	if relayInfo != nil && relayInfo.PlatformMode {
 		return
 	}

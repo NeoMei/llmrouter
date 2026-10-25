@@ -140,6 +140,8 @@ func handleFinalStream(c *gin.Context, info *relaycommon.RelayInfo, resp *dto.Ch
 }
 
 func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response, callback func(data string, geminiResponse *dto.GeminiChatResponse) bool) (*dto.Usage, *types.NewAPIError) {
+	nativeEvidence, finishNativeEvidence := service.NativeTokenObserver(c.Request.Context(), info, dto.BillingUsageSourceGeminiChat)
+	defer finishNativeEvidence()
 	var usage = &dto.Usage{}
 	var imageCount int
 	var hasBillableUsageMetadata bool
@@ -191,6 +193,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	}
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		nativeEvidence.Observe([]byte(data), true)
 		if streamErr != nil {
 			sr.Stop(streamErr)
 			return
@@ -359,7 +362,10 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 }
 
 func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+	nativeEvidence, finishNativeEvidence := service.NativeTokenObserver(c.Request.Context(), info, dto.BillingUsageSourceGeminiChat)
+	defer finishNativeEvidence()
 	responseBody, err := io.ReadAll(resp.Body)
+	nativeEvidence.Observe(responseBody, false)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
@@ -437,9 +443,12 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 }
 
 func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+	nativeEvidence, finishNativeEvidence := service.NativeTokenObserver(c.Request.Context(), info, dto.BillingUsageSourceGeminiChat)
+	defer finishNativeEvidence()
 	defer service.CloseResponseBodyGracefully(resp)
 
 	responseBody, readErr := io.ReadAll(resp.Body)
+	nativeEvidence.Observe(responseBody, false)
 	if readErr != nil {
 		return nil, types.NewOpenAIError(readErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}

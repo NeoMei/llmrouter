@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
@@ -225,7 +226,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	billingLifecycleStarted := false
 	defer func() {
 		// Only return quota if downstream failed and quota was actually pre-consumed
-		if newAPIError != nil && billingLifecycleStarted {
+		if newAPIError != nil && billingLifecycleStarted && !relayInfo.PlatformMode {
 			newAPIError = service.NormalizeViolationFeeError(newAPIError)
 			if relayInfo.Billing != nil {
 				relayInfo.Billing.Refund(c)
@@ -400,9 +401,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		logger.LogInfo(c, retryLogStr)
 	}
 	if newAPIError != nil {
-		gopool.Go(func() {
-			perfmetrics.RecordRelaySample(relayInfo, false, 0)
-		})
+		perfmetrics.RecordRelaySampleAsync(relayInfo, false, 0)
 	}
 }
 
@@ -566,6 +565,12 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 }
 
 func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) *types.NewAPIError {
+	if info.PlatformMode {
+		if info.PlatformBilling == nil {
+			return types.NewError(errors.New("platform billing missing"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return nil
+	}
 	// Native per-image pricing uses the validated selected model contract. The
 	// public alias may resemble DALL·E and carry unrelated size/quality ratios.
 	if c.GetInt("channel_type") == constant.ChannelTypeAli {
@@ -704,6 +709,12 @@ func revalidateRouteCandidateAbility(c *gin.Context, candidate relaycommon.Route
 }
 
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
+	if v, ok := c.Get("platform_billing"); ok {
+		session, valid := v.(*platformbilling.Session)
+		if !valid || session == nil || !session.CanRetry() || c.Writer.Written() {
+			return false
+		}
+	}
 	if openaiErr == nil || retryTimes <= 0 || !accountpool.RetryAllowed(c) {
 		return false
 	}

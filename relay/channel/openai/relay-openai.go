@@ -185,6 +185,9 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			sr.Stop(streamErr)
 			return
 		}
+		if info.PlatformMode && info.PlatformBilling != nil {
+			info.PlatformBilling.ObserveRawEnvelope([]byte(data), true)
+		}
 		emitted, err := streamValidator.Accept(common.StringToByteSlice(data))
 		if err != nil {
 			streamErr = toolpolicy.NewResponseValidationError(err)
@@ -308,6 +311,9 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		forceFormat = true
 	}
 
+	if info.PlatformMode && info.PlatformBilling != nil {
+		info.PlatformBilling.ObserveRawEnvelope(responseBody, false)
+	}
 	usageModified := false
 	if simpleResponse.Usage.PromptTokens == 0 && !info.ActualUsageValidated {
 		completionTokens := simpleResponse.Usage.CompletionTokens

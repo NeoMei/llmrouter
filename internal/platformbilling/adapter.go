@@ -1,0 +1,486 @@
+package platformbilling
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+	"net/http"
+	"regexp"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+)
+
+// Call stores immutable verified payer scope and terminal command intent. Model
+// credentials are never persisted: recovery cannot authorize another dispatch.
+type Call struct {
+	CallID                string `gorm:"primaryKey;size:128"`
+	ActorID               string `gorm:"size:128"`
+	AccountID             string `gorm:"size:128"`
+	OriginProductID       string `gorm:"size:128"`
+	CredentialID          string `gorm:"size:128"`
+	TaskID                string `gorm:"size:128"`
+	Model                 string `gorm:"size:255"`
+	Digest                string `gorm:"size:64"`
+	RateID                string `gorm:"size:128"`
+	Asset                 string `gorm:"size:16;not null;default:CREDIT/6"`
+	FundingMode           string `gorm:"size:16;not null;default:credits"`
+	FundingProductID      string `gorm:"size:128;not null;default:llmrouter"`
+	BillingProfileVersion int    `gorm:"not null;default:0"`
+	Amount                string `gorm:"size:32"`
+	Status                string `gorm:"size:32;index"`
+	Intent                string `gorm:"type:text"`
+	Charged               string `gorm:"size:32"`
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+}
+
+func (Call) TableName() string { return "platform_model_calls" }
+
+type Attempt struct {
+	ID        uint   `gorm:"primaryKey"`
+	CallID    string `gorm:"size:128;index"`
+	ChannelID int
+	Status    string `gorm:"size:32"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+func (Attempt) TableName() string { return "platform_model_attempts" }
+
+type Adapter struct {
+	db     *gorm.DB
+	config Config
+	client *client
+}
+type Session struct {
+	adapter     *Adapter
+	call        Call
+	attempt     Attempt
+	confirmed   *Usage
+	safeFailure bool
+	uncertain   bool
+	err         error
+}
+
+var stableID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
+
+func New(db *gorm.DB, c Config) (*Adapter, error) {
+	a := &Adapter{db: db, config: c}
+	if !c.Enabled {
+		return a, nil
+	}
+	if db == nil || c.Group == "" || c.Group == "auto" || c.MaxInputTokens < 1 || c.MaxInputTokens > 1<<20 || c.MaxOutputTokens < 1 || c.MaxOutputTokens > 32768 || c.MaxBodyBytes < 1 || c.MaxBodyBytes > 1<<20 {
+		return nil, ErrInvalid
+	}
+	var err error
+	a.client, err = newClient(c)
+	if err != nil {
+		return nil, err
+	}
+	if err = db.AutoMigrate(&Call{}, &Attempt{}); err != nil {
+		return nil, err
+	}
+	return a, nil
+}
+func (a *Adapter) Enabled() bool            { return a != nil && a.config.Enabled }
+func (a *Adapter) Principal() (int, string) { return a.config.PrincipalID, a.config.Group }
+func (a *Adapter) BodyLimit() int64         { return a.config.MaxBodyBytes }
+func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body []byte) (*Session, error) {
+	if !a.Enabled() || !stableID.MatchString(id) || !stableID.MatchString(task) || !strings.HasPrefix(credential, "uh_model_") || len(credential) > 1024 || int64(len(body)) > a.config.MaxBodyBytes || len(body) > a.config.MaxInputTokens/2 {
+		return nil, ErrInvalid
+	}
+	req, parseErr := strictChatRequest(body)
+	if parseErr != nil {
+		return nil, ErrInvalid
+	}
+	model, _ := req["model"].(string)
+	if model == "" || strings.Contains(strings.ToLower(model), "search") || strings.Contains(strings.ToLower(model), "audio") {
+		return nil, ErrInvalid
+	}
+	max, ok := req["max_tokens"].(json.Number)
+	if !ok {
+		max, ok = req["max_completion_tokens"].(json.Number)
+	}
+	maximum, err := confirmedCount(max)
+	if !ok || err != nil || maximum < 1 || maximum > a.config.MaxOutputTokens {
+		return nil, ErrInvalid
+	}
+	for _, key := range []string{"max_tokens", "max_completion_tokens"} {
+		if value, exists := req[key]; exists {
+			n, e := confirmedCount(value)
+			if e != nil || n < 1 || n > maximum {
+				return nil, ErrInvalid
+			}
+		}
+	}
+	if value, exists := req["n"]; exists {
+		n, e := confirmedCount(value)
+		if e != nil || n != 1 {
+			return nil, ErrInvalid
+		}
+	}
+	// Reject multimodal message content and built-in tools. Function tools are
+	// ordinary text tokens and remain available for OpenCode agent loops.
+	if messages, ok := req["messages"].([]any); ok {
+		for _, v := range messages {
+			m, ok := v.(map[string]any)
+			if !ok {
+				return nil, ErrInvalid
+			}
+			if content, exists := m["content"]; exists && content != nil {
+				switch content := content.(type) {
+				case string:
+				case []any:
+					for _, part := range content {
+						text, ok := part.(map[string]any)
+						if !ok || text["type"] != "text" {
+							return nil, ErrInvalid
+						}
+						if _, ok := text["text"].(string); !ok {
+							return nil, ErrInvalid
+						}
+					}
+				default:
+					return nil, ErrInvalid
+				}
+			}
+		}
+	}
+	if ts, ok := req["tools"].([]any); ok {
+		for _, v := range ts {
+			tool, ok := v.(map[string]any)
+			if !ok || tool["type"] != "function" {
+				return nil, ErrInvalid
+			}
+		}
+	}
+	var grant Claims
+	if err := a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": model}, &grant); err != nil {
+		return nil, err
+	}
+	if grant.ID == "" || grant.Audience != "llmrouter" || grant.ActorID == "" || grant.AccountID == "" || grant.OriginProductID == "" || grant.TaskID != task || !grant.ExpiresAt.After(time.Now()) || !slices.Contains(grant.Models, model) {
+		return nil, ErrInvalid
+	}
+	asset, mode, err := normalizeFunding(grant.Asset, grant.FundingMode)
+	if err != nil || grant.BillingProfileVersion < 0 {
+		return nil, ErrInvalid
+	}
+	digestBody := append(append([]byte(task), 0), body...)
+	// Keep the original CREDIT/version-0 digest byte-for-byte compatible with
+	// in-flight calls. New funding snapshots cannot reinterpret that digest.
+	if asset != "CREDIT/6" || mode != "credits" || grant.BillingProfileVersion != 0 {
+		prefix := fmt.Sprintf("unihub-funding-v1\x00%s\x00%s\x00%d\x00", asset, mode, grant.BillingProfileVersion)
+		digestBody = append([]byte(prefix), digestBody...)
+	}
+	sum := sha256.Sum256(digestBody)
+	digest := hex.EncodeToString(sum[:])
+	row := Call{CallID: id, ActorID: grant.ActorID, AccountID: grant.AccountID, OriginProductID: grant.OriginProductID, CredentialID: grant.ID, TaskID: task, Model: model, Digest: digest, Asset: asset, FundingMode: mode, FundingProductID: "llmrouter", BillingProfileVersion: grant.BillingProfileVersion, Status: "RESERVING"}
+	var old Call
+	if err := a.db.WithContext(ctx).First(&old, "call_id = ?", id).Error; err == nil {
+		return nil, compareCall(old, row)
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	var rates []Rate
+	if err := a.client.do(ctx, http.MethodGet, "/internal/v1/rates", "", nil, &rates); err != nil {
+		return nil, err
+	}
+	var chosen *Rate
+	for i := range rates {
+		r := &rates[i]
+		if r.Model != model {
+			continue
+		}
+		rateAsset, err := normalizeAsset(r.Asset)
+		if err != nil {
+			return nil, err
+		}
+		pin := ""
+		if asset == "CREDIT/6" {
+			pin = a.config.RateIDs[model]
+		}
+		if assetPin := a.config.AssetRateIDs[asset][model]; assetPin != "" {
+			pin = assetPin
+		}
+		if rateAsset == asset && (pin == "" || r.ID == pin) {
+			if chosen != nil {
+				return nil, ErrInvalid
+			}
+			chosen = r
+		}
+	}
+	if chosen == nil {
+		return nil, ErrInvalid
+	}
+	amount, err := reserveBound(*chosen, a.config.MaxInputTokens, maximum)
+	if err != nil {
+		return nil, err
+	}
+	row.RateID = chosen.ID
+	row.Amount = amount
+	created := a.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
+	if created.Error != nil {
+		return nil, created.Error
+	}
+	if created.RowsAffected != 1 {
+		if err := a.db.First(&old, "call_id = ?", id).Error; err != nil {
+			return nil, err
+		}
+		return nil, compareCall(old, row)
+	}
+	var remote RemoteCall
+	err = a.client.do(ctx, http.MethodPost, "/internal/v1/calls/reserve", id, map[string]string{"credential": credential, "task_id": task, "call_id": id, "request_digest": digest, "rate_id": chosen.ID, "amount": amount}, &remote)
+	if err != nil {
+		status := "RESERVE_UNKNOWN"
+		var re *remoteError
+		if errors.As(err, &re) && re.status >= 400 && re.status < 500 && re.status != 409 {
+			status = "REJECTED"
+		}
+		_ = a.db.Model(&Call{}).Where("call_id = ?", id).Update("status", status).Error
+		return nil, err
+	}
+	if !remote.matches(row) || remote.Status != "RESERVED" {
+		_ = a.db.Model(&Call{}).Where("call_id = ?", id).Update("status", "RESERVE_UNKNOWN").Error
+		return nil, ErrPending
+	}
+	reserved := a.db.WithContext(ctx).Model(&Call{}).Where("call_id = ? AND status = ?", id, "RESERVING").Update("status", "RESERVED")
+	if reserved.Error != nil {
+		return nil, reserved.Error
+	}
+	if reserved.RowsAffected != 1 {
+		return nil, ErrPending
+	}
+	row.Status = "RESERVED"
+	return &Session{adapter: a, call: row, safeFailure: true}, nil
+}
+func compareCall(old, row Call) error {
+	oldAsset, oldMode, err := normalizeFunding(old.Asset, old.FundingMode)
+	if err != nil || oldAsset != row.Asset || oldMode != row.FundingMode || old.BillingProfileVersion != row.BillingProfileVersion || (old.FundingProductID != "" && old.FundingProductID != row.FundingProductID) || old.CallID != row.CallID || old.ActorID != row.ActorID || old.AccountID != row.AccountID || old.OriginProductID != row.OriginProductID || old.TaskID != row.TaskID || old.Model != row.Model || old.Digest != row.Digest {
+		return ErrConflict
+	}
+	return ErrDuplicate
+}
+func (s *Session) Dispatch(ctx context.Context, channel int) error {
+	if s.err != nil || s.uncertain || s.confirmed != nil {
+		return ErrPending
+	}
+	attempt := Attempt{CallID: s.call.CallID, ChannelID: channel, Status: "DISPATCHED"}
+	err := s.adapter.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		claim := tx.Model(&Call{}).Where("call_id = ? AND status = ?", s.call.CallID, "RESERVED").Update("status", "UNKNOWN")
+		if claim.Error != nil {
+			return claim.Error
+		}
+		if claim.RowsAffected != 1 {
+			return ErrPending
+		}
+		return tx.Create(&attempt).Error
+	})
+	if err != nil {
+		s.err = err
+		return err
+	}
+	s.attempt = attempt
+	s.safeFailure = false
+	s.uncertain = true
+	return nil
+}
+func (s *Session) Rejected() {
+	if s.attempt.ID == 0 {
+		return
+	}
+	if err := s.adapter.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&Attempt{}).Where("id = ?", s.attempt.ID).Update("status", "REJECTED").Error; err != nil {
+			return err
+		}
+		result := tx.Model(&Call{}).Where("call_id = ? AND status = ?", s.call.CallID, "UNKNOWN").Update("status", "RESERVED")
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrPending
+		}
+		return nil
+	}); err != nil {
+		s.err = err
+		return
+	}
+	s.safeFailure = true
+	s.uncertain = false
+}
+func (s *Session) CanRetry() bool { return s.err == nil && !s.uncertain && s.confirmed == nil }
+func (s *Session) invalidateUsage() {
+	s.confirmed = nil
+	if s.attempt.ID != 0 {
+		if err := s.adapter.db.Model(&Attempt{}).Where("id = ?", s.attempt.ID).Update("status", "UNKNOWN").Error; err != nil {
+			s.err = err
+		}
+	}
+}
+func (s *Session) observe(raw *dto.Usage) {
+	u, err := NormalizeUsage(raw)
+	if err != nil {
+		s.invalidateUsage()
+		return
+	}
+	s.confirmed = &u
+	if s.attempt.ID != 0 {
+		if err := s.adapter.db.Model(&Attempt{}).Where("id = ?", s.attempt.ID).Update("status", "USAGE_CONFIRMED").Error; err != nil {
+			s.err = err
+		}
+	}
+}
+func (s *Session) Finish(ctx context.Context) error {
+	if s.err != nil {
+		return s.err
+	}
+	status := "UNKNOWN"
+	var intent any
+	if s.confirmed != nil {
+		status = "SETTLE_PENDING"
+		intent = struct {
+			Usage        Usage  `json:"usage"`
+			ProviderCost string `json:"provider_cost"`
+		}{*s.confirmed, ""}
+	} else if s.safeFailure {
+		status = "RELEASE_PENDING"
+		intent = map[string]string{"reason": "definitive_no_output_failure"}
+	}
+	var b []byte
+	var err error
+	if intent != nil {
+		b, err = common.Marshal(intent)
+		if err != nil {
+			return err
+		}
+	}
+	saved := s.adapter.db.WithContext(ctx).Model(&Call{}).Where("call_id = ? AND status IN ?", s.call.CallID, []string{"RESERVED", "UNKNOWN"}).Updates(map[string]any{"status": status, "intent": string(b)})
+	if saved.Error != nil {
+		return saved.Error
+	}
+	if saved.RowsAffected != 1 {
+		return ErrPending
+	}
+	if status == "UNKNOWN" {
+		return nil
+	}
+	s.call.Status = status
+	s.call.Intent = string(b)
+	_ = s.adapter.deliver(ctx, s.call)
+	return nil
+}
+func (a *Adapter) deliver(ctx context.Context, row Call) error {
+	operation, terminal := "settle", "SETTLED"
+	if row.Status == "RELEASE_PENDING" {
+		operation, terminal = "release", "RELEASED"
+	}
+	var body any
+	if common.Unmarshal([]byte(row.Intent), &body) != nil {
+		return ErrInvalid
+	}
+	var remote RemoteCall
+	if err := a.client.do(ctx, http.MethodPost, "/internal/v1/calls/"+row.CallID+"/"+operation, row.CallID+":"+operation, body, &remote); err != nil {
+		return err
+	}
+	if !remote.matches(row) || remote.Status != terminal {
+		return ErrPending
+	}
+	return a.db.WithContext(ctx).Model(&Call{}).Where("call_id = ? AND status = ?", row.CallID, row.Status).Updates(map[string]any{"status": terminal, "charged": remote.Charged}).Error
+}
+
+// Recover only resends durable final commands. UNKNOWN calls are never replayed
+// or refunded. A lost reserve response is known not to have dispatched upstream.
+func (a *Adapter) Recover(ctx context.Context) error {
+	if !a.Enabled() {
+		return nil
+	}
+	// Expired undispatched calls are fenced before remote recovery. Dispatch
+	// atomically requires RESERVED, so a paused original handler cannot send
+	// upstream after its hold was recovered by another process.
+	cutoff := time.Now().Add(-time.Minute)
+	if err := a.db.WithContext(ctx).Model(&Call{}).Where("status IN ? AND updated_at < ?", []string{"RESERVING", "RESERVED"}, cutoff).Update("status", "RESERVE_UNKNOWN").Error; err != nil {
+		return err
+	}
+	var rows []Call
+	if err := a.db.WithContext(ctx).Where("status IN ?", []string{"SETTLE_PENDING", "RELEASE_PENDING", "RESERVE_UNKNOWN"}).Order("updated_at ASC").Limit(100).Find(&rows).Error; err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if err := a.db.WithContext(ctx).Model(&Call{}).Where("call_id = ?", row.CallID).UpdateColumn("updated_at", time.Now()).Error; err != nil {
+			return err
+		}
+		if row.Status == "RESERVE_UNKNOWN" {
+			var remote RemoteCall
+			if a.client.do(ctx, http.MethodGet, "/internal/v1/calls/"+row.CallID, "", nil, &remote) != nil || !remote.matches(row) || remote.Status != "RESERVED" {
+				continue
+			}
+			b, _ := common.Marshal(map[string]string{"reason": "reservation_response_lost_no_dispatch"})
+			if err := a.db.WithContext(ctx).Model(&Call{}).Where("call_id = ? AND status = ?", row.CallID, "RESERVE_UNKNOWN").Updates(map[string]any{"status": "RELEASE_PENDING", "intent": string(b)}).Error; err != nil {
+				return err
+			}
+			row.Status = "RELEASE_PENDING"
+			row.Intent = string(b)
+		}
+		_ = a.deliver(ctx, row)
+	}
+	return ctx.Err()
+}
+func (a *Adapter) Start(ctx context.Context) func() {
+	worker, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			_ = a.Recover(worker)
+			select {
+			case <-worker.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	return func() { cancel(); wg.Wait() }
+}
+func (a *Adapter) String() string { return fmt.Sprintf("platformbilling(enabled=%t)", a.Enabled()) }
+
+// Receipt authenticates a newly issued capability against the original payer
+// and task. It intentionally contains no prompt, credential, or provider body.
+type Receipt struct {
+	CallID  string `json:"call_id"`
+	Status  string `json:"status"`
+	Charged string `json:"charged,omitempty"`
+	Asset   string `json:"asset"`
+}
+
+func (a *Adapter) Receipt(ctx context.Context, credential, task, id string) (Receipt, error) {
+	if !a.Enabled() || !stableID.MatchString(id) || !stableID.MatchString(task) || !strings.HasPrefix(credential, "uh_model_") || len(credential) > 1024 {
+		return Receipt{}, ErrInvalid
+	}
+	var row Call
+	if err := a.db.WithContext(ctx).First(&row, "call_id = ?", id).Error; err != nil {
+		return Receipt{}, ErrInvalid
+	}
+	var grant Claims
+	if err := a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": row.Model}, &grant); err != nil {
+		return Receipt{}, err
+	}
+	if row.CallID != id || grant.Audience != "llmrouter" || grant.ID == "" || grant.ActorID != row.ActorID || grant.AccountID != row.AccountID || grant.OriginProductID != row.OriginProductID || grant.TaskID != task || row.TaskID != task || !grant.ExpiresAt.After(time.Now()) || !slices.Contains(grant.Models, row.Model) {
+		return Receipt{}, ErrInvalid
+	}
+	asset, _, err := normalizeFunding(row.Asset, row.FundingMode)
+	if err != nil {
+		return Receipt{}, ErrInvalid
+	}
+	return Receipt{CallID: row.CallID, Status: row.Status, Charged: row.Charged, Asset: asset}, nil
+}

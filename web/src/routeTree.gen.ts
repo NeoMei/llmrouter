@@ -15,6 +15,7 @@ import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/
 import { Route as DiagRouteImport } from './routes/diag'
 import { Route as DocsRouteImport } from './routes/docs'
 import { Route as PrivacyPolicyRouteImport } from './routes/privacy-policy'
+import { Route as UnihubRouteImport } from './routes/unihub'
 import { Route as UserAgreementRouteImport } from './routes/user-agreement'
 import { Route as authForgotPasswordRouteImport } from './routes/(auth)/forgot-password'
 import { Route as authOauthRouteImport } from './routes/(auth)/oauth'
@@ -97,6 +98,11 @@ const DocsRoute = DocsRouteImport.update({
 const PrivacyPolicyRoute = PrivacyPolicyRouteImport.update({
   id: '/privacy-policy',
   path: '/privacy-policy',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const UnihubRoute = UnihubRouteImport.update({
+  id: '/unihub',
+  path: '/unihub',
   getParentRoute: () => rootRouteImport,
 } as any)
 const UserAgreementRoute = UserAgreementRouteImport.update({
@@ -411,6 +417,7 @@ export interface FileRoutesByFullPath {
   '/diag': typeof DiagRoute
   '/docs': typeof DocsRoute
   '/privacy-policy': typeof PrivacyPolicyRoute
+  '/unihub': typeof UnihubRoute
   '/user-agreement': typeof UserAgreementRoute
   '/system-settings': typeof AuthenticatedSystemSettingsRouteRouteWithChildren
   '/forgot-password': typeof authForgotPasswordRoute
@@ -472,6 +479,7 @@ export interface FileRoutesByTo {
   '/diag': typeof DiagRoute
   '/docs': typeof DocsRoute
   '/privacy-policy': typeof PrivacyPolicyRoute
+  '/unihub': typeof UnihubRoute
   '/user-agreement': typeof UserAgreementRoute
   '/forgot-password': typeof authForgotPasswordRoute
   '/oauth': typeof authOauthRoute
@@ -535,6 +543,7 @@ export interface FileRoutesById {
   '/diag': typeof DiagRoute
   '/docs': typeof DocsRoute
   '/privacy-policy': typeof PrivacyPolicyRoute
+  '/unihub': typeof UnihubRoute
   '/user-agreement': typeof UserAgreementRoute
   '/_authenticated/system-settings': typeof AuthenticatedSystemSettingsRouteRouteWithChildren
   '/(auth)/forgot-password': typeof authForgotPasswordRoute
@@ -598,6 +607,7 @@ export interface FileRouteTypes {
     | '/diag'
     | '/docs'
     | '/privacy-policy'
+    | '/unihub'
     | '/user-agreement'
     | '/system-settings'
     | '/forgot-password'
@@ -659,6 +669,7 @@ export interface FileRouteTypes {
     | '/diag'
     | '/docs'
     | '/privacy-policy'
+    | '/unihub'
     | '/user-agreement'
     | '/forgot-password'
     | '/oauth'
@@ -721,6 +732,7 @@ export interface FileRouteTypes {
     | '/diag'
     | '/docs'
     | '/privacy-policy'
+    | '/unihub'
     | '/user-agreement'
     | '/_authenticated/system-settings'
     | '/(auth)/forgot-password'
@@ -785,6 +797,7 @@ export interface RootRouteChildren {
   DiagRoute: typeof DiagRoute
   DocsRoute: typeof DocsRoute
   PrivacyPolicyRoute: typeof PrivacyPolicyRoute
+  UnihubRoute: typeof UnihubRoute
   UserAgreementRoute: typeof UserAgreementRoute
   errors401Route: typeof errors401Route
   errors403Route: typeof errors403Route
@@ -841,6 +854,13 @@ declare module '@tanstack/react-router' {
       path: '/privacy-policy'
       fullPath: '/privacy-policy'
       preLoaderRoute: typeof PrivacyPolicyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/unihub': {
+      id: '/unihub'
+      path: '/unihub'
+      fullPath: '/unihub'
+      preLoaderRoute: typeof UnihubRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/user-agreement': {
@@ -1372,6 +1392,7 @@ const rootRouteChildren: RootRouteChildren = {
   DiagRoute: DiagRoute,
   DocsRoute: DocsRoute,
   PrivacyPolicyRoute: PrivacyPolicyRoute,
+  UnihubRoute: UnihubRoute,
   UserAgreementRoute: UserAgreementRoute,
   errors401Route: errors401Route,
   errors403Route: errors403Route,

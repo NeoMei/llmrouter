@@ -150,6 +150,7 @@ export const Route = createRootRouteWithContext<{
     }
 
     const pathname = location?.pathname || ''
+    if (pathname === '/unihub') return
     const needsSetupCheck =
       !setupStatusChecked && !pathname.startsWith('/setup')
     const authBootstrap = bootstrapAuthentication()

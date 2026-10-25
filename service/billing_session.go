@@ -40,6 +40,9 @@ type BillingSession struct {
 // 资金来源和令牌额度分两步提交：若资金来源已提交但令牌调整失败，
 // 会标记 fundingSettled 防止 Refund 对已提交的资金来源执行退款。
 func (s *BillingSession) Settle(actualQuota int) error {
+	if s.relayInfo != nil && s.relayInfo.PlatformMode {
+		return errors.New("platform calls cannot use local billing session")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.settled {
@@ -81,6 +84,9 @@ func (s *BillingSession) Settle(actualQuota int) error {
 
 // Refund 退还所有预扣费，幂等安全，异步执行。
 func (s *BillingSession) Refund(c *gin.Context) {
+	if s.relayInfo != nil && s.relayInfo.PlatformMode {
+		return
+	}
 	s.mu.Lock()
 	if s.settled || s.refunded || !s.needsRefundLocked() {
 		s.mu.Unlock()
@@ -151,6 +157,9 @@ func (s *BillingSession) GetPreConsumedQuota() int {
 }
 
 func (s *BillingSession) Reserve(targetQuota int) error {
+	if s.relayInfo != nil && s.relayInfo.PlatformMode {
+		return errors.New("platform calls cannot use local billing session")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -362,7 +371,7 @@ func (s *BillingSession) syncRelayInfo() {
 
 // NewBillingSession 根据用户计费偏好创建 BillingSession，处理 subscription_first / wallet_first 的回退。
 func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preConsumedQuota int) (*BillingSession, *types.NewAPIError) {
-	if relayInfo == nil {
+	if relayInfo == nil || relayInfo.PlatformMode {
 		return nil, types.NewError(fmt.Errorf("relayInfo is nil"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
 

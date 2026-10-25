@@ -42,6 +42,12 @@ func refreshTieredBillingGroup(relayInfo *relaycommon.RelayInfo) (*billingexpr.B
 // snapshot after channel selection and reserves any additional quota before
 // the request can be sent upstream.
 func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
+	if relayInfo != nil && relayInfo.PlatformMode {
+		if relayInfo.PlatformBilling == nil {
+			return types.NewError(fmt.Errorf("platform billing missing"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return nil
+	}
 	snapshot, changed, err := refreshTieredBillingGroup(relayInfo)
 	if err != nil {
 		return types.NewErrorWithStatusCode(err, types.ErrorCodeModelPriceError, http.StatusBadRequest, types.ErrOptionWithSkipRetry())

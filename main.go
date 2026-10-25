@@ -19,6 +19,8 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/internal/platformaccount"
+	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
@@ -201,11 +203,37 @@ func main() {
 		return
 	}
 
+	platformConfig, platformErr := platformbilling.ConfigFromEnv(os.Getenv)
+	if platformErr != nil {
+		common.FatalLog("invalid UniHub platform configuration")
+		return
+	}
+	platformAdapter, platformErr := platformbilling.New(model.DB, platformConfig)
+	if platformErr != nil {
+		common.FatalLog("failed to initialize UniHub platform adapter")
+		return
+	}
+	if platformAdapter.Enabled() {
+		principal, e := model.GetUserById(platformConfig.PrincipalID, false)
+		if e != nil || principal.Status != common.UserStatusEnabled || principal.Group != platformConfig.Group {
+			common.FatalLog("UniHub routing principal must be enabled in the configured fixed group")
+			return
+		}
+		stopPlatform := platformAdapter.Start(context.Background())
+		defer stopPlatform()
+	}
 	// 设置路由
 	router.SetRouter(server, router.WebAssets{
 		BuildFS:   buildFS,
 		IndexPage: indexPage,
 	})
+	router.SetPlatformRouter(server, platformAdapter)
+	productConfig, productErr := platformaccount.FromEnv()
+	if productErr != nil {
+		common.FatalLog("invalid UniHub product configuration")
+		return
+	}
+	router.SetUniHubRouter(server, productConfig)
 	var port = os.Getenv("PORT")
 	if port == "" {
 		port = strconv.Itoa(*common.Port)

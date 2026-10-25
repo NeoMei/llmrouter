@@ -68,6 +68,7 @@ type ChannelMeta struct {
 	NativeSpeechText      *string
 	NativeUsageImages     *int
 	ActualAudioSeconds    *float64
+	AudioDurationSource   string
 
 	ActualUsageValidated bool
 	ChannelType          int

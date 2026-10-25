@@ -39,5 +39,6 @@ func ValidateNativeAudioAdmission(c *gin.Context, info *relaycommon.RelayInfo) e
 		return fmt.Errorf("native transcription requires measured PCM WAV duration")
 	}
 	info.ActualAudioSeconds = &fact.Seconds
+	info.AudioDurationSource = "server_measurement"
 	return nil
 }

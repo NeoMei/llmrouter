@@ -90,47 +90,53 @@ func NativeImageUsage(p metering.Price, outputs []NativeImageOutput, terminal bo
 		u.State = "incomplete"
 		return u
 	}
-	if len(p.Terms) != 1 {
-		u.State = "invalid"
-		return u
+	counts := map[string]int{}
+	for _, t := range p.Terms {
+		if t.Key != "images" {
+			parts := strings.Split(t.Key, "x")
+			if len(parts) != 2 {
+				u.State = "invalid"
+				return u
+			}
+			w, e := strconv.Atoi(parts[0])
+			h, e2 := strconv.Atoi(parts[1])
+			if e != nil || e2 != nil || w <= 0 || h <= 0 {
+				u.State = "invalid"
+				return u
+			}
+		}
+		counts[t.Key] = 0
 	}
-	term := p.Terms[0]
-	seen := map[string]bool{}
-	count := 0
+	seen := map[string]NativeImageOutput{}
 	for _, o := range outputs {
 		if o.ID == "" {
-			u.State = "missing"
 			return u
 		}
-		if seen[o.ID] {
+		if old, ok := seen[o.ID]; ok {
+			if old.Width != o.Width || old.Height != o.Height {
+				u.State = "invalid"
+				return u
+			}
 			continue
 		}
-		seen[o.ID] = true
-		if term.Key != "images" {
-			want := strings.Split(term.Key, "x")
-			if len(want) != 2 {
-				u.State = "missing"
+		seen[o.ID] = o
+		key := "images"
+		if _, ok := counts[key]; !ok {
+			if o.Width <= 0 || o.Height <= 0 {
 				return u
 			}
-			w, e1 := strconv.Atoi(want[0])
-			h, e2 := strconv.Atoi(want[1])
-			if e1 != nil || e2 != nil {
-				u.State = "invalid"
-				return u
-			}
-			if o.Width == 0 || o.Height == 0 {
-				u.State = "missing"
-				return u
-			}
-			if o.Width != w || o.Height != h {
-				u.State = "invalid"
-				return u
-			}
+			key = fmt.Sprintf("%dx%d", o.Width, o.Height)
 		}
-		count++
+		if _, ok := counts[key]; !ok {
+			u.State = "invalid"
+			return u
+		}
+		counts[key]++
 	}
 	u.State = "confirmed"
-	u.Measurements = []metering.Measurement{{Key: term.Key, Unit: "image", Quantity: metering.Quantity{Value: strconv.Itoa(count)}}}
+	for _, t := range p.Terms {
+		u.Measurements = append(u.Measurements, metering.Measurement{Key: t.Key, Unit: "image", Quantity: metering.Quantity{Value: strconv.Itoa(counts[t.Key])}})
+	}
 	return u
 }
 
@@ -153,13 +159,17 @@ func EstimateNativeMediaUsage(info *relaycommon.RelayInfo, request any, price me
 		if !ok {
 			return u, fmt.Errorf("audio request required")
 		}
-		if price.Policy != "unicode_scalar_v1" {
-			return u, fmt.Errorf("supplier character reservation bound unavailable")
+		if price.Policy != "unicode_scalar_v1" && price.Policy != "provider_reported_v1" {
+			return u, fmt.Errorf("unsupported character policy")
 		}
 		if !utf8.ValidString(r.Input) {
 			return u, fmt.Errorf("invalid speech UTF8")
 		}
 		n := utf8.RuneCountInString(r.Input)
+		// Supplier count is not Unicode count: reserve its parser-enforced receipt ceiling.
+		if price.Policy == "provider_reported_v1" {
+			n = math.MaxInt32
+		}
 		u.Measurements = []metering.Measurement{{Key: "characters", Unit: "character", Quantity: metering.Quantity{Value: strconv.Itoa(n)}}}
 	case relayconstant.RelayModeAudioTranscription, relayconstant.RelayModeAudioTranslation:
 		if info.ActualAudioSeconds == nil {
@@ -176,17 +186,14 @@ func EstimateNativeMediaUsage(info *relaycommon.RelayInfo, request any, price me
 		if r.N != nil && *r.N > 0 {
 			n = *r.N
 		}
-		key := "images"
-		if len(price.Terms) == 1 {
-			key = price.Terms[0].Key
-		}
 		if n > dto.MaxImageN {
 			return u, fmt.Errorf("image count exceeds bound")
 		}
-		if key != "images" && key != r.Size {
-			return u, fmt.Errorf("image size admission bound unavailable")
+		// Reserve every possible output against every tier, so auto/mismatched
+		// dimensions cannot exceed the frozen reservation.
+		for _, t := range price.Terms {
+			u.Measurements = append(u.Measurements, metering.Measurement{Key: t.Key, Unit: "image", Quantity: metering.Quantity{Value: strconv.FormatUint(uint64(n), 10)}})
 		}
-		u.Measurements = []metering.Measurement{{Key: key, Unit: "image", Quantity: metering.Quantity{Value: strconv.FormatUint(uint64(n), 10)}}}
 	default:
 		return u, fmt.Errorf("unsupported native media operation")
 	}

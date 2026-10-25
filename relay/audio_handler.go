@@ -99,6 +99,9 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 			}
 			nativeUsage = service.NativeSpeechUsage(info.NativeBilling.Price, text, info.NativeUsageCharacters, terminal)
 		} else {
+			if info.AudioDurationSource != "provider_reported" {
+				terminal = false
+			}
 			nativeUsage = service.NativeAudioUsage(info.NativeBilling.Price, info.ActualAudioSeconds, terminal)
 		}
 		if err := service.RecordNativeUsageForRelay(c.Request.Context(), info, nativeUsage); err != nil {

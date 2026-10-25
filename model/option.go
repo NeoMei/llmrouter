@@ -143,6 +143,7 @@ func InitOptionMap() {
 	common.OptionMap["ModelRequestRateLimitGroup"] = setting.ModelRequestRateLimitGroup2JSONString()
 	common.OptionMap["ModelRatio"] = ratio_setting.ModelRatio2JSONString()
 	common.OptionMap["ModelNativePricing"] = billing_setting.ModelNativePricingJSONString()
+	common.OptionMap["ModelNativeReservationLimits"] = billing_setting.ModelNativeReservationLimitsJSONString()
 	common.OptionMap["ModelPrice"] = ratio_setting.ModelPrice2JSONString()
 	common.OptionMap["CacheRatio"] = ratio_setting.CacheRatio2JSONString()
 	common.OptionMap["CreateCacheRatio"] = ratio_setting.CreateCacheRatio2JSONString()
@@ -208,6 +209,19 @@ func SyncOptions(frequency int) {
 }
 
 func UpdateOption(key string, value string) error {
+	if key == "ModelNativeReservationLimits" {
+		var c map[string]map[string]metering.Quantity
+		if err := common.UnmarshalUnique([]byte(value), &c); err != nil {
+			return err
+		}
+		if err := billing_setting.ValidateModelNativeReservationLimits(c); err != nil {
+			return err
+		}
+		if err := DB.Save(&Option{Key: key, Value: value}).Error; err != nil {
+			return err
+		}
+		return updateOptionMap(key, value)
+	}
 	if key == "ModelNativePricing" {
 		var c map[string]map[string]metering.Price
 		if err := common.UnmarshalUnique([]byte(value), &c); err != nil {
@@ -558,6 +572,8 @@ func updateOptionMap(key string, value string) (err error) {
 		err = ratio_setting.UpdateCompletionRatioByJSONString(value)
 	case "ModelNativePricing":
 		err = billing_setting.UpdateModelNativePricingByJSONString(value)
+	case "ModelNativeReservationLimits":
+		err = billing_setting.UpdateModelNativeReservationLimitsByJSONString(value)
 	case "ModelPrice":
 		err = ratio_setting.UpdateModelPriceByJSONString(value)
 	case "CacheRatio":

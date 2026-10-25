@@ -17,3 +17,21 @@ func TestModelNativePricingValidationAndSnapshot(t *testing.T) {
 	require.Equal(t, "1", got2.Terms[0].Price.Numerator)
 	require.Error(t, ValidateModelNativePricing(map[string]map[string]metering.Price{"m": {"chat": p}}))
 }
+
+func TestModelNativeReservationLimitsAreBoundedAndCopied(t *testing.T) {
+	old := GetModelNativeReservationLimitsCopy()
+	t.Cleanup(func() { require.NoError(t, SetModelNativeReservationLimits(old)) })
+	q := metering.Quantity{Value: "1200", Scale: 0}
+	require.NoError(t, SetModelNativeReservationLimits(map[string]map[string]metering.Quantity{
+		"speech-model": {"speech": q},
+	}))
+	got, ok := ResolveModelNativeReservationLimit("speech-model", "speech")
+	require.True(t, ok)
+	require.Equal(t, q, got)
+	require.Error(t, ValidateModelNativeReservationLimits(map[string]map[string]metering.Quantity{
+		"speech-model": {"speech": {Value: "01"}},
+	}))
+	require.Error(t, ValidateModelNativeReservationLimits(map[string]map[string]metering.Quantity{
+		"speech-model": {"speech": {Value: "2147483648"}},
+	}))
+}

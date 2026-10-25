@@ -46,6 +46,25 @@ func TestNativeMissingZeroAndDuplicateFinish(t *testing.T) {
 	}
 	ocrBalances(t, s, old, 1000, 500, 0)
 }
+
+func TestNativeSupplierQuantityBeyondFrozenCapRequiresReconciliation(t *testing.T) {
+	n, s, a, old := nativeFixture(t)
+	ctx := context.Background()
+	j, err := n.Begin(ctx, a)
+	require.NoError(t, err)
+	require.NoError(t, n.RecordUsage(ctx, j.ID, nativeUsage("1001")))
+	j, err = n.Inspect(ctx, j.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "pending_measurement", j.State)
+	assert.Equal(t, "reservation_limit_exceeded", j.Reason)
+	assert.Contains(t, j.LastObservation, `"value":"1001"`)
+	_, err = n.Finish(ctx, j.ID, "measured")
+	require.ErrorIs(t, err, ErrOCRPending)
+	ocrBalances(t, s, old, 900, 400, 100)
+	_, err = n.ResolveMeasurement(ctx, j.ID, "cap-reviewed", 1, "operator_loss_release", nil, "reviewed supplier discrepancy")
+	require.NoError(t, err)
+	ocrBalances(t, s, old, 1000, 500, 0)
+}
 func TestNativeFrozenPriceAndRestart(t *testing.T) {
 	n, s, a, old := nativeFixture(t)
 	ctx := context.Background()

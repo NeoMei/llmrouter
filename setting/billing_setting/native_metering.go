@@ -4,6 +4,8 @@ import (
 	"errors"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/metering"
+	"math"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -16,6 +18,91 @@ type ModelNativePricingConfig struct {
 
 var nativePricing = ModelNativePricingConfig{ModelNativePricing: map[string]map[string]metering.Price{}}
 var nativePricingMu sync.RWMutex
+
+// ModelNativeReservationLimits contains explicit admission ceilings for
+// supplier-reported quantities whose final value is only known in the
+// provider response. Values are frozen into the native billing journal by
+// the reservation usage; they are never used as final usage.
+// The key is public model -> operation -> integer quantity. A missing limit
+// disables admission for that provider-reported operation rather than making
+// an unsafe estimate.
+type ModelNativeReservationLimitsConfig struct {
+	ModelNativeReservationLimits map[string]map[string]metering.Quantity `json:"ModelNativeReservationLimits"`
+}
+
+var nativeReservationLimits = ModelNativeReservationLimitsConfig{ModelNativeReservationLimits: map[string]map[string]metering.Quantity{}}
+var nativeReservationLimitsMu sync.RWMutex
+
+func ValidateModelNativeReservationLimits(c map[string]map[string]metering.Quantity) error {
+	if len(c) > 10000 {
+		return errors.New("too many native reservation limit models")
+	}
+	for model, ops := range c {
+		if strings.TrimSpace(model) == "" || len(model) > 128 || len(ops) > 16 {
+			return errors.New("invalid native reservation limit model")
+		}
+		for operation, q := range ops {
+			if operation != "speech" && operation != "video" {
+				return errors.New("unsupported native reservation limit operation")
+			}
+			if q.Scale != 0 || q.Value == "" || len(q.Value) > 10 || (len(q.Value) > 1 && q.Value[0] == '0') || strings.Trim(q.Value, "0123456789") != "" {
+				return errors.New("native reservation limit must be a non-negative integer")
+			}
+			n, err := strconv.ParseUint(q.Value, 10, 32)
+			if err != nil || n == 0 || n > math.MaxInt32 {
+				return errors.New("native reservation limit out of bounds")
+			}
+		}
+	}
+	return nil
+}
+
+func SetModelNativeReservationLimits(c map[string]map[string]metering.Quantity) error {
+	if err := ValidateModelNativeReservationLimits(c); err != nil {
+		return err
+	}
+	b, err := common.Marshal(c)
+	if err != nil {
+		return err
+	}
+	var copy map[string]map[string]metering.Quantity
+	if err = common.Unmarshal(b, &copy); err != nil {
+		return err
+	}
+	nativeReservationLimitsMu.Lock()
+	nativeReservationLimits.ModelNativeReservationLimits = copy
+	nativeReservationLimitsMu.Unlock()
+	return nil
+}
+
+func ResolveModelNativeReservationLimit(model, operation string) (metering.Quantity, bool) {
+	nativeReservationLimitsMu.RLock()
+	defer nativeReservationLimitsMu.RUnlock()
+	q, ok := nativeReservationLimits.ModelNativeReservationLimits[model][operation]
+	return q, ok
+}
+
+func GetModelNativeReservationLimitsCopy() map[string]map[string]metering.Quantity {
+	nativeReservationLimitsMu.RLock()
+	defer nativeReservationLimitsMu.RUnlock()
+	b, _ := common.Marshal(nativeReservationLimits.ModelNativeReservationLimits)
+	var out map[string]map[string]metering.Quantity
+	_ = common.Unmarshal(b, &out)
+	return out
+}
+
+func UpdateModelNativeReservationLimitsByJSONString(raw string) error {
+	var c map[string]map[string]metering.Quantity
+	if err := common.UnmarshalUnique([]byte(raw), &c); err != nil {
+		return err
+	}
+	return SetModelNativeReservationLimits(c)
+}
+
+func ModelNativeReservationLimitsJSONString() string {
+	b, _ := common.Marshal(GetModelNativeReservationLimitsCopy())
+	return string(b)
+}
 
 func ValidateModelNativePricing(c map[string]map[string]metering.Price) error {
 	if len(c) > 10000 {
@@ -34,8 +121,10 @@ func ValidateModelNativePricing(c map[string]map[string]metering.Price) error {
 			}
 			policyOK := false
 			switch operation {
-			case "chat", "responses", "embedding", "transcription":
+			case "chat", "responses", "embedding":
 				policyOK = p.Policy == "provider_reported_v1"
+			case "transcription":
+				policyOK = p.Policy == "provider_reported_v1" || p.Policy == "server_audio_measurement_v1"
 			case "speech":
 				policyOK = p.Policy == "provider_reported_v1" || p.Policy == "unicode_scalar_v1"
 			case "image_generation", "image_edit":

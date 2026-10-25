@@ -210,6 +210,23 @@ func (s *NativeBillingStore) RecordUsage(ctx context.Context, id string, u meter
 		if metering.ValidateUsage(a.Price, u) != nil {
 			return tx.Model(&n).Updates(map[string]any{"state": "pending_measurement", "reason": "unconfirmed_evidence", "last_observation": string(raw), "updated_at": time.Now().Unix()}).Error
 		}
+		// Supplier-defined character/provider units use explicit server ceilings,
+		// not a token estimate. Preserve over-cap receipts for reconciliation
+		// instead of silently charging beyond the frozen admission contract.
+		if (a.Price.Operation == "speech" && a.Price.Policy == "provider_reported_v1") || (a.Price.Operation == "video" && a.Price.Terms[0].Unit == "provider_unit") {
+			for _, measurement := range u.Measurements {
+				for _, reserved := range a.Reservation.Measurements {
+					if measurement.Key != reserved.Key {
+						continue
+					}
+					actual, actualErr := decimal.NewFromString(measurement.Quantity.Value)
+					limit, limitErr := decimal.NewFromString(reserved.Quantity.Value)
+					if actualErr != nil || limitErr != nil || actual.Shift(-int32(measurement.Quantity.Scale)).GreaterThan(limit.Shift(-int32(reserved.Quantity.Scale))) {
+						return tx.Model(&n).Updates(map[string]any{"state": "pending_measurement", "reason": "reservation_limit_exceeded", "last_observation": string(raw), "updated_at": time.Now().Unix()}).Error
+					}
+				}
+			}
+		}
 		if n.Reason == "conflicting_evidence" {
 			conflict = true
 			return nil

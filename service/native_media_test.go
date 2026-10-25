@@ -1,7 +1,11 @@
 package service
 
 import (
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/metering"
+	"github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"testing"
@@ -26,6 +30,25 @@ func TestNativeSpeechCharacters(t *testing.T) {
 	u := NativeSpeechUsage(p, "estimated", &n, true)
 	assert.Equal(t, "2", u.Measurements[0].Quantity.Value)
 	assert.Equal(t, "incomplete", NativeSpeechUsage(p, "estimated", &n, false).State)
+}
+
+func TestProviderSpeechAdmissionRequiresExplicitReservationLimit(t *testing.T) {
+	old := billing_setting.GetModelNativeReservationLimitsCopy()
+	t.Cleanup(func() { require.NoError(t, billing_setting.SetModelNativeReservationLimits(old)) })
+	require.NoError(t, billing_setting.SetModelNativeReservationLimits(nil))
+	p := mediaPrice("speech", "provider_reported_v1", "characters", "character")
+	info := &common.RelayInfo{RelayMode: constant.RelayModeAudioSpeech, BillingModelName: "speech-model"}
+	req := dto.AudioRequest{Input: "hello"}
+	_, err := EstimateNativeMediaUsage(info, req, p)
+	require.Error(t, err)
+	require.NoError(t, billing_setting.SetModelNativeReservationLimits(map[string]map[string]metering.Quantity{
+		"speech-model": {"speech": {Value: "10"}},
+	}))
+	u, err := EstimateNativeMediaUsage(info, req, p)
+	require.NoError(t, err)
+	require.Equal(t, "10", u.Measurements[0].Quantity.Value)
+	_, err = EstimateNativeMediaUsage(info, dto.AudioRequest{Input: "01234567890"}, p)
+	require.Error(t, err)
 }
 func TestNativeAudioSeconds(t *testing.T) {
 	p := mediaPrice("transcription", "provider_reported_v1", "audio", "audio_second")

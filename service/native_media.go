@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/metering"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 )
 
 // NativeSpeechUsage converts only the final outbound text or trusted supplier
@@ -176,9 +177,17 @@ func EstimateNativeMediaUsage(info *relaycommon.RelayInfo, request any, price me
 			return u, fmt.Errorf("invalid speech UTF8")
 		}
 		n := utf8.RuneCountInString(r.Input)
-		// Supplier count is not Unicode count: reserve its parser-enforced receipt ceiling.
+		// Supplier character rules can differ from Unicode scalars. The explicit
+		// server cap is a reservation only; settlement still requires its receipt.
 		if price.Policy == "provider_reported_v1" {
-			n = math.MaxInt32
+			q, configured := billing_setting.ResolveModelNativeReservationLimit(info.BillingModelNameOrOrigin(), "speech")
+			if !configured {
+				return u, fmt.Errorf("provider-reported speech requires a configured reservation limit")
+			}
+			n, _ = strconv.Atoi(q.Value)
+			if utf8.RuneCountInString(r.Input) > n {
+				return u, fmt.Errorf("speech input exceeds reservation limit")
+			}
 		}
 		u.Measurements = []metering.Measurement{{Key: "characters", Unit: "character", Quantity: metering.Quantity{Value: strconv.Itoa(n)}}}
 	case relayconstant.RelayModeAudioTranscription, relayconstant.RelayModeAudioTranslation:

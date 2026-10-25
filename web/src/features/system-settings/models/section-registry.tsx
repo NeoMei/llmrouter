@@ -25,6 +25,8 @@ import { GeminiSettingsCard } from './gemini-settings-card'
 import { GlobalSettingsCard } from './global-settings-card'
 import { GrokSettingsCard } from './grok-settings-card'
 import { RoutingReliabilitySection } from './routing-reliability-section'
+import { NativePricingEditor } from './native-pricing-editor'
+import { NativeBillingPanel } from '@/features/native-metering/billing-panel'
 
 function formatJsonForEditor(value: string, fallback: string) {
   const raw = (value ?? '').toString().trim()
@@ -64,6 +66,12 @@ const MODELS_SECTIONS = [
         }}
       />
     ),
+  },
+  { id: 'native-reconciliation', titleKey: 'Native billing reconciliation', build: () => <NativeBillingPanel admin /> },
+  {
+    id: 'native-pricing',
+    titleKey: 'Native metering prices',
+    build: (settings: ModelSettings) => <NativePricingEditor value={settings.ModelNativePricing} />,
   },
   {
     id: 'routing-reliability',

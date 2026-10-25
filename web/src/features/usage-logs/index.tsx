@@ -20,6 +20,7 @@ import { getRouteApi, useNavigate } from '@tanstack/react-router'
 import { useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { NativeBillingPanel } from '@/features/native-metering/billing-panel'
 import { SectionPageLayout } from '@/components/layout'
 import type { NavGroup } from '@/components/layout/types'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -151,6 +152,7 @@ function UsageLogsContent() {
                 </TabsList>
               </Tabs>
             )}
+            <NativeBillingPanel />
             <div className='min-h-0 flex-1'>
               <UsageLogsTable logCategory={activeCategory} />
             </div>

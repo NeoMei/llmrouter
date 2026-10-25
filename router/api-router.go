@@ -402,6 +402,7 @@ func SetApiRouter(router *gin.Engine) {
 }
 
 func registerNativeBillingRoutes(api *gin.RouterGroup) {
+	api.GET("/native-billing/self", middleware.UserAuth(), controller.ListOwnNativeBilling)
 	routes := api.Group("/native-billing")
 	routes.Use(middleware.AdminAuth())
 	routes.GET("/", controller.ListNativeBilling)

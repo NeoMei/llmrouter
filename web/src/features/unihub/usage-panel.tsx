@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 
+import { formatQuantity } from '@/features/native-metering/contract'
 import { UniHubError } from './sdk'
 import { message, exactAmount } from './session'
 import { Details, Panel, type PanelProps } from './ui'
@@ -99,6 +100,9 @@ export function UsagePanel(props: PanelProps) {
               <li className='rounded border p-3' key={call.call_id}>
                 {call.call_id} · {call.origin_product_id} · {call.model} ·{' '}
                 {call.status}
+                {call.usage?.metered ? <div><p>{call.usage.metered.operation} · {call.usage.metered.state}</p>{call.usage.metered.measurements.map((m) => <p key={m.key}>{m.key}: {formatQuantity(m.quantity)} {m.unit} {m.provider_unit}</p>)}</div> : null}
+                {call.rate?.metered ? <div>{call.rate.metered.terms.map((term) => <p key={term.key}>{term.key}: {term.price.numerator}/{term.price.denominator} {call.asset} / {term.unit}</p>)}</div> : null}
+                {call.financial_details && call.held !== undefined ? <p>{t('Reserved')}: {exactAmount(call.held, call.asset)}</p> : null}
                 {call.financial_details && call.charged !== undefined ? (
                   <span> · {exactAmount(call.charged, call.asset)}</span>
                 ) : null}

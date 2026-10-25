@@ -28,3 +28,7 @@ Remaining integration owned by parent/Task 6:
 - Wire OCR/video asynchronous supplier lifecycle and platform task routes to `BindTask`/`ObserveTask`; block legacy task and OCR billing side effects for platform-owned jobs.
 - Platform Chat selects metered_v2 only when an explicit chat operation rate pin is configured; otherwise `/platform/v1/chat/completions` remains legacy exclusive_v1.
 - Keep local wallet, subscription, token quota, request counters and local OCR/task logs untouched for platform calls.
+
+Additional route evidence: `router/platform_metered_test.go` runs real Gin middleware + distributor + controller + provider HTTP fixture for embedding, speech, and image generation. It verifies reserve, one supplier send, terminal settlement, idempotent replay rejection, and unchanged local user quota/used quota/request count. Chat and Responses metered producer evidence remains pending because their current raw observers emit incomplete token usage for the fixture; no false settlement is accepted.
+
+Async routes use immutable `Adapter.Task` scope and persisted `platform_call_id`/provider task mapping. OCR creation now carries `AuthorizedAdmission.PlatformCallID/PlatformPrice/Dispatch/BindTask`; legacy OCR status excludes platform jobs. Video/OCR status/result routes reject shared-principal or wrong-task access; cancellation returns bounded unsupported until provider capability confirms no output. `Adapter.ReleaseTask` requires exact call/task binding and trusted no-output evidence before releasing.

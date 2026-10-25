@@ -161,3 +161,21 @@ export function preview(
 export function finalAmount(state: string, quota: string): string | undefined {
   return state === 'settled' ? quota : undefined
 }
+
+export const reservationLimitsSchema = z.record(
+  z.string().trim().min(1).max(128),
+  z.object({ speech: quantitySchema.optional(), video: quantitySchema.optional() }).strict()
+).superRefine((catalog, ctx) => {
+  for (const ops of Object.values(catalog)) {
+    for (const q of Object.values(ops)) {
+      if (q && (q.scale !== 0 || q.value === '0' || BigInt(q.value) > 2147483647n)) {
+        ctx.addIssue({ code: 'custom', message: 'Invalid reservation limit' })
+      }
+    }
+  }
+})
+export function setReservationLimit(raw: string, model: string, operation: 'speech' | 'video', value: string): string {
+  const catalog = reservationLimitsSchema.parse(JSON.parse(raw) as unknown)
+  const next = { ...catalog, [model]: { ...catalog[model], [operation]: { value, scale: 0 } } }
+  return JSON.stringify(reservationLimitsSchema.parse(next), null, 2)
+}

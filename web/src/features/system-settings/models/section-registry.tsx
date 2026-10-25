@@ -77,7 +77,10 @@ const MODELS_SECTIONS = [
     id: 'native-pricing',
     titleKey: 'Native metering prices',
     build: (settings: ModelSettings) => (
-      <NativePricingEditor value={settings.ModelNativePricing} />
+      <NativePricingEditor
+        value={settings.ModelNativePricing}
+        reservationLimits={settings.ModelNativeReservationLimits}
+      />
     ),
   },
   {

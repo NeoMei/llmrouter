@@ -45,6 +45,7 @@ const defaultModelSettings: ModelSettings = {
   'grok.violation_deduction_amount': 0.05,
   ModelPrice: '',
   ModelNativePricing: '{}',
+  ModelNativeReservationLimits: '{}',
   ModelRatio: '',
   CacheRatio: '',
   CreateCacheRatio: '',

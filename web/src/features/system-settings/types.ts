@@ -207,6 +207,7 @@ export type ModelSettings = {
   'grok.violation_deduction_amount': number
   ModelPrice: string
   ModelNativePricing: string
+  ModelNativeReservationLimits: string
   ModelRatio: string
   CacheRatio: string
   CreateCacheRatio: string

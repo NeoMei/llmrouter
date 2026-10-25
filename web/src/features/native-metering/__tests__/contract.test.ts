@@ -7,6 +7,8 @@ import {
   preview,
   finalAmount,
   formatQuantity,
+  setReservationLimit,
+  reservationLimitsSchema,
 } from '../contract'
 
 const price = {
@@ -81,4 +83,14 @@ test('invalid unit, duplicate tier, zero denominator and operation mismatch reje
     catalogSchema.safeParse({ model: { ocr: price } }).success,
     false
   )
+})
+
+
+test('reservation limits serialize independently and preserve other operations', () => {
+ const saved = setReservationLimit('{"m":{"video":{"value":"10","scale":0}}}', 'm', 'speech', '2147483647')
+ assert.deepEqual(JSON.parse(saved), {m:{speech:{value:'2147483647',scale:0},video:{value:'10',scale:0}}})
+ assert.equal(reservationLimitsSchema.safeParse({m:{speech:{value:'0',scale:0}}}).success,false)
+ assert.equal(reservationLimitsSchema.safeParse({m:{speech:{value:'2147483648',scale:0}}}).success,false)
+ assert.equal(reservationLimitsSchema.safeParse({m:{video:{value:'1',scale:1}}}).success,false)
+ assert.equal(reservationLimitsSchema.safeParse({m:{ocr:{value:'1',scale:0}}}).success,false)
 })

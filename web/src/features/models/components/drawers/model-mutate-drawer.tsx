@@ -183,6 +183,7 @@ export function ModelMutateDrawer({
       'claude.thinking_adapter_budget_tokens_percentage': 0.8,
       ModelPrice: '',
       ModelNativePricing: '{}',
+      ModelNativeReservationLimits: '{}',
       ModelRatio: '',
       CacheRatio: '',
       CompletionRatio: '',

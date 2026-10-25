@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -11,6 +11,7 @@ import { Panel, Field, Submit, Details, type PanelProps } from './ui'
 
 export function TaskPanel(props: PanelProps) {
   const { t } = useTranslation()
+  const cache = useQueryClient()
   const [grant, setGrant] = useState<ModelCredential | null>(null)
   const [call, setCall] = useState('')
   const [output, setOutput] = useState('')
@@ -67,6 +68,40 @@ export function TaskPanel(props: PanelProps) {
       asset: string
     }>
   }
+  async function acceptReceipt(
+    result: NonNullable<typeof receipt>,
+    epoch: number
+  ) {
+    if (
+      epoch !== props.session.epoch ||
+      !mounted.current ||
+      props.session.account !== props.account.id
+    ) {
+      return
+    }
+    setReceipt(result)
+    if (result.status === 'SETTLED') {
+      await Promise.all([
+        cache.invalidateQueries({ queryKey: ['resources', props.account.id] }),
+        cache.invalidateQueries({ queryKey: ['usage', props.account.id] }),
+      ])
+    }
+  }
+  async function refreshReceipt() {
+    if (!grant) return
+    const epoch = props.session.epoch
+    setBusy(true)
+    try {
+      const result = await props.session.bound(() => readReceipt(grant, call))
+      await acceptReceipt(result, epoch)
+    } catch (error) {
+      if (epoch === props.session.epoch && mounted.current) {
+        setError(message(error))
+      }
+    } finally {
+      if (epoch === props.session.epoch && mounted.current) setBusy(false)
+    }
+  }
   async function send(form: HTMLFormElement) {
     setBusy(true)
     setError('')
@@ -122,7 +157,7 @@ export function TaskPanel(props: PanelProps) {
       )
       if (epoch !== props.session.epoch || !mounted.current) return
       const result = await readReceipt(current, id)
-      if (epoch === props.session.epoch && mounted.current) setReceipt(result)
+      await acceptReceipt(result, epoch)
     } catch (e) {
       if (epoch === props.session.epoch && mounted.current) setError(message(e))
     } finally {
@@ -225,12 +260,7 @@ export function TaskPanel(props: PanelProps) {
           <Button
             disabled={busy}
             variant='outline'
-            onClick={() =>
-              void props.session
-                .bound(() => readReceipt(grant, call))
-                .then(setReceipt)
-                .catch((e) => setError(message(e)))
-            }
+            onClick={() => void refreshReceipt()}
           >
             {t('Query task receipt')}
           </Button>

@@ -577,3 +577,270 @@ for (const failure of ['network', 'pending', 'idempotency_conflict'] as const) {
     expect(writes[0]).toEqual(writes[1])
   })
 }
+
+for (const manual of [false, true]) {
+  test(`${manual ? 'manual' : 'automatic'} settled task receipt refreshes same-payer credits and usage`, async ({
+    page,
+  }) => {
+    await fixture(page)
+    let settled = false
+    let receipts = 0
+    const headers = { 'Access-Control-Allow-Origin': 'http://127.0.0.1:58004' }
+    await page.route('**/personal-a/resources', (route) =>
+      route.request().method() === 'OPTIONS'
+        ? route.fallback()
+        : route.fulfill({
+            headers,
+            json: {
+              account_id: 'personal-a',
+              product_id: 'llmrouter',
+              subscriptions: [],
+              credits: {
+                asset: 'CREDIT/6',
+                spendable: settled ? '2999980' : '3000000',
+                reserved: '0',
+                frozen: '0',
+              },
+              payments: { real_payments_configured: false },
+              billing_profile: {
+                addons: { enabled: true },
+                subscription: { enabled: false },
+              },
+            },
+          })
+    )
+    await page.route('**/personal-a/usage/summary', (route) =>
+      route.request().method() === 'OPTIONS'
+        ? route.fallback()
+        : route.fulfill({
+            headers,
+            json: {
+              calls_total: settled ? '1' : '0',
+              pending_calls: '0',
+              financial_details: true,
+              charges_by_asset: { 'CREDIT/6': settled ? '20' : '0' },
+              as_of: 'now',
+            },
+          })
+    )
+    await page.route('**/platform/v1/**', (route) => {
+      if (route.request().method() === 'POST') {
+        return route.fulfill({
+          json: { choices: [{ message: { content: 'charged text' } }] },
+        })
+      }
+      receipts++
+      settled = !manual || receipts > 1
+      return route.fulfill({
+        json: {
+          status: settled ? 'SETTLED' : 'RESERVED',
+          charged: settled ? '20' : '0',
+          asset: 'CREDIT/6',
+        },
+      })
+    })
+    await login(page)
+    await expect(
+      page.getByText('Spendable credits: 3.000000 CREDIT', { exact: false })
+    ).toBeVisible()
+    await page
+      .getByLabel('Funding mode', { exact: true })
+      .selectOption('prepaid_cash')
+    await page.getByLabel('Message', { exact: true }).fill('Hello')
+    await page.getByRole('button', { name: 'Send new task' }).click()
+    if (manual) {
+      await expect(
+        page.getByText('Task status: RESERVED', { exact: false })
+      ).toBeVisible()
+      await page.getByRole('button', { name: 'Query task receipt' }).click()
+    }
+    await expect(
+      page.getByText('Task status: SETTLED', { exact: false })
+    ).toBeVisible()
+    await expect(
+      page.getByText('Spendable credits: 2.999980 CREDIT', { exact: false })
+    ).toBeVisible()
+    await expect(page.getByText('Calls: 1', { exact: false })).toBeVisible()
+    await expect(
+      page.getByText('Charged: 0.000020 CREDIT', { exact: true })
+    ).toBeVisible()
+  })
+}
+
+test('upgrade controls show only higher-rank same-period offers and accepted quote disappears', async ({
+  page,
+}) => {
+  await fixture(page)
+  const headers = { 'Access-Control-Allow-Origin': 'http://127.0.0.1:58004' }
+  const offer = (
+    id: string,
+    rank: number,
+    period = 'month',
+    kind = 'membership'
+  ) => ({
+    id,
+    name: id,
+    rank,
+    period,
+    kind,
+    account_kind: 'both',
+    product_id: 'llmrouter',
+    status: 'published',
+    price: '1000000',
+    monthly_credit: '1000000',
+  })
+  const offers = [
+    offer('lower', 1),
+    offer('current', 2),
+    offer('higher', 3),
+    offer('annual', 3, 'year'),
+    offer('addon', 4, '', 'addon'),
+  ]
+  await page.route('**/catalog', (route) =>
+    route.request().method() === 'OPTIONS'
+      ? route.fallback()
+      : route.fulfill({ headers, json: offers })
+  )
+  await page.route('**/personal-a/resources', (route) =>
+    route.request().method() === 'OPTIONS'
+      ? route.fallback()
+      : route.fulfill({
+          headers,
+          json: {
+            account_id: 'personal-a',
+            subscriptions: [
+              {
+                id: 'active-sub',
+                product_id: 'llmrouter',
+                status: 'active',
+                offer: offers[1],
+              },
+            ],
+            payments: { real_payments_configured: false },
+            billing_profile: {
+              addons: { enabled: true },
+              subscription: { enabled: true },
+            },
+          },
+        })
+  )
+  await page.route('**/personal-a/quotes', (route) =>
+    route.request().method() === 'OPTIONS'
+      ? route.fallback()
+      : route.fulfill({
+          headers,
+          json: {
+            id: 'upgrade-quote',
+            account_id: 'personal-a',
+            subscription_id: 'active-sub',
+            offer: offers[2],
+            amount: '1000000',
+            expires_at: '2099-01-01T00:00:00Z',
+          },
+        })
+  )
+  await page.route('**/quotes/upgrade-quote/accept', (route) =>
+    route.request().method() === 'OPTIONS'
+      ? route.fallback()
+      : route.fulfill({
+          headers,
+          json: {
+            id: 'upgrade-order',
+            account_id: 'personal-a',
+            offer: offers[2],
+            amount: '1000000',
+            payment_status: 'PENDING',
+            fulfillment_status: 'PENDING',
+          },
+        })
+  )
+  await login(page)
+  await expect(page.getByRole('button', { name: 'Quote upgrade' })).toHaveCount(
+    1
+  )
+  await page
+    .getByRole('article')
+    .filter({ has: page.getByRole('heading', { name: 'higher', exact: true }) })
+    .getByRole('button', { name: 'Quote upgrade' })
+    .click()
+  await expect(
+    page.getByText('Upgrade quote: upgrade-quote', { exact: false })
+  ).toBeVisible()
+  await page
+    .getByRole('button', { name: 'Accept quote and create order' })
+    .click()
+  await expect(page.getByText('upgrade-order', { exact: true })).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Accept quote and create order' })
+  ).toHaveCount(0)
+})
+
+test('late settled receipt after payer switch cannot populate or refetch the new payer', async ({
+  page,
+}) => {
+  await fixture(page)
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let entered!: () => void
+  const requested = new Promise<void>((resolve) => {
+    entered = resolve
+  })
+  let complete!: () => void
+  const completed = new Promise<void>((resolve) => {
+    complete = resolve
+  })
+  let newPayerReads = 0
+  await page.route('**/team-b/resources', (route) => {
+    if (route.request().method() === 'OPTIONS') return route.fallback()
+    newPayerReads++
+    return route.fulfill({
+      headers: { 'Access-Control-Allow-Origin': 'http://127.0.0.1:58004' },
+      json: {
+        account_id: 'team-b',
+        subscriptions: [],
+        payments: { real_payments_configured: false },
+        billing_profile: {
+          addons: { enabled: true },
+          subscription: { enabled: false },
+        },
+      },
+    })
+  })
+  await page.route('**/platform/v1/**', async (route) => {
+    if (route.request().method() === 'POST') {
+      return route.fulfill({
+        json: { choices: [{ message: { content: 'old payer output' } }] },
+      })
+    }
+    entered()
+    await gate
+    try {
+      await route.fulfill({
+        json: { status: 'SETTLED', charged: '20', asset: 'CREDIT/6' },
+      })
+    } catch {
+      /* switching payer aborts this in-flight response */
+    } finally {
+      complete()
+    }
+  })
+  await login(page)
+  await page
+    .getByLabel('Funding mode', { exact: true })
+    .selectOption('prepaid_cash')
+  await page.getByLabel('Message', { exact: true }).fill('Hello')
+  await page.getByRole('button', { name: 'Send new task' }).click()
+  await requested
+  await page.getByRole('combobox').first().selectOption('team-b')
+  await expect(
+    page.getByText('Finance actions require owner or billing_admin role.')
+  ).toBeVisible()
+  release()
+  await completed
+  await expect(
+    page.getByText('Task status: SETTLED', { exact: false })
+  ).toHaveCount(0)
+  expect(newPayerReads).toBe(1)
+})

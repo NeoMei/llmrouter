@@ -8,6 +8,7 @@ import { FinancialReceipt, type FinancialResult } from './financial-receipt'
 import { UniHubError, type Quote, type Offer } from './sdk'
 import { message, cnyMillionths, exactAmount, FinancialIntent } from './session'
 import { Panel, Field, Submit, type PanelProps } from './ui'
+import { upgradeSubscription } from './upgrades'
 
 export function BillingPanel(props: PanelProps) {
   const { t } = useTranslation()
@@ -77,6 +78,7 @@ export function BillingPanel(props: PanelProps) {
         )
       }
       setResult(value)
+      if (original.kind === 'quote') setQuote(null)
       props.session.intents.delete(original.account)
       setIntent(null)
       await cache.invalidateQueries({
@@ -103,8 +105,9 @@ export function BillingPanel(props: PanelProps) {
     setBusy(true)
     setError('')
     try {
-      const subscription = resources.data?.subscriptions.find(
-        (item) => item.product_id === 'llmrouter' && item.status === 'active'
+      const subscription = upgradeSubscription(
+        resources.data?.subscriptions ?? [],
+        offer
       )
       if (!subscription) {
         throw new Error(t('Select an active subscription to quote an upgrade'))
@@ -273,8 +276,10 @@ export function BillingPanel(props: PanelProps) {
                       : 'Create purchase order'
                   )}
                 </Button>
-                {offer.kind !== 'addon' &&
-                resources.data?.subscriptions.length ? (
+                {upgradeSubscription(
+                  resources.data?.subscriptions ?? [],
+                  offer
+                ) ? (
                   <Button
                     variant='outline'
                     disabled={busy || intent !== null}

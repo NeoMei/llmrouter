@@ -97,8 +97,10 @@ func (s *OCRBillingStore) DeliverAuditLog(ctx context.Context, logDB *gorm.DB, e
 			return ErrOCRConflict
 		}
 		var admission OCRAdmission
-		if err := common.UnmarshalJsonStr(job.Contract, &admission); err != nil {
-			return errors.New("OCR billing snapshot invalid; authoritative audit retained")
+		if job.SubmissionState != "native" {
+			if err := common.UnmarshalJsonStr(job.Contract, &admission); err != nil {
+				return errors.New("OCR billing snapshot invalid; authoritative audit retained")
+			}
 		}
 		log.UserId, log.TokenId, log.ChannelId = job.UserID, job.TokenID, job.ChannelID
 		log.ModelName, log.Group = job.Model, job.BillingGroup

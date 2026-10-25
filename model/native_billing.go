@@ -525,3 +525,13 @@ func (s *NativeBillingStore) ResolveMeasurement(ctx context.Context, id, actionI
 	}
 	return s.Finish(ctx, id, outcome)
 }
+
+func (s *NativeBillingStore) ProjectAuditLogs(ctx context.Context, logDB *gorm.DB, limit int) error {
+	if limit < 1 || limit > 100 {
+		return ErrOCRConflict
+	}
+	query := s.ledger.db.WithContext(ctx).Where("projected_at = ?", 0).Where("job_id IN (?)", s.ledger.db.Model(&NativeBilling{}).Select("id"))
+	return s.ledger.projectAudit(ctx, query, limit, func(ctx context.Context, event OCRAuditEvent) error {
+		return s.ledger.DeliverAuditLog(ctx, logDB, event)
+	})
+}

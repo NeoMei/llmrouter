@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"errors"
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/metering"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/go-redis/redis/v8"
@@ -153,4 +154,29 @@ func TestNativeAdminResolutionIdempotencyAndConflictingCommand(t *testing.T) {
 	_, err = n.ResolveMeasurement(ctx, j.ID, "resolve-1", 1, "confirm_no_output", nil, "changed reason")
 	require.ErrorIs(t, err, ErrOCRConflict)
 	ocrBalances(t, s, old, 1000, 500, 0)
+}
+
+func TestNativeReceiptProjectionUsesActualQuantityOnce(t *testing.T) {
+	n, s, a, _ := nativeFixture(t)
+	ctx := context.Background()
+	require.NoError(t, s.db.AutoMigrate(&Log{}, &OCRLogReceipt{}))
+	old := common.LogConsumeEnabled
+	common.LogConsumeEnabled = true
+	t.Cleanup(func() { common.LogConsumeEnabled = old })
+	j, err := n.Begin(ctx, a)
+	require.NoError(t, err)
+	require.NoError(t, n.RecordUsage(ctx, j.ID, nativeUsage("500")))
+	_, err = n.Finish(ctx, j.ID, "measured")
+	require.NoError(t, err)
+	require.NoError(t, s.ProjectAuditLogs(ctx, s.db, 10))
+	require.NoError(t, s.ProjectAuditLogs(ctx, s.db, 10))
+	var logs []Log
+	require.NoError(t, s.db.Find(&logs).Error)
+	require.Len(t, logs, 1)
+	assert.Equal(t, 50, logs[0].Quota)
+	var other map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(logs[0].Other, &other))
+	assert.Equal(t, "character", other["billing_unit"])
+	assert.Equal(t, "speech", other["operation"])
+	assert.Contains(t, logs[0].Other, `"value":"500"`)
 }

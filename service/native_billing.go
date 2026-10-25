@@ -110,3 +110,34 @@ func ResolveNativeBilling(ctx context.Context, id, actionID string, actor int, a
 	defer s.Close()
 	return s.ResolveMeasurement(ctx, id, actionID, actor, action, u, reason)
 }
+
+// StartNativeBillingRecovery drains only durable money decisions and audit
+// projections. It never dispatches providers or releases unmeasured holds.
+func StartNativeBillingRecovery(ctx context.Context) func() {
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				run, cancelRun := context.WithTimeout(ctx, 25*time.Second)
+				s, err := nativeBillingStore()
+				if err == nil {
+					err = s.Recover(run, 100)
+					if logErr := s.ProjectAuditLogs(run, model.LOG_DB, 100); logErr != nil {
+						common.SysError("native billing log projection: " + logErr.Error())
+					}
+					s.Close()
+				}
+				if err != nil {
+					common.SysError("native billing recovery: " + err.Error())
+				}
+				cancelRun()
+			}
+		}
+	}()
+	return cancel
+}

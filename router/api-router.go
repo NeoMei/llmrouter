@@ -157,11 +157,7 @@ func SetApiRouter(router *gin.Engine) {
 			}
 		}
 
-		nativeBillingAdmin := apiRouter.Group("/native-billing")
-		nativeBillingAdmin.Use(middleware.AdminAuth())
-		nativeBillingAdmin.GET("/", controller.ListNativeBilling)
-		nativeBillingAdmin.GET("/:id", controller.GetNativeBilling)
-		nativeBillingAdmin.POST("/:id/resolve", controller.ResolveNativeBilling)
+		registerNativeBillingRoutes(apiRouter)
 
 		// Subscription billing (plans, purchase, admin management)
 		subscriptionRoute := apiRouter.Group("/subscription")
@@ -403,4 +399,12 @@ func SetApiRouter(router *gin.Engine) {
 			deploymentsRoute.DELETE("/:id", controller.DeleteDeployment)
 		}
 	}
+}
+
+func registerNativeBillingRoutes(api *gin.RouterGroup) {
+	routes := api.Group("/native-billing")
+	routes.Use(middleware.AdminAuth())
+	routes.GET("/", controller.ListNativeBilling)
+	routes.GET("/:id", controller.GetNativeBilling)
+	routes.POST("/:id/resolve", controller.ResolveNativeBilling)
 }

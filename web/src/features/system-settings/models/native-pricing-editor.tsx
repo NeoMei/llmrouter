@@ -83,10 +83,16 @@ export function NativePricingEditor(props: Props) {
       toast.error(t('Model is required'))
       return
     }
-    const next =
-      parsed && typeof parsed === 'object' ? structuredClone(parsed) : {}
+    const baseline = catalogSchema.safeParse(parsed)
+    if (!baseline.success) {
+      toast.error(t('Invalid native tariff'))
+      return
+    }
+    const next = structuredClone(baseline.data)
     next[model] ||= {}
-    next[model][operation] = tariff
+    const current = next[model][operation]
+    const otherTerms = current?.terms.filter((term) => term.key !== termKey) || []
+    next[model][operation] = { ...tariff, terms: [...otherTerms, ...tariff.terms] }
     const result = catalogSchema.safeParse(next)
     if (!result.success) {
       toast.error(t('Invalid native tariff'))

@@ -210,13 +210,15 @@ func miniMaxImageHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 	}
 	if info.NativeBilling != nil {
 		outs := make([]service.NativeImageOutput, 0, len(minimaxResponse.Data.ImageURLs)+len(minimaxResponse.Data.ImageBase64))
-		for i, u := range minimaxResponse.Data.ImageURLs {
+		for _, u := range minimaxResponse.Data.ImageURLs {
 			outs = append(outs, service.NativeImageOutput{ID: u})
 		}
-		for i, b := range minimaxResponse.Data.ImageBase64 {
+		for _, b := range minimaxResponse.Data.ImageBase64 {
 			outs = append(outs, service.NativeImageOutput{ID: b})
 		}
-		_ = service.RecordNativeUsageForRelay(c.Request.Context(), info, service.NativeImageUsage(info.NativeBilling.Price, outs, true))
+		if err := service.RecordNativeUsageForRelay(c.Request.Context(), info, service.NativeImageUsage(info.NativeBilling.Price, outs, true)); err != nil {
+			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		}
 	}
 
 	return &dto.Usage{}, nil

@@ -140,6 +140,7 @@ func OpenaiImageStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp 
 	usage := &dto.Usage{}
 	var lastStreamData []byte
 	var completedImages int64
+	nativeOutputs := []service.NativeImageOutput{}
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		raw := common.StringToByteSlice(data)
@@ -160,6 +161,19 @@ func OpenaiImageStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp 
 			}
 			if chunk.Type == "image_generation.completed" || chunk.Type == "image_edit.completed" {
 				completedImages++
+				id := gjson.GetBytes(raw, "id").String()
+				b64 := gjson.GetBytes(raw, "b64_json").String()
+				if id == "" {
+					id = b64
+				}
+				o := service.NativeImageOutput{ID: id}
+				if b64 != "" {
+					if fact, e := helper.DecodeMediaFact("image", b64); e == nil {
+						o.Width = fact.Width
+						o.Height = fact.Height
+					}
+				}
+				nativeOutputs = append(nativeOutputs, o)
 			}
 		}
 		if err := writeOpenaiImageStreamChunk(c, raw); err != nil {
@@ -190,6 +204,12 @@ func OpenaiImageStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp 
 		}
 		if upstreamFinished || float64(completedImages) > requestedN {
 			updateOpenAIImageCount(info, completedImages)
+		}
+	}
+	if info.NativeBilling != nil {
+		terminal := info.StreamStatus != nil && !info.StreamStatus.HasErrors() && info.StreamStatus.IsNormalEnd()
+		if err := service.RecordNativeUsageForRelay(c.Request.Context(), info, service.NativeImageUsage(info.NativeBilling.Price, nativeOutputs, terminal)); err != nil {
+			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 		}
 	}
 	return usage, nil

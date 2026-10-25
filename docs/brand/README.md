@@ -1,10 +1,10 @@
 # LLMRouter visual identity
 
-The user delegated the final design choice after reviewing three concepts on 2026-10-25. The selected mark is **Route R**: a rounded Router initial, a central signal dot and a 45-degree outgoing route. Its geometry, warm terracotta and dark brown typography relate to the user-supplied Quukk identity while retaining an independent product symbol.
+After reviewing the functional graphic concepts on 2026-10-25, the user selected A — Confluence. The selected mark is **Confluence**: three model/account lanes converge into one unified outlet. Its flat geometry, warm terracotta and dark brown typography relate to the user-supplied Quukk identity while explaining LLMRouter's core job without a letter monogram.
 
 ## Artwork
 
-- `web/public/brand/llmrouter-mark.svg`: transparent 256 × 256 vector master; terracotta `#AA603F`.
+- `web/public/brand/llmrouter-confluence.svg`: transparent 256 × 256 vector master; three lanes converge into one outlet. `llmrouter-mark.svg` remains an identical compatibility alias.
 - `llmrouter-mark-mono.svg`: black monochrome master for template/presentation uses.
 - `llmrouter-wordmark.svg`: horizontal mark and outlined Public Sans 650 lettering in `#302A25`.
 - `llmrouter-wordmark-dark.svg`: warm-light mark `#F4C5A7` and ivory lettering `#F8F5F0`.
@@ -18,6 +18,6 @@ The master has no external font/image dependencies. Wordmarks convert Public San
 
 ## Website rollout
 
-Default branding and initial HTML use `/brand/llmrouter-mark.svg`, avoiding reuse of a previously cached upstream logo URL. The PNG/ICO paths also contain the new artwork for older clients. Existing administrator-supplied custom logos remain supported. Production may serve these exact static artifacts at Nginx and set the Logo option to this SVG, independently of the backend release. Asset publication must retain the current backend image, existing site routing and other settings, with rollback copies of the previous logo option and Nginx file.
+Default branding and initial HTML use `/brand/llmrouter-confluence.svg`, avoiding reuse of a previously cached upstream logo URL. The PNG/ICO paths also contain the new artwork for older clients. Existing administrator-supplied custom logos remain supported. Production may serve these exact static artifacts at Nginx and set the Logo option to this SVG, independently of the backend release. Asset publication must retain the current backend image, existing site routing and other settings, with rollback copies of the previous logo option and Nginx file.
 
 Upstream New API/QuantumNous legal, licensing, copyright and About attribution remain in place. This identity change does not imply signed or verified desktop installers; those require the normal packaging/signing pipeline.

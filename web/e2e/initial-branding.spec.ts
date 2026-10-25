@@ -28,8 +28,8 @@ test('serves LLMRouter branding before application scripts run', async ({
   await expect(page).toHaveTitle('LLMRouter')
   await expect(
     page.locator('link[rel="icon"][type="image/svg+xml"]')
-  ).toHaveAttribute('href', '/brand/llmrouter-mark.svg')
-  const icon = await page.request.get('/brand/llmrouter-mark.svg')
+  ).toHaveAttribute('href', '/brand/llmrouter-confluence.svg')
+  const icon = await page.request.get('/brand/llmrouter-confluence.svg')
   expect(icon.ok()).toBeTruthy()
   expect(icon.headers()['content-type']).toContain('image/svg+xml')
   await expect(page.locator('meta[name="title"]')).toHaveAttribute(

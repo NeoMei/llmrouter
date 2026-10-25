@@ -159,7 +159,8 @@ export function Footer(props: FooterProps) {
     demoSiteEnabled,
   } = useSystemConfig()
 
-  const displayLogo = systemLogo || props.logo || '/brand/llmrouter-mark.svg'
+  const displayLogo =
+    systemLogo || props.logo || '/brand/llmrouter-confluence.svg'
   const displayName = systemName || props.name || 'LLMRouter'
   const isDemoSiteMode = Boolean(demoSiteEnabled)
   const currentYear = new Date().getFullYear()

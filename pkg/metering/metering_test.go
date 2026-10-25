@@ -55,8 +55,12 @@ func TestInvalidQuantityAndHuge(t *testing.T) {
 func TestExactFamilies(t *testing.T) {
 	for _, tc := range []struct{ op, key, unit string }{{"chat", "input", "token"}, {"image_generation", "small", "image"}, {"ocr", "requests", "request"}, {"video", "video", "video_second"}, {"video", "provider", "provider_unit"}} {
 		t.Run(tc.unit, func(t *testing.T) {
-			p := Price{Version: "metered_v2", Operation: tc.op, Policy: "sum", Terms: []Term{{Key: tc.key, Unit: tc.unit, ProviderUnit: "vendor:unit", Price: Rational{"2", "3"}, Step: &Quantity{"2", 0}, Minimum: &Quantity{"3", 0}}}}
-			u := Usage{Version: "metered_v2", Operation: tc.op, State: "confirmed", Measurements: []Measurement{{Key: tc.key, Unit: tc.unit, ProviderUnit: "vendor:unit", Quantity: qty("1", 0)}}}
+			p := Price{Version: "metered_v2", Operation: tc.op, Policy: "sum", Terms: []Term{{Key: tc.key, Unit: tc.unit, ProviderUnit: "", Price: Rational{"2", "3"}, Step: &Quantity{"2", 0}, Minimum: &Quantity{"3", 0}}}}
+			u := Usage{Version: "metered_v2", Operation: tc.op, State: "confirmed", Measurements: []Measurement{{Key: tc.key, Unit: tc.unit, ProviderUnit: "", Quantity: qty("1", 0)}}}
+			if tc.unit == "provider_unit" {
+				p.Terms[0].ProviderUnit = "vendor:unit"
+				u.Measurements[0].ProviderUnit = "vendor:unit"
+			}
 			got, err := Calculate(p, u)
 			require.NoError(t, err)
 			assert.Equal(t, "8/3", got.RatString())
@@ -158,7 +162,7 @@ func TestIntegerTariffQuantities(t *testing.T) {
 func TestUnknownNonTokenDimensions(t *testing.T) {
 	for _, tc := range []struct{ op, unit string }{{"speech", "character"}, {"transcription", "audio_second"}, {"ocr", "request"}, {"video", "video_second"}, {"video", "provider_unit"}} {
 		t.Run(tc.unit, func(t *testing.T) {
-			require.Error(t, ValidatePrice(Price{Version: "metered_v2", Operation: tc.op, Policy: "sum", Terms: []Term{{Key: "bogus", Unit: tc.unit, ProviderUnit: "vendor:unit", Price: Rational{"1", "1"}}}}))
+			require.Error(t, ValidatePrice(Price{Version: "metered_v2", Operation: tc.op, Policy: "sum", Terms: []Term{{Key: "bogus", Unit: tc.unit, ProviderUnit: "", Price: Rational{"1", "1"}}}}))
 		})
 	}
 }

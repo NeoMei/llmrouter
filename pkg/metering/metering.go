@@ -67,18 +67,20 @@ func ValidatePrice(p Price) error {
 		if t.Unit != p.Terms[0].Unit {
 			return errors.New("mixed tariff units")
 		}
-		compatible := t.Unit == "request" || t.Unit == "provider_unit"
+		compatible := false
 		switch p.Operation {
 		case "chat", "responses", "embedding":
-			compatible = compatible || t.Unit == "token"
+			compatible = t.Unit == "token"
 		case "speech":
-			compatible = compatible || t.Unit == "character" || t.Unit == "audio_second" || t.Unit == "token"
+			compatible = t.Unit == "character"
 		case "transcription":
-			compatible = compatible || t.Unit == "audio_second" || t.Unit == "token"
+			compatible = t.Unit == "audio_second"
 		case "image_generation", "image_edit":
-			compatible = compatible || t.Unit == "image"
+			compatible = t.Unit == "image"
+		case "ocr":
+			compatible = t.Unit == "request"
 		case "video":
-			compatible = compatible || t.Unit == "video_second"
+			compatible = t.Unit == "video_second" || t.Unit == "provider_unit"
 		}
 		if !compatible {
 			return errors.New("operation/unit mismatch")
@@ -95,8 +97,11 @@ func ValidatePrice(p Price) error {
 		if err != nil || d.Sign() <= 0 {
 			return errors.New("invalid denominator")
 		}
-		if t.Unit == "provider_unit" && strings.TrimSpace(t.ProviderUnit) == "" {
+		if t.Unit == "provider_unit" && (strings.TrimSpace(t.ProviderUnit) == "" || len(t.ProviderUnit) > 128) {
 			return errors.New("provider namespace required")
+		}
+		if t.Unit != "provider_unit" && t.ProviderUnit != "" {
+			return errors.New("unexpected provider namespace")
 		}
 		if t.Step != nil {
 			if (t.Unit == "token" || t.Unit == "character" || t.Unit == "image" || t.Unit == "request") && t.Step.Scale != 0 {
@@ -123,6 +128,9 @@ func ValidatePrice(p Price) error {
 func ValidateUsage(p Price, u Usage) error {
 	if err := ValidatePrice(p); err != nil {
 		return err
+	}
+	if len(u.Source) > 128 || len(u.ProviderRequestID) > 256 {
+		return errors.New("usage identifier too long")
 	}
 	if u.Version != "metered_v2" || u.Operation != p.Operation || u.State != "confirmed" {
 		return errors.New("usage not confirmed")

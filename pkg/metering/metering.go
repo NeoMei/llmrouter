@@ -2,7 +2,6 @@ package metering
 
 import (
 	"errors"
-	"fmt"
 	"math/big"
 	"strings"
 )
@@ -47,7 +46,7 @@ type Usage struct {
 var units = map[string]bool{"token": true, "character": true, "audio_second": true, "image": true, "request": true, "video_second": true, "provider_unit": true}
 var ops = map[string]bool{"chat": true, "responses": true, "embedding": true, "speech": true, "transcription": true, "image_generation": true, "image_edit": true, "ocr": true, "video": true}
 
-func q(v Quantity) (*big.Rat, error) {
+func parseQuantity(v Quantity) (*big.Rat, error) {
 	if v.Scale < 0 || v.Scale > 9 || v.Value == "" || (len(v.Value) > 1 && v.Value[0] == '0') || strings.Trim(v.Value, "0123456789") != "" || len(v.Value) > 38 {
 		return nil, errors.New("invalid quantity")
 	}
@@ -56,28 +55,51 @@ func q(v Quantity) (*big.Rat, error) {
 	return new(big.Rat).SetFrac(n, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(v.Scale)), nil)), nil
 }
 func ValidatePrice(p Price) error {
-	if p.Version != "metered_v2" || p.Policy == "" || !ops[p.Operation] || len(p.Terms) == 0 || len(p.Terms) > 64 {
+	if p.Version != "metered_v2" || strings.TrimSpace(p.Policy) == "" || len(p.Policy) > 128 || !ops[p.Operation] || len(p.Terms) == 0 || len(p.Terms) > 64 {
 		return errors.New("invalid price")
 	}
 	seen := map[string]bool{}
 	for _, t := range p.Terms {
-		if seen[t.Key] || t.Key == "" || !units[t.Unit] || t.Price.Denominator == "0" || t.Price.Numerator == "" {
+		if seen[t.Key] || strings.TrimSpace(t.Key) == "" || len(t.Key) > 128 || !units[t.Unit] || t.Price.Denominator == "0" || t.Price.Numerator == "" {
 			return errors.New("invalid term")
 		}
 		seen[t.Key] = true
-		n, ok := new(big.Int).SetString(t.Price.Numerator, 10)
-		if !ok || n.Sign() < 0 || len(t.Price.Numerator) > 38 {
+		if t.Unit != p.Terms[0].Unit {
+			return errors.New("mixed tariff units")
+		}
+		compatible := t.Unit == "request" || t.Unit == "provider_unit"
+		switch p.Operation {
+		case "chat", "responses", "embedding":
+			compatible = compatible || t.Unit == "token"
+		case "speech":
+			compatible = compatible || t.Unit == "character" || t.Unit == "audio_second" || t.Unit == "token"
+		case "transcription":
+			compatible = compatible || t.Unit == "audio_second" || t.Unit == "token"
+		case "image_generation", "image_edit":
+			compatible = compatible || t.Unit == "image"
+		case "video":
+			compatible = compatible || t.Unit == "video_second"
+		}
+		if !compatible {
+			return errors.New("operation/unit mismatch")
+		}
+		if t.Unit == "token" && t.Key != "input" && t.Key != "output" && t.Key != "cache_read" && t.Key != "cache_write" && t.Key != "reasoning" {
+			return errors.New("unknown token dimension")
+		}
+
+		n, err := parseQuantity(Quantity{Value: t.Price.Numerator})
+		if err != nil || n.Sign() < 0 {
 			return errors.New("invalid price numerator")
 		}
-		d, ok := new(big.Int).SetString(t.Price.Denominator, 10)
-		if !ok || d.Sign() <= 0 {
+		d, err := parseQuantity(Quantity{Value: t.Price.Denominator})
+		if err != nil || d.Sign() <= 0 {
 			return errors.New("invalid denominator")
 		}
-		if t.Unit == "provider_unit" && t.ProviderUnit == "" {
+		if t.Unit == "provider_unit" && strings.TrimSpace(t.ProviderUnit) == "" {
 			return errors.New("provider namespace required")
 		}
 		if t.Step != nil {
-			if _, e := q(*t.Step); e != nil {
+			if _, e := parseQuantity(*t.Step); e != nil {
 				return e
 			}
 			if t.Step.Value == "0" {
@@ -85,7 +107,7 @@ func ValidatePrice(p Price) error {
 			}
 		}
 		if t.Minimum != nil {
-			if _, e := q(*t.Minimum); e != nil {
+			if _, e := parseQuantity(*t.Minimum); e != nil {
 				return e
 			}
 		}
@@ -93,6 +115,9 @@ func ValidatePrice(p Price) error {
 	return nil
 }
 func ValidateUsage(p Price, u Usage) error {
+	if err := ValidatePrice(p); err != nil {
+		return err
+	}
 	if u.Version != "metered_v2" || u.Operation != p.Operation || u.State != "confirmed" {
 		return errors.New("usage not confirmed")
 	}
@@ -106,7 +131,7 @@ func ValidateUsage(p Price, u Usage) error {
 		if !ok || seen[m.Key] || m.Unit != t.Unit || m.ProviderUnit != t.ProviderUnit {
 			return errors.New("measurement mismatch")
 		}
-		if _, e := q(m.Quantity); e != nil {
+		if _, e := parseQuantity(m.Quantity); e != nil {
 			return e
 		}
 		if (m.Unit == "token" || m.Unit == "character" || m.Unit == "image" || m.Unit == "request") && m.Quantity.Scale != 0 {
@@ -120,9 +145,6 @@ func ValidateUsage(p Price, u Usage) error {
 	return nil
 }
 func Calculate(p Price, u Usage) (*big.Rat, error) {
-	if e := ValidatePrice(p); e != nil {
-		return nil, e
-	}
 	if e := ValidateUsage(p, u); e != nil {
 		return nil, e
 	}
@@ -135,21 +157,25 @@ func Calculate(p Price, u Usage) (*big.Rat, error) {
 				break
 			}
 		}
-		qv, _ := q(m.Quantity)
+		qv, _ := parseQuantity(m.Quantity)
 		if qv.Sign() == 0 {
 			continue
 		}
-		if t.Step != nil {
-			s, _ := q(*t.Step)
-			qv.Quo(qv, s)
-			qv.SetFrac(new(big.Int).Quo(qv.Num(), qv.Denom()), big.NewInt(1))
-			qv.Mul(qv, s)
-		}
 		if t.Minimum != nil {
-			min, _ := q(*t.Minimum)
-			if qv.Cmp(min) < 0 {
-				qv.Set(min)
+			minimum, _ := parseQuantity(*t.Minimum)
+			if qv.Cmp(minimum) < 0 {
+				qv.Set(minimum)
 			}
+		}
+		if t.Step != nil {
+			step, _ := parseQuantity(*t.Step)
+			ratio := new(big.Rat).Quo(qv, step)
+			whole, remainder := new(big.Int), new(big.Int)
+			whole.QuoRem(ratio.Num(), ratio.Denom(), remainder)
+			if remainder.Sign() > 0 {
+				whole.Add(whole, big.NewInt(1))
+			}
+			qv.Mul(new(big.Rat).SetInt(whole), step)
 		}
 		n := new(big.Int)
 		n.SetString(t.Price.Numerator, 10)
@@ -159,5 +185,3 @@ func Calculate(p Price, u Usage) (*big.Rat, error) {
 	}
 	return sum, nil
 }
-
-var _ = fmt.Sprintf

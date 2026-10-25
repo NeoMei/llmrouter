@@ -1,8 +1,10 @@
 package metering
 
 import (
+	"encoding/json"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"os"
 	"testing"
 )
 
@@ -109,6 +111,30 @@ func TestRejectedContracts(t *testing.T) {
 			got, err := Calculate(p, u)
 			require.Error(t, err)
 			assert.Nil(t, got)
+		})
+	}
+}
+
+func TestWireFixtures(t *testing.T) {
+	data, err := os.ReadFile("testdata/v2.json")
+	require.NoError(t, err)
+	var fixtures []struct {
+		Name    string
+		Price   Price
+		Usage   Usage
+		Want    string
+		Invalid bool
+	}
+	require.NoError(t, json.Unmarshal(data, &fixtures))
+	for _, f := range fixtures {
+		t.Run(f.Name, func(t *testing.T) {
+			got, err := Calculate(f.Price, f.Usage)
+			if f.Invalid {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, f.Want, got.RatString())
 		})
 	}
 }

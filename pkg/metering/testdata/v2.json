@@ -1,0 +1,250 @@
+[
+  {
+    "name": "characters",
+    "price": {
+      "version": "metered_v2",
+      "operation": "speech",
+      "policy": "provider_reported_v1",
+      "terms": [
+        {
+          "key": "characters",
+          "unit": "character",
+          "price": {
+            "numerator": "1",
+            "denominator": "1000"
+          }
+        }
+      ]
+    },
+    "usage": {
+      "version": "metered_v2",
+      "operation": "speech",
+      "state": "confirmed",
+      "source": "provider",
+      "measurements": [
+        {
+          "key": "characters",
+          "unit": "character",
+          "quantity": {
+            "value": "1500",
+            "scale": 0
+          }
+        }
+      ]
+    },
+    "want": "3/2"
+  },
+  {
+    "name": "seconds",
+    "price": {
+      "version": "metered_v2",
+      "operation": "transcription",
+      "policy": "provider_reported_v1",
+      "terms": [
+        {
+          "key": "audio",
+          "unit": "audio_second",
+          "price": {
+            "numerator": "2",
+            "denominator": "1"
+          }
+        }
+      ]
+    },
+    "usage": {
+      "version": "metered_v2",
+      "operation": "transcription",
+      "state": "confirmed",
+      "source": "provider",
+      "measurements": [
+        {
+          "key": "audio",
+          "unit": "audio_second",
+          "quantity": {
+            "value": "1001",
+            "scale": 3
+          }
+        }
+      ]
+    },
+    "want": "1001/500"
+  },
+  {
+    "name": "zero",
+    "price": {
+      "version": "metered_v2",
+      "operation": "speech",
+      "policy": "provider_reported_v1",
+      "terms": [
+        {
+          "key": "characters",
+          "unit": "character",
+          "price": {
+            "numerator": "1",
+            "denominator": "1"
+          }
+        }
+      ]
+    },
+    "usage": {
+      "version": "metered_v2",
+      "operation": "speech",
+      "state": "confirmed",
+      "source": "provider",
+      "measurements": [
+        {
+          "key": "characters",
+          "unit": "character",
+          "quantity": {
+            "value": "0",
+            "scale": 0
+          }
+        }
+      ]
+    },
+    "want": "0"
+  },
+  {
+    "name": "mismatch",
+    "price": {
+      "version": "metered_v2",
+      "operation": "speech",
+      "policy": "provider_reported_v1",
+      "terms": [
+        {
+          "key": "characters",
+          "unit": "character",
+          "price": {
+            "numerator": "1",
+            "denominator": "1000"
+          }
+        }
+      ]
+    },
+    "usage": {
+      "version": "metered_v2",
+      "operation": "speech",
+      "state": "confirmed",
+      "source": "provider",
+      "measurements": [
+        {
+          "key": "characters",
+          "unit": "token",
+          "quantity": {
+            "value": "1500",
+            "scale": 0
+          }
+        }
+      ]
+    },
+    "want": "",
+    "invalid": true
+  },
+  {
+    "name": "unknown",
+    "price": {
+      "version": "metered_v2",
+      "operation": "speech",
+      "policy": "provider_reported_v1",
+      "terms": [
+        {
+          "key": "characters",
+          "unit": "character",
+          "price": {
+            "numerator": "1",
+            "denominator": "1000"
+          }
+        }
+      ]
+    },
+    "usage": {
+      "version": "metered_v2",
+      "operation": "speech",
+      "state": "confirmed",
+      "source": "provider",
+      "measurements": [
+        {
+          "key": "unknown",
+          "unit": "character",
+          "quantity": {
+            "value": "1500",
+            "scale": 0
+          }
+        }
+      ]
+    },
+    "want": "",
+    "invalid": true
+  },
+  {
+    "name": "missing",
+    "price": {
+      "version": "metered_v2",
+      "operation": "speech",
+      "policy": "provider_reported_v1",
+      "terms": [
+        {
+          "key": "characters",
+          "unit": "character",
+          "price": {
+            "numerator": "1",
+            "denominator": "1000"
+          }
+        }
+      ]
+    },
+    "usage": {
+      "version": "metered_v2",
+      "operation": "speech",
+      "state": "confirmed",
+      "source": "provider",
+      "measurements": []
+    },
+    "want": "",
+    "invalid": true
+  },
+  {
+    "name": "duplicate",
+    "price": {
+      "version": "metered_v2",
+      "operation": "speech",
+      "policy": "provider_reported_v1",
+      "terms": [
+        {
+          "key": "characters",
+          "unit": "character",
+          "price": {
+            "numerator": "1",
+            "denominator": "1000"
+          }
+        },
+        {
+          "key": "characters",
+          "unit": "character",
+          "price": {
+            "numerator": "1",
+            "denominator": "1000"
+          }
+        }
+      ]
+    },
+    "usage": {
+      "version": "metered_v2",
+      "operation": "speech",
+      "state": "confirmed",
+      "source": "provider",
+      "measurements": [
+        {
+          "key": "characters",
+          "unit": "character",
+          "quantity": {
+            "value": "1500",
+            "scale": 0
+          }
+        }
+      ]
+    },
+    "want": "",
+    "invalid": true
+  }
+]

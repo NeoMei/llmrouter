@@ -197,9 +197,9 @@ func (s *NativeBillingStore) RecordUsage(ctx context.Context, id string, u meter
 		if n.Evidence != "" && n.Evidence != string(raw) {
 			conflict = true
 			if n.State == "settled" || n.State == "released" {
-				return tx.Model(&n).Updates(map[string]any{"conflict_evidence": string(raw), "reason": "conflicting_evidence"}).Error
+				return tx.Model(&n).Updates(map[string]any{"conflict_evidence": string(raw), "reason": "conflicting_evidence", "updated_at": time.Now().Unix()}).Error
 			}
-			return tx.Model(&n).Updates(map[string]any{"state": "pending_measurement", "reason": "conflicting_evidence", "conflict_evidence": string(raw)}).Error
+			return tx.Model(&n).Updates(map[string]any{"state": "pending_measurement", "reason": "conflicting_evidence", "conflict_evidence": string(raw), "updated_at": time.Now().Unix()}).Error
 		}
 		if n.Outcome != "" {
 			if n.Evidence == string(raw) {
@@ -208,7 +208,7 @@ func (s *NativeBillingStore) RecordUsage(ctx context.Context, id string, u meter
 			return ErrOCRConflict
 		}
 		if metering.ValidateUsage(a.Price, u) != nil {
-			return tx.Model(&n).Updates(map[string]any{"state": "pending_measurement", "reason": "unconfirmed_evidence", "last_observation": string(raw)}).Error
+			return tx.Model(&n).Updates(map[string]any{"state": "pending_measurement", "reason": "unconfirmed_evidence", "last_observation": string(raw), "updated_at": time.Now().Unix()}).Error
 		}
 		if n.Reason == "conflicting_evidence" {
 			conflict = true
@@ -429,7 +429,7 @@ func (s *NativeBillingStore) Recover(ctx context.Context, limit int) error {
 		return ErrOCRConflict
 	}
 	var rows []NativeBilling
-	if err := s.ledger.db.WithContext(ctx).Where("state IN ?", []string{"reserving", "settlement_pending"}).Order("created_at,id").Limit(limit).Find(&rows).Error; err != nil {
+	if err := s.ledger.db.WithContext(ctx).Where("platform = ?", false).Where("state IN ? OR (admin_action_id <> ? AND outcome = ?)", []string{"reserving", "measured", "settlement_pending"}, "", "").Order("created_at,id").Limit(limit).Find(&rows).Error; err != nil {
 		return err
 	}
 	var first error
@@ -441,6 +441,21 @@ func (s *NativeBillingStore) Recover(ctx context.Context, limit int) error {
 			if err == nil {
 				_, err = s.Begin(ctx, a)
 			}
+
+		} else if n.AdminActionID != "" && n.Outcome == "" {
+			var command struct {
+				Action string
+				Usage  *metering.Usage
+				Reason string
+				Actor  int
+			}
+			if e := common.UnmarshalJsonStr(n.AdminCommand, &command); e != nil {
+				err = e
+			} else {
+				_, err = s.ResolveMeasurement(ctx, n.ID, n.AdminActionID, command.Actor, command.Action, command.Usage, command.Reason)
+			}
+		} else if n.State == "measured" {
+			_, err = s.Finish(ctx, n.ID, "measured")
 		} else {
 			_, err = s.recoverSettlement(ctx, n.ID)
 		}
@@ -510,6 +525,7 @@ func (s *NativeBillingStore) ResolveMeasurement(ctx context.Context, id, actionI
 		n.AdminActor = actor
 		n.AdminReason = reason
 		n.AdminCommand = string(command)
+		n.UpdatedAt = time.Now().Unix()
 		return tx.Save(&n).Error
 	})
 	if err != nil {

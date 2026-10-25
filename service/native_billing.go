@@ -115,6 +115,19 @@ func ResolveNativeBilling(ctx context.Context, id, actionID string, actor int, a
 // projections. It never dispatches providers or releases unmeasured holds.
 func StartNativeBillingRecovery(ctx context.Context) func() {
 	ctx, cancel := context.WithCancel(ctx)
+	initial, initialCancel := context.WithTimeout(ctx, 25*time.Second)
+	if s, err := nativeBillingStore(); err == nil {
+		if recErr := s.Recover(initial, 100); recErr != nil {
+			common.SysError("native billing startup recovery: " + recErr.Error())
+		}
+		if logErr := s.ProjectAuditLogs(initial, model.LOG_DB, 100); logErr != nil {
+			common.SysError("native billing startup projection: " + logErr.Error())
+		}
+		_ = s.Close()
+	} else {
+		common.SysError("native billing startup recovery: " + err.Error())
+	}
+	initialCancel()
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()

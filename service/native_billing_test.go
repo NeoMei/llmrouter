@@ -81,4 +81,24 @@ func TestNativeLocalTokenFlowUsesFrozenReservationAndReceiptOnly(t *testing.T) {
 	var journal model.NativeBilling
 	require.NoError(t, db.First(&journal, "id = ?", info.NativeBilling.CallID).Error)
 	assert.Equal(t, "settled", journal.State)
+	// A new process must recover confirmed evidence and project its receipt
+	// before StartNativeBillingRecovery returns, without waiting for a timer.
+	require.NoError(t, db.AutoMigrate(&model.Log{}, &model.OCRLogReceipt{}))
+	oldLog, oldConsume := model.LOG_DB, common.LogConsumeEnabled
+	model.LOG_DB = db
+	common.LogConsumeEnabled = true
+	t.Cleanup(func() { model.LOG_DB = oldLog; common.LogConsumeEnabled = oldConsume })
+	a.CallID = "startup-recovery"
+	pending, err := BeginNativeBilling(ctx, a)
+	require.NoError(t, err)
+	require.NoError(t, RecordNativeUsage(ctx, pending.ID, actual))
+	stop := StartNativeBillingRecovery(ctx)
+	defer stop()
+	var restored model.NativeBilling
+	require.NoError(t, db.First(&restored, "id = ?", pending.ID).Error)
+	assert.Equal(t, "settled", restored.State)
+	var receipts int64
+	require.NoError(t, db.Model(&model.OCRLogReceipt{}).Count(&receipts).Error)
+	assert.EqualValues(t, 2, receipts)
+
 }

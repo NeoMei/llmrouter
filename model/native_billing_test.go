@@ -180,3 +180,47 @@ func TestNativeReceiptProjectionUsesActualQuantityOnce(t *testing.T) {
 	assert.Equal(t, "speech", other["operation"])
 	assert.Contains(t, logs[0].Other, `"value":"500"`)
 }
+
+func TestNativeRecoverMeasuredEvidenceAfterRestart(t *testing.T) {
+	n, s, a, old := nativeFixture(t)
+	ctx := context.Background()
+	j, err := n.Begin(ctx, a)
+	require.NoError(t, err)
+	require.NoError(t, n.RecordUsage(ctx, j.ID, nativeUsage("500")))
+	st := NewNativeBillingStore(s.db, nil)
+	require.NoError(t, n.Close())
+	_, err = st.Inspect(ctx, j.ID)
+	require.NoError(t, err)
+	require.NoError(t, st.Recover(ctx, 10))
+	out, err := st.Inspect(ctx, j.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "settled", out.State)
+	ocrBalances(t, s, old, 950, 450, 50)
+}
+func TestNativeRecoverAdminIntentAfterRestart(t *testing.T) {
+	n, s, a, old := nativeFixture(t)
+	ctx := context.Background()
+	j, err := n.Begin(ctx, a)
+	require.NoError(t, err)
+
+	injected := errors.New("crash before finish intent commit")
+	require.NoError(t, s.db.Callback().Update().Before("gorm:update").Register("native_resolution_crash", func(tx *gorm.DB) {
+		if row, ok := tx.Statement.Dest.(*NativeBilling); ok && row.Outcome != "" {
+			tx.AddError(injected)
+		}
+	}))
+	_, err = n.ResolveMeasurement(ctx, j.ID, "op-restart", 1, "confirm_no_output", nil, "operator confirmed no output")
+	require.ErrorIs(t, err, injected)
+	require.NoError(t, s.db.Callback().Update().Remove("native_resolution_crash"))
+	persisted, err := n.Inspect(ctx, j.ID)
+	require.NoError(t, err)
+	require.Equal(t, "op-restart", persisted.AdminActionID)
+	require.Empty(t, persisted.Outcome)
+
+	st := NewNativeBillingStore(s.db, nil)
+	require.NoError(t, st.Recover(ctx, 10))
+	out, err := st.Inspect(ctx, j.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "released", out.State)
+	ocrBalances(t, s, old, 1000, 500, 0)
+}

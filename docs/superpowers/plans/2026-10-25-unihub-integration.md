@@ -21,7 +21,7 @@
 - Every member/finance operation is reauthorized by UniHub; exact registered client/redirect/Origin is required.
 - Existing product-origin query isolation remains unchanged; cross-product reports require explicit llmrouter scope and current finance role.
 - Preserve upstream licenses, current account-pool/provider behavior, local operators and legacy users.
-- New backend tests use testify require/assert; new frontend tests belong in module __tests__ directories.
+- New LLMRouter backend tests use testify require/assert; UniHub tests follow its existing standard-library fixtures; new frontend tests belong in module __tests__ directories.
 - No production cutover, publication or real-merchant activation in this implementation run.
 
 ---

@@ -112,6 +112,8 @@ type RouteCandidate struct {
 type RelayInfo struct {
 	PlatformMode    bool
 	PlatformBilling *platformbilling.Session
+	// NativeBilling is an immutable metering snapshot and evidence observer.
+	NativeBilling *NativeBillingContext
 
 	TokenId           int
 	TokenKey          string

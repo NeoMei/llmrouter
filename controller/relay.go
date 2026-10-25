@@ -1,12 +1,14 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +30,7 @@ import (
 	"github.com/QuantumNous/new-api/service/accountpool"
 	"github.com/QuantumNous/new-api/service/modelcatalog"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -89,6 +92,11 @@ func relaySelectedChannel(c *gin.Context, relayInfo *relaycommon.RelayInfo, chan
 		return types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry()), false
 	}
 	c.Request.Body = io.NopCloser(bodyStorage)
+	if relayInfo.NativeBilling != nil && !relayInfo.PlatformMode {
+		if err := service.MarkNativeBillingDispatched(c.Request.Context(), relayInfo); err != nil {
+			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry()), false
+		}
+	}
 
 	switch relayFormat {
 	case types.RelayFormatOpenAIRealtime:
@@ -227,6 +235,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	defer func() {
 		// Only return quota if downstream failed and quota was actually pre-consumed
 		if newAPIError != nil && billingLifecycleStarted && !relayInfo.PlatformMode {
+			if relayInfo.NativeBilling != nil {
+				// The durable dispatch flag refuses release once output is uncertain.
+				_, _ = service.FinishNativeBilling(context.WithoutCancel(c.Request.Context()), relayInfo.NativeBilling.CallID, "pre_dispatch_failure")
+				return
+			}
 			newAPIError = service.NormalizeViolationFeeError(newAPIError)
 			if relayInfo.Billing != nil {
 				relayInfo.Billing.Refund(c)
@@ -568,6 +581,42 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 	if info.PlatformMode {
 		if info.PlatformBilling == nil {
 			return types.NewError(errors.New("platform billing missing"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return nil
+	}
+
+	operation := ""
+	switch info.RelayMode {
+	case relayconstant.RelayModeChatCompletions, relayconstant.RelayModeCompletions, relayconstant.RelayModeGemini:
+		operation = "chat"
+	case relayconstant.RelayModeResponses:
+		operation = "responses"
+	case relayconstant.RelayModeEmbeddings, relayconstant.RelayModeMultimodalEmbedding:
+		operation = "embedding"
+	case relayconstant.RelayModeAudioSpeech:
+		operation = "speech"
+	case relayconstant.RelayModeAudioTranscription, relayconstant.RelayModeAudioTranslation:
+		operation = "transcription"
+	case relayconstant.RelayModeImagesGenerations:
+		operation = "image_generation"
+	case relayconstant.RelayModeImagesEdits:
+		operation = "image_edit"
+	}
+	if info.NativeBilling != nil {
+		return types.NewError(errors.New("native dispatch cannot be retried without final evidence"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+	if price, configured := billing_setting.ResolveModelNativePrice(info.BillingModelNameOrOrigin(), operation); configured {
+		if operation != "chat" && operation != "responses" && operation != "embedding" {
+			return types.NewError(errors.New("native operation requires a bounded admission adapter"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		reservation, err := service.NativeTokenReservation(info, price)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		ratio := helper.HandleGroupRatio(c, info)
+		a := model.NativeAdmission{CallID: info.RequestId, UserID: info.UserId, TokenID: info.TokenId, ChannelID: info.ChannelId, Model: info.BillingModelNameOrOrigin(), Group: info.UsingGroup, Preference: info.UserSetting.BillingPreference, Price: price, GroupRatio: strconv.FormatFloat(ratio.GroupRatio, 'f', -1, 64), QuotaPerUnit: strconv.FormatFloat(common.QuotaPerUnit, 'f', -1, 64), Reservation: reservation}
+		if err := service.BeginNativeBillingForRelay(c.Request.Context(), info, a); err != nil {
+			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 		}
 		return nil
 	}

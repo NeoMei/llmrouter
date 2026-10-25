@@ -157,6 +157,12 @@ func SetApiRouter(router *gin.Engine) {
 			}
 		}
 
+		nativeBillingAdmin := apiRouter.Group("/native-billing")
+		nativeBillingAdmin.Use(middleware.AdminAuth())
+		nativeBillingAdmin.GET("/", controller.ListNativeBilling)
+		nativeBillingAdmin.GET("/:id", controller.GetNativeBilling)
+		nativeBillingAdmin.POST("/:id/resolve", controller.ResolveNativeBilling)
+
 		// Subscription billing (plans, purchase, admin management)
 		subscriptionRoute := apiRouter.Group("/subscription")
 		subscriptionRoute.Use(middleware.UserAuth())

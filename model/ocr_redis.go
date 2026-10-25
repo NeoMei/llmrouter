@@ -38,18 +38,18 @@ else
  if not used then return 'invalid' end
 end
 if not remain or not amount or amount < 0 or amount > 2147483647 then return 'invalid' end
-if phase == 'reserve' then
+if (phase == 'reserve' or phase == 'native_debit') then
  if redis.call('HGET',KEYS[1],'Status') ~= ARGV[12] then return 'pending' end
  if kind == 'token' and redis.call('HGET',KEYS[1],'UnlimitedQuota') ~= ARGV[5] then return 'pending' end
  if (kind == 'wallet' or ARGV[5] ~= 'true') and remain < amount then return 'insufficient' end
 end
 local delta=amount
-if phase == 'reserve' then delta=-amount end
+if (phase == 'reserve' or phase == 'native_debit') then delta=-amount end
 local after=remain+delta
 if after < -2147483648 or after > 2147483647 then return 'invalid' end
 if used and (used-delta < 0 or used-delta > 2147483647) then return 'invalid' end
 local incarnation=redis.call('HGET',KEYS[1],'OCRIncarnation')
-if phase == 'refund' and (not incarnation or incarnation ~= ARGV[13]) then return 'pending' end
+if (phase == 'refund' or phase == 'native_credit' or phase == 'native_debit') and (not incarnation or incarnation ~= ARGV[13]) then return 'pending' end
 if not incarnation then incarnation=ARGV[6] end
 local receipt=ARGV[7]..'|'..incarnation
 -- All identity, type and arithmetic validation precedes any mutation.
@@ -224,7 +224,7 @@ func (s *OCRBillingStore) applyOCRCacheOperation(ctx context.Context, id, kind, 
 		if err != nil {
 			return err
 		}
-		if phase == "refund" {
+		if phase == "refund" || phase == "native_credit" || phase == "native_debit" {
 			reserve, err := ocrOperation(s.db.WithContext(ctx), id, kind, "reserve")
 			if err != nil {
 				return err

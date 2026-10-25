@@ -336,7 +336,7 @@ func applyOCRQuotaTx(tx *gorm.DB, j *OCRJob, op *OCROperation, cacheAdmitted boo
 		return nil
 	}
 	delta := -op.Amount
-	if op.Phase == "refund" {
+	if op.Phase == "refund" || op.Phase == "native_credit" {
 		delta = op.Amount
 	}
 	if op.Kind == "wallet" {
@@ -347,7 +347,7 @@ func applyOCRQuotaTx(tx *gorm.DB, j *OCRJob, op *OCROperation, cacheAdmitted boo
 		if !cacheAdmitted && op.Phase == "reserve" && (owner.Status != common.UserStatusEnabled || owner.DeletedAt.Valid) {
 			return ErrOCRConflict
 		}
-		if !cacheAdmitted && op.Phase == "reserve" && owner.Quota < op.Amount {
+		if !cacheAdmitted && (op.Phase == "reserve" || op.Phase == "native_debit") && owner.Quota < op.Amount {
 			return ErrOCRInsufficient
 		}
 		after := int64(owner.Quota) + int64(delta)
@@ -375,7 +375,7 @@ func applyOCRQuotaTx(tx *gorm.DB, j *OCRJob, op *OCROperation, cacheAdmitted boo
 		if !cacheAdmitted && op.Phase == "reserve" && (token.Status != common.TokenStatusEnabled || token.DeletedAt.Valid || (token.ExpiredTime != -1 && token.ExpiredTime <= time.Now().Unix())) {
 			return ErrOCRConflict
 		}
-		if !cacheAdmitted && op.Phase == "reserve" && !token.UnlimitedQuota && token.RemainQuota < op.Amount {
+		if !cacheAdmitted && (op.Phase == "reserve" || op.Phase == "native_debit") && !token.UnlimitedQuota && token.RemainQuota < op.Amount {
 			return ErrOCRInsufficient
 		}
 		remain, used := int64(token.RemainQuota)+int64(delta), int64(token.UsedQuota)-int64(delta)

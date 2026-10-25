@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/pkg/metering"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -120,6 +121,33 @@ func (s *OCRBillingStore) DeliverAuditLog(ctx context.Context, logDB *gorm.DB, e
 		other["model_price"], other["group_ratio"], other["quota_per_unit"] = admission.Price, admission.GroupRatio, admission.QuotaPerUnit
 		other["billing_source"], other["billing_preference"] = job.Funding, job.Preference
 		other["started_at"], other["completed_at"] = job.CreatedAt, event.CreatedAt
+		if job.SubmissionState == "native" {
+			var native NativeBilling
+			if err := s.db.WithContext(ctx).First(&native, "id = ?", job.ID).Error; err != nil {
+				return err
+			}
+			if native.State != "settled" && native.State != "released" {
+				return ErrOCRPending
+			}
+			var contract NativeAdmission
+			if err := common.UnmarshalJsonStr(native.Contract, &contract); err != nil {
+				return err
+			}
+			var usage metering.Usage
+			if native.Evidence != "" {
+				if err := common.UnmarshalJsonStr(native.Evidence, &usage); err != nil {
+					return err
+				}
+			}
+			delete(other, "model_price")
+			other["operation"], other["billing_unit"] = contract.Price.Operation, contract.Price.Terms[0].Unit
+			other["native_price"], other["native_measurements"] = contract.Price, usage.Measurements
+			other["reserved_quota"], other["final_quota"] = native.ReservedQuota, native.FinalQuota
+			other["group_ratio"], other["quota_per_unit"] = contract.GroupRatio, contract.QuotaPerUnit
+			other["admin_info"] = map[string]any{"source": usage.Source, "provider_request_id": usage.ProviderRequestID, "action_id": native.AdminActionID, "actor": native.AdminActor, "reason": native.AdminReason}
+			log.Content = "Native " + native.Outcome
+		}
+
 	}
 	if log.UserId <= 0 || log.TokenId <= 0 || len(log.ModelName) > 128 {
 		return ErrOCRConflict

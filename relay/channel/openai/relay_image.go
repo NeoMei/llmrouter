@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/pkg/metering"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
@@ -50,6 +51,14 @@ func OpenaiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 	}
 
 	updateOpenAIImageCount(info, gjson.GetBytes(responseBody, "data.#").Int())
+	if info.NativeBilling != nil {
+		n := gjson.GetBytes(responseBody, "data.#").Int()
+		outs := make([]service.NativeImageOutput, n)
+		for i := range outs {
+			outs[i].ID = fmt.Sprintf("%d", i)
+		}
+		_ = service.RecordNativeUsageForRelay(c.Request.Context(), info, service.NativeImageUsage(info.NativeBilling.Price, outs, true))
+	}
 
 	// 写入新的 response body
 	service.IOCopyBytesGracefully(c, resp, responseBody)

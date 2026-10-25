@@ -21,11 +21,14 @@ import {
   QueryClientProvider,
   useQuery,
 } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import { logout } from '@/features/auth/api'
+import { clearAuthentication } from '@/lib/auth-session'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { TeamPanel } from './account-panel'
 import { AuthPanel } from './auth-panel'
@@ -33,6 +36,7 @@ import { BillingPanel } from './billing-panel'
 import type { User, Account } from './sdk'
 import {
   createProductSession,
+  getActiveProductSession,
   type ProductConfig,
   type ProductSession,
   message,
@@ -42,8 +46,8 @@ import { UsagePanel } from './usage-panel'
 
 function ProductShell(props: { config: ProductConfig }) {
   const { t } = useTranslation()
-  const [session] = useState<ProductSession>(() =>
-    createProductSession(props.config)
+  const [session] = useState<ProductSession>(
+    () => getActiveProductSession() ?? createProductSession(props.config)
   )
   const [cache] = useState(
     () =>
@@ -54,9 +58,10 @@ function ProductShell(props: { config: ProductConfig }) {
         },
       })
   )
-  const [user, setUser] = useState<User | null>(null)
-  const [accounts, setAccounts] = useState<Account[]>([])
-  const [payer, setPayer] = useState('')
+  const navigate = useNavigate()
+  const [user, setUser] = useState<User | null>(session.user)
+  const [accounts, setAccounts] = useState<Account[]>(session.accounts)
+  const [payer, setPayer] = useState(session.account)
   const [error, setError] = useState('')
   useEffect(() => {
     session.onClear = () => {
@@ -68,7 +73,6 @@ function ProductShell(props: { config: ProductConfig }) {
     }
     return () => {
       session.onClear = () => {}
-      session.clear()
       cache.clear()
     }
   }, [session, cache])
@@ -82,6 +86,7 @@ function ProductShell(props: { config: ProductConfig }) {
       cache.clear()
       if (!fresh) setPayer('')
     }
+    session.accounts = result
     setAccounts(result)
     await cache.invalidateQueries()
   }
@@ -98,6 +103,8 @@ function ProductShell(props: { config: ProductConfig }) {
         <AuthPanel
           session={session}
           onLogin={(identity, list) => {
+            session.user = identity
+            session.accounts = list
             setUser(identity)
             setAccounts(list)
           }}
@@ -108,7 +115,18 @@ function ProductShell(props: { config: ProductConfig }) {
             <p>
               {user.name} · {user.id}
             </p>
-            <Button variant='outline' onClick={() => session.clear()}>
+            <Button
+              variant='outline'
+              onClick={() => {
+                void logout()
+                  .then(() => {
+                    session.clear()
+                    clearAuthentication()
+                    void navigate({ to: '/sign-in', replace: true })
+                  })
+                  .catch((e) => setError(message(e)))
+              }}
+            >
               {t('Sign out')}
             </Button>
           </header>
@@ -172,6 +190,9 @@ function ProductShell(props: { config: ProductConfig }) {
 }
 export function UniHub() {
   const { t } = useTranslation()
+  const projected = useAuthStore(
+    (state) => state.auth.user?.identity_source === 'unihub'
+  )
   const config = useQuery({
     queryKey: ['unihub-public-config'],
     queryFn: async () => {
@@ -185,7 +206,13 @@ export function UniHub() {
     <main className='mx-auto max-w-6xl space-y-5 p-4 md:p-8'>
       <header className='flex items-center justify-between'>
         <h1 className='text-2xl font-semibold'>{t('LLMRouter · UniHub')}</h1>
-        <Link to='/sign-in'>{t('Local operator sign in')}</Link>
+        {projected ? (
+          <nav aria-label={t('UniHub account')}>
+            <Link to='/dashboard'>{t('Console')}</Link>
+          </nav>
+        ) : (
+          <Link to='/sign-in'>{t('Local operator sign in')}</Link>
+        )}
       </header>
       {config.isPending ? <p>{t('Loading')}</p> : null}
       {config.error ? <p role='alert'>{message(config.error)}</p> : null}

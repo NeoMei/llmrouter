@@ -30,6 +30,8 @@ export interface AuthUser {
   id: number
   username: string
   display_name?: string
+  identity_source?: string
+  unihub_user_id?: string
   email?: string
   role: number
   status?: number

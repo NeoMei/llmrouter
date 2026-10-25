@@ -25,3 +25,8 @@ Add explicit `usage:all-products` product scope, restricted at registry validati
 ## Acceptance
 
 Test both disabled/legacy and platform-enabled mode; ordinary and streamed calls; insufficient funds; duplicate IDs; wrong payer/origin; ambiguous dispatch and settle response loss/restart; unchanged local quota; current account-pool behavior. Test registry and finance role boundaries, cross-account cursors and all-product reporting without widening existing routes. Test UI login/register, token clearing, account selection, role-limited actions, exact amounts, pending readback and visible errors. Build backend/frontend and run current targeted suites, race tests and the actual UniHub HTTP/PostgreSQL/Formance gateway fixture where local services are available. Record actual versus fixture-only verification. No live real-payment claim.
+
+
+## Login navigation repair
+
+The deployed independent workbench did not satisfy the expectation of entering authenticated LLMRouter after UniHub login. The dashboard-session repair supersedes the request-scoped projection preference above: exchange proven product identity for a common native projection/session keyed by fixed issuer and immutable subject. Existing accounts are never matched by email/name or migrated. Native financial, credential, identity/security mutation and operator APIs remain unavailable to this projection. The product shell presents UniHub resources and requires current UniHub authorization; native refresh cookies never authorize UniHub operations. See the integration guide for the endpoint and lifecycle contract.

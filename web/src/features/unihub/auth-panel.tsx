@@ -16,11 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import { sanitizeAuthRedirect } from '@/features/auth/lib/auth-redirect'
 
+import { authorizeProductSession } from './native-session'
 import { registrationDefinitivelyRejected } from './registration'
 import type { User, Account, Registration } from './sdk'
 import { message, type ProductSession } from './session'
@@ -31,6 +34,7 @@ export function AuthPanel(props: {
   onLogin: (user: User, accounts: Account[]) => void
 }) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [register, setRegister] = useState(false)
@@ -67,26 +71,17 @@ export function AuthPanel(props: {
         form.reset()
         return
       }
-      const identity = await props.session.bound(async () => {
-        const tokens = await props.session.client.passwordLogin(body)
-        props.session.expire(tokens.expires_in)
-        const response = await fetch('/api/unihub/identity', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${tokens.access_token}` },
-          credentials: 'omit',
-          redirect: 'error',
-          signal: props.session.signal,
-        })
-        if (!response.ok) throw new Error(t('Product identity proof rejected'))
-        return (await response.json()) as {
-          user: User
-          accounts: Account[]
-        }
-      })
+      const identity = await authorizeProductSession(props.session, body)
       props.onLogin(identity.user, identity.accounts)
       form.reset()
+      const target =
+        sanitizeAuthRedirect(
+          new URLSearchParams(window.location.search).get('redirect'),
+          window.location.origin
+        ) ?? '/dashboard'
+      await navigate({ href: target, replace: true })
     } catch (error) {
-      if (!register) props.session.clear()
+      if (!register && !props.session.user) props.session.clear()
       else if (registrationDefinitivelyRejected(error)) setPending(null)
       setNotice(message(error))
     } finally {

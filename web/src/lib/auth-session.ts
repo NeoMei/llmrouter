@@ -78,6 +78,10 @@ const refreshRaceDelays = [80, 200, 500] as const
 let refreshPromise: Promise<RefreshOutcome> | null = null
 let authEpoch = 0
 
+export function getAuthEpoch(): number {
+  return authEpoch
+}
+
 class AuthRefreshSupersededError extends Error {
   constructor() {
     super('Authentication refresh was superseded')

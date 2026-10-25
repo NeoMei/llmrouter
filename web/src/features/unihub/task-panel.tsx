@@ -203,6 +203,9 @@ export function TaskPanel(props: PanelProps) {
           'Short-lived task credentials are not durable API keys. Text chat only; media, OCR and Responses are unavailable here.'
         )}
       </p>
+      {props.config.models.length === 0 ? (
+        <p role='status'>{t('No available models')}</p>
+      ) : null}
       {profile.error ? <p role='alert'>{message(profile.error)}</p> : null}
       <form
         className='grid gap-3'

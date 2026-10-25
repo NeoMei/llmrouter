@@ -14,16 +14,18 @@ import (
 const userCacheSchemaVersion = 2
 
 type UserBase struct {
-	Id          int    `json:"id"`
-	Group       string `json:"group"`
-	Email       string `json:"email"`
-	Quota       int    `json:"quota"`
-	Status      int    `json:"status"`
-	Role        int    `json:"role"`
-	Username    string `json:"username"`
-	Setting     string `json:"setting"`
-	AuthVersion int64  `json:"-"`
-	CacheSchema int    `json:"-"`
+	Id             int    `json:"id"`
+	Group          string `json:"group"`
+	Email          string `json:"email"`
+	Quota          int    `json:"quota"`
+	Status         int    `json:"status"`
+	Role           int    `json:"role"`
+	Username       string `json:"username"`
+	Setting        string `json:"setting"`
+	AuthVersion    int64  `json:"-"`
+	IdentitySource string `json:"identity_source,omitempty"`
+	UniHubUserID   string `json:"unihub_user_id,omitempty"`
+	CacheSchema    int    `json:"-"`
 }
 
 func (user *UserBase) WriteContext(c *gin.Context) {

@@ -61,6 +61,10 @@ func authHelper(c *gin.Context, minRole int) {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "AUTH_USER_INVALID", "message": common.TranslateMessage(c, i18n.MsgAuthUserInfoInvalid)})
 		return
 	}
+	if user.IdentitySource == model.UniHubIdentitySource && !allowedUniHubPath(c) {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "UNIHUB_NATIVE_PATH_FORBIDDEN", "message": "native operation is not available for UniHub users"})
+		return
+	}
 	setDashboardAuthContext(c, user, identity, useAccessToken)
 
 	// 管理/root 写操作审计兜底：内聚在鉴权链路里，保证任何经过 AdminAuth/RootAuth
@@ -76,6 +80,22 @@ func authHelper(c *gin.Context, minRole int) {
 	finishAdminAudit(c, auditWriter)
 }
 
+func allowedUniHubPath(c *gin.Context) bool {
+	if c.Request.Method == http.MethodGet {
+		switch c.Request.URL.Path {
+		case "/api/models", "/api/capabilities", "/api/user/self", "/api/user/self/groups", "/api/user/models", "/api/user/sessions":
+			return true
+		}
+	}
+	if c.Request.Method == http.MethodDelete && c.FullPath() == "/api/user/sessions/:sid" {
+		return true
+	}
+	if c.Request.Method == http.MethodPost && c.FullPath() == "/api/user/sessions/revoke-others" {
+		return true
+	}
+	return false
+}
+
 func TryUserAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		user, identity, credentialKind, err := classifyDashboardCredential(c)
@@ -84,6 +104,10 @@ func TryUserAuth() func(c *gin.Context) {
 			return
 		}
 		if credentialKind != dashboardCredentialUnmatched {
+			if user.IdentitySource == model.UniHubIdentitySource && !allowedUniHubPath(c) {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "UNIHUB_NATIVE_PATH_FORBIDDEN", "message": "native operation is not available for UniHub users"})
+				return
+			}
 			setDashboardAuthContext(c, user, identity, credentialKind == dashboardCredentialPAT)
 		}
 		c.Next()
@@ -174,6 +198,9 @@ func classifyDashboardCredential(c *gin.Context) (*model.UserBase, service.AuthI
 		if err != nil {
 			return nil, service.AuthIdentity{}, dashboardCredentialInternal, err
 		}
+		if err := validateProjectionCredential(user); err != nil {
+			return nil, service.AuthIdentity{}, dashboardCredentialInternal, err
+		}
 		return user, identity, dashboardCredentialInternal, nil
 	}
 	patUser, err := model.ValidateAccessToken(raw)
@@ -187,7 +214,21 @@ func classifyDashboardCredential(c *gin.Context) (*model.UserBase, service.AuthI
 	if err != nil {
 		return nil, service.AuthIdentity{}, dashboardCredentialPAT, err
 	}
+	if err := validateProjectionCredential(user); err != nil {
+		return nil, service.AuthIdentity{}, dashboardCredentialPAT, err
+	}
 	return user, service.AuthIdentity{UserID: user.Id, UserAuthVersion: user.AuthVersion}, dashboardCredentialPAT, nil
+}
+
+func validateProjectionCredential(user *model.UserBase) error {
+	projected, err := model.CheckUniHubProjection(user.Id)
+	if err != nil {
+		return err
+	}
+	if projected {
+		user.IdentitySource = model.UniHubIdentitySource
+	}
+	return nil
 }
 
 func authorizationToken(header string) (string, bool) {
@@ -274,6 +315,14 @@ func TokenOrUserAuth() func(c *gin.Context) {
 			_, user, err := service.ValidateLoginSession(identity)
 			if err != nil {
 				writeDashboardAuthError(c, err)
+				return
+			}
+			if err := validateProjectionCredential(user); err != nil {
+				writeDashboardAuthError(c, err)
+				return
+			}
+			if user.IdentitySource == model.UniHubIdentitySource {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "UNIHUB_NATIVE_PATH_FORBIDDEN", "message": "native operation is not available for UniHub users"})
 				return
 			}
 			setDashboardAuthContext(c, user, identity, false)

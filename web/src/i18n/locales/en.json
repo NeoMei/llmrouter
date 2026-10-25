@@ -2089,7 +2089,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Related Projects",
     "footer.defaultCopyright": "All rights reserved.",
-    "footer.new\u0061pi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
+    "footer.newapi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment",
     "For private deployments, format: https://fastgpt.run/api/openapi": "For private deployments, format: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Force a syntactically valid JSON response",
@@ -5464,6 +5464,7 @@
     "Created; payment and posting are not confirmed.": "Created; payment and posting are not confirmed.",
     "Posted to the ledger": "Posted to the ledger",
     "Original financial object": "Original financial object",
-    "Query this original object": "Query this original object"
+    "Query this original object": "Query this original object",
+    "Session cleanup failed. Please sign out before retrying.": "Session cleanup failed. Please sign out before retrying."
   }
 }

@@ -35,8 +35,11 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	// upstreams can serve /v1/responses (and /v1/responses/compact) via
 	// conversion. Pass-through bodies keep native behavior.
 	passthroughBody := model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled
-	if !passthroughBody {
+	if !passthroughBody && !info.PlatformMode {
 		responsesprobe.DecideResponsesViaChat(c.Request.Context(), info)
+	}
+	if info.PlatformMode && info.ResponsesViaChat {
+		return types.NewError(fmt.Errorf("platform responses conversion is unavailable"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact {
 		switch info.ApiType {
@@ -191,6 +194,14 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		requestBody = body
 	}
 
+	if info.PlatformMode {
+		if info.PlatformBilling == nil || info.NativeBilling == nil {
+			return types.NewError(fmt.Errorf("platform metering context required"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		if err := info.PlatformBilling.Dispatch(c.Request.Context(), info.ChannelId); err != nil {
+			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+		}
+	}
 	var httpResp *http.Response
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {

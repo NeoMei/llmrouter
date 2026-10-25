@@ -592,6 +592,12 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 			// Session.Dispatch and raw usage observation.
 			return nil
 		}
+		if (price.Operation == "chat" || price.Operation == "responses" || price.Operation == "embedding") && c.GetInt("channel_type") != constant.ChannelTypeOpenAI {
+			return types.NewError(errors.New("platform metered producer unavailable for this channel"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		if len(info.ParamOverride) > 0 || len(info.HeadersOverride) > 0 || info.ChannelSetting.SystemPrompt != "" || info.ChannelSetting.PassThroughBodyEnabled || model_setting.GetGlobalSettings().PassThroughRequestEnabled {
+			return types.NewError(errors.New("platform metering requires unchanged validated request"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
 		if info.NativeBilling == nil {
 			info.NativeBilling = &relaycommon.NativeBillingContext{
 				CallID: info.PlatformBilling.CallID(), Platform: true, Price: price,

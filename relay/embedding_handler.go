@@ -91,6 +91,14 @@ func EmbeddingHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	info.UpstreamRequestGetBody = getBody
 	var requestBody io.Reader = body
 	statusCodeMappingStr := c.GetString("status_code_mapping")
+	if info.PlatformMode {
+		if info.PlatformBilling == nil || info.NativeBilling == nil {
+			return types.NewError(fmt.Errorf("platform metering context required"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		if err := info.PlatformBilling.Dispatch(c.Request.Context(), info.ChannelId); err != nil {
+			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+		}
+	}
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
 		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)

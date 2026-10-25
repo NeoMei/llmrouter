@@ -252,6 +252,9 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 				info.PlatformBilling.Rejected()
 			}
 			newApiErr := service.RelayErrorHandler(c.Request.Context(), httpResp, false)
+			if info.PlatformMode && httpResp.StatusCode >= 300 && httpResp.StatusCode < 400 {
+				return types.NewErrorWithStatusCode(fmt.Errorf("platform provider redirects are unavailable"), types.ErrorCodeBadResponse, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+			}
 			// reset status code 重置状态码
 			service.ResetStatusCode(newApiErr, statusCodeMappingStr)
 			return newApiErr

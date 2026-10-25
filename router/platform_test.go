@@ -2,6 +2,7 @@ package router
 
 import (
 	"bytes"
+	"context"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/i18n"
@@ -29,7 +30,7 @@ func TestPlatformChatUsesFixedPayerAndNeverDebitsLegacy(t *testing.T) {
 	oldStreaming := constant.StreamingTimeout
 	constant.StreamingTimeout = 30
 	defer func() { constant.StreamingTimeout = oldStreaming }()
-	scenarios := []string{"success", "provider_failure", "missing_usage", "partial_stream", "retry", "function_schema", "function_strict_true", "function_strict_false"}
+	scenarios := []string{"redirect", "retry_veto", "retry_authorization_changed", "settle_response_loss", "success", "provider_failure", "missing_usage", "partial_stream", "retry", "function_schema", "function_strict_true", "function_strict_false"}
 	invalidUsage := map[string]string{
 		"missing_prompt":     `{"completion_tokens":5,"total_tokens":5}`,
 		"missing_completion": `{"prompt_tokens":10,"total_tokens":10}`,
@@ -99,7 +100,19 @@ func TestPlatformChatUsesFixedPayerAndNeverDebitsLegacy(t *testing.T) {
 					assert.True(t, exists, "explicit false must survive request conversion")
 					assert.Equal(t, scenario == "function_strict_true", strict)
 				}
-				if scenario == "provider_failure" || scenario == "retry" && upstreamCalls == 1 {
+				if scenario == "redirect" && upstreamCalls == 1 {
+					w.Header().Set("Location", "/v1/chat/completions")
+					w.WriteHeader(http.StatusTemporaryRedirect)
+					return
+				}
+				if scenario == "retry_veto" {
+					w.Header().Set("X-Should-Retry", "false")
+				}
+				if scenario == "retry_authorization_changed" && upstreamCalls == 1 {
+					require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", 1).Update("status", common.ChannelStatusManuallyDisabled).Error)
+					model.InitChannelCache()
+				}
+				if scenario == "provider_failure" || scenario == "retry_veto" || scenario == "retry_authorization_changed" || scenario == "retry" && upstreamCalls == 1 {
 					w.WriteHeader(503)
 					_, _ = w.Write([]byte(`{"error":{"message":"temporarily unavailable","type":"server_error"}}`))
 					return
@@ -160,6 +173,17 @@ func TestPlatformChatUsesFixedPayerAndNeverDebitsLegacy(t *testing.T) {
 					}
 					assert.Equal(t, expectedUsage, body.Usage)
 					assert.Empty(t, body.ProviderCost)
+					if scenario == "settle_response_loss" && settled == 1 {
+						w.Header().Set("Content-Length", "10000")
+						w.WriteHeader(http.StatusOK)
+						_, err := w.Write([]byte("{"))
+						require.NoError(t, err)
+						w.(http.Flusher).Flush()
+						connection, _, err := w.(http.Hijacker).Hijack()
+						require.NoError(t, err)
+						require.NoError(t, connection.Close())
+						return
+					}
 					v = platformbilling.RemoteCall{CallID: "call", Status: "SETTLED"}
 				case "/internal/v1/calls/call/release":
 					released++
@@ -184,7 +208,7 @@ func TestPlatformChatUsesFixedPayerAndNeverDebitsLegacy(t *testing.T) {
 			defer hub.Close()
 			db, e := gorm.Open(sqlite.Open("file:"+t.TempDir()+"/db"), &gorm.Config{})
 			require.NoError(t, e)
-			require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.Ability{}, &model.UserSubscription{}, &model.ClientModelRoute{}, &model.ClientModelTarget{}))
+			require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.Ability{}, &model.UserSubscription{}, &model.ClientModelRoute{}, &model.ClientModelTarget{}, &model.UpstreamAccountPool{}, &model.UpstreamAccountMember{}, &model.UpstreamAccountState{}))
 			oldDB, oldLog, oldCache, oldRetry := model.DB, model.LOG_DB, common.MemoryCacheEnabled, common.RetryTimes
 			model.DB = db
 			model.LOG_DB = db
@@ -204,12 +228,19 @@ func TestPlatformChatUsesFixedPayerAndNeverDebitsLegacy(t *testing.T) {
 			require.NoError(t, db.Create(&sub).Error)
 			base := up.URL
 			channel := model.Channel{Id: 1, Type: constant.ChannelTypeOpenAI, Key: "provider-key", Status: common.ChannelStatusEnabled, Name: "platform", BaseURL: &base, Models: "platform-test", Group: "platform"}
+			if scenario == "retry_veto" || scenario == "retry_authorization_changed" {
+				channel.Key = "provider-key\nprovider-backup"
+				channel.ChannelInfo = model.ChannelInfo{IsMultiKey: true, MultiKeyMode: constant.MultiKeyModePolling}
+			}
 			require.NoError(t, db.Create(&channel).Error)
 			require.NoError(t, db.Create(&model.Ability{Group: "platform", Model: "platform-test", ChannelId: 1, Enabled: true}).Error)
 			require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"platform-test":0}`))
 			require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"platform":1}`))
 			model.InitChannelCache()
 			service.InitHttpClient()
+			if scenario == "redirect" {
+				service.GetHttpClient().CheckRedirect = func(*http.Request, []*http.Request) error { return nil }
+			}
 			service.InitTokenEncoders()
 			a, e := platformbilling.New(db, platformbilling.Config{Enabled: true, Origin: hub.URL, ServiceToken: "service-service-service-service-token", PrincipalID: 1, Group: "platform", MaxInputTokens: 1000, MaxOutputTokens: 100, MaxBodyBytes: 8192})
 			require.NoError(t, e)
@@ -259,7 +290,7 @@ func TestPlatformChatUsesFixedPayerAndNeverDebitsLegacy(t *testing.T) {
 			}
 			w := send(body)
 			assert.Equal(t, "call", w.Header().Get("X-UniHub-Call-ID"))
-			if scenario == "provider_failure" {
+			if scenario == "provider_failure" || scenario == "redirect" || scenario == "retry_veto" || scenario == "retry_authorization_changed" {
 				assert.GreaterOrEqual(t, w.Code, 400)
 			} else if !strings.HasPrefix(scenario, "usage_") {
 				assert.Equal(t, 200, w.Code, w.Body.String())
@@ -275,10 +306,21 @@ func TestPlatformChatUsesFixedPayerAndNeverDebitsLegacy(t *testing.T) {
 			var persisted platformbilling.Call
 			require.NoError(t, db.First(&persisted).Error)
 			assert.Equal(t, "fixed-account", persisted.AccountID)
-			if scenario == "success" || scenario == "retry" || scenario == "function_schema" || strings.HasPrefix(scenario, "function_strict_") || strings.HasPrefix(scenario, "valid_") {
+			if scenario == "settle_response_loss" {
+				assert.Equal(t, "SETTLE_PENDING", persisted.Status)
+				assert.Equal(t, 1, settled)
+				restarted, err := platformbilling.New(db, platformbilling.Config{Enabled: true, Origin: hub.URL, ServiceToken: "service-service-service-service-token", PrincipalID: 1, Group: "platform", MaxInputTokens: 1000, MaxOutputTokens: 100, MaxBodyBytes: 8192})
+				require.NoError(t, err)
+				require.NoError(t, restarted.Recover(context.Background()))
+				require.NoError(t, db.First(&persisted).Error)
+				assert.Equal(t, "SETTLED", persisted.Status)
+				assert.Equal(t, 2, settled)
+				assert.Equal(t, 409, send(body).Code)
+				assert.Equal(t, before, upstreamCalls, "recovery must resend only the terminal intent")
+			} else if scenario == "success" || scenario == "retry" || scenario == "function_schema" || strings.HasPrefix(scenario, "function_strict_") || strings.HasPrefix(scenario, "valid_") {
 				assert.Equal(t, "SETTLED", persisted.Status)
 				assert.Equal(t, 1, settled)
-			} else if scenario == "provider_failure" {
+			} else if scenario == "provider_failure" || scenario == "redirect" || scenario == "retry_veto" || scenario == "retry_authorization_changed" {
 				assert.Equal(t, "RELEASED", persisted.Status)
 				assert.Equal(t, 1, released)
 			} else {

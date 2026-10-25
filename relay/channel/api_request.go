@@ -459,7 +459,7 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	if err := accountpool.BeginSend(c); err != nil {
 		return nil, err
 	}
-	if accountpool.State(c).Selected != nil {
+	if info.PlatformMode || accountpool.State(c).Selected != nil {
 		// Redirects otherwise replay a body inside Client.Do, hiding extra sends
 		// and intermediate retry vetoes from the account lifecycle. Copy only
 		// the client: its shared transport remains reusable and unmodified.

@@ -48,6 +48,10 @@ func NativeSpeechUsage(p metering.Price, text string, reported *int64, terminal 
 }
 func NativeAudioUsage(p metering.Price, seconds *float64, terminal bool) metering.Usage {
 	u := metering.Usage{Version: "metered_v2", Operation: p.Operation, State: "missing", Source: "native_media"}
+	if p.Policy != "provider_reported_v1" && p.Policy != "server_audio_measurement_v1" {
+		u.State = "invalid"
+		return u
+	}
 	if !terminal {
 		u.State = "incomplete"
 		return u

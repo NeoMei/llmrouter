@@ -20,6 +20,7 @@
     "test": "tsx --test",
     "e2e": "playwright test",
     "e2e:account-pools": "playwright test --config playwright.task9.config.ts",
+    "e2e:native-metering": "playwright test --config playwright.native.config.ts",
     "e2e:unihub": "playwright test --config playwright.unihub.config.ts"
   },
   "dependencies": {

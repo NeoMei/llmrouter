@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+
 async function fixture(page: Page) {
   page.on('pageerror', (e) => console.log('PAGEERROR', e.message))
   page.on('console', (m) => {
@@ -16,7 +17,7 @@ async function fixture(page: Page) {
   })
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname
-    if (path === '/api/user/auth/refresh')
+    if (path === '/api/user/auth/refresh') {
       return route.fulfill({
         json: {
           success: true,
@@ -38,6 +39,7 @@ async function fixture(page: Page) {
           },
         },
       })
+    }
     if (path === '/api/option/') {
       if (route.request().method() === 'PUT') {
         writes.push(route.request().postDataJSON())
@@ -53,7 +55,7 @@ async function fixture(page: Page) {
         },
       })
     }
-    if (path === '/api/native-billing/self')
+    if (path === '/api/native-billing/self') {
       return route.fulfill({
         json: {
           success: true,
@@ -74,15 +76,18 @@ async function fixture(page: Page) {
           ],
         },
       })
-    if (path === '/api/notice')
+    }
+    if (path === '/api/notice') {
       return route.fulfill({ json: { success: true, data: '' } })
-    if (path === '/api/status')
+    }
+    if (path === '/api/status') {
       return route.fulfill({
         json: {
           success: true,
           data: { system_name: 'Local native acceptance' },
         },
       })
+    }
     return route.fulfill({ json: { success: true, data: [], total: 0 } })
   })
   return writes

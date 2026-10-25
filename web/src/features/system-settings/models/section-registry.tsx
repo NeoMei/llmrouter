@@ -1,5 +1,3 @@
-import { NativeBillingPanel } from '@/features/native-metering/billing-panel'
-
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -18,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { NativeBillingPanel } from '@/features/native-metering/billing-panel'
+
 import { ChannelAffinitySection } from '../general/channel-affinity'
 import { IoNetDeploymentSettingsSection } from '../integrations/ionet-deployment-settings-section'
 import type { ModelSettings } from '../types'

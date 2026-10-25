@@ -228,6 +228,22 @@ func (h *OCRHandler) Create(c *gin.Context) {
 		admission.Dispatch = func(ctx context.Context) error { return session.Dispatch(ctx, selected.ChannelID) }
 		admission.BindTask = session.BindTask
 	}
+	if value, platform := c.Get("platform_billing"); platform {
+		session, ok := value.(*platformbilling.Session)
+		if !ok {
+			h.fail(c, 400, "platform billing missing")
+			return
+		}
+		price, ok := session.MeteredPrice()
+		if !ok || price.Operation != "ocr" {
+			h.fail(c, 400, "platform OCR tariff required")
+			return
+		}
+		admission.PlatformCallID = session.CallID()
+		admission.PlatformPrice = &price
+		admission.Dispatch = func(ctx context.Context) error { return session.Dispatch(ctx, selected.ChannelID) }
+		admission.BindTask = session.BindTask
+	}
 	status, err := h.Runtime.Service.Create(c.Request.Context(), ocr.CreateRequest{Admission: admission, RequestedModel: in.Model, Target: target, Capabilities: selected.Capabilities, Input: media, DisableRetry: strings.EqualFold(c.GetHeader("X-Should-Retry"), "false")})
 	if err != nil {
 		h.serviceError(c, err, 502)

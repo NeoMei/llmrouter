@@ -2,6 +2,7 @@ package router
 
 import (
 	"bytes"
+	"encoding/binary"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/i18n"
@@ -15,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -25,6 +27,7 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 	for _, tc := range []struct{ op, path, body, response, unit, key, policy string }{
 		{"chat", "/chat/completions", `{"model":"platform-test","messages":[{"role":"user","content":"hello"}],"max_tokens":10}`, `{"id":"chat","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`, "token", "input", "sum"},
 		{"responses", "/responses", `{"model":"platform-test","input":"hello","max_output_tokens":10}`, `{"id":"resp","object":"response","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`, "token", "input", "sum"},
+		{"image_edit", "/images/edits", "", `{"created":1,"data":[{"b64_json":"aGVsbG8="}]}`, "image", "images", "successful_outputs_v1"},
 		{"embedding", "/embeddings", `{"model":"platform-test","input":"hello"}`, `{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1]}],"model":"platform-test","usage":{"prompt_tokens":1,"total_tokens":1}}`, "token", "input", "sum"},
 		{"speech", "/audio/speech", `{"model":"platform-test","input":"hello","voice":"alloy"}`, "audio-bytes", "character", "characters", "unicode_scalar_v1"},
 		{"image_generation", "/images/generations", `{"model":"platform-test","prompt":"hello","n":1}`, `{"created":1,"data":[{"b64_json":"aGVsbG8="}]}`, "image", "images", "successful_outputs_v1"},
@@ -99,14 +102,48 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 			model.InitChannelCache()
 			service.InitHttpClient()
 			service.InitTokenEncoders()
-			a, e := platformbilling.New(db, platformbilling.Config{Enabled: true, Origin: hub.URL, ServiceToken: "service-service-service-service-token", PrincipalID: 1, Group: "platform", MaxInputTokens: 1000, MaxOutputTokens: 100, MaxBodyBytes: 8192, OperationRateIDs: map[string]map[string]map[string]string{"chat": {"CREDIT/6": {"platform-test": "rate"}}}})
+			a, e := platformbilling.New(db, platformbilling.Config{Enabled: true, Origin: hub.URL, ServiceToken: "service-service-service-service-token", PrincipalID: 1, Group: "platform", MaxInputTokens: 1000, MaxOutputTokens: 100, MaxBodyBytes: 65536, OperationLimits: map[string]map[string]platformbilling.OperationLimits{"transcription": {"platform-test": {MaxQuantity: 60, Policy: "server_audio_measurement_v1"}}}, OperationRateIDs: map[string]map[string]map[string]string{"chat": {"CREDIT/6": {"platform-test": "rate"}}}})
 			require.NoError(t, e)
 			engine := gin.New()
 			engine.Use(middlewareBodyCleanupForTest())
 			SetPlatformRouter(engine, a)
 			send := func() *httptest.ResponseRecorder {
-				r := httptest.NewRequest("POST", "/platform/v1"+tc.path, bytes.NewBufferString(tc.body))
-				r.Header.Set("Content-Type", "application/json")
+				body := []byte(tc.body)
+				ct := "application/json"
+				if tc.op == "transcription" || tc.op == "image_edit" {
+					var buf bytes.Buffer
+					mw := multipart.NewWriter(&buf)
+					require.NoError(t, mw.WriteField("model", "platform-test"))
+					field, filename := "image", "image.png"
+					data := []byte("image")
+					if tc.op == "transcription" {
+						field, filename = "file", "audio.wav"
+						data = make([]byte, 16044)
+						copy(data, "RIFF")
+						binary.LittleEndian.PutUint32(data[4:], uint32(len(data)-8))
+						copy(data[8:], "WAVEfmt ")
+						binary.LittleEndian.PutUint32(data[16:], 16)
+						binary.LittleEndian.PutUint16(data[20:], 1)
+						binary.LittleEndian.PutUint16(data[22:], 1)
+						binary.LittleEndian.PutUint32(data[24:], 8000)
+						binary.LittleEndian.PutUint32(data[28:], 16000)
+						binary.LittleEndian.PutUint16(data[32:], 2)
+						binary.LittleEndian.PutUint16(data[34:], 16)
+						copy(data[36:], "data")
+						binary.LittleEndian.PutUint32(data[40:], 16000)
+					} else {
+						require.NoError(t, mw.WriteField("prompt", "hello"))
+					}
+					part, e := mw.CreateFormFile(field, filename)
+					require.NoError(t, e)
+					_, e = part.Write(data)
+					require.NoError(t, e)
+					require.NoError(t, mw.Close())
+					body = buf.Bytes()
+					ct = mw.FormDataContentType()
+				}
+				r := httptest.NewRequest("POST", "/platform/v1"+tc.path, bytes.NewReader(body))
+				r.Header.Set("Content-Type", ct)
 				r.Header.Set("Authorization", "Bearer uh_model_token")
 				r.Header.Set("Idempotency-Key", "call")
 				r.Header.Set("X-UniHub-Task-ID", "task")

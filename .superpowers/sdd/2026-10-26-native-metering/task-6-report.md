@@ -10,3 +10,7 @@ Validation: `go test ./relay/channel/task/... ./service ./model ./service/ocr ./
 
 ## Concerns
 Platform controller must supply the `PlatformTaskObserver`; platform adapter must install `PlatformTaskRelease` for trusted no-output release for failed OCR/video terminals. Provider-unit caps require `LLMROUTER_NATIVE_VIDEO_PROVIDER_CAPS` per model/policy; absent cap rejects admission. Veo is admission-disabled/pending until bounded media probing is implemented; no fallback estimate is allowed. No paid/provider calls were made.
+
+## Review follow-up
+
+Post-review fixes (`273461dc0`, `d00b1d2a6`) persist colliding task evidence, paginate native recovery, reject duplicate receipt keys, invoke trusted no-output release for failed platform video/OCR terminals, and reject Veo output-probe admission until a bounded probe exists. Focused regression tests pass. Multiple-output provider-specific aggregation remains pending because no stable per-output duration/unit schema is defined in the current adapters; plural unsupported receipts stay pending rather than being estimated.

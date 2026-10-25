@@ -599,6 +599,11 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 		if len(info.ParamOverride) > 0 || len(info.HeadersOverride) > 0 || info.ChannelSetting.SystemPrompt != "" || info.ChannelSetting.PassThroughBodyEnabled || model_setting.GetGlobalSettings().PassThroughRequestEnabled {
 			return types.NewError(errors.New("platform metering requires unchanged validated request"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		}
+		if price.Operation == "transcription" && price.Policy == "server_audio_measurement_v1" {
+			if err := helper.ValidateNativeAudioAdmission(c, info); err != nil {
+				return types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+			}
+		}
 		if info.NativeBilling == nil {
 			info.NativeBilling = &relaycommon.NativeBillingContext{
 				CallID: info.PlatformBilling.CallID(), Platform: true, Price: price,

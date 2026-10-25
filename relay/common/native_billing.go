@@ -29,12 +29,24 @@ func (n *NativeBillingContext) Record(ctx context.Context, u metering.Usage) err
 	// checked against the frozen price here.
 	if u.State == "confirmed" {
 		if err := metering.ValidateUsage(n.Price, u); err != nil {
+			invalid := u
+			invalid.State = "invalid"
+			if n.Observe != nil {
+				if observeErr := n.Observe(ctx, invalid); observeErr != nil {
+					return observeErr
+				}
+			}
 			return err
 		}
 	} else if u.State != "missing" && u.State != "invalid" && u.State != "incomplete" {
 		return errors.New("invalid native usage state")
 	}
 	if n.Usage != nil && n.Usage.State == "confirmed" && !reflect.DeepEqual(*n.Usage, u) {
+		if n.Observe != nil {
+			if err := n.Observe(ctx, u); err != nil {
+				return err
+			}
+		}
 		return ErrNativeUsageConflict
 	}
 	if n.Observe != nil {

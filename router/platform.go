@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/middleware"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"io"
@@ -20,6 +21,8 @@ import (
 // SetPlatformRouter takes an explicit adapter. Disabled deployments register no
 // platform endpoint and keep the legacy router untouched.
 func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
+	service.PlatformTaskObserver = adapter.ObserveTask
+	service.PlatformTaskRelease = adapter.ReleaseTask
 	if !adapter.Enabled() {
 		return
 	}

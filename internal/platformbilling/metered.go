@@ -323,3 +323,29 @@ func (a *Adapter) Task(ctx context.Context, credential, task, callID string) (Ca
 	err := a.db.WithContext(ctx).First(&row, "call_id = ?", callID).Error
 	return row, err
 }
+
+// ReleaseTask is callable only with the immutable provider task binding and a
+// supplier-confirmed no-output terminal. It writes RELEASE_PENDING intent first.
+func (a *Adapter) ReleaseTask(ctx context.Context, callID, providerTaskID string) error {
+	var row Call
+	if err := a.db.WithContext(ctx).Where("call_id = ? AND provider_task_id = ?", callID, providerTaskID).First(&row).Error; err != nil {
+		return ErrInvalid
+	}
+	if row.Status == "RELEASED" {
+		return nil
+	}
+	if row.Status != "UNKNOWN" && row.Status != "RESERVED" {
+		return ErrPending
+	}
+	b, _ := common.Marshal(map[string]string{"reason": "provider_confirmed_no_output"})
+	saved := a.db.WithContext(ctx).Model(&Call{}).Where("call_id = ? AND provider_task_id = ? AND status IN ?", callID, providerTaskID, []string{"UNKNOWN", "RESERVED"}).Updates(map[string]any{"status": "RELEASE_PENDING", "intent": string(b)})
+	if saved.Error != nil {
+		return saved.Error
+	}
+	if saved.RowsAffected != 1 {
+		return ErrPending
+	}
+	row.Status = "RELEASE_PENDING"
+	row.Intent = string(b)
+	return a.deliver(ctx, row)
+}

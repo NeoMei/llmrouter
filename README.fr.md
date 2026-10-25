@@ -1,8 +1,8 @@
 <div align="center">
 
-![new-api](/web/public/logo.png)
+![LLMRouter](/web/public/brand/llmrouter-wordmark.svg)
 
-# New API
+# LLMRouter
 
 🍥 **Passerelle de modèles étendus de nouvelle génération et système de gestion d'actifs d'IA**
 

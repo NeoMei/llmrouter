@@ -1,8 +1,8 @@
 <div align="center">
 
-![new-api](/web/public/logo.png)
+![LLMRouter](/web/public/brand/llmrouter-wordmark.svg)
 
-# New API
+# LLMRouter
 
 🍥 **次世代大規模モデルゲートウェイとAI資産管理システム**
 

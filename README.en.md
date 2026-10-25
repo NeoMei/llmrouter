@@ -1,8 +1,8 @@
 <div align="center">
 
-![new-api](/web/public/logo.png)
+![LLMRouter](/web/public/brand/llmrouter-wordmark.svg)
 
-# New API
+# LLMRouter
 
 🍥 **Next-Generation Large Model Gateway and AI Asset Management System**
 

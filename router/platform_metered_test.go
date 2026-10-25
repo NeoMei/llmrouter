@@ -93,7 +93,7 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 			model.InitChannelCache()
 			service.InitHttpClient()
 			service.InitTokenEncoders()
-			a, e := platformbilling.New(db, platformbilling.Config{Enabled: true, Origin: hub.URL, ServiceToken: "service-service-service-service-token", PrincipalID: 1, Group: "platform", MaxInputTokens: 1000, MaxOutputTokens: 100, MaxBodyBytes: 8192})
+			a, e := platformbilling.New(db, platformbilling.Config{Enabled: true, Origin: hub.URL, ServiceToken: "service-service-service-service-token", PrincipalID: 1, Group: "platform", MaxInputTokens: 1000, MaxOutputTokens: 100, MaxBodyBytes: 8192, OperationRateIDs: map[string]map[string]map[string]string{"chat": {"CREDIT/6": {"platform-test": "rate"}}}})
 			require.NoError(t, e)
 			engine := gin.New()
 			engine.Use(middlewareBodyCleanupForTest())

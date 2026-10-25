@@ -202,7 +202,12 @@ func parseOperation(c Config, op, contentType string, body []byte) (operationReq
 			return result, ErrInvalid
 		}
 		result.Quantity = utf8.RuneCountInString(input)
-		if result.Quantity > c.MaxInputTokens {
+		if limit, ok := c.OperationLimits[op][result.Model]; ok && limit.Policy == "provider_reported_v1" {
+			if limit.MaxQuantity <= 0 {
+				return result, ErrInvalid
+			}
+			result.Quantity = limit.MaxQuantity
+		} else if result.Quantity > c.MaxInputTokens {
 			return result, ErrInvalid
 		}
 	case "image_generation", "image_edit":

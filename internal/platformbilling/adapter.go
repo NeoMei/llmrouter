@@ -106,11 +106,6 @@ func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body [
 	if model == "" || strings.Contains(strings.ToLower(model), "search") || strings.Contains(strings.ToLower(model), "audio") {
 		return nil, ErrInvalid
 	}
-	for _, key := range []string{"group", "channel", "user", "web_search_options", "modalities", "audio", "extra_body", "billing_usage", "service_tier", "speed", "inference_geo"} {
-		if _, ok := req[key]; ok {
-			return nil, ErrInvalid
-		}
-	}
 	max, ok := req["max_tokens"].(json.Number)
 	if !ok {
 		max, ok = req["max_completion_tokens"].(json.Number)

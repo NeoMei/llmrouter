@@ -75,6 +75,21 @@ func strictChatRequest(body []byte) (map[string]any, error) {
 	if common.UnmarshalUnique(body, &request) != nil || request == nil {
 		return nil, ErrInvalid
 	}
+	// Platform rates cover text Chat token usage only. The shared provider DTO
+	// also carries native search and other billable extensions; adding a field
+	// there must never implicitly expand the funded platform contract.
+	for key := range request {
+		switch key {
+		case "model", "messages", "stream", "stream_options", "max_tokens", "max_completion_tokens",
+			"reasoning_effort", "verbosity", "temperature", "top_p", "top_k", "stop", "n",
+			"frequency_penalty", "presence_penalty", "response_format", "seed",
+			"parallel_tool_calls", "tools", "tool_choice", "functions", "function_call",
+			"logprobs", "top_logprobs", "logit_bias", "metadata", "store", "safety_identifier",
+			"prompt_cache_key":
+		default:
+			return nil, ErrInvalid
+		}
+	}
 	if validateDTOKeys(request, reflect.TypeOf(dto.GeneralOpenAIRequest{})) != nil {
 		return nil, ErrInvalid
 	}

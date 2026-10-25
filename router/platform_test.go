@@ -46,26 +46,41 @@ func TestPlatformChatUsesFixedPayerAndNeverDebitsLegacy(t *testing.T) {
 		"fraction_cache":     `{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"prompt_tokens_details":{"cached_tokens":1.5}}`,
 	}
 	invalidRequests := map[string]string{
-		"max_alias":               `"max_tokens":50,"MAX_TOKENS":1000`,
-		"max_completion_alias":    `"max_completion_tokens":50,"MAX_COMPLETION_TOKENS":1000`,
-		"max_duplicate":           `"max_tokens":1000,"max_tokens":50`,
-		"n_alias":                 `"max_tokens":50,"N":10`,
-		"messages_alias":          `"max_tokens":50,"MESSAGES":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"x"}}]}]`,
-		"max_go_name":             `"max_tokens":50,"MaxTokens":1000`,
-		"unknown":                 `"max_tokens":50,"new_untrusted_option":1000`,
-		"max_fraction":            `"max_tokens":50.5`,
-		"max_overflow":            `"max_tokens":18446744073709551616`,
-		"max_nested_stream_alias": `"max_tokens":50,"stream_options":{"include_usage":true,"IncludeUsage":false}`,
-		"message_content_alias":   `"max_tokens":50,"messages":[{"role":"user","content":"text","Content":[{"type":"image_url"}]}]`,
-		"tools_alias":             `"max_tokens":50,"TOOLS":[{"type":"web_search"}]`,
-		"modalities_alias":        `"max_tokens":50,"MODALITIES":["audio"]`,
-		"nested_content_alias":    `"max_tokens":50,"tools":[{"type":"function","function":{"name":"x","NAME":"y"}}]`,
-		"nested_duplicate":        `"max_tokens":50,"tools":[{"type":"function","function":{"name":"x","parameters":{"type":"object","properties":{"x":{"type":"string","type":"number"}}}}}]`,
-		"strict_string":           `"max_tokens":50,"tools":[{"type":"function","function":{"name":"x","strict":"false"}}]`,
-		"strict_number":           `"max_tokens":50,"tools":[{"type":"function","function":{"name":"x","strict":0}}]`,
-		"strict_null":             `"max_tokens":50,"tools":[{"type":"function","function":{"name":"x","strict":null}}]`,
-		"strict_alias":            `"max_tokens":50,"tools":[{"type":"function","function":{"name":"x","Strict":false}}]`,
-		"strict_duplicate":        `"max_tokens":50,"tools":[{"type":"function","function":{"name":"x","strict":true,"strict":false}}]`,
+		"enable_search":            `"max_tokens":50,"enable_search":true`,
+		"enable_search_false":      `"max_tokens":50,"enable_search":false`,
+		"web_search":               `"max_tokens":50,"web_search":true`,
+		"search_parameters":        `"max_tokens":50,"search_parameters":{"mode":"on"}`,
+		"search_mode":              `"max_tokens":50,"search_mode":"pro"`,
+		"web_search_options":       `"max_tokens":50,"web_search_options":{"search_context_size":"high"}`,
+		"search_domain_filter":     `"max_tokens":50,"search_domain_filter":["example.com"]`,
+		"search_recency_filter":    `"max_tokens":50,"search_recency_filter":"day"`,
+		"return_images":            `"max_tokens":50,"return_images":true`,
+		"return_related_questions": `"max_tokens":50,"return_related_questions":true`,
+		"service_tier":             `"max_tokens":50,"service_tier":"priority"`,
+		"speed":                    `"max_tokens":50,"speed":"fast"`,
+		"inference_geo":            `"max_tokens":50,"inference_geo":"us"`,
+		"prediction":               `"max_tokens":50,"prediction":{"type":"content","content":"predicted"}`,
+		"prompt_cache_retention":   `"max_tokens":50,"prompt_cache_retention":"24h"`,
+		"max_alias":                `"max_tokens":50,"MAX_TOKENS":1000`,
+		"max_completion_alias":     `"max_completion_tokens":50,"MAX_COMPLETION_TOKENS":1000`,
+		"max_duplicate":            `"max_tokens":1000,"max_tokens":50`,
+		"n_alias":                  `"max_tokens":50,"N":10`,
+		"messages_alias":           `"max_tokens":50,"MESSAGES":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"x"}}]}]`,
+		"max_go_name":              `"max_tokens":50,"MaxTokens":1000`,
+		"unknown":                  `"max_tokens":50,"new_untrusted_option":1000`,
+		"max_fraction":             `"max_tokens":50.5`,
+		"max_overflow":             `"max_tokens":18446744073709551616`,
+		"max_nested_stream_alias":  `"max_tokens":50,"stream_options":{"include_usage":true,"IncludeUsage":false}`,
+		"message_content_alias":    `"max_tokens":50,"messages":[{"role":"user","content":"text","Content":[{"type":"image_url"}]}]`,
+		"tools_alias":              `"max_tokens":50,"TOOLS":[{"type":"web_search"}]`,
+		"modalities_alias":         `"max_tokens":50,"MODALITIES":["audio"]`,
+		"nested_content_alias":     `"max_tokens":50,"tools":[{"type":"function","function":{"name":"x","NAME":"y"}}]`,
+		"nested_duplicate":         `"max_tokens":50,"tools":[{"type":"function","function":{"name":"x","parameters":{"type":"object","properties":{"x":{"type":"string","type":"number"}}}}}]`,
+		"strict_string":            `"max_tokens":50,"tools":[{"type":"function","function":{"name":"x","strict":"false"}}]`,
+		"strict_number":            `"max_tokens":50,"tools":[{"type":"function","function":{"name":"x","strict":0}}]`,
+		"strict_null":              `"max_tokens":50,"tools":[{"type":"function","function":{"name":"x","strict":null}}]`,
+		"strict_alias":             `"max_tokens":50,"tools":[{"type":"function","function":{"name":"x","Strict":false}}]`,
+		"strict_duplicate":         `"max_tokens":50,"tools":[{"type":"function","function":{"name":"x","strict":true,"strict":false}}]`,
 	}
 	validOptional := map[string]string{"optional_null": `{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"prompt_tokens_details":null,"completion_tokens_details":{"reasoning_tokens":null}}`, "optional_missing": `{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}`, "explicit_zero": `{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}`}
 	for name := range validOptional {
@@ -289,6 +304,19 @@ func TestPlatformChatUsesFixedPayerAndNeverDebitsLegacy(t *testing.T) {
 				var n int64
 				require.NoError(t, db.Model(&platformbilling.Call{}).Count(&n).Error)
 				assert.Zero(t, n)
+				var unchangedUser model.User
+				var unchangedToken model.Token
+				var unchangedSubscription model.UserSubscription
+				require.NoError(t, db.First(&unchangedUser, user.Id).Error)
+				require.NoError(t, db.First(&unchangedToken, token.Id).Error)
+				require.NoError(t, db.First(&unchangedSubscription, sub.Id).Error)
+				assert.Equal(t, user.Quota, unchangedUser.Quota)
+				assert.Equal(t, user.UsedQuota, unchangedUser.UsedQuota)
+				assert.Equal(t, user.RequestCount, unchangedUser.RequestCount)
+				assert.Equal(t, token.RemainQuota, unchangedToken.RemainQuota)
+				assert.Equal(t, token.UsedQuota, unchangedToken.UsedQuota)
+				assert.Equal(t, sub.AmountUsed, unchangedSubscription.AmountUsed)
+				assert.Equal(t, sub.AmountTotal, unchangedSubscription.AmountTotal)
 				return
 			}
 			if scenario == "success" {

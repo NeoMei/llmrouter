@@ -27,6 +27,7 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 	for _, tc := range []struct{ op, path, body, response, unit, key, policy string }{
 		{"chat", "/chat/completions", `{"model":"platform-test","messages":[{"role":"user","content":"hello"}],"max_tokens":10}`, `{"id":"chat","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`, "token", "input", "sum"},
 		{"responses", "/responses", `{"model":"platform-test","input":"hello","max_output_tokens":10}`, `{"id":"resp","object":"response","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`, "token", "input", "sum"},
+		{"transcription", "/audio/transcriptions", "", `{"text":"hello"}`, "audio_second", "audio", "server_audio_measurement_v1"},
 		{"image_edit", "/images/edits", "", `{"created":1,"data":[{"b64_json":"aGVsbG8="}]}`, "image", "images", "successful_outputs_v1"},
 		{"embedding", "/embeddings", `{"model":"platform-test","input":"hello"}`, `{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1]}],"model":"platform-test","usage":{"prompt_tokens":1,"total_tokens":1}}`, "token", "input", "sum"},
 		{"speech", "/audio/speech", `{"model":"platform-test","input":"hello","voice":"alloy"}`, "audio-bytes", "character", "characters", "unicode_scalar_v1"},

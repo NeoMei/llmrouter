@@ -21,6 +21,11 @@ import (
 
 func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
+	if info.PlatformMode && info.NativeBilling != nil && info.NativeBilling.Price.Policy == "server_audio_measurement_v1" {
+		if err := helper.ValidateNativeAudioAdmission(c, info); err != nil {
+			return types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+	}
 	accountpool.ResetNativeOutcome(c)
 	if !c.Writer.Written() {
 		c.Set("binary_stream_content_type", "")

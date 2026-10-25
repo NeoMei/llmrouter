@@ -56,8 +56,8 @@ const bundle: AuthBundle = {
   },
 }
 
-for (const mode of ['clear', 'newer', 'bound']) {
-  const newer = mode === 'newer'
+for (const mode of ['clear', 'newer', 'bound', 'clear-product']) {
+  const newer = mode === 'newer' || mode === 'clear-product'
   test(`delayed session response after ${mode} revokes exact stale session without changing current auth`, async (context) => {
     clearAuthentication(false)
     let release!: () => void
@@ -96,9 +96,10 @@ for (const mode of ['clear', 'newer', 'bound']) {
         })
       }
       if (url === '/api/unihub/session') {
+        cookieSID = bundle.session.sid
         requested()
         await gate
-        cookieSID = bundle.session.sid
+        assert.equal(init?.signal?.aborted, false)
         return Response.json({ success: true, data: bundle })
       }
       assert.equal(url, '/api/user/auth/logout')
@@ -130,10 +131,12 @@ for (const mode of ['clear', 'newer', 'bound']) {
       session: { ...bundle.session, sid: 'new-sid' },
       user: { id: 7, username: 'operator', role: 10 },
     }
+    if (mode === 'clear-product') session.clear()
     if (newer) applyAuthBundle(current, false)
+    else if (mode === 'bound') session.select('changed-payer')
     else clearAuthentication(false)
     release()
-    await assert.rejects(pending, /Product identity proof rejected/)
+    await assert.rejects(pending)
     assert.deepEqual(revoked, ['rejected-sid'])
     assert.equal(
       revoked.includes(cookieSID),

@@ -70,7 +70,7 @@ export async function authorizeProductSession(
         headers: { Authorization: `Bearer ${tokens.access_token}` },
         credentials: 'include',
         redirect: 'error',
-        signal: session.signal,
+        signal: AbortSignal.timeout(8000),
       })
       if (!response.ok) throw new Error(t('Product identity proof rejected'))
       const payload = (await response.json()) as {

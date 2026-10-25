@@ -47,6 +47,17 @@ func TestNativeTaskRecoveryPagesPastMeasurementHolds(t *testing.T) {
 	var last model.Task
 	require.NoError(t, db.Where("task_id = ?", "100").First(&last).Error)
 	assert.False(t, last.NativePending)
+	// A verified no-output failure releases and clears the task outbox once.
+	releases := 0
+	PlatformTaskRelease = func(_ context.Context, _, _ string) error { releases++; return nil }
+	failed := model.Task{TaskID: "failed", FundingOwner: "platform", NativePending: true, Status: model.TaskStatusFailure, PrivateData: last.PrivateData}
+	require.NoError(t, prepareNativeTaskIntent(&failed, []byte(`{"status":"failed","videos":[]}`)))
+	require.NoError(t, db.Create(&failed).Error)
+	require.NoError(t, settleNativeTask(context.Background(), &failed))
+	require.NoError(t, settleNativeTask(context.Background(), &failed))
+	assert.Equal(t, 1, releases)
+	assert.False(t, failed.NativePending)
+
 	// A losing terminal observation is retained, keeps recovery active, and blocks
 	// another observer settlement even when the caller has a stale task snapshot.
 	stale := last

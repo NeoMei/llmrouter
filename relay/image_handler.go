@@ -123,6 +123,10 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		return newAPIError
 	}
 
+	if info.NativeBilling != nil {
+		return nil
+	}
+
 	imageN := uint(1)
 	if request.N != nil {
 		imageN = *request.N

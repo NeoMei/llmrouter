@@ -90,6 +90,7 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 		}
 	}
 
+	info.NativeSpeechText = &volcRequest.Request.Text
 	c.Set(contextKeyTTSRequest, volcRequest)
 
 	if volcRequest.Request.Operation == "submit" {

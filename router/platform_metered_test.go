@@ -27,6 +27,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -41,6 +42,7 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 		{"ocr", "/ocr/jobs", "", "", "request", "requests", "success_request", false},
 		{"ocr", "/ocr/jobs", "", "", "request", "requests", "success_request", true},
 		{"ocr", "/ocr/jobs", "refused", "", "request", "requests", "success_request", true},
+		{"ocr", "/ocr/jobs", "refused401", "", "request", "requests", "success_request", true},
 		{"chat", "/chat/completions", `{"model":"platform-test","messages":[{"role":"user","content":"hello"}],"max_tokens":10}`, `{"id":"chat","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`, "token", "input", "sum", false},
 		{"responses", "/responses", `{"model":"platform-test","input":"hello","max_output_tokens":10}`, `{"id":"resp","object":"response","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`, "token", "input", "sum", false},
 		{"transcription", "/audio/transcriptions", "", `{"text":"hello"}`, "audio_second", "audio", "server_audio_measurement_v1", false},
@@ -52,7 +54,7 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 		name := tc.op
 		if tc.failed {
 			name += "_no_output"
-			if tc.body == "refused" {
+			if strings.HasPrefix(tc.body, "refused") {
 				name += "_refused"
 			}
 		}
@@ -77,8 +79,12 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 					switch r.URL.Path {
 					case "/api/v2/ocr/jobs":
 						sends++
-						if tc.body == "refused" {
-							w.WriteHeader(429)
+						if strings.HasPrefix(tc.body, "refused") {
+							status := 429
+							if tc.body == "refused401" {
+								status = 401
+							}
+							w.WriteHeader(status)
 							return
 						}
 						_, _ = w.Write([]byte(`{"code":0,"data":{"jobId":"provider-owned"}}`))
@@ -246,12 +252,12 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 			expected := 200
 			if tc.op == "ocr" {
 				expected = 202
-				if tc.body == "refused" {
+				if strings.HasPrefix(tc.body, "refused") {
 					expected = 502
 				}
 			}
 			require.Equal(t, expected, w.Code, w.Body.String())
-			if tc.op == "ocr" && tc.body != "refused" {
+			if tc.op == "ocr" && !strings.HasPrefix(tc.body, "refused") {
 				r := httptest.NewRequest("GET", "/platform/v1/ocr/jobs/call", nil)
 				r.Header.Set("Authorization", "Bearer uh_model_token")
 				r.Header.Set("X-UniHub-Task-ID", "task")

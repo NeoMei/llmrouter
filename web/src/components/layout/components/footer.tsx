@@ -161,7 +161,7 @@ export function Footer(props: FooterProps) {
 
   const displayLogo =
     systemLogo || props.logo || '/brand/llmrouter-confluence.svg'
-  const displayName = systemName || props.name || 'LLMRouter'
+  const displayName = systemName || props.name || '万流 · LLMRouter'
   const isDemoSiteMode = Boolean(demoSiteEnabled)
   const currentYear = new Date().getFullYear()
 

@@ -47,7 +47,7 @@ export function AuthenticatedLayout(props: AuthenticatedLayoutProps) {
     return (
       <div className='min-h-svh'>
         <header className='flex h-14 items-center justify-between border-b px-4'>
-          <SystemBrand defaultName='LLMRouter' variant='inline' />
+          <SystemBrand defaultName='万流 · LLMRouter' variant='inline' />
           <LanguageSwitcher />
         </header>
         <div className='flex flex-col md:flex-row'>

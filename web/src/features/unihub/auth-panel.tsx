@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { sanitizeAuthRedirect } from '@/features/auth/lib/auth-redirect'
 import { applyAuthBundle, isAuthBundle } from '@/lib/api'
+import { getAuthEpoch } from '@/lib/auth-session'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { registrationDefinitivelyRejected } from './registration'
@@ -45,6 +46,7 @@ export function AuthPanel(props: {
   } | null>(null)
   async function submit(form: HTMLFormElement) {
     const originalAuth = useAuthStore.getState().auth.session?.sid
+    const originalAuthEpoch = getAuthEpoch()
     setBusy(true)
     setNotice('')
     const data = new FormData(form)
@@ -112,7 +114,10 @@ export function AuthPanel(props: {
         }
         return { proof, bundle: payload.data }
       })
-      if (originalAuth !== useAuthStore.getState().auth.session?.sid) {
+      if (
+        originalAuthEpoch !== getAuthEpoch() ||
+        originalAuth !== useAuthStore.getState().auth.session?.sid
+      ) {
         throw new Error(t('Product identity proof rejected'))
       }
       applyAuthBundle(identity.bundle)

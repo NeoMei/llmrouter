@@ -142,3 +142,77 @@ test('late prior-payer 401 cannot clear a newer selected account', async () => {
   assert.equal(session.account, 'B')
   assert.equal(client.hasAccessToken(), true)
 })
+
+test('same native id switching identity source clears product token and intents', async () => {
+  const { useAuthStore } = await import('@/stores/auth-store')
+  const { createProductSession } = await import('../session')
+  const auth = useAuthStore.getState().auth
+  auth.setUser({
+    id: 42,
+    username: 'projected',
+    role: 1,
+    identity_source: 'unihub',
+    unihub_user_id: 'subject-a',
+  })
+  const session = createProductSession({
+    enabled: true,
+    public_origin: 'https://hub.test',
+    client_id: 'c',
+    redirect_uri: 'https://app.test/unihub',
+    product_id: 'llmrouter',
+    models: [],
+  })
+  session.user = { id: 'subject-a', name: 'Business user', email: '' }
+  session.client.setAccessToken('memory-only')
+  session.intents.set(
+    'purchase',
+    new FinancialIntent('A', 'purchase', { id: 'offer' })
+  )
+  auth.setUser({ id: 42, username: 'local', role: 1, identity_source: 'local' })
+  assert.equal(session.client.hasAccessToken(), false)
+  assert.equal(session.intents.size, 0)
+  assert.equal(session.user, null)
+  auth.reset()
+})
+
+test('same native id changing immutable subject clears old product authorization', async () => {
+  const { useAuthStore } = await import('@/stores/auth-store')
+  const { createProductSession } = await import('../session')
+  const auth = useAuthStore.getState().auth
+  auth.setUser({
+    id: 42,
+    username: 'projected',
+    role: 1,
+    identity_source: 'unihub',
+    unihub_user_id: 'subject-a',
+  })
+  const session = createProductSession({
+    enabled: true,
+    public_origin: 'https://hub.test',
+    client_id: 'c',
+    redirect_uri: 'https://app.test/unihub',
+    product_id: 'llmrouter',
+    models: [],
+  })
+  session.user = { id: 'subject-a', name: 'Business user', email: '' }
+  session.client.setAccessToken('memory-only')
+  auth.setUser({
+    id: 42,
+    username: 'projected',
+    role: 1,
+    identity_source: 'unihub',
+    unihub_user_id: 'subject-b',
+  })
+  assert.equal(session.client.hasAccessToken(), false)
+  assert.equal(session.user, null)
+  auth.reset()
+})
+
+test('global clear advances anonymous authentication epoch and fences pending login', async () => {
+  const { clearAuthentication, getAuthEpoch } =
+    await import('@/lib/auth-session')
+  clearAuthentication(false)
+  const captured = getAuthEpoch()
+  clearAuthentication(false)
+  assert.notEqual(getAuthEpoch(), captured)
+})

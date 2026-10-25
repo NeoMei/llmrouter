@@ -111,16 +111,12 @@ export class ProductSession {
 let activeProductSession: ProductSession | null = null
 
 useAuthStore.subscribe((state, previous) => {
-  if (
-    state.auth.user?.id !== previous.auth.user?.id &&
-    activeProductSession?.user
-  ) {
-    if (
-      state.auth.user?.identity_source !== 'unihub' ||
-      state.auth.user.unihub_user_id !== activeProductSession.user.id
-    ) {
-      activeProductSession.clear()
-    }
+  const identityChanged =
+    state.auth.user?.id !== previous.auth.user?.id ||
+    state.auth.user?.identity_source !== previous.auth.user?.identity_source ||
+    state.auth.user?.unihub_user_id !== previous.auth.user?.unihub_user_id
+  if (identityChanged && activeProductSession?.user) {
+    activeProductSession.clear()
   }
 })
 

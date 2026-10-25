@@ -129,6 +129,13 @@ func EstimateNativeMediaUsage(info *relaycommon.RelayInfo, request any, price me
 		return metering.Usage{}, fmt.Errorf("relay info required")
 	}
 	u := metering.Usage{Version: "metered_v2", Operation: price.Operation, State: "incomplete", Source: "local_admission"}
+	switch r := request.(type) {
+	case *dto.AudioRequest:
+		request = *r
+	case *dto.ImageRequest:
+		request = *r
+	}
+
 	switch info.RelayMode {
 	case relayconstant.RelayModeAudioSpeech:
 		r, ok := request.(dto.AudioRequest)

@@ -19,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/metering"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay"
 	"github.com/QuantumNous/new-api/relay/capability"
@@ -606,10 +607,15 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 		return types.NewError(errors.New("native dispatch cannot be retried without final evidence"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
 	if price, configured := billing_setting.ResolveModelNativePrice(info.BillingModelNameOrOrigin(), operation); configured {
+		var reservation metering.Usage
+		var err error
 		if operation != "chat" && operation != "responses" && operation != "embedding" {
-			return types.NewError(errors.New("native operation requires a bounded admission adapter"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+			if err = helper.ValidateNativeAudioAdmission(c, info); err == nil {
+				reservation, err = service.EstimateNativeMediaUsage(info, info.Request, price)
+			}
+		} else {
+			reservation, err = service.NativeTokenReservation(info, price)
 		}
-		reservation, err := service.NativeTokenReservation(info, price)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		}

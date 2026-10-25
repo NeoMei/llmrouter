@@ -99,10 +99,6 @@ func (e *NativeTokenEvidence) Observe(raw []byte, stream bool) {
 		e.terminal = true
 	} else if e.Source == BillingUsageSourceOAIResponses && root.Get("type").String() == "response.completed" {
 		e.terminal = true
-	} else if e.Source == BillingUsageSourceOAIChat && root.Get("choices").Exists() {
-		e.terminal = true
-	} else if e.Source == BillingUsageSourceGeminiChat && root.Get("candidates").Exists() {
-		e.terminal = true
 	}
 }
 
@@ -223,4 +219,11 @@ func (e *NativeTokenEvidence) Usage(price metering.Price) metering.Usage {
 	}
 	u.State = "confirmed"
 	return u
+}
+
+// CompleteStream records transport completion separately from cumulative usage.
+func (e *NativeTokenEvidence) CompleteStream(clean bool) {
+	if clean {
+		e.terminal = true
+	}
 }

@@ -14,3 +14,5 @@ Platform controller must supply the `PlatformTaskObserver`; platform adapter mus
 ## Review follow-up
 
 Post-review fixes (`273461dc0`, `d00b1d2a6`) persist colliding task evidence, paginate native recovery, reject duplicate receipt keys, invoke trusted no-output release for failed platform video/OCR terminals, and reject Veo output-probe admission until a bounded probe exists. Focused regression tests pass. Multiple-output provider-specific aggregation remains pending because no stable per-output duration/unit schema is defined in the current adapters; plural unsupported receipts stay pending rather than being estimated.
+
+Multi-output coverage is explicit: current native adapters force one output or expose a task-level scalar receipt. Admission rejects plural-output metadata (`n`, `sampleCount`, `video_count`, etc.) until a provider-specific tariff/receipt policy is defined. The configured model reservation limit is preferred over the legacy environment cap; it never substitutes for final provider usage.

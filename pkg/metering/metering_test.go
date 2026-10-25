@@ -185,3 +185,17 @@ func TestExactSumAndBoundaries(t *testing.T) {
 	_, err = Calculate(p, u)
 	require.Error(t, err)
 }
+
+func TestOperationUnitMatrix(t *testing.T) {
+	for _, tc := range []struct{ op, unit, key string }{{"chat", "request", "requests"}, {"responses", "provider_unit", "provider"}, {"embedding", "character", "characters"}, {"speech", "token", "input"}, {"speech", "audio_second", "audio"}, {"transcription", "token", "input"}, {"ocr", "provider_unit", "provider"}, {"image_generation", "request", "requests"}, {"image_edit", "video_second", "video"}, {"video", "image", "images"}} {
+		t.Run(tc.op+tc.unit, func(t *testing.T) {
+			p := Price{Version: "metered_v2", Operation: tc.op, Policy: "sum", Terms: []Term{{Key: tc.key, Unit: tc.unit, Price: Rational{"1", "1"}}}}
+			if tc.unit == "provider_unit" {
+				p.Terms[0].ProviderUnit = "vendor:unit"
+			}
+			require.Error(t, ValidatePrice(p))
+		})
+	}
+	p := Price{Version: "metered_v2", Operation: "speech", Policy: "sum", Terms: []Term{{Key: "characters", Unit: "character", ProviderUnit: "stray", Price: Rational{"1", "1"}}}}
+	require.Error(t, ValidatePrice(p))
+}

@@ -3,6 +3,7 @@ package platformbilling
 import (
 	"bytes"
 	"context"
+	"errors"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/metering"
 	"github.com/glebarez/sqlite"
@@ -12,6 +13,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -187,4 +189,58 @@ func TestMultipartDigestIgnoresBoundaryAndRejectsDuplicate(t *testing.T) {
 	ct, b = makeBody("ccc", true)
 	_, e = parseOperation(Config{}, "ocr", ct, b)
 	require.Error(t, e)
+}
+
+func TestConcurrentMeteredReceiptsPersistConflict(t *testing.T) {
+	a, db, _ := meteredFixture(t, "speech")
+	ctx := context.Background()
+	s, e := a.AdmitOperation(ctx, "uh_model_token", "task", "call", "speech", "application/json", []byte(`{"model":"test","input":"hello"}`))
+	require.NoError(t, e)
+	require.NoError(t, s.Dispatch(ctx, 1))
+	// Independent sessions model independent provider callbacks, not a shared lock.
+	other := &Session{adapter: a, call: s.call}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for i, session := range []*Session{s, other} {
+		go func(n int, x *Session) { <-start; results <- x.ObserveMetering(ctx, speechUsage(strconv.Itoa(n+1))) }(i, session)
+	}
+	close(start)
+	first, second := <-results, <-results
+	require.True(t, (first == nil && errors.Is(second, ErrConflict)) || (second == nil && errors.Is(first, ErrConflict)), "%v / %v", first, second)
+	var row Call
+	require.NoError(t, db.First(&row).Error)
+	assert.True(t, row.EvidenceConflict)
+	assert.Equal(t, "UNKNOWN", row.Status)
+	require.ErrorIs(t, s.Finish(ctx), ErrConflict)
+}
+func TestTaskBindingAndBusinessInsertAreAtomic(t *testing.T) {
+	a, db, _ := meteredFixture(t, "speech")
+	ctx := context.Background()
+	s, e := a.AdmitOperation(ctx, "uh_model_token", "task", "call", "speech", "application/json", []byte(`{"model":"test","input":"hello"}`))
+	require.NoError(t, e)
+	require.NoError(t, s.Dispatch(ctx, 1))
+	failure := errors.New("injected task insert failure")
+	require.ErrorIs(t, s.BindTaskTransaction(ctx, "provider", func(*gorm.DB) error { return failure }), failure)
+	var row Call
+	require.NoError(t, db.First(&row).Error)
+	assert.Empty(t, row.ProviderTaskID)
+	assert.Equal(t, "UNKNOWN", row.Status)
+	require.NoError(t, s.BindTaskTransaction(ctx, "provider", func(tx *gorm.DB) error {
+		return tx.Model(&Attempt{}).Where("call_id = ?", "call").Update("status", "TASK_STORED").Error
+	}))
+	require.NoError(t, db.First(&row).Error)
+	assert.Equal(t, "provider", row.ProviderTaskID)
+}
+func TestRecoverDurableProviderBindingBeforeObservation(t *testing.T) {
+	a, _, settles := meteredFixture(t, "speech")
+	ctx := context.Background()
+	s, e := a.AdmitOperation(ctx, "uh_model_token", "task", "call", "speech", "application/json", []byte(`{"model":"test","input":"hello"}`))
+	require.NoError(t, e)
+	require.NoError(t, s.Dispatch(ctx, 1))
+	// Worker reconstructs the exact provider ID from its durable OCR submission.
+	require.NoError(t, a.BindTask(ctx, "call", "durable-provider"))
+	require.NoError(t, a.BindTask(ctx, "call", "durable-provider"))
+	require.Error(t, a.BindTask(ctx, "call", "wrong-provider"))
+	require.NoError(t, a.ObserveTask(ctx, "call", "durable-provider", speechUsage("1")))
+	assert.EqualValues(t, 1, settles.Load())
 }

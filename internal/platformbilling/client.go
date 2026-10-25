@@ -1,4 +1,4 @@
-// Package platformbilling isolates platform model credits from local quota.
+// Package platformbilling isolates platform model funding from local quota.
 package platformbilling
 
 import (
@@ -26,14 +26,17 @@ var (
 )
 
 type Claims struct {
-	ID              string    `json:"id"`
-	Audience        string    `json:"audience"`
-	ActorID         string    `json:"actor_id"`
-	AccountID       string    `json:"account_id"`
-	OriginProductID string    `json:"origin_product_id"`
-	Models          []string  `json:"models"`
-	TaskID          string    `json:"task_id"`
-	ExpiresAt       time.Time `json:"expires_at"`
+	ID                    string    `json:"id"`
+	Audience              string    `json:"audience"`
+	ActorID               string    `json:"actor_id"`
+	AccountID             string    `json:"account_id"`
+	OriginProductID       string    `json:"origin_product_id"`
+	Models                []string  `json:"models"`
+	TaskID                string    `json:"task_id"`
+	ExpiresAt             time.Time `json:"expires_at"`
+	Asset                 string    `json:"asset"`
+	FundingMode           string    `json:"funding_mode"`
+	BillingProfileVersion int       `json:"billing_profile_version"`
 }
 type Rational struct {
 	Numerator   string `json:"numerator"`
@@ -42,6 +45,7 @@ type Rational struct {
 type Rate struct {
 	ID         string   `json:"id"`
 	Model      string   `json:"model"`
+	Asset      string   `json:"asset"`
 	Status     string   `json:"status"`
 	Semantics  string   `json:"semantics"`
 	Input      Rational `json:"input"`
@@ -58,14 +62,18 @@ type Usage struct {
 	Reasoning  string `json:"reasoning"`
 }
 type RemoteCall struct {
-	ActorID         string `json:"actor_id"`
-	AccountID       string `json:"account_id"`
-	OriginProductID string `json:"origin_product_id"`
-	RequestDigest   string `json:"request_digest"`
-	Rate            Rate   `json:"rate"`
-	CallID          string `json:"call_id"`
-	Status          string `json:"status"`
-	Charged         string `json:"charged,omitempty"`
+	ActorID               string `json:"actor_id"`
+	AccountID             string `json:"account_id"`
+	OriginProductID       string `json:"origin_product_id"`
+	RequestDigest         string `json:"request_digest"`
+	Rate                  Rate   `json:"rate"`
+	CallID                string `json:"call_id"`
+	Status                string `json:"status"`
+	Charged               string `json:"charged,omitempty"`
+	ChargeAsset           string `json:"charge_asset"`
+	FundingMode           string `json:"funding_mode"`
+	FundingProductID      string `json:"funding_product_id"`
+	BillingProfileVersion int    `json:"billing_profile_version"`
 }
 type Config struct {
 	Enabled                         bool
@@ -74,6 +82,7 @@ type Config struct {
 	MaxBodyBytes                    int64
 	MaxInputTokens, MaxOutputTokens int
 	RateIDs                         map[string]string
+	AssetRateIDs                    map[string]map[string]string
 	Timeout                         time.Duration
 }
 type client struct {
@@ -207,5 +216,50 @@ func HTTPStatus(err error) int {
 }
 
 func (remote RemoteCall) matches(row Call) bool {
-	return remote.CallID == row.CallID && remote.ActorID == row.ActorID && remote.AccountID == row.AccountID && remote.OriginProductID == row.OriginProductID && remote.RequestDigest == row.Digest && remote.Rate.ID == row.RateID && remote.Rate.Model == row.Model
+	asset, mode, err := normalizeFunding(row.Asset, row.FundingMode)
+	if err != nil || row.BillingProfileVersion < 0 {
+		return false
+	}
+	remoteAsset, remoteMode, err := normalizeFunding(remote.ChargeAsset, remote.FundingMode)
+	if err != nil || remote.BillingProfileVersion != row.BillingProfileVersion {
+		return false
+	}
+	rateAsset, err := normalizeAsset(remote.Rate.Asset)
+	if err != nil || rateAsset != asset || remoteAsset != asset || remoteMode != mode {
+		return false
+	}
+	funder := remote.FundingProductID
+	if funder == "" && remoteAsset == "CREDIT/6" {
+		funder = "llmrouter"
+	}
+	localFunder := row.FundingProductID
+	if localFunder == "" && asset == "CREDIT/6" {
+		localFunder = "llmrouter"
+	}
+	return funder == "llmrouter" && funder == localFunder && remote.CallID == row.CallID && remote.ActorID == row.ActorID && remote.AccountID == row.AccountID && remote.OriginProductID == row.OriginProductID && remote.RequestDigest == row.Digest && remote.Rate.ID == row.RateID && remote.Rate.Model == row.Model
+}
+
+// Missing fields belong to the original CREDIT contract, never to cash funding.
+func normalizeAsset(asset string) (string, error) {
+	if asset == "" {
+		return "CREDIT/6", nil
+	}
+	if asset != "CREDIT/6" && asset != "CNY/6" {
+		return "", ErrInvalid
+	}
+	return asset, nil
+}
+
+func normalizeFunding(asset, mode string) (string, string, error) {
+	asset, err := normalizeAsset(asset)
+	if err != nil {
+		return "", "", err
+	}
+	if mode == "" {
+		mode = "credits"
+	}
+	if (asset == "CREDIT/6" && mode != "credits") || (asset == "CNY/6" && mode != "prepaid_cash") {
+		return "", "", ErrInvalid
+	}
+	return asset, mode, nil
 }

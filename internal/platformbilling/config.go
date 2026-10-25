@@ -37,5 +37,17 @@ func ConfigFromEnv(get func(string) string) (Config, error) {
 			return c, ErrInvalid
 		}
 	}
+	// Legacy model pins select CREDIT rates only. Explicit asset pins take
+	// precedence, for example {"CNY/6":{"model-name":"cash-rate-id"}}.
+	if raw := get("UNIHUB_MODEL_ASSET_RATE_IDS"); raw != "" {
+		if common.UnmarshalJsonStr(raw, &c.AssetRateIDs) != nil {
+			return c, ErrInvalid
+		}
+		for asset := range c.AssetRateIDs {
+			if asset != "CREDIT/6" && asset != "CNY/6" {
+				return c, ErrInvalid
+			}
+		}
+	}
 	return c, nil
 }

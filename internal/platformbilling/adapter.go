@@ -22,21 +22,25 @@ import (
 // Call stores immutable verified payer scope and terminal command intent. Model
 // credentials are never persisted: recovery cannot authorize another dispatch.
 type Call struct {
-	CallID          string `gorm:"primaryKey;size:128"`
-	ActorID         string `gorm:"size:128"`
-	AccountID       string `gorm:"size:128"`
-	OriginProductID string `gorm:"size:128"`
-	CredentialID    string `gorm:"size:128"`
-	TaskID          string `gorm:"size:128"`
-	Model           string `gorm:"size:255"`
-	Digest          string `gorm:"size:64"`
-	RateID          string `gorm:"size:128"`
-	Amount          string `gorm:"size:32"`
-	Status          string `gorm:"size:32;index"`
-	Intent          string `gorm:"type:text"`
-	Charged         string `gorm:"size:32"`
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	CallID                string `gorm:"primaryKey;size:128"`
+	ActorID               string `gorm:"size:128"`
+	AccountID             string `gorm:"size:128"`
+	OriginProductID       string `gorm:"size:128"`
+	CredentialID          string `gorm:"size:128"`
+	TaskID                string `gorm:"size:128"`
+	Model                 string `gorm:"size:255"`
+	Digest                string `gorm:"size:64"`
+	RateID                string `gorm:"size:128"`
+	Asset                 string `gorm:"size:16;not null;default:CREDIT/6"`
+	FundingMode           string `gorm:"size:16;not null;default:credits"`
+	FundingProductID      string `gorm:"size:128;not null;default:llmrouter"`
+	BillingProfileVersion int    `gorm:"not null;default:0"`
+	Amount                string `gorm:"size:32"`
+	Status                string `gorm:"size:32;index"`
+	Intent                string `gorm:"type:text"`
+	Charged               string `gorm:"size:32"`
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 func (Call) TableName() string { return "platform_model_calls" }
@@ -171,9 +175,20 @@ func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body [
 	if grant.ID == "" || grant.Audience != "llmrouter" || grant.ActorID == "" || grant.AccountID == "" || grant.OriginProductID == "" || grant.TaskID != task || !grant.ExpiresAt.After(time.Now()) || !slices.Contains(grant.Models, model) {
 		return nil, ErrInvalid
 	}
-	sum := sha256.Sum256(append(append([]byte(task), 0), body...))
+	asset, mode, err := normalizeFunding(grant.Asset, grant.FundingMode)
+	if err != nil || grant.BillingProfileVersion < 0 {
+		return nil, ErrInvalid
+	}
+	digestBody := append(append([]byte(task), 0), body...)
+	// Keep the original CREDIT/version-0 digest byte-for-byte compatible with
+	// in-flight calls. New funding snapshots cannot reinterpret that digest.
+	if asset != "CREDIT/6" || mode != "credits" || grant.BillingProfileVersion != 0 {
+		prefix := fmt.Sprintf("unihub-funding-v1\x00%s\x00%s\x00%d\x00", asset, mode, grant.BillingProfileVersion)
+		digestBody = append([]byte(prefix), digestBody...)
+	}
+	sum := sha256.Sum256(digestBody)
 	digest := hex.EncodeToString(sum[:])
-	row := Call{CallID: id, ActorID: grant.ActorID, AccountID: grant.AccountID, OriginProductID: grant.OriginProductID, CredentialID: grant.ID, TaskID: task, Model: model, Digest: digest, Status: "RESERVING"}
+	row := Call{CallID: id, ActorID: grant.ActorID, AccountID: grant.AccountID, OriginProductID: grant.OriginProductID, CredentialID: grant.ID, TaskID: task, Model: model, Digest: digest, Asset: asset, FundingMode: mode, FundingProductID: "llmrouter", BillingProfileVersion: grant.BillingProfileVersion, Status: "RESERVING"}
 	var old Call
 	if err := a.db.WithContext(ctx).First(&old, "call_id = ?", id).Error; err == nil {
 		return nil, compareCall(old, row)
@@ -187,7 +202,21 @@ func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body [
 	var chosen *Rate
 	for i := range rates {
 		r := &rates[i]
-		if r.Model == model && (a.config.RateIDs[model] == "" || r.ID == a.config.RateIDs[model]) {
+		if r.Model != model {
+			continue
+		}
+		rateAsset, err := normalizeAsset(r.Asset)
+		if err != nil {
+			return nil, err
+		}
+		pin := ""
+		if asset == "CREDIT/6" {
+			pin = a.config.RateIDs[model]
+		}
+		if assetPin := a.config.AssetRateIDs[asset][model]; assetPin != "" {
+			pin = assetPin
+		}
+		if rateAsset == asset && (pin == "" || r.ID == pin) {
 			if chosen != nil {
 				return nil, ErrInvalid
 			}
@@ -239,7 +268,8 @@ func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body [
 	return &Session{adapter: a, call: row, safeFailure: true}, nil
 }
 func compareCall(old, row Call) error {
-	if old.CallID != row.CallID || old.ActorID != row.ActorID || old.AccountID != row.AccountID || old.OriginProductID != row.OriginProductID || old.TaskID != row.TaskID || old.Model != row.Model || old.Digest != row.Digest {
+	oldAsset, oldMode, err := normalizeFunding(old.Asset, old.FundingMode)
+	if err != nil || oldAsset != row.Asset || oldMode != row.FundingMode || old.BillingProfileVersion != row.BillingProfileVersion || (old.FundingProductID != "" && old.FundingProductID != row.FundingProductID) || old.CallID != row.CallID || old.ActorID != row.ActorID || old.AccountID != row.AccountID || old.OriginProductID != row.OriginProductID || old.TaskID != row.TaskID || old.Model != row.Model || old.Digest != row.Digest {
 		return ErrConflict
 	}
 	return ErrDuplicate
@@ -435,6 +465,7 @@ type Receipt struct {
 	CallID  string `json:"call_id"`
 	Status  string `json:"status"`
 	Charged string `json:"charged,omitempty"`
+	Asset   string `json:"asset"`
 }
 
 func (a *Adapter) Receipt(ctx context.Context, credential, task, id string) (Receipt, error) {
@@ -452,5 +483,9 @@ func (a *Adapter) Receipt(ctx context.Context, credential, task, id string) (Rec
 	if row.CallID != id || grant.Audience != "llmrouter" || grant.ID == "" || grant.ActorID != row.ActorID || grant.AccountID != row.AccountID || grant.OriginProductID != row.OriginProductID || grant.TaskID != task || row.TaskID != task || !grant.ExpiresAt.After(time.Now()) || !slices.Contains(grant.Models, row.Model) {
 		return Receipt{}, ErrInvalid
 	}
-	return Receipt{row.CallID, row.Status, row.Charged}, nil
+	asset, _, err := normalizeFunding(row.Asset, row.FundingMode)
+	if err != nil {
+		return Receipt{}, ErrInvalid
+	}
+	return Receipt{CallID: row.CallID, Status: row.Status, Charged: row.Charged, Asset: asset}, nil
 }

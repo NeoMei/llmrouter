@@ -6,8 +6,15 @@ const accounts = [
 ]
 async function fixture(
   page: Page,
-  options: { expiry?: number; registerUnknown?: boolean } = {}
+  options: {
+    expiry?: number
+    registerUnknown?: boolean
+    models?: string[]
+    mismatch?: boolean
+  } = {}
 ) {
+  let authorized = false
+  let nativeBundle: unknown
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname
     if (path === '/api/unihub/config') {
@@ -18,9 +25,49 @@ async function fixture(
           client_id: 'client',
           redirect_uri: 'http://127.0.0.1:58004/unihub',
           product_id: 'llmrouter',
-          models: ['synthetic'],
+          models: options.models ?? ['synthetic'],
         },
       })
+    }
+    if (path === '/api/user/auth/refresh') {
+      return route.fulfill(
+        authorized
+          ? { json: { success: true, data: nativeBundle } }
+          : { status: 401, json: { success: false } }
+      )
+    }
+    if (path === '/api/user/auth/logout') {
+      authorized = false
+      return route.fulfill({ json: { success: true } })
+    }
+    if (path === '/api/unihub/session') {
+      authorized = true
+      nativeBundle = {
+        access_token: 'native-session-token',
+        token_type: 'Bearer',
+        access_expires_at: Math.floor(Date.now() / 1000) + 300,
+        user: {
+          id: 42,
+          username: 'product-user',
+          display_name: 'Product user',
+          role: 1,
+          identity_source: 'unihub',
+          unihub_user_id: options.mismatch
+            ? 'different-subject'
+            : 'immutable-user',
+        },
+        session: {
+          sid: 'sid-unihub',
+          current: true,
+          login_method: 'unihub',
+          ip: '127.0.0.1',
+          user_agent: 'fixture',
+          created_at: 1,
+          last_active_at: 1,
+          expires_at: 9999999999,
+        },
+      }
+      return route.fulfill({ json: { success: true, data: nativeBundle } })
     }
     if (path === '/api/unihub/identity') {
       return route.fulfill({
@@ -843,4 +890,90 @@ test('late settled receipt after payer switch cannot populate or refetch the new
     page.getByText('Task status: SETTLED', { exact: false })
   ).toHaveCount(0)
   expect(newPayerReads).toBe(1)
+})
+
+test('sign-in entry preserves safe wallet destination and unified navigation excludes native actions', async ({
+  page,
+}) => {
+  await fixture(page)
+  const denied: string[] = []
+  page.on('request', (request) => {
+    if (
+      /\/api\/(?:token|user\/(?:topup|subscription|access_token)|channels)/.test(
+        new URL(request.url()).pathname
+      )
+    ) {
+      denied.push(request.url())
+    }
+  })
+  await page.goto('/sign-in?redirect=%2Fwallet')
+  await page.getByRole('link', { name: /UniHub/ }).click()
+  await expect(page).toHaveURL(/\/unihub\?redirect=%2Fwallet/)
+  await page.getByLabel('Username', { exact: true }).fill('product')
+  await page.getByLabel('Password', { exact: true }).fill('private')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await expect(page).toHaveURL(/\/wallet$/)
+  await expect(
+    page
+      .getByRole('complementary')
+      .getByRole('link', { name: 'Wallet', exact: true })
+  ).toBeVisible()
+  await expect(
+    page.getByRole('link', { name: /API keys|Change password|Recharge/ })
+  ).toHaveCount(0)
+  await page.getByRole('combobox').first().selectOption('personal-a')
+  await expect(
+    page.getByText('9007199254740.993123 CNY', { exact: false })
+  ).toBeVisible()
+  expect(denied).toEqual([])
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click()
+  await expect(page).toHaveURL(/\/sign-in$/)
+  await page.reload()
+  await page.goto('/dashboard')
+  await expect(page).toHaveURL(/\/sign-in/)
+})
+
+test('external redirect is rejected and product token survives dashboard to unified account navigation', async ({
+  page,
+}) => {
+  await fixture(page)
+  await page.goto('/unihub?redirect=https%3A%2F%2Fevil.test%2Fsteal')
+  await page.getByLabel('Username', { exact: true }).fill('product')
+  await page.getByLabel('Password', { exact: true }).fill('private')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await expect(page).toHaveURL(/\/dashboard\/overview$/)
+  await page
+    .getByRole('complementary')
+    .getByRole('link', { name: 'UniHub account' })
+    .click()
+  await expect(page.getByText('Product user · immutable-user')).toBeVisible()
+  await expect(page.getByLabel('Password', { exact: true })).toHaveCount(0)
+})
+
+test('immutable subject mismatch rejects native bundle and leaves product sign-in visible', async ({
+  page,
+}) => {
+  await fixture(page, { mismatch: true })
+  await page.goto('/unihub')
+  await page.getByLabel('Username', { exact: true }).fill('product')
+  await page.getByLabel('Password', { exact: true }).fill('private')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await expect(page.getByRole('status')).toContainText(
+    'Product identity proof rejected'
+  )
+  await expect(page).toHaveURL(/\/unihub$/)
+  await expect(page.getByText('Product user · immutable-user')).toHaveCount(0)
+})
+
+test('closed model gate shows unavailable state and disables provider send', async ({
+  page,
+}) => {
+  await fixture(page, { models: [] })
+  await login(page)
+  await expect(
+    page.getByText('No available models', { exact: true })
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Send new task' })
+  ).toBeDisabled()
 })

@@ -16,7 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { UniHubClient, UniHubError } from './sdk'
+import { useAuthStore } from '@/stores/auth-store'
+
+import { UniHubClient, UniHubError, type User, type Account } from './sdk'
 
 export interface ProductConfig {
   enabled: boolean
@@ -53,6 +55,8 @@ export class FinancialIntent {
 }
 export class ProductSession {
   readonly intents = new Map<string, FinancialIntent>()
+  user: User | null = null
+  accounts: Account[] = []
   account = ''
   epoch = 0
   readonly client: UniHubClient
@@ -75,6 +79,8 @@ export class ProductSession {
     clearTimeout(this.timer)
     this.client.clearAccessToken()
     this.intents.clear()
+    this.user = null
+    this.accounts = []
     this.select('')
     this.onClear()
   }
@@ -102,6 +108,26 @@ export class ProductSession {
     }
   }
 }
+let activeProductSession: ProductSession | null = null
+
+useAuthStore.subscribe((state, previous) => {
+  if (
+    state.auth.user?.id !== previous.auth.user?.id &&
+    activeProductSession?.user
+  ) {
+    if (
+      state.auth.user?.identity_source !== 'unihub' ||
+      state.auth.user.unihub_user_id !== activeProductSession.user.id
+    ) {
+      activeProductSession.clear()
+    }
+  }
+})
+
+export function getActiveProductSession(): ProductSession | null {
+  return activeProductSession
+}
+
 export function createProductSession(config: ProductConfig): ProductSession {
   const send: typeof fetch = async (input, init) => {
     const epoch = session.epoch
@@ -117,6 +143,7 @@ export function createProductSession(config: ProductConfig): ProductSession {
       fetch: send,
     })
   )
+  activeProductSession = session
   return session
 }
 

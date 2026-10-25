@@ -16,10 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import { sanitizeAuthRedirect } from '@/features/auth/lib/auth-redirect'
+import { applyAuthBundle, isAuthBundle } from '@/lib/api'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { registrationDefinitivelyRejected } from './registration'
 import type { User, Account, Registration } from './sdk'
@@ -31,6 +35,7 @@ export function AuthPanel(props: {
   onLogin: (user: User, accounts: Account[]) => void
 }) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [register, setRegister] = useState(false)
@@ -39,6 +44,7 @@ export function AuthPanel(props: {
     key: string
   } | null>(null)
   async function submit(form: HTMLFormElement) {
+    const originalAuth = useAuthStore.getState().auth.session?.sid
     setBusy(true)
     setNotice('')
     const data = new FormData(form)
@@ -70,21 +76,54 @@ export function AuthPanel(props: {
       const identity = await props.session.bound(async () => {
         const tokens = await props.session.client.passwordLogin(body)
         props.session.expire(tokens.expires_in)
-        const response = await fetch('/api/unihub/identity', {
+        const proofResponse = await fetch('/api/unihub/identity', {
           method: 'POST',
           headers: { Authorization: `Bearer ${tokens.access_token}` },
           credentials: 'omit',
           redirect: 'error',
           signal: props.session.signal,
         })
-        if (!response.ok) throw new Error(t('Product identity proof rejected'))
-        return (await response.json()) as {
+        if (!proofResponse.ok) {
+          throw new Error(t('Product identity proof rejected'))
+        }
+        const proof = (await proofResponse.json()) as {
           user: User
           accounts: Account[]
         }
+        const response = await fetch('/api/unihub/session', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${tokens.access_token}` },
+          credentials: 'include',
+          redirect: 'error',
+          signal: props.session.signal,
+        })
+        if (!response.ok) throw new Error(t('Product identity proof rejected'))
+        const payload = (await response.json()) as {
+          success?: boolean
+          data?: unknown
+        }
+        if (
+          !payload.success ||
+          !isAuthBundle(payload.data) ||
+          payload.data.user.identity_source !== 'unihub' ||
+          payload.data.user.unihub_user_id !== proof.user.id
+        ) {
+          throw new Error(t('Product identity proof rejected'))
+        }
+        return { proof, bundle: payload.data }
       })
-      props.onLogin(identity.user, identity.accounts)
+      if (originalAuth !== useAuthStore.getState().auth.session?.sid) {
+        throw new Error(t('Product identity proof rejected'))
+      }
+      applyAuthBundle(identity.bundle)
+      props.onLogin(identity.proof.user, identity.proof.accounts)
       form.reset()
+      const target =
+        sanitizeAuthRedirect(
+          new URLSearchParams(window.location.search).get('redirect'),
+          window.location.origin
+        ) ?? '/dashboard'
+      await navigate({ href: target, replace: true })
     } catch (error) {
       if (!register) props.session.clear()
       else if (registrationDefinitivelyRejected(error)) setPending(null)

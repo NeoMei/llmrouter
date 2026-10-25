@@ -84,6 +84,9 @@ func (a *Adapter) AdmitOperation(ctx context.Context, credential, task, id, oper
 	if err = metering.ValidatePrice(*chosen.Metered); err != nil {
 		return nil, ErrInvalid
 	}
+	if operation == "video" && billing_setting.ValidateNativeVideoPrice(*chosen.Metered) != nil {
+		return nil, ErrInvalid
+	}
 	if operation == "image_generation" || operation == "image_edit" {
 		if billing_setting.ValidateNativeImageTiers(*chosen.Metered) != nil {
 			return nil, ErrInvalid

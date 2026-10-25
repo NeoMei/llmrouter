@@ -24,6 +24,19 @@ func NativeVideoReservation(c *gin.Context, modelName string, price metering.Pri
 	if err != nil {
 		return u, err
 	}
+	// All currently supported native video adapters submit one output. Reject
+	// caller metadata that asks for plural outputs until a tariff defines how
+	// each provider's output array is measured.
+	for _, key := range []string{"n", "sampleCount", "sample_count", "video_count", "number_of_videos"} {
+		if raw, ok := req.Metadata[key]; ok {
+			if n, ok := raw.(float64); ok && n > 1 {
+				return u, errors.New("native video multiple outputs are unsupported")
+			}
+			if n, ok := raw.(int); ok && n > 1 {
+				return u, errors.New("native video multiple outputs are unsupported")
+			}
+		}
+	}
 	seconds := req.Duration
 	if req.Seconds != "" {
 		n, e := strconv.Atoi(req.Seconds)

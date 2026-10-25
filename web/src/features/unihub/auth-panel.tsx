@@ -22,10 +22,8 @@ import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import { sanitizeAuthRedirect } from '@/features/auth/lib/auth-redirect'
-import { applyAuthBundle, isAuthBundle } from '@/lib/api'
-import { getAuthEpoch } from '@/lib/auth-session'
-import { useAuthStore } from '@/stores/auth-store'
 
+import { authorizeProductSession } from './native-session'
 import { registrationDefinitivelyRejected } from './registration'
 import type { User, Account, Registration } from './sdk'
 import { message, type ProductSession } from './session'
@@ -45,8 +43,6 @@ export function AuthPanel(props: {
     key: string
   } | null>(null)
   async function submit(form: HTMLFormElement) {
-    const originalAuth = useAuthStore.getState().auth.session?.sid
-    const originalAuthEpoch = getAuthEpoch()
     setBusy(true)
     setNotice('')
     const data = new FormData(form)
@@ -75,53 +71,8 @@ export function AuthPanel(props: {
         form.reset()
         return
       }
-      const identity = await props.session.bound(async () => {
-        const tokens = await props.session.client.passwordLogin(body)
-        props.session.expire(tokens.expires_in)
-        const proofResponse = await fetch('/api/unihub/identity', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${tokens.access_token}` },
-          credentials: 'omit',
-          redirect: 'error',
-          signal: props.session.signal,
-        })
-        if (!proofResponse.ok) {
-          throw new Error(t('Product identity proof rejected'))
-        }
-        const proof = (await proofResponse.json()) as {
-          user: User
-          accounts: Account[]
-        }
-        const response = await fetch('/api/unihub/session', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${tokens.access_token}` },
-          credentials: 'include',
-          redirect: 'error',
-          signal: props.session.signal,
-        })
-        if (!response.ok) throw new Error(t('Product identity proof rejected'))
-        const payload = (await response.json()) as {
-          success?: boolean
-          data?: unknown
-        }
-        if (
-          !payload.success ||
-          !isAuthBundle(payload.data) ||
-          payload.data.user.identity_source !== 'unihub' ||
-          payload.data.user.unihub_user_id !== proof.user.id
-        ) {
-          throw new Error(t('Product identity proof rejected'))
-        }
-        return { proof, bundle: payload.data }
-      })
-      if (
-        originalAuthEpoch !== getAuthEpoch() ||
-        originalAuth !== useAuthStore.getState().auth.session?.sid
-      ) {
-        throw new Error(t('Product identity proof rejected'))
-      }
-      applyAuthBundle(identity.bundle)
-      props.onLogin(identity.proof.user, identity.proof.accounts)
+      const identity = await authorizeProductSession(props.session, body)
+      props.onLogin(identity.user, identity.accounts)
       form.reset()
       const target =
         sanitizeAuthRedirect(
@@ -130,7 +81,7 @@ export function AuthPanel(props: {
         ) ?? '/dashboard'
       await navigate({ href: target, replace: true })
     } catch (error) {
-      if (!register) props.session.clear()
+      if (!register && !props.session.user) props.session.clear()
       else if (registrationDefinitivelyRejected(error)) setPending(null)
       setNotice(message(error))
     } finally {

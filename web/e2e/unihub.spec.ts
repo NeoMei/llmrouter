@@ -963,6 +963,9 @@ test('immutable subject mismatch rejects native bundle and leaves product sign-i
   )
   await expect(page).toHaveURL(/\/unihub$/)
   await expect(page.getByText('Product user · immutable-user')).toHaveCount(0)
+  await page.reload()
+  await page.goto('/dashboard')
+  await expect(page).toHaveURL(/\/sign-in/)
 })
 
 test('closed model gate shows unavailable state and disables provider send', async ({

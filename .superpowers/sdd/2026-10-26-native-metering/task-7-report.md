@@ -26,5 +26,5 @@ Remaining integration owned by parent/Task 6:
 - Initialize `NativeBillingContext` from `Session.MeteredPrice` before platform relay billing early return.
 - Add provider dispatch fences at the first supplier send for each new helper; preserve retry semantics.
 - Wire OCR/video asynchronous supplier lifecycle and platform task routes to `BindTask`/`ObserveTask`; block legacy task and OCR billing side effects for platform-owned jobs.
-- Add explicit metered Chat route selection; current `/platform/v1/chat/completions` remains the legacy exclusive_v1 path for compatibility.
+- Platform Chat selects metered_v2 only when an explicit chat operation rate pin is configured; otherwise `/platform/v1/chat/completions` remains legacy exclusive_v1.
 - Keep local wallet, subscription, token quota, request counters and local OCR/task logs untouched for platform calls.

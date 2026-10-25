@@ -12,6 +12,9 @@ import (
 // Installed by the platform router; background workers retain no credentials.
 var PlatformTaskObserver func(context.Context, string, string, metering.Usage) error
 
+// PlatformTaskRelease is installed by platformbilling for trusted no-output terminals.
+var PlatformTaskRelease func(context.Context, string, string) error
+
 // prepareNativeTaskIntent runs before the terminal CAS, so success and evidence
 // are one row mutation. A crash after this point is replayable without a provider
 // request or current pricing lookup.
@@ -52,6 +55,9 @@ func settleNativeTask(ctx context.Context, task *model.Task) error {
 		return err
 	}
 	if task.FundingOwner == "platform" {
+		if u.State == "confirmed" && len(u.Measurements) == 0 && PlatformTaskRelease != nil {
+			return PlatformTaskRelease(ctx, bc.PlatformCallID, task.GetUpstreamTaskID())
+		}
 		if PlatformTaskObserver == nil {
 			return errors.New("platform task observer unavailable")
 		}

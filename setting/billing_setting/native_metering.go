@@ -32,6 +32,22 @@ func ValidateModelNativePricing(c map[string]map[string]metering.Price) error {
 			if operation != p.Operation {
 				return errors.New("native pricing operation key mismatch")
 			}
+			policyOK := false
+			switch operation {
+			case "chat", "responses", "embedding", "transcription":
+				policyOK = p.Policy == "provider_reported_v1"
+			case "speech":
+				policyOK = p.Policy == "provider_reported_v1" || p.Policy == "unicode_scalar_v1"
+			case "image_generation", "image_edit":
+				policyOK = p.Policy == "successful_outputs_v1"
+			case "ocr":
+				policyOK = p.Policy == "success_request"
+			case "video":
+				policyOK = p.Policy == "provider_reported_v1" || p.Policy == "successful_outputs_v1"
+			}
+			if !policyOK {
+				return errors.New("unsupported native measurement policy")
+			}
 			if err := metering.ValidatePrice(p); err != nil {
 				return err
 			}

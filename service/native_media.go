@@ -24,6 +24,10 @@ func NativeSpeechUsage(p metering.Price, text string, reported *int64, terminal 
 	var q metering.Quantity
 	switch p.Policy {
 	case "unicode_scalar_v1":
+		if !utf8.ValidString(text) {
+			u.State = "invalid"
+			return u
+		}
 		q = metering.Quantity{Value: strconv.Itoa(utf8.RuneCountInString(text))}
 	case "provider_reported_v1":
 		if reported == nil {
@@ -48,7 +52,10 @@ func NativeAudioUsage(p metering.Price, seconds *float64, terminal bool) meterin
 		u.State = "incomplete"
 		return u
 	}
-	if seconds == nil || math.IsNaN(*seconds) || math.IsInf(*seconds, 0) || *seconds < 0 || *seconds > 86400 {
+	if seconds == nil {
+		return u
+	}
+	if math.IsNaN(*seconds) || math.IsInf(*seconds, 0) || *seconds < 0 || *seconds > 86400 {
 		u.State = "invalid"
 		return u
 	}
@@ -91,7 +98,11 @@ func NativeImageUsage(p metering.Price, outputs []NativeImageOutput, terminal bo
 	seen := map[string]bool{}
 	count := 0
 	for _, o := range outputs {
-		if o.ID == "" || seen[o.ID] {
+		if o.ID == "" {
+			u.State = "missing"
+			return u
+		}
+		if seen[o.ID] {
 			continue
 		}
 		seen[o.ID] = true

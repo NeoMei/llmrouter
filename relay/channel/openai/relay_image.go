@@ -208,7 +208,7 @@ func OpenaiImageStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp 
 	}
 	if info.NativeBilling != nil {
 		terminal := info.StreamStatus != nil && !info.StreamStatus.HasErrors() && info.StreamStatus.IsNormalEnd()
-		if err := service.RecordNativeUsageForRelay(c.Request.Context(), info, service.NativeImageUsage(info.NativeBilling.Price, nativeOutputs, terminal)); err != nil {
+		if err := service.RecordNativeUsageForRelay(c.Request.Context(), info, service.NativeImageUsage(info.NativeBilling.Price, nativeOutputs, terminal && len(nativeOutputs) > 0)); err != nil {
 			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 		}
 	}

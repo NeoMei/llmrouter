@@ -30,6 +30,8 @@ import (
 	"github.com/QuantumNous/new-api/router"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/QuantumNous/new-api/service/ocr"
+	"github.com/QuantumNous/new-api/service/relaymedia"
 	_ "github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
@@ -62,6 +64,10 @@ func main() {
 	}
 
 	defer func() {
+		controller.RelayMediaRuntime.Close()
+		if err := controller.OCRRuntime.Close(); err != nil {
+			common.SysError("OCR runtime close failed")
+		}
 		err := model.CloseDB()
 		if err != nil {
 			common.FatalLog("failed to close database: " + err.Error())
@@ -365,10 +371,16 @@ func InitResources() error {
 	// Initialize codex-gateway provider subsystem (profile loader + platform key
 	// pool). Each component is optional and degrades gracefully when unset; see
 	// gateway.InitFromEnv. Needs both the SQL DB and Redis client.
-	if sqlDB, dbErr := model.DB.DB(); dbErr == nil {
-		gateway.InitFromEnv(common.RDB, sqlDB)
-	} else {
-		common.SysError("failed to obtain *sql.DB for gateway init: " + dbErr.Error())
+	gateway.InitFromEnv(common.RDB, model.DB)
+	controller.OCRRuntime, err = ocr.RuntimeFromEnv(model.DB)
+	if err != nil {
+		return fmt.Errorf("OCR runtime initialization: %w", err)
+	}
+
+	controller.RelayMediaRuntime, err = relaymedia.RuntimeFromEnv(model.DB)
+	if err != nil {
+		_ = controller.OCRRuntime.Close()
+		return fmt.Errorf("relay media runtime initialization: %w", err)
 	}
 
 	perfmetrics.Init()

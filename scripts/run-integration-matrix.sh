@@ -22,11 +22,11 @@ fi
 
 cleanup() {
   docker compose -f "$compose_file" down --volumes --remove-orphans
-  docker image rm llmrouter-test-gateway:local >/dev/null 2>&1 || true
+  docker image rm llmrouter-test-gateway:local llmrouter-test-minio:local llmrouter-test-mc:local >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
 
-docker compose -f "$compose_file" build gateway-a
+docker compose --parallel 1 -f "$compose_file" build gateway-a minio minio-init
 if ! docker compose -f "$compose_file" up --detach --no-build --wait; then
   docker compose -f "$compose_file" ps --all || true
   docker compose -f "$compose_file" logs --no-color || true

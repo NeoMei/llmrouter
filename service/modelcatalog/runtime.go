@@ -21,6 +21,7 @@ type RuntimeContext struct {
 // RuntimeChannel is the non-secret channel state needed by the catalog. Keys
 // are intentionally absent; the management API must never expose them.
 type RuntimeChannel struct {
+	Type         int
 	ID           int
 	Enabled      bool
 	ModelMapping string
@@ -93,6 +94,13 @@ func AssembleRuntimeCatalog(
 		}
 		if !ok || !channel.Enabled {
 			continue
+		}
+		metadata, metadataErr := NormalizeModelCapabilities(routeByID[raw.RouteId].Metadata)
+		if metadataErr != nil {
+			return nil, metadataErr
+		}
+		if err := ValidateChannelOperations(metadata, channel.Type); err != nil {
+			return nil, err
 		}
 		upstream := applyModelMapping(channel.ModelMapping, strings.TrimSpace(raw.UpstreamModel))
 		if upstream == "" {

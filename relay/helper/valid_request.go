@@ -47,6 +47,8 @@ func GetAndValidateRequest(c *gin.Context, format types.RelayFormat) (request dt
 
 	case types.RelayFormatOpenAIImage:
 		request, err = GetAndValidOpenAIImageRequest(c, relayMode)
+	case types.RelayFormatMultimodalEmbedding:
+		request, err = GetAndValidateMultimodalEmbeddingRequest(c)
 	case types.RelayFormatEmbedding:
 		request, err = GetAndValidateEmbeddingRequest(c, relayMode)
 	case types.RelayFormatRerank:
@@ -57,6 +59,9 @@ func GetAndValidateRequest(c *gin.Context, format types.RelayFormat) (request dt
 		request = &dto.BaseRequest{}
 	default:
 		return nil, fmt.Errorf("unsupported relay format: %s", format)
+	}
+	if err == nil {
+		_, err = InspectRequestMedia(request)
 	}
 	return request, err
 }
@@ -108,6 +113,17 @@ func GetAndValidateEmbeddingRequest(c *gin.Context, relayMode int) (*dto.Embeddi
 		return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
 
+	if embeddingRequest == nil {
+		return nil, fmt.Errorf("request is empty")
+	}
+	if relayMode == relayconstant.RelayModeEmbeddings && embeddingRequest.Dimensions != nil && (*embeddingRequest.Dimensions <= 0 || *embeddingRequest.Dimensions > dto.MaxEmbeddingDimensions) {
+		return nil, fmt.Errorf("dimensions must be between 1 and %d", dto.MaxEmbeddingDimensions)
+	}
+	if relayMode == relayconstant.RelayModeEmbeddings {
+		if _, err := embeddingRequest.InputCount(); err != nil {
+			return nil, err
+		}
+	}
 	if embeddingRequest.Input == nil {
 		return nil, fmt.Errorf("input is empty")
 	}

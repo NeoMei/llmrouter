@@ -78,6 +78,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	}
 	tik := time.Now()
 	var unsupportedTestChannelTypes = []int{
+		constant.ChannelTypePaddleOCR,
 		constant.ChannelTypeMidjourney,
 		constant.ChannelTypeMidjourneyPlus,
 		constant.ChannelTypeSunoAPI,
@@ -846,6 +847,15 @@ func TestChannel(c *gin.Context) {
 	testModel := c.Query("model")
 	endpointType := c.Query("endpoint_type")
 	isStream, _ := strconv.ParseBool(c.Query("stream"))
+	// Native OCR jobs cannot be checked by the generic model probe.
+	if channel.Type == constant.ChannelTypePaddleOCR {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": fmt.Sprintf("%s channel test is not supported", constant.GetChannelTypeName(channel.Type)),
+			"time":    0.0,
+		})
+		return
+	}
 	testUserID, err := resolveChannelTestUserID(c)
 	if err != nil {
 		common.ApiError(c, err)
@@ -918,7 +928,7 @@ func performChannelTests(ctx context.Context, channels []*model.Channel, testUse
 		if report != nil {
 			report(index, total) // channels completed before this one
 		}
-		if channel.Status == common.ChannelStatusManuallyDisabled {
+		if channel.Status == common.ChannelStatusManuallyDisabled || channel.Type == constant.ChannelTypePaddleOCR {
 			continue
 		}
 		isChannelEnabled := channel.Status == common.ChannelStatusEnabled

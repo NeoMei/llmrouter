@@ -24,6 +24,7 @@ import (
 type textQuotaSummary struct {
 	PromptTokens             int
 	CompletionTokens         int
+	NativeImages             int
 	TotalTokens              int
 	CacheTokens              int
 	CacheCreationTokens      int
@@ -60,7 +61,7 @@ type textQuotaSummary struct {
 // hasBillableUsage includes Claude cache tokens, which are reported separately
 // from ordinary input/output counts, and separately charged tool calls.
 func (s *textQuotaSummary) hasBillableUsage() bool {
-	return s.TotalTokens > 0 ||
+	return s.NativeImages > 0 || s.TotalTokens > 0 ||
 		(s.IsClaudeUsageSemantic && (s.CacheTokens > 0 || s.CacheCreationTokens > 0 || s.CacheCreationTokens5m > 0 || s.CacheCreationTokens1h > 0)) ||
 		!s.ToolCallSurchargeQuota.IsZero()
 }
@@ -215,6 +216,9 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	summary.PromptTokens = usage.PromptTokens
 	summary.CompletionTokens = usage.CompletionTokens
 	summary.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	if relayInfo.ChannelMeta != nil && relayInfo.NativeUsageImages != nil {
+		summary.NativeImages = *relayInfo.NativeUsageImages
+	}
 	summary.CacheTokens = usage.PromptTokensDetails.CachedTokens
 	summary.CacheCreationTokens = usage.PromptTokensDetails.CacheCreationTokensTotal()
 	summary.CacheCreationTokens5m = usage.ClaudeCacheCreation5mTokens
@@ -256,7 +260,9 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
 
 	ratio := dModelRatio.Mul(dGroupRatio)
-	summary.ToolCallSurchargeQuota = calculateTextToolCallSurcharge(ctx, relayInfo, &summary)
+	if relayInfo.RelayFormat != types.RelayFormatMultimodalEmbedding {
+		summary.ToolCallSurchargeQuota = calculateTextToolCallSurcharge(ctx, relayInfo, &summary)
+	}
 
 	var audioInputQuota decimal.Decimal
 	if !relayInfo.PriceData.UsePrice {
@@ -333,7 +339,7 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		noteQuotaClamp(relayInfo, clamp)
 	}
 
-	if !summary.hasBillableUsage() {
+	if !summary.hasBillableUsage() && !(relayInfo.RelayFormat == types.RelayFormatMultimodalEmbedding && relayInfo.PriceData.UsePrice) {
 		summary.Quota = 0
 	} else if !ratio.IsZero() && summary.Quota == 0 {
 		summary.Quota = 1
@@ -399,7 +405,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		extraContent = append(extraContent, fmt.Sprintf("Image Generation Call 花费 %s", decimal.NewFromFloat(summary.ImageGenerationCallPrice).Mul(decimal.NewFromFloat(summary.GroupRatio)).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).String()))
 	}
 
-	if !summary.hasBillableUsage() {
+	if !summary.hasBillableUsage() && !(relayInfo.RelayFormat == types.RelayFormatMultimodalEmbedding && relayInfo.ActualUsageValidated) {
 		extraContent = append(extraContent, "上游没有返回计费信息，无法扣费（可能是上游超时）")
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
 	} else {
@@ -435,6 +441,19 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	} else {
 		other = GenerateTextOtherInfo(ctx, relayInfo, summary.ModelRatio, summary.GroupRatio, summary.CompletionRatio, summary.CacheTokens, summary.CacheRatio, summary.ModelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
 	}
+	if relayInfo.ChannelMeta != nil && relayInfo.NativeUsageImages != nil {
+		other["native_usage_unit"] = "images"
+		other["native_usage_images"] = *relayInfo.NativeUsageImages
+		other["native_pricing"] = "configured_per_image"
+	}
+	if relayInfo.RelayFormat == types.RelayFormatMultimodalEmbedding {
+		other["native_usage_unit"] = "text_and_visual_input_tokens"
+		if relayInfo.PriceData.UsePrice {
+			other["native_pricing"] = "configured_per_request"
+		} else {
+			other["native_pricing"] = "configured_text_visual_ratios"
+		}
+	}
 	appendUsageBillingPathForLog(other, common.GetContextKeyBool(ctx, constant.ContextKeyLocalCountTokens), originUsage)
 	if adminRejectReason != "" {
 		other["reject_reason"] = adminRejectReason
@@ -442,7 +461,11 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if summary.ImageTokens != 0 {
 		other["image"] = true
 		other["image_ratio"] = summary.ImageRatio
-		other["image_output"] = summary.ImageTokens
+		if relayInfo.RelayFormat == types.RelayFormatMultimodalEmbedding {
+			other["visual_input"] = summary.ImageTokens
+		} else {
+			other["image_output"] = summary.ImageTokens
+		}
 	}
 	if summary.WebSearchCallCount > 0 {
 		other["web_search"] = true

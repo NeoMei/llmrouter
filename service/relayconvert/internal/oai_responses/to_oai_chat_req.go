@@ -263,20 +263,28 @@ func responsesContentPartsToChatContent(parts []any) (any, error) {
 				"file": responsesFilePartToChatFile(part),
 			})
 		case "input_audio":
+			if _, data := part["data"]; data {
+				if _, url := part["audio_url"]; url {
+					return nil, fmt.Errorf("Responses audio data and audio_url are mutually exclusive")
+				}
+			}
+			if _, multichannel := part["use_multichannel"]; multichannel {
+				return nil, fmt.Errorf("Responses multichannel audio cannot be represented in Chat")
+			}
 			onlyText = false
 			chatParts = append(chatParts, map[string]any{
 				"type":        dto.ContentTypeInputAudio,
-				"input_audio": responsesPartPayload(part, "input_audio"),
+				"input_audio": responsesAudioPartToChat(part),
 			})
 		case "input_video":
 			onlyText = false
-			chatParts = append(chatParts, map[string]any{
-				"type":      dto.ContentTypeVideoUrl,
-				"video_url": responsesVideoPartToChatVideoURL(part),
-			})
+			videoPart := map[string]any{"type": dto.ContentTypeVideoUrl, "video_url": responsesVideoPartToChatVideoURL(part)}
+			if fps, exists := part["fps"]; exists {
+				videoPart["fps"] = fps
+			}
+			chatParts = append(chatParts, videoPart)
 		default:
-			onlyText = false
-			chatParts = append(chatParts, part)
+			return nil, fmt.Errorf("unsupported Responses content type %q", part["type"])
 		}
 	}
 
@@ -437,6 +445,11 @@ func RequestTextToChatResponseFormat(raw json.RawMessage) (*dto.ResponseFormat, 
 
 func responsesImagePartToChatImageURL(part map[string]any) any {
 	if imageURL, ok := part["image_url"]; ok {
+		if detail, exists := part["detail"]; exists {
+			if url, ok := imageURL.(string); ok {
+				return map[string]any{"url": url, "detail": detail}
+			}
+		}
 		return imageURL
 	}
 	imageURL := map[string]any{}
@@ -469,15 +482,10 @@ func responsesFilePartToChatFile(part map[string]any) any {
 
 func responsesVideoPartToChatVideoURL(part map[string]any) any {
 	if videoURL, ok := part["video_url"]; ok {
-		if videoURLMap, ok := videoURL.(map[string]any); ok {
-			if url := common.Interface2String(videoURLMap["url"]); url != "" {
-				return url
-			}
-		}
 		return videoURL
 	}
 	if url := common.Interface2String(part["url"]); url != "" {
-		return url
+		return part
 	}
 	return responsesPartPayload(part, "video_url")
 }
@@ -573,4 +581,20 @@ func JSONString(raw json.RawMessage) (string, error) {
 
 func RawJSONPresent(raw json.RawMessage) bool {
 	return rawJSONPresent(raw)
+}
+
+func responsesAudioPartToChat(part map[string]any) any {
+	if audio, exists := part["input_audio"]; exists {
+		return audio
+	}
+	audio := map[string]any{}
+	for _, key := range []string{"data", "format"} {
+		if value, ok := part[key]; ok {
+			audio[key] = value
+		}
+	}
+	if remote, ok := part["audio_url"]; ok {
+		audio["data"] = remote
+	}
+	return audio
 }

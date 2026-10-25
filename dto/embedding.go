@@ -1,6 +1,8 @@
 package dto
 
 import (
+	"fmt"
+	"math"
 	"strings"
 
 	"github.com/QuantumNous/new-api/types"
@@ -85,4 +87,92 @@ type EmbeddingResponse struct {
 	Data   []EmbeddingResponseItem `json:"data"`
 	Model  string                  `json:"model"`
 	Usage  `json:"usage"`
+}
+
+// InputCount validates the OpenAI embedding input union without silently
+// dropping malformed batch members. Token arrays retain their legacy wire form.
+func (r *EmbeddingRequest) InputCount() (int, error) {
+	switch input := r.Input.(type) {
+	case string:
+		if input == "" {
+			return 0, fmt.Errorf("input is empty")
+		}
+		return 1, nil
+	case []string:
+		if len(input) == 0 {
+			return 0, fmt.Errorf("input is empty")
+		}
+		for _, s := range input {
+			if s == "" {
+				return 0, fmt.Errorf("input is empty")
+			}
+		}
+		return len(input), nil
+	case []int:
+		if len(input) == 0 {
+			return 0, fmt.Errorf("input is empty")
+		}
+		for _, n := range input {
+			if n < 0 {
+				return 0, fmt.Errorf("invalid token input")
+			}
+		}
+		return 1, nil
+	case [][]int:
+		if len(input) == 0 {
+			return 0, fmt.Errorf("input is empty")
+		}
+		for _, tokens := range input {
+			if _, err := (&EmbeddingRequest{Input: tokens}).InputCount(); err != nil {
+				return 0, err
+			}
+		}
+		return len(input), nil
+	case []any:
+		if len(input) == 0 {
+			return 0, fmt.Errorf("input is empty")
+		}
+		if _, ok := input[0].(string); ok {
+			for _, v := range input {
+				s, ok := v.(string)
+				if !ok || s == "" {
+					return 0, fmt.Errorf("invalid text embedding batch")
+				}
+			}
+			return len(input), nil
+		}
+		if _, ok := input[0].([]any); ok {
+			for _, v := range input {
+				tokens, ok := v.([]any)
+				if !ok || len(tokens) == 0 {
+					return 0, fmt.Errorf("invalid token embedding batch")
+				}
+				for _, token := range tokens {
+					if !validEmbeddingToken(token) {
+						return 0, fmt.Errorf("invalid token input")
+					}
+				}
+			}
+			return len(input), nil
+		}
+		for _, v := range input {
+			if !validEmbeddingToken(v) {
+				return 0, fmt.Errorf("invalid token input")
+			}
+		}
+		return 1, nil
+	default:
+		return 0, fmt.Errorf("unsupported embedding input shape")
+	}
+}
+
+func validEmbeddingToken(v any) bool {
+	switch n := v.(type) {
+	case float64:
+		return n >= 0 && n <= math.MaxInt32 && math.Trunc(n) == n
+	case int:
+		return n >= 0 && int64(n) <= math.MaxInt32
+	default:
+		return false
+	}
 }

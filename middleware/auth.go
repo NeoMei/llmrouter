@@ -362,8 +362,19 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 	}
 }
 
-func TokenAuth() func(c *gin.Context) {
+func TokenAuth() func(c *gin.Context) { return tokenAuth(false) }
+
+// TokenAuthOwnedJobRead keeps the full relay identity, origin, IP, user and group
+// checks, but permits a quota-exhausted token to retrieve its already paid job.
+// Only GET may use this policy; expired, disabled and deleted tokens still fail.
+func TokenAuthOwnedJobRead() func(c *gin.Context) { return tokenAuth(true) }
+
+func tokenAuth(ownedJobRead bool) func(c *gin.Context) {
 	return func(c *gin.Context) {
+		if ownedJobRead && c.Request.Method != http.MethodGet {
+			abortWithOpenAiMessage(c, http.StatusMethodNotAllowed, "owned job authentication is read-only")
+			return
+		}
 		// 先检测是否为ws
 		if c.Request.Header.Get("Sec-WebSocket-Protocol") != "" {
 			// Sec-WebSocket-Protocol: realtime, openai-insecure-api-key.sk-xxx, openai-beta.realtime-v1
@@ -418,7 +429,23 @@ func TokenAuth() func(c *gin.Context) {
 			parts = strings.Split(key, "-")
 			key = parts[0]
 		}
-		token, err := model.ValidateUserToken(key)
+		var token *model.Token
+		var err error
+		if ownedJobRead {
+			// Read current SQL identity instead of a possibly stale credential cache.
+			token, err = model.GetTokenByKey(key, true)
+			if err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					err = model.ErrTokenInvalid
+				} else {
+					err = fmt.Errorf("%w: %v", model.ErrDatabase, err)
+				}
+			} else if (token.Status != common.TokenStatusEnabled && token.Status != common.TokenStatusExhausted) || (token.ExpiredTime != -1 && token.ExpiredTime < common.GetTimestamp()) {
+				err = model.ErrTokenInvalid
+			}
+		} else {
+			token, err = model.ValidateUserToken(key)
+		}
 		if token != nil {
 			id := c.GetInt("id")
 			if id == 0 {

@@ -300,12 +300,13 @@ type Message struct {
 }
 
 type MediaContent struct {
-	Type       string `json:"type"`
-	Text       string `json:"text,omitempty"`
-	ImageUrl   any    `json:"image_url,omitempty"`
-	InputAudio any    `json:"input_audio,omitempty"`
-	File       any    `json:"file,omitempty"`
-	VideoUrl   any    `json:"video_url,omitempty"`
+	FPS        *float64 `json:"fps,omitempty"`
+	Type       string   `json:"type"`
+	Text       string   `json:"text,omitempty"`
+	ImageUrl   any      `json:"image_url,omitempty"`
+	InputAudio any      `json:"input_audio,omitempty"`
+	File       any      `json:"file,omitempty"`
+	VideoUrl   any      `json:"video_url,omitempty"`
 	// OpenRouter Params
 	CacheControl json.RawMessage `json:"cache_control,omitempty"`
 }
@@ -361,13 +362,18 @@ func (m *MediaContent) GetFile() *MessageFile {
 }
 
 func (m *MediaContent) GetVideoUrl() *MessageVideoUrl {
+	if url, ok := m.VideoUrl.(string); ok {
+		return &MessageVideoUrl{Url: url}
+	}
 	if m.VideoUrl != nil {
 		if _, ok := m.VideoUrl.(*MessageVideoUrl); ok {
 			return m.VideoUrl.(*MessageVideoUrl)
 		}
 		if itemMap, ok := m.VideoUrl.(map[string]any); ok {
-			out := &MessageVideoUrl{
-				Url: common.Interface2String(itemMap["url"]),
+			out := &MessageVideoUrl{}
+			data, err := common.Marshal(itemMap)
+			if err != nil || common.Unmarshal(data, out) != nil {
+				return nil
 			}
 			return out
 		}
@@ -421,7 +427,7 @@ func (m *MessageImageUrl) IsRemoteImage() bool {
 
 type MessageInputAudio struct {
 	Data   string `json:"data"` //base64
-	Format string `json:"format"`
+	Format string `json:"format,omitempty"`
 }
 
 type MessageFile struct {
@@ -431,7 +437,8 @@ type MessageFile struct {
 }
 
 type MessageVideoUrl struct {
-	Url string `json:"url"`
+	Url string   `json:"url"`
+	FPS *float64 `json:"fps,omitempty"`
 }
 
 const (
@@ -605,8 +612,8 @@ func (m *Message) ParseContent() []MediaContent {
 		case ContentTypeInputAudio:
 			if audioData, ok := contentItem["input_audio"].(map[string]interface{}); ok {
 				data, ok1 := audioData["data"].(string)
-				format, ok2 := audioData["format"].(string)
-				if ok1 && ok2 {
+				format, _ := audioData["format"].(string)
+				if ok1 {
 					temp := &MessageInputAudio{
 						Data:   data,
 						Format: format,
@@ -642,13 +649,15 @@ func (m *Message) ParseContent() []MediaContent {
 				}
 			}
 		case ContentTypeVideoUrl:
-			if videoUrl, ok := contentItem["video_url"].(string); ok {
-				contentList = append(contentList, MediaContent{
-					Type: ContentTypeVideoUrl,
-					VideoUrl: &MessageVideoUrl{
-						Url: videoUrl,
-					},
-				})
+			media := MediaContent{Type: ContentTypeVideoUrl, VideoUrl: contentItem["video_url"]}
+			if value, exists := contentItem["fps"]; exists {
+				if fps, ok := value.(float64); ok {
+					media.FPS = &fps
+				}
+			}
+			if video := media.GetVideoUrl(); video != nil {
+				media.VideoUrl = video
+				contentList = append(contentList, media)
 			}
 		}
 	}
@@ -843,8 +852,9 @@ type OpenAIResponsesRequest struct {
 	Model   string          `json:"model"`
 	Input   json.RawMessage `json:"input,omitempty"`
 	Include json.RawMessage `json:"include,omitempty"`
-	// 在后台运行推理，暂时还不支持依赖的接口
-	// Background         json.RawMessage `json:"background,omitempty"`
+	// Background requests create asynchronous Responses work. Preserve explicit
+	// false separately from omission for admission and upstream serialization.
+	Background        *bool           `json:"background,omitempty"`
 	Conversation      json.RawMessage `json:"conversation,omitempty"`
 	ContextManagement json.RawMessage `json:"context_management,omitempty"`
 	Instructions      json.RawMessage `json:"instructions,omitempty"`

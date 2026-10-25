@@ -10,6 +10,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/crypto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/profile"
@@ -107,39 +108,9 @@ func TestStripBracketSuffix(t *testing.T) {
 	}
 }
 
-func TestRebind(t *testing.T) {
-	orig := common.MainDatabaseType()
-	t.Cleanup(func() { common.SetMainDatabaseType(orig) })
-
-	query := `SELECT * FROM t WHERE a = ? AND b = ?`
-
-	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
-	assert.Equal(t, query, rebind(query))
-
-	common.SetMainDatabaseType(common.DatabaseTypeMySQL)
-	assert.Equal(t, query, rebind(query))
-
-	common.SetMainDatabaseType(common.DatabaseTypePostgreSQL)
-	assert.Equal(t, `SELECT * FROM t WHERE a = $1 AND b = $2`, rebind(query))
-}
-
-func TestLockClause(t *testing.T) {
-	orig := common.MainDatabaseType()
-	t.Cleanup(func() { common.SetMainDatabaseType(orig) })
-
-	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
-	assert.Equal(t, "", lockClause())
-
-	common.SetMainDatabaseType(common.DatabaseTypePostgreSQL)
-	assert.Equal(t, " FOR UPDATE SKIP LOCKED", lockClause())
-
-	common.SetMainDatabaseType(common.DatabaseTypeMySQL)
-	assert.Equal(t, " FOR UPDATE SKIP LOCKED", lockClause())
-}
-
 // ─── keypool with in-memory SQLite ───
 
-func setupTestDB(t *testing.T) (*sql.DB, *crypto.AESGCM) {
+func setupTestDB(t *testing.T) (*sql.DB, *gorm.DB, *crypto.AESGCM) {
 	t.Helper()
 	gormDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
@@ -170,7 +141,8 @@ func setupTestDB(t *testing.T) (*sql.DB, *crypto.AESGCM) {
 	require.NoError(t, err)
 
 	t.Cleanup(func() { db.Close() })
-	return db, c
+	require.NoError(t, gormDB.AutoMigrate(&model.UpstreamAccountPool{}, &model.UpstreamAccountMember{}, &model.UpstreamAccountState{}))
+	return db, gormDB, c
 }
 
 func insertPlatformKey(t *testing.T, db *sql.DB, c *crypto.AESGCM, profileID int, status string, lastUsed *time.Time) int {
@@ -191,9 +163,9 @@ func TestSelectPlatformKeyPicksLeastRecentlyUsed(t *testing.T) {
 	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	t.Cleanup(func() { common.SetMainDatabaseType(orig) })
 
-	db, c := setupTestDB(t)
+	db, gormDB, c := setupTestDB(t)
 	ctx := context.Background()
-	ks := NewKeySelector(db, c)
+	ks := NewKeySelector(gormDB, c)
 
 	old := time.Now().Add(-2 * time.Hour)
 	recent := time.Now().Add(-5 * time.Minute)
@@ -212,9 +184,9 @@ func TestSelectPlatformKeySkipsCooldown(t *testing.T) {
 	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	t.Cleanup(func() { common.SetMainDatabaseType(orig) })
 
-	db, c := setupTestDB(t)
+	db, gormDB, c := setupTestDB(t)
 	ctx := context.Background()
-	ks := NewKeySelector(db, c)
+	ks := NewKeySelector(gormDB, c)
 
 	// active key with future cooldown → skipped
 	_, err := db.Exec(`UPDATE provider_key_pool SET cooldown_until = ? WHERE id = ?`,
@@ -233,9 +205,9 @@ func TestSelectPlatformKeySkipsNonActive(t *testing.T) {
 	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	t.Cleanup(func() { common.SetMainDatabaseType(orig) })
 
-	db, c := setupTestDB(t)
+	db, gormDB, c := setupTestDB(t)
 	ctx := context.Background()
-	ks := NewKeySelector(db, c)
+	ks := NewKeySelector(gormDB, c)
 
 	insertPlatformKey(t, db, c, 3, "disabled", nil)
 
@@ -243,51 +215,14 @@ func TestSelectPlatformKeySkipsNonActive(t *testing.T) {
 	require.Error(t, err, "no active key should produce error")
 }
 
-func TestMarkCooldown(t *testing.T) {
-	orig := common.MainDatabaseType()
-	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
-	t.Cleanup(func() { common.SetMainDatabaseType(orig) })
-
-	db, c := setupTestDB(t)
-	ctx := context.Background()
-	ks := NewKeySelector(db, c)
-
-	id := insertPlatformKey(t, db, c, 4, "active", nil)
-	ks.MarkCooldown(ctx, id, 5*time.Minute)
-
-	var status string
-	var cooldown sql.NullTime
-	require.NoError(t, db.QueryRow(`SELECT status, cooldown_until FROM provider_key_pool WHERE id = ?`, id).Scan(&status, &cooldown))
-	assert.Equal(t, "active", status) // cooldown only sets cooldown_until, not status
-	assert.True(t, cooldown.Valid && cooldown.Time.After(time.Now()))
-}
-
-func TestMarkDisabled(t *testing.T) {
-	orig := common.MainDatabaseType()
-	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
-	t.Cleanup(func() { common.SetMainDatabaseType(orig) })
-
-	db, c := setupTestDB(t)
-	ctx := context.Background()
-	ks := NewKeySelector(db, c)
-
-	id := insertPlatformKey(t, db, c, 5, "active", nil)
-	ks.MarkDisabled(ctx, id, "auth failed: 401")
-
-	var status, lastErr string
-	require.NoError(t, db.QueryRow(`SELECT status, last_error FROM provider_key_pool WHERE id = ?`, id).Scan(&status, &lastErr))
-	assert.Equal(t, "disabled", status)
-	assert.Equal(t, "auth failed: 401", lastErr)
-}
-
 func TestGetBYOKKey(t *testing.T) {
 	orig := common.MainDatabaseType()
 	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	t.Cleanup(func() { common.SetMainDatabaseType(orig) })
 
-	db, c := setupTestDB(t)
+	db, gormDB, c := setupTestDB(t)
 	ctx := context.Background()
-	ks := NewKeySelector(db, c)
+	ks := NewKeySelector(gormDB, c)
 
 	enc, err := c.Encrypt([]byte("sk-byok-user-key"))
 	require.NoError(t, err)
@@ -356,4 +291,83 @@ func TestGetRequestURL(t *testing.T) {
 		assert.Equal(t, "https://dashscope.aliyuncs.com/chat/completions", url)
 		assert.Equal(t, "qwen-max", info.UpstreamModelName, "bracket suffix should be stripped from info")
 	})
+}
+
+func TestPlatformCredentialRefreshKeepsOwnerAndIsolatesOldOutcome(t *testing.T) {
+	db, gormDB, crypto := setupTestDB(t)
+	id := insertPlatformKey(t, db, crypto, 33, "active", nil)
+	selector := NewKeySelector(gormDB, crypto)
+	ctx := context.Background()
+	refs, _, owners, err := selector.PlatformAccounts(ctx, 33, 59)
+	require.NoError(t, err)
+	require.Len(t, refs, 1)
+	owner := owners[id]
+	require.NoError(t, model.SetUpstreamAccountQuotaGroup(ctx, gormDB, owner, "quota:33", time.Now()))
+	selected, _, err := selector.SelectPlatformAccount(ctx, 33, 59, model.UpstreamAccountScope{Operation: "chat.completions.create", Model: "m"}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "quota:33", selected.Ref.QuotaGroup)
+	encrypted, err := crypto.Encrypt([]byte("refreshed-key"))
+	require.NoError(t, err)
+	require.NoError(t, gormDB.Model(&model.ProviderKeyPool{}).Where("id = ?", id).Update("encrypted_key", encrypted).Error)
+	require.NoError(t, model.RecordUpstreamAccountFailure(ctx, gormDB, selected, model.UpstreamAccountScope{}, model.UpstreamAccountFailure{Kind: model.UpstreamAccountInvalid, Reason: "invalid_credential"}, time.Now()))
+	refreshed, key, err := selector.SelectPlatformAccount(ctx, 33, 59, model.UpstreamAccountScope{}, nil)
+	require.NoError(t, err)
+	assert.NotEqual(t, selected.Ref.MemberID, refreshed.Ref.MemberID)
+	assert.Equal(t, "quota:33", refreshed.Ref.QuotaGroup)
+	assert.Equal(t, "refreshed-key", key)
+	owned, err := selector.ResolveAccountKey(ctx, owner)
+	require.NoError(t, err)
+	assert.Equal(t, "refreshed-key", owned)
+	owner.KeyIndex++
+	_, err = selector.ResolveAccountKey(ctx, owner)
+	require.Error(t, err)
+}
+
+func TestBYOKDisabledOrUnreadableFailsClosed(t *testing.T) {
+	db, gormDB, crypto := setupTestDB(t)
+	selector := NewKeySelector(gormDB, crypto)
+	_, err := db.Exec(`INSERT INTO user_provider_keys(user_id,profile_id,encrypted_key,status) VALUES(1,2,?,'disabled')`, []byte("bad"))
+	require.NoError(t, err)
+	_, err = selector.GetBYOKKey(context.Background(), 1, 2)
+	require.Error(t, err)
+	_, err = db.Exec(`UPDATE user_provider_keys SET status='active' WHERE user_id=1`)
+	require.NoError(t, err)
+	_, err = selector.GetBYOKKey(context.Background(), 1, 2)
+	require.Error(t, err)
+}
+
+func TestPlatformLegacyCooldownProvidesRetryTimeAndOwnerRemainsManageable(t *testing.T) {
+	db, gormDB, cipher := setupTestDB(t)
+	id := insertPlatformKey(t, db, cipher, 44, "active", nil)
+	retryAt := time.Now().Add(2 * time.Minute)
+	require.NoError(t, gormDB.Model(&model.ProviderKeyPool{}).Where("id = ?", id).Update("cooldown_until", retryAt).Error)
+	selector := NewKeySelector(gormDB, cipher)
+	_, _, err := selector.SelectPlatformAccount(context.Background(), 44, 59, model.UpstreamAccountScope{}, nil)
+	var unavailable *model.UpstreamAccountUnavailable
+	require.ErrorAs(t, err, &unavailable)
+	assert.WithinDuration(t, retryAt, unavailable.RetryAt, time.Millisecond)
+	owner, err := selector.ResolvePlatformOwner(context.Background(), 44, 59, id)
+	require.NoError(t, err)
+	assert.NotEmpty(t, owner.MemberID)
+}
+
+func TestPlatformSelectorInstancesShareHealth(t *testing.T) {
+	db, gormDB, cipher := setupTestDB(t)
+	firstID := insertPlatformKey(t, db, cipher, 55, "active", nil)
+	secondID := insertPlatformKey(t, db, cipher, 55, "active", nil)
+	first := NewKeySelector(gormDB, cipher)
+	second := NewKeySelector(gormDB, cipher)
+	scope := model.UpstreamAccountScope{Operation: "chat.completions.create", Model: "m"}
+	sent, _, err := first.SelectPlatformAccount(context.Background(), 55, 59, scope, nil)
+	require.NoError(t, err)
+	assert.Equal(t, firstID, sent.KeyIndex)
+	require.NoError(t, model.RecordUpstreamAccountFailure(context.Background(), gormDB, sent, scope, model.UpstreamAccountFailure{Kind: model.UpstreamAccountCooldown, Reason: "rate_limit", RetryAt: time.Now().Add(time.Minute)}, time.Now()))
+	next, _, err := second.SelectPlatformAccount(context.Background(), 55, 59, scope, nil)
+	require.NoError(t, err)
+	assert.Equal(t, secondID, next.KeyIndex)
+	owner, err := second.ResolvePlatformOwner(context.Background(), 55, 59, secondID)
+	require.NoError(t, err)
+	require.NoError(t, model.SetUpstreamAccountPaused(context.Background(), gormDB, owner, true, time.Now()))
+	_, _, err = first.SelectPlatformAccount(context.Background(), 55, 59, scope, nil)
+	require.Error(t, err)
 }

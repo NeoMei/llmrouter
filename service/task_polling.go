@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -275,6 +276,32 @@ func updateSunoTasks(ctx context.Context, channelId int, taskIds []string, taskM
 		}
 		return err
 	}
+	// Persisted ownership survives channel mode changes. Unowned legacy
+	// single-key tasks still resolve locally without requiring pool tables.
+	groups := map[string][]string{}
+	for _, taskID := range taskIds {
+		task := taskM[taskID]
+		if task == nil {
+			return fmt.Errorf("task owner missing")
+		}
+		key, err := model.TaskAccountKey(ctx, model.DB, ch, task)
+		if err != nil {
+			return err
+		}
+		groups[key] = append(groups[key], taskID)
+	}
+	for key, ids := range groups {
+		account := *ch
+		account.Key = key
+		if err := updateSunoAccountTasks(ctx, &account, ids, taskM); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func updateSunoAccountTasks(ctx context.Context, ch *model.Channel, taskIds []string, taskM map[string]*model.Task) error {
+	channelId := ch.Id
 	adaptor := GetTaskAdaptorFunc(constant.TaskPlatformSuno)
 	if adaptor == nil {
 		return errors.New("adaptor not found")
@@ -313,7 +340,7 @@ func updateSunoTasks(ctx context.Context, channelId int, taskIds []string, taskM
 			return ctx.Err()
 		}
 		task := taskM[responseItem.TaskID]
-		if task == nil {
+		if task == nil || !slices.Contains(taskIds, responseItem.TaskID) {
 			logger.LogWarn(ctx, fmt.Sprintf("Suno task response ignored: unknown task_id=%s", responseItem.TaskID))
 			continue
 		}
@@ -455,7 +482,9 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 	info.ChannelMeta = &relaycommon.ChannelMeta{
 		ChannelBaseUrl: cacheGetChannel.GetBaseURL(),
 	}
-	info.ApiKey = cacheGetChannel.Key
+	if !cacheGetChannel.ChannelInfo.IsMultiKey {
+		info.ApiKey = cacheGetChannel.Key
+	}
 	adaptor.Init(info)
 	disablePollingSleep := cacheGetChannel.GetOtherSettings().DisableTaskPollingSleep
 	for i, taskId := range taskIds {
@@ -494,11 +523,9 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		logger.LogError(ctx, fmt.Sprintf("Task %s not found in taskM", taskId))
 		return fmt.Errorf("task %s not found", taskId)
 	}
-	key := ch.Key
-
-	privateData := task.PrivateData
-	if privateData.Key != "" {
-		key = privateData.Key
+	key, err := model.TaskAccountKey(ctx, model.DB, ch, task)
+	if err != nil {
+		return err
 	}
 	resp, err := adaptor.FetchTask(baseURL, key, map[string]any{
 		"task_id": task.GetUpstreamTaskID(),

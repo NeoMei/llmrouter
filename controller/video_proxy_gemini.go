@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strconv"
@@ -206,22 +207,14 @@ func isTaskProxyContentURL(url string, taskID string) bool {
 }
 
 func getVertexTaskKey(channel *model.Channel, task *model.Task) string {
-	if task != nil {
-		if key := strings.TrimSpace(task.PrivateData.Key); key != "" {
-			return key
-		}
-	}
-	if channel == nil {
+	if channel == nil || task == nil {
 		return ""
 	}
-	keys := channel.GetKeys()
-	for _, key := range keys {
-		key = strings.TrimSpace(key)
-		if key != "" {
-			return key
-		}
+	key, err := model.TaskAccountKey(context.Background(), model.DB, channel, task)
+	if err != nil {
+		return ""
 	}
-	return strings.TrimSpace(channel.Key)
+	return key
 }
 
 func extractVertexVideoURLFromTaskData(task *model.Task) string {

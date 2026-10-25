@@ -36,6 +36,8 @@ import {
   type ClientModelRouteInput,
   type ClientModelTarget,
 } from './api'
+import { validateFixedSpace, readMetadata } from './metadata'
+import { MetadataEditor } from './metadata-editor'
 import {
   parsePreferredWires,
   serializePreferredWires,
@@ -140,6 +142,16 @@ export function ClientModelRoutesPage() {
     }
     if (form.enabled && !form.targets.some((target) => target.enabled)) {
       setError(t('An enabled route needs at least one enabled target'))
+      return
+    }
+
+    const metadataError = validateFixedSpace(
+      form.metadata || '',
+      form.targets,
+      routes.find((route) => route.id === form.id)?.metadata
+    )
+    if (metadataError) {
+      setError(t(metadataError))
       return
     }
 
@@ -324,17 +336,13 @@ export function ClientModelRoutesPage() {
                   })
                 }
               />
-              <label className='block text-sm'>
-                {t('Metadata (JSON)')}
-                <textarea
-                  className='mt-1 w-full rounded border p-2 font-mono text-xs'
-                  rows={2}
-                  value={form.metadata || ''}
-                  onChange={(event) =>
-                    setForm({ ...form, metadata: event.target.value })
-                  }
-                />
-              </label>
+              <MetadataEditor
+                value={form.metadata || ''}
+                onChange={(metadata) => setForm({ ...form, metadata })}
+                lockedSpace={hasFixedSpace(
+                  routes.find((route) => route.id === form.id)?.metadata
+                )}
+              />
 
               {form.targets.map((target, index) => {
                 const channel = channelsByID.get(target.channel_id)
@@ -487,6 +495,13 @@ export function ClientModelRoutesPage() {
                         ))}
                       </div>
                     </fieldset>
+                    <MetadataEditor
+                      target
+                      value={target.metadata || ''}
+                      onChange={(metadata) =>
+                        setTarget(form, setForm, index, { metadata })
+                      }
+                    />
                     <label className='flex items-center gap-2 text-sm'>
                       <Checkbox
                         checked={target.enabled}
@@ -624,5 +639,17 @@ function wireLabelKey(wire: WireProtocol): string {
       return 'OpenAI Chat'
     case 'anthropic':
       return 'Anthropic Messages'
+    case 'paddleocr_jobs':
+      return 'PaddleOCR Jobs'
+    case 'qwen_multimodal_embedding':
+      return 'Qwen Multimodal Embedding'
+  }
+}
+
+function hasFixedSpace(raw?: string): boolean {
+  try {
+    return !!readMetadata(raw || '').embedding_space
+  } catch {
+    return false
   }
 }

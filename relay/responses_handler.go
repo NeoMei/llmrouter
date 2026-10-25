@@ -149,7 +149,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	var requestBody io.Reader
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
 		toolpolicy.Set(c, requestPolicy)
-		body, size, getBody, closer, err := newResponsesPassthroughBody(c, request, info.RelayMode == relayconstant.RelayModeResponses)
+		body, size, getBody, closer, err := newResponsesPassthroughBody(c, request, info.RelayMode == relayconstant.RelayModeResponses, info.ModelRouteId > 0)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
@@ -235,7 +235,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		return nil
 	}
 
-	if strings.HasPrefix(info.OriginModelName, "gpt-4o-audio") {
+	if strings.HasPrefix(info.OriginModelName, "gpt-4o-audio") || (info.ChannelType == appconstant.ChannelTypeAli && info.UpstreamModelName == "qwen3.8-omni-flash" && info.ActualUsageValidated) {
 		service.PostAudioConsumeQuota(c, info, usageDto, "")
 	} else {
 		service.PostTextConsumeQuota(c, info, usageDto, nil)
@@ -249,7 +249,7 @@ func normalizeResponsesStore(request *dto.OpenAIResponsesRequest) {
 	}
 }
 
-func newResponsesPassthroughBody(c *gin.Context, request *dto.OpenAIResponsesRequest, normalizeStore bool) (
+func newResponsesPassthroughBody(c *gin.Context, request *dto.OpenAIResponsesRequest, normalizeStore bool, resolvedRoute bool) (
 	body io.Reader,
 	size int64,
 	getBody func() (io.ReadCloser, error),
@@ -272,7 +272,7 @@ func newResponsesPassthroughBody(c *gin.Context, request *dto.OpenAIResponsesReq
 	if closeErr != nil {
 		return nil, 0, nil, nil, closeErr
 	}
-	jsonData, err := patchResponsesPassthroughBody(rawRequest, request, normalizeStore)
+	jsonData, err := patchResponsesPassthroughBody(rawRequest, request, normalizeStore, resolvedRoute)
 	if err != nil {
 		return nil, 0, nil, nil, err
 	}
@@ -281,7 +281,7 @@ func newResponsesPassthroughBody(c *gin.Context, request *dto.OpenAIResponsesReq
 
 // patchResponsesPassthroughBody keeps pass-through extensions byte-precise at
 // the JSON value level while applying only router-owned Responses mutations.
-func patchResponsesPassthroughBody(rawRequest []byte, request *dto.OpenAIResponsesRequest, normalizeStore bool) ([]byte, error) {
+func patchResponsesPassthroughBody(rawRequest []byte, request *dto.OpenAIResponsesRequest, normalizeStore bool, resolvedRoute bool) ([]byte, error) {
 	if request == nil {
 		return nil, errors.New("prepared responses request is nil")
 	}
@@ -289,6 +289,16 @@ func patchResponsesPassthroughBody(rawRequest []byte, request *dto.OpenAIRespons
 	if err := common.Unmarshal(rawRequest, &payload); err != nil {
 		return nil, fmt.Errorf("invalid responses pass-through request: %w", err)
 	}
+	if resolvedRoute {
+		// The raw client alias cannot override the catalog's selected and mapped
+		// upstream identity. Preserve every unrelated raw extension value.
+		model, err := common.Marshal(request.Model)
+		if err != nil {
+			return nil, err
+		}
+		payload["model"] = model
+	}
+
 	if normalizeStore {
 		if _, exists := payload["store"]; !exists {
 			payload["store"] = json.RawMessage("false")

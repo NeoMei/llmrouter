@@ -12,12 +12,14 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/profile"
 	quirkpkg "github.com/QuantumNous/new-api/relay/quirk"
 	"github.com/QuantumNous/new-api/relay/toolpolicy"
+	"github.com/QuantumNous/new-api/service/accountpool"
 	"github.com/QuantumNous/new-api/service/relayconvert"
 	"github.com/QuantumNous/new-api/types"
 
@@ -128,34 +130,63 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *
 	ctx := c.Request.Context()
 	p, err := a.Loader.Get(ctx, info.UpstreamModelName)
 	if err != nil {
-		return nil // profile 加载失败时保留 inner 设置的默认 key
+		return err
 	}
 	profileID := p.ProfileID
 
-	// BYOK 优先
-	if byokKey, err := a.KeySel.GetBYOKKey(ctx, info.UserId, profileID); err == nil && byokKey != "" {
+	// BYOK ownership is sticky across attempts, including provider rejection.
+	byokKey, err := a.KeySel.GetBYOKKey(ctx, info.UserId, profileID)
+	if err != nil {
+		accountpool.State(c).Veto = true
+		return err
+	}
+	if byokKey != "" {
+		if c.GetBool("gateway_byok_sent") {
+			return fmt.Errorf("BYOK request already attempted")
+		}
+		accountpool.ResetSelection(c)
 		header.Set("Authorization", "Bearer "+byokKey)
 		c.Set("key_source", "byok")
+		c.Set("gateway_byok_sent", true)
 		return nil
 	}
-
-	// 平台 key
-	keyID, poolKey, err := a.KeySel.SelectPlatformKey(ctx, profileID)
+	scope := accountpool.RequestScope(c, info.UpstreamModelName)
+	state := accountpool.State(c)
+	refs, keys, owners, err := a.KeySel.PlatformAccounts(ctx, profileID, info.ChannelId)
 	if err != nil {
 		return err
 	}
-	header.Set("Authorization", "Bearer "+poolKey)
+	var selected model.UpstreamAccountSelection
+	prepared := false
+	if state.Selected != nil && !state.Excluded[state.Selected.Ref.MemberID] && state.Scope == scope {
+		for _, ref := range refs {
+			if ref.MemberID == state.Selected.Ref.MemberID {
+				selected = *state.Selected
+				prepared = true
+				break
+			}
+		}
+	}
+	if !prepared {
+		selected, err = model.SelectUpstreamAccount(ctx, a.KeySel.db, refs, scope, state.Excluded, time.Now())
+		if err != nil {
+			accountpool.SetUnavailableHeader(c, err)
+			return types.NewErrorWithStatusCode(err, types.ErrorCodeChannelNoAvailableKey, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+		}
+	}
+	accountpool.Prepare(c, a.KeySel.db, selected, scope)
+	state.Candidates = refs
+	owner := owners[selected.KeyIndex]
+	state.Owner = &owner
+	header.Set("Authorization", "Bearer "+keys[selected.KeyIndex])
 	c.Set("key_source", "platform")
-	c.Set("pool_key_id", keyID)
+	c.Set("pool_key_id", selected.KeyIndex)
 	return nil
 }
 
 // ─── 响应处理 ───
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
-	if resp.StatusCode >= 400 {
-		a.handleUpstreamError(c, resp)
-	}
 	// When we converted Responses→Chat for the upstream, the response comes back
 	// in Chat Completions format but the client expects Responses format.
 	// Route through the Chat→Responses conversion handler.
@@ -166,20 +197,6 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		return openai.OaiChatToResponsesHandler(c, info, resp)
 	}
 	return a.Inner.DoResponse(c, resp, info)
-}
-
-func (a *Adaptor) handleUpstreamError(c *gin.Context, resp *http.Response) {
-	if a.KeySel == nil || c.GetString("key_source") != "platform" {
-		return // BYOK 错误不归因到池
-	}
-	keyID := c.GetInt("pool_key_id")
-	ctx := c.Request.Context()
-	switch resp.StatusCode {
-	case 429:
-		a.KeySel.MarkCooldown(ctx, keyID, 5*time.Minute)
-	case 401, 403:
-		a.KeySel.MarkDisabled(ctx, keyID, "auth failed")
-	}
 }
 
 // ─── 纯委托方法 ───

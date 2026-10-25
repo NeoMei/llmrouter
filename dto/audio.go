@@ -10,6 +10,7 @@ import (
 )
 
 type AudioRequest struct {
+	Stream         *bool           `json:"stream,omitempty"`
 	Model          string          `json:"model"`
 	Input          string          `json:"input"`
 	Voice          string          `json:"voice"`
@@ -42,7 +43,7 @@ func (r *AudioRequest) GetTokenCountMeta() *types.TokenCountMeta {
 }
 
 func (r *AudioRequest) IsStream(c *gin.Context) bool {
-	return r.StreamFormat == "sse"
+	return r.StreamFormat == "sse" || r.StreamFormat == "audio" || r.Stream != nil && *r.Stream
 }
 
 func (r *AudioRequest) SetModelName(modelName string) {

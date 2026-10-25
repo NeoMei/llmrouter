@@ -332,3 +332,27 @@ func TestConfigurationUpdateNeverBecomesConversationTurn(t *testing.T) {
 	assert.Equal(t, "call_a", got.Messages[1].ToolCallId)
 	assert.Equal(t, "low", got.ReasoningEffort)
 }
+
+func TestResponsesMediaDetailsSurviveChatConversion(t *testing.T) {
+	req := &dto.OpenAIResponsesRequest{Model: "qwen3.8-omni-flash", Input: mustRawMessage(t, []map[string]any{{"role": "user", "content": []map[string]any{
+		{"type": "input_image", "image_url": "https://example.test/i", "detail": "low"},
+		{"type": "input_video", "video_url": map[string]any{"url": "https://example.test/v", "fps": 0}},
+		{"type": "input_audio", "audio_url": "https://example.test/a", "format": "wav"},
+	}}})}
+	got, err := ResponsesRequestToChatCompletionsRequest(req)
+	require.NoError(t, err)
+	parts := got.Messages[0].ParseContent()
+	require.Len(t, parts, 3)
+	assert.Equal(t, "low", parts[0].GetImageMedia().Detail)
+	raw, err := common.Marshal(parts[1].VideoUrl)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"fps":0`)
+	assert.Equal(t, "https://example.test/a", parts[2].GetInputAudio().Data)
+}
+
+func TestResponsesMediaConversionRejectsLoss(t *testing.T) {
+	for _, part := range []string{`{"type":"input_audio","audio_url":"https://example.test/a","use_multichannel":true}`, `{"type":"input_unimplemented","data":"opaque"}`} {
+		_, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{Model: "m", Input: []byte(`[{"role":"user","content":[` + part + `]}]`)})
+		require.Error(t, err)
+	}
+}

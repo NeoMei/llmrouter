@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useChannels } from './channels-provider'
+import { AccountPoolDialog } from './dialogs/account-pool-dialog'
 import { BalanceQueryDialog } from './dialogs/balance-query-dialog'
 import { ChannelTestDialog } from './dialogs/channel-test-dialog'
 import { CopyChannelDialog } from './dialogs/copy-channel-dialog'
@@ -69,6 +70,20 @@ export function ChannelsDialogs() {
         open={open === 'copy-channel'}
         onOpenChange={(v) => !v && setOpen(null)}
       />
+
+      {open === 'account-pool' && currentRow && (
+        <AccountPoolDialog
+          key={currentRow.id}
+          channel={{
+            id: currentRow.id,
+            name: currentRow.name,
+            type: currentRow.type,
+            models: currentRow.models,
+            model_mapping: currentRow.model_mapping,
+          }}
+          onClose={() => setOpen(null)}
+        />
+      )}
 
       {/* Multi-Key Management Dialog */}
       <MultiKeyManageDialog

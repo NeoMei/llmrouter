@@ -1,7 +1,9 @@
 package modelcatalog
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -9,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 )
 
@@ -23,13 +26,16 @@ type ClientModelTarget = model.ClientModelTarget
 type WireProtocol string
 
 const (
-	WireResponses  WireProtocol = "responses"
-	WireOpenAIChat WireProtocol = "openai_chat"
-	WireAnthropic  WireProtocol = "anthropic"
+	WireMultimodalEmbedding WireProtocol = "qwen_multimodal_embedding"
+	WirePaddleOCR           WireProtocol = "paddleocr_jobs"
+	WireResponses           WireProtocol = "responses"
+	WireOpenAIChat          WireProtocol = "openai_chat"
+	WireAnthropic           WireProtocol = "anthropic"
 )
 
 // ClientModel is the immutable public identity exposed to a client.
 type ClientModel struct {
+	dto.ModelCapabilities
 	Id                       int            `json:"-"`
 	PublicID                 string         `json:"id"`
 	DisplayName              string         `json:"display_name"`
@@ -44,6 +50,7 @@ type ClientModel struct {
 }
 
 type routeMetadata struct {
+	dto.ModelCapabilities
 	ContextWindow            int      `json:"context_window"`
 	ContextFitRequired       bool     `json:"context_fit_required"`
 	ReasoningEfforts         []string `json:"reasoning_efforts"`
@@ -55,6 +62,7 @@ type routeMetadata struct {
 // retained for telemetry, while BillingModel is always the canonical upstream
 // price key; callers must use this value before charging a request.
 type ResolvedModel struct {
+	Capabilities         dto.ModelCapabilities
 	RequestedModel       string
 	PublicID             string
 	UpstreamModel        string
@@ -143,7 +151,8 @@ func NewCatalog(routes []model.ClientModelRoute, targets []model.ClientModelTarg
 			return nil, fmt.Errorf("route %q metadata: %w", publicID, err)
 		}
 		entries[i] = routeEntry{enabled: route.Enabled, contextFitRequired: capabilities.ContextFitRequired, model: ClientModel{
-			Id: route.Id, PublicID: publicID, DisplayName: display, Client: client,
+			ModelCapabilities: capabilities.ModelCapabilities,
+			Id:                route.Id, PublicID: publicID, DisplayName: display, Client: client,
 			Aliases: append([]string(nil), aliases...), Metadata: route.Metadata,
 			ContextWindow: capabilities.ContextWindow, ReasoningEfforts: append([]string(nil), capabilities.ReasoningEfforts...),
 			SupportsReasoningSummary: capabilities.SupportsReasoningSummary, SupportsTools: capabilities.SupportsTools,
@@ -184,6 +193,9 @@ func NewCatalog(routes []model.ClientModelRoute, targets []model.ClientModelTarg
 				policies[strings.ToLower(strings.TrimSpace(group))] = policy
 			}
 			target.GroupPolicies = policies
+		}
+		if err := validateEmbeddingTarget(entries[i].model.EmbeddingSpace, target); err != nil {
+			return nil, err
 		}
 		target.PreferredWires = encodeWires(wires)
 		entries[i].targets = append(entries[i].targets, target)
@@ -355,6 +367,7 @@ func (c *Catalog) resolveCandidatesAuthorized(snapshot AuthorizedRuntimeSnapshot
 			priority, weight = policy.Priority, policy.Weight
 		}
 		resolved = append(resolved, ResolvedModel{
+			Capabilities:   cloneCapabilities(entry.model.ModelCapabilities),
 			RequestedModel: requestedModel, PublicID: entry.model.PublicID,
 			UpstreamModel: target.UpstreamModel, BillingModel: target.BillingModel,
 			ChannelID: target.ChannelId, RouteID: entry.model.Id, TargetID: target.Id, Priority: priority, Weight: weight,
@@ -456,6 +469,7 @@ func entryTargetVisible(target model.ClientModelTarget, groups []string) bool {
 }
 
 func cloneClientModel(m ClientModel) ClientModel {
+	m.ModelCapabilities = cloneCapabilities(m.ModelCapabilities)
 	m.Aliases = append([]string(nil), m.Aliases...)
 	m.PreferredWires = append([]WireProtocol(nil), m.PreferredWires...)
 	m.ReasoningEfforts = append([]string(nil), m.ReasoningEfforts...)
@@ -542,7 +556,24 @@ func decodeRouteMetadata(raw string) (routeMetadata, error) {
 		return routeMetadata{}, nil
 	}
 	var metadata routeMetadata
-	if err := common.Unmarshal([]byte(raw), &metadata); err != nil {
+	if err := common.UnmarshalUnique([]byte(raw), &metadata); err != nil {
+		return routeMetadata{}, err
+	}
+	var fields map[string]json.RawMessage
+	if err := common.Unmarshal([]byte(raw), &fields); err != nil {
+		return routeMetadata{}, err
+	}
+	for name, target := range map[string]any{"media_limits": &dto.MediaLimits{}, "embedding_space": &dto.EmbeddingSpace{}} {
+		if value, exists := fields[name]; exists {
+			decoder := common.NewJsonDecoder(bytes.NewReader(value))
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(target); err != nil {
+				return routeMetadata{}, fmt.Errorf("%s: %w", name, err)
+			}
+		}
+	}
+
+	if err := normalizeCapabilities(&metadata.ModelCapabilities); err != nil {
 		return routeMetadata{}, err
 	}
 	if metadata.ContextWindow < 0 {
@@ -578,7 +609,7 @@ func decodeWires(raw string) ([]WireProtocol, error) {
 	for _, value := range values {
 		wire := WireProtocol(strings.ToLower(strings.TrimSpace(value)))
 		switch wire {
-		case WireResponses, WireOpenAIChat, WireAnthropic:
+		case WireResponses, WireOpenAIChat, WireAnthropic, WirePaddleOCR, WireMultimodalEmbedding:
 		default:
 			return nil, fmt.Errorf("unknown wire protocol %q", value)
 		}

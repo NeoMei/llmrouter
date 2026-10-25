@@ -6,6 +6,12 @@ It is an engineering compliance artifact and should be kept with Docker images, 
 Scope: direct dependencies from `go.mod`, `web/package.json`, and `electron/package.json`.
 Transitive dependencies should be audited before a final external release.
 
+Integration-only container tools are built from the official MinIO sources:
+`minio/minio` at `RELEASE.2024-08-03T04-33-23Z` and `minio/mc` at
+`RELEASE.2024-07-31T15-58-33Z` (GNU AGPLv3). The source archives and builder/runtime
+images are SHA256-pinned in `tests/minio/Dockerfile`; each test image retains its
+upstream LICENSE. These tools are not bundled into the application image.
+
 ## Dependency Inventory
 
 | Area        | Scope       | Ecosystem | Dependency                                            | Version                              | License                                            |
@@ -39,6 +45,8 @@ Transitive dependencies should be audited before a final external release.
 | backend     | production  | Go        | `github.com/joho/godotenv`                            | `v1.5.1`                             | MIT                                                |
 | backend     | production  | Go        | `github.com/mewkiz/flac`                              | `v1.0.13`                            | Unlicense                                          |
 | backend     | production  | Go        | `github.com/nicksnyder/go-i18n/v2`                    | `v2.6.1`                             | MIT                                                |
+| backend | production | Go | `github.com/pdfcpu/pdfcpu` | `v0.16.3` | Apache-2.0 |
+| backend | production | Go | `golang.org/x/term` | `v0.47.0` | BSD-3-Clause |
 | backend     | production  | Go        | `github.com/pkg/errors`                               | `v0.9.1`                             | BSD-2-Clause                                       |
 | backend     | production  | Go        | `github.com/pquerna/otp`                              | `v1.5.0`                             | Apache-2.0                                         |
 | backend     | production  | Go        | `github.com/samber/hot`                               | `v0.11.0`                            | MIT                                                |
@@ -54,12 +62,12 @@ Transitive dependencies should be audited before a final external release.
 | backend     | production  | Go        | `github.com/tiktoken-go/tokenizer`                    | `v0.6.2`                             | MIT                                                |
 | backend     | production  | Go        | `github.com/waffo-com/waffo-go`                       | `v1.3.1`                             | MIT                                                |
 | backend     | production  | Go        | `github.com/yapingcat/gomedia`                        | `v0.0.0-20240906162731-17feea57090c` | MIT                                                |
-| backend     | production  | Go        | `golang.org/x/crypto`                                 | `v0.45.0`                            | BSD-3-Clause                                       |
-| backend     | production  | Go        | `golang.org/x/image`                                  | `v0.38.0`                            | BSD-3-Clause                                       |
-| backend     | production  | Go        | `golang.org/x/net`                                    | `v0.47.0`                            | BSD-3-Clause                                       |
-| backend     | production  | Go        | `golang.org/x/sync`                                   | `v0.20.0`                            | BSD-3-Clause                                       |
-| backend     | production  | Go        | `golang.org/x/sys`                                    | `v0.38.0`                            | BSD-3-Clause                                       |
-| backend     | production  | Go        | `golang.org/x/text`                                   | `v0.35.0`                            | BSD-3-Clause                                       |
+| backend     | production  | Go        | `golang.org/x/crypto`                                 | `v0.58.0`                            | BSD-3-Clause                                       |
+| backend     | production  | Go        | `golang.org/x/image`                                  | `v0.47.0`                            | BSD-3-Clause                                       |
+| backend     | production  | Go        | `golang.org/x/net`                                    | `v0.60.0`                            | BSD-3-Clause                                       |
+| backend     | production  | Go        | `golang.org/x/sync`                                   | `v0.24.0`                            | BSD-3-Clause                                       |
+| backend     | production  | Go        | `golang.org/x/sys`                                    | `v0.49.0`                            | BSD-3-Clause                                       |
+| backend     | production  | Go        | `golang.org/x/text`                                   | `v0.43.0`                            | BSD-3-Clause                                       |
 | backend     | production  | Go        | `gopkg.in/yaml.v3`                                    | `v3.0.1`                             | Apache-2.0 OR MIT                                  |
 | backend     | production  | Go        | `gorm.io/driver/mysql`                                | `v1.4.3`                             | MIT                                                |
 | backend     | production  | Go        | `gorm.io/driver/postgres`                             | `v1.5.2`                             | MIT                                                |
@@ -319,3 +327,15 @@ this software, either in source code form or as a compiled binary, for any
 purpose, commercial or non-commercial, and by any means.
 
 For more information, please refer to https://unlicense.org/
+
+## PaddleOCR PDF parser transitive additions
+
+The bounded PDF admission parser adds these pinned production dependencies. These entries supplement the direct inventory; upstream license and attribution notices remain unchanged.
+
+| Dependency | Version | License |
+|---|---|---|
+| `github.com/hhrutter/tiff` | `v1.0.7` | BSD-3-Clause |
+| `github.com/mattn/go-runewidth` | `v0.0.31` | MIT |
+| `github.com/clipperhouse/uax29/v2` | `v2.7.0` | MIT |
+| `github.com/xdg-go/stringprep` | `v1.0.4` | Apache-2.0 |
+| `go.yaml.in/yaml/v3` | `v3.0.5` | MIT and Apache-2.0 |

@@ -205,3 +205,52 @@ func TestDeleteClientModelRouteRejectsMissingRoute(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 	require.Contains(t, recorder.Body.String(), gorm.ErrRecordNotFound.Error())
 }
+
+func TestClientModelRouteEmbeddingSpaceCannotChangeInPlace(t *testing.T) {
+	db := setupClientModelRouteControllerTestDB(t)
+	require.NoError(t, db.Create(&model.Channel{Id: 7, Type: constant.ChannelTypeOpenAI, Models: "text-embedding-v4", Status: common.ChannelStatusEnabled}).Error)
+	metadata := `{"operations":["embeddings.create"],"embedding_space":{"provider":"aliyun","model":"text-embedding-v4","version":"v4","dimensions":1024,"input_semantics":"text/query-document-v1"}}`
+	require.NoError(t, db.Create(&model.ClientModelRoute{Id: 1, PublicId: "fixed-vector", Aliases: `["old-alias"]`, Enabled: true, Metadata: metadata}).Error)
+	target := model.ClientModelTarget{ChannelId: 7, UpstreamModel: "text-embedding-v4", BillingModel: "gpt-4o-mini", PreferredWires: `["openai_chat"]`, Weight: 1, Enabled: true}
+	for _, updated := range []string{strings.Replace(metadata, `"version":"v4"`, `"version":"v5"`, 1), ""} {
+		ctx, recorder := clientModelRouteRequestContext(t, http.MethodPut, "/api/client_model_routes/", clientModelRoutePayload{ID: 1, PublicID: "fixed-vector", Metadata: updated, Enabled: true, Targets: []model.ClientModelTarget{target}})
+		UpdateClientModelRoute(ctx)
+		require.Equal(t, http.StatusConflict, recorder.Code, recorder.Body.String())
+		var stored model.ClientModelRoute
+		require.NoError(t, db.First(&stored, 1).Error)
+		require.Equal(t, metadata, stored.Metadata)
+	}
+	for _, alias := range []string{"fixed-vector", "old-alias"} {
+		ctx, recorder := clientModelRouteRequestContext(t, http.MethodPut, "/api/client_model_routes/", clientModelRoutePayload{ID: 1, PublicID: "new-vector", Aliases: []string{alias}, Metadata: strings.Replace(metadata, `"version":"v4"`, `"version":"v5"`, 1), Enabled: true, Targets: []model.ClientModelTarget{target}})
+		UpdateClientModelRoute(ctx)
+		require.Equal(t, http.StatusConflict, recorder.Code, recorder.Body.String())
+	}
+	ctx, recorder := clientModelRouteRequestContext(t, http.MethodPut, "/api/client_model_routes/", clientModelRoutePayload{ID: 1, PublicID: "new-vector", Aliases: []string{"new-alias"}, Metadata: strings.Replace(metadata, `"version":"v4"`, `"version":"v5"`, 1), Enabled: true, Targets: []model.ClientModelTarget{target}})
+	UpdateClientModelRoute(ctx)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+}
+
+func TestClientModelRouteRejectsUnsupportedDeclaredOperation(t *testing.T) {
+	db := setupClientModelRouteControllerTestDB(t)
+	require.NoError(t, db.Create(&model.Channel{Id: 7, Type: constant.ChannelTypeOpenAI, Models: "a", Status: common.ChannelStatusEnabled}).Error)
+	ctx, recorder := clientModelRouteRequestContext(t, http.MethodPost, "/api/client_model_routes/", clientModelRoutePayload{PublicID: "declared-rerank", Metadata: `{"operations":["rerank.create"]}`, Enabled: true, Targets: []model.ClientModelTarget{{ChannelId: 7, UpstreamModel: "a", BillingModel: "gpt-4o-mini", PreferredWires: `["openai_chat"]`, Weight: 1, Enabled: true}}})
+	CreateClientModelRoute(ctx)
+	require.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
+	require.Contains(t, recorder.Body.String(), "operation")
+}
+
+func TestMultimodalRouteWireOption(t *testing.T) {
+	db := setupClientModelRouteControllerTestDB(t)
+	require.NoError(t, db.Create(&model.Channel{Id: 27, Type: constant.ChannelTypeAli, Name: "Ali", Models: "qwen3-vl-embedding", Status: common.ChannelStatusEnabled}).Error)
+	ctx, rec := clientModelRouteRequestContext(t, http.MethodGet, "/api/client_model_routes/options", nil)
+	ListClientModelRouteOptions(ctx)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var out struct {
+		Data clientModelRouteOptionsResponse `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(rec.Body.Bytes(), &out))
+	require.Len(t, out.Data.Channels, 1)
+	require.Contains(t, out.Data.Channels[0].Wires, "qwen_multimodal_embedding")
+	require.NoError(t, validateTargetWiresForChannel(model.ClientModelTarget{Id: 1, PreferredWires: `["qwen_multimodal_embedding"]`}, constant.ChannelTypeAli))
+}

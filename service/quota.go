@@ -307,10 +307,22 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	audioInputTokens := usage.PromptTokensDetails.AudioTokens
 	audioOutTokens := usage.CompletionTokenDetails.AudioTokens
 
+	if relayInfo.ChannelType == constant.ChannelTypeAli && relayInfo.UpstreamModelName == "qwen3.8-omni-flash" {
+		// Audio units have a separate configured ratio. All remaining actual
+		// units (visual input and reasoning included) retain the base ratio;
+		// raw usage details are kept intact in the response and consume log.
+		textInputTokens = usage.PromptTokens - audioInputTokens
+		textOutTokens = usage.CompletionTokens - audioOutTokens
+	}
+
+	billingModel := relayInfo.OriginModelName
+	if relayInfo.ActualUsageValidated {
+		billingModel = relayInfo.BillingModelNameOrOrigin()
+	}
 	tokenName := ctx.GetString("token_name")
-	completionRatio := decimal.NewFromFloat(ratio_setting.GetCompletionRatio(relayInfo.OriginModelName))
-	audioRatio := decimal.NewFromFloat(ratio_setting.GetAudioRatio(relayInfo.OriginModelName))
-	audioCompletionRatio := decimal.NewFromFloat(ratio_setting.GetAudioCompletionRatio(relayInfo.OriginModelName))
+	completionRatio := decimal.NewFromFloat(ratio_setting.GetCompletionRatio(billingModel))
+	audioRatio := decimal.NewFromFloat(ratio_setting.GetAudioRatio(billingModel))
+	audioCompletionRatio := decimal.NewFromFloat(ratio_setting.GetAudioCompletionRatio(billingModel))
 
 	modelRatio := relayInfo.PriceData.ModelRatio
 	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
@@ -326,8 +338,9 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 			TextTokens:  textOutTokens,
 			AudioTokens: audioOutTokens,
 		},
-		ModelName:  relayInfo.OriginModelName,
+		ModelName:  billingModel,
 		UsePrice:   usePrice,
+		ModelPrice: modelPrice,
 		ModelRatio: modelRatio,
 		GroupRatio: groupRatio,
 	}
@@ -347,8 +360,9 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		logContent = fmt.Sprintf("模型价格 %.2f，分组倍率 %.2f", modelPrice, groupRatio)
 	}
 
+	validatedActualUsage := relayInfo.ActualUsageValidated
 	// record all the consume log even if quota is 0
-	if totalTokens == 0 {
+	if totalTokens == 0 && !validatedActualUsage {
 		// in this case, must be some error happened
 		// we cannot just return, because we may have to return the pre-consumed quota
 		quota = 0
@@ -356,6 +370,9 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, relayInfo.OriginModelName, relayInfo.FinalPreConsumedQuota))
 	} else {
+		if totalTokens == 0 && validatedActualUsage && !usePrice {
+			quota = 0
+		}
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
 	}
@@ -370,6 +387,21 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	}
 	other := GenerateAudioOtherInfo(ctx, relayInfo, usage, modelRatio, groupRatio,
 		completionRatio.InexactFloat64(), audioRatio.InexactFloat64(), audioCompletionRatio.InexactFloat64(), modelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
+	if relayInfo.ChannelType == constant.ChannelTypeAli && relayInfo.UpstreamModelName == "qwen3.8-omni-flash" {
+		other["image_input"] = usage.PromptTokensDetails.ImageTokens
+		other["video_input"] = usage.PromptTokensDetails.VideoTokens
+		other["reasoning_output"] = usage.CompletionTokenDetails.ReasoningTokens
+		other["non_audio_input_billing_units"] = textInputTokens
+		other["non_audio_output_billing_units"] = textOutTokens
+	}
+	if relayInfo.ActualAudioSeconds != nil {
+		other["actual_audio_seconds"] = *relayInfo.ActualAudioSeconds
+	}
+	if relayInfo.NativeUsageCharacters != nil {
+		other["native_usage_unit"] = "characters"
+		other["native_usage_characters"] = *relayInfo.NativeUsageCharacters
+		other["native_pricing"] = "configured_per_request"
+	}
 	if tieredResult != nil {
 		InjectTieredBillingInfo(other, relayInfo, tieredResult)
 	}

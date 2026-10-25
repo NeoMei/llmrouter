@@ -572,4 +572,9 @@ export const STATIC_I18N_KEYS = [
   'This user account is disabled.',
   'Telegram binding failed. Please try again.',
   'Verification scope is missing',
+  'Complete the fixed embedding identity',
+  'Target model must match the fixed embedding identity',
+  'Target embedding identity must match the route',
+  'PaddleOCR Jobs',
+  'Qwen Multimodal Embedding',
 ] as const

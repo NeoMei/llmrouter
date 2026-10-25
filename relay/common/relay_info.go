@@ -63,6 +63,12 @@ type ResponsesUsageInfo struct {
 }
 
 type ChannelMeta struct {
+	// ActualUsageValidated is set only by a pre-output actual-usage gate.
+	NativeUsageCharacters *int64
+	NativeUsageImages     *int
+	ActualAudioSeconds    *float64
+
+	ActualUsageValidated bool
 	ChannelType          int
 	ChannelId            int
 	ChannelIsMultiKey    bool
@@ -90,6 +96,7 @@ type TokenCountMeta struct {
 // RouteCandidate is the controller-owned, package-neutral state for one
 // authoritative public-model target attempt.
 type RouteCandidate struct {
+	Capabilities         dto.ModelCapabilities
 	RouteID              int
 	TargetID             int
 	ChannelID            int
@@ -129,7 +136,8 @@ type RelayInfo struct {
 	ModelRouteId            int    // 命中的公开模型路由目标 ID
 	ModelTargetId           int    // 当前显式路由目标 ID
 	ResolvedChannelId       int    // 当前显式路由渠道 ID
-	RouteContextWindow      int    // 当前目标的上下文容量
+	ModelCapabilities       dto.ModelCapabilities
+	RouteContextWindow      int // 当前目标的上下文容量
 	RouteCandidates         []RouteCandidate
 	RejectedRouteCandidates []RouteCandidate
 	RouteCandidateIndex     int
@@ -570,6 +578,9 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		info.RelayMode = c.GetInt("relay_mode")
 	}
 
+	if strings.HasPrefix(c.Request.URL.Path, "/compatible-mode/v1/") {
+		info.RequestURLPath = strings.TrimPrefix(info.RequestURLPath, "/compatible-mode")
+	}
 	if strings.HasPrefix(c.Request.URL.Path, "/pg") {
 		info.IsPlayground = true
 		info.RequestURLPath = strings.TrimPrefix(info.RequestURLPath, "/pg")
@@ -650,6 +661,10 @@ func GenRelayInfo(c *gin.Context, relayFormat types.RelayFormat, request dto.Req
 		err = errors.New("request is not a RerankRequest")
 	case types.RelayFormatGemini:
 		info = GenRelayInfoGemini(c, request)
+	case types.RelayFormatMultimodalEmbedding:
+		info = genBaseRelayInfo(c, request)
+		info.RelayFormat = types.RelayFormatMultimodalEmbedding
+		info.RelayMode = relayconstant.RelayModeMultimodalEmbedding
 	case types.RelayFormatEmbedding:
 		info = GenRelayInfoEmbedding(c, request)
 	case types.RelayFormatOpenAIResponses:

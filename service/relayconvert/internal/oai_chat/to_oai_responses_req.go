@@ -137,6 +137,23 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 				continue
 			}
 			parts := msg.ParseContent()
+			contentRaw, err := common.Marshal(msg.Content)
+			if err != nil {
+				return nil, err
+			}
+			var original []any
+			if err := common.Unmarshal(contentRaw, &original); err != nil {
+				return nil, err
+			}
+			if len(parts) != len(original) {
+				return nil, fmt.Errorf("instruction media conversion would discard unsupported content")
+			}
+			for _, part := range parts {
+				if part.Type != dto.ContentTypeText {
+					return nil, fmt.Errorf("system/developer media cannot be converted to Responses instructions")
+				}
+			}
+
 			var sb strings.Builder
 			for _, part := range parts {
 				if part.Type == dto.ContentTypeText && strings.TrimSpace(part.Text) != "" {
@@ -211,6 +228,17 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 		}
 
 		parts := msg.ParseContent()
+		rawContent, marshalErr := common.Marshal(msg.Content)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		var originalParts []any
+		if err := common.Unmarshal(rawContent, &originalParts); err != nil {
+			return nil, fmt.Errorf("invalid Chat content array: %w", err)
+		}
+		if len(parts) != len(originalParts) {
+			return nil, fmt.Errorf("Chat media conversion would discard unsupported content")
+		}
 		contentParts := make([]map[string]any, 0, len(parts))
 		for _, part := range parts {
 			switch part.Type {
@@ -224,10 +252,11 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 					"text": part.Text,
 				})
 			case dto.ContentTypeImageURL:
-				contentParts = append(contentParts, map[string]any{
-					"type":      "input_image",
-					"image_url": normalizeChatImageURLToString(part.ImageUrl),
-				})
+				imagePart := map[string]any{"type": "input_image", "image_url": normalizeChatImageURLToString(part.ImageUrl)}
+				if image := part.GetImageMedia(); image != nil && image.Detail != "" {
+					imagePart["detail"] = image.Detail
+				}
+				contentParts = append(contentParts, imagePart)
 			case dto.ContentTypeInputAudio:
 				contentParts = append(contentParts, map[string]any{
 					"type":        "input_audio",
@@ -239,14 +268,13 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 					"file": part.File,
 				})
 			case dto.ContentTypeVideoUrl:
-				contentParts = append(contentParts, map[string]any{
-					"type":      "input_video",
-					"video_url": part.VideoUrl,
-				})
+				videoPart := map[string]any{"type": "input_video", "video_url": part.VideoUrl}
+				if part.FPS != nil {
+					videoPart["fps"] = *part.FPS
+				}
+				contentParts = append(contentParts, videoPart)
 			default:
-				contentParts = append(contentParts, map[string]any{
-					"type": part.Type,
-				})
+				return nil, fmt.Errorf("unsupported Chat content type %q", part.Type)
 			}
 		}
 		item["content"] = contentParts

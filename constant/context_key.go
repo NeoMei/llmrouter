@@ -96,3 +96,14 @@ const (
 	// choice snapshot for the current upstream attempt.
 	ContextKeyToolPolicy ContextKey = "tool_policy"
 )
+
+// ContextKeyAccountPoolLifecycle is owned by service/accountpool; values are typed lifecycle pointers.
+const ContextKeyAccountPoolLifecycle ContextKey = "internal.upstream_account_lifecycle"
+
+// ContextKeyDeferredModelRoute is an untrusted-selection hint only: the
+// controller must resolve the configured public route or fail closed.
+const ContextKeyDeferredModelRoute ContextKey = "internal.deferred_model_route"
+
+// ContextKeyAliNativeRerank marks a validated Ali-native rerank envelope whose
+// BodyStorage now contains the canonical request; the client path is retained.
+const ContextKeyAliNativeRerank ContextKey = "internal.ali_native_rerank"

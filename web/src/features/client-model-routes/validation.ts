@@ -23,7 +23,13 @@ export function validateAliases(aliases: string[]): boolean {
   return new Set(normalized).size === normalized.length
 }
 
-export const WIRE_PROTOCOLS = ['responses', 'openai_chat', 'anthropic'] as const
+export const WIRE_PROTOCOLS = [
+  'responses',
+  'openai_chat',
+  'anthropic',
+  'paddleocr_jobs',
+  'qwen_multimodal_embedding',
+] as const
 
 export type WireProtocol = (typeof WIRE_PROTOCOLS)[number]
 

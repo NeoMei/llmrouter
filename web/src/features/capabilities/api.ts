@@ -16,12 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { api } from '@/lib/api'
+import { api, type ApiRequestConfig } from '@/lib/api'
 
 import type { CapabilitySnapshot } from './types'
 
-export async function getCapabilities(): Promise<CapabilitySnapshot> {
-  const response = await api.get('/api/capabilities')
+export async function getCapabilities(
+  config: ApiRequestConfig = {}
+): Promise<CapabilitySnapshot> {
+  const response = await api.get('/api/capabilities', config)
   if (!response.data?.success || !response.data?.data) {
     throw new Error(response.data?.message || 'Failed to load capabilities')
   }

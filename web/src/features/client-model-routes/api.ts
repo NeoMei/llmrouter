@@ -18,12 +18,15 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { api, type ApiRequestConfig } from '@/lib/api'
 
+import type { WireProtocol } from './validation'
+
 const clientModelRouteRequestConfig = {
   skipBusinessError: true,
   skipErrorHandler: true,
 } satisfies ApiRequestConfig
 
 export type ClientModelTarget = {
+  metadata?: string
   id?: number
   route_id?: number
   channel_id: number
@@ -59,7 +62,7 @@ export type ClientModelRouteChannelOption = {
   wires: WireProtocol[]
 }
 
-export type WireProtocol = 'responses' | 'openai_chat' | 'anthropic'
+export type { WireProtocol } from './validation'
 
 export type ClientModelRouteOptions = {
   channels: ClientModelRouteChannelOption[]

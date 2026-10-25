@@ -296,6 +296,16 @@ func migrateDB() error {
 		&ProviderModel{},
 		&UserProviderKey{},
 		&ProviderKeyPool{},
+		&OCRJob{},
+		&OCRResource{},
+		&RelayMediaResource{},
+		&OCRResourceGrant{},
+		&OCROperation{},
+		&OCRAuditEvent{},
+		&OCRLogReceipt{},
+		&UpstreamAccountPool{},
+		&UpstreamAccountMember{},
+		&UpstreamAccountState{},
 		&ClientModelRoute{},
 		&ClientModelTarget{},
 	)
@@ -366,6 +376,16 @@ func migrateDBFast() error {
 		{&ProviderModel{}, "ProviderModel"},
 		{&UserProviderKey{}, "UserProviderKey"},
 		{&ProviderKeyPool{}, "ProviderKeyPool"},
+		{&OCRJob{}, "OCRJob"},
+		{&OCRResource{}, "OCRResource"},
+		{&RelayMediaResource{}, "RelayMediaResource"},
+		{&OCRResourceGrant{}, "OCRResourceGrant"},
+		{&OCROperation{}, "OCROperation"},
+		{&OCRAuditEvent{}, "OCRAuditEvent"},
+		{&OCRLogReceipt{}, "OCRLogReceipt"},
+		{&UpstreamAccountPool{}, "UpstreamAccountPool"},
+		{&UpstreamAccountMember{}, "UpstreamAccountMember"},
+		{&UpstreamAccountState{}, "UpstreamAccountState"},
 		{&ClientModelRoute{}, "ClientModelRoute"},
 		{&ClientModelTarget{}, "ClientModelTarget"},
 	}
@@ -418,7 +438,7 @@ func migrateLOGDB() error {
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		return migrateClickHouseLogDB()
 	}
-	return LOG_DB.AutoMigrate(&Log{})
+	return LOG_DB.AutoMigrate(&Log{}, &OCRLogReceipt{})
 }
 
 func migrateClickHouseLogDB() error {

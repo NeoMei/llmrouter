@@ -10,16 +10,20 @@ import (
 type Protocol string
 
 const (
-	ProtocolOpenAI   Protocol = "openai"
-	ProtocolClaude   Protocol = "claude"
-	ProtocolGemini   Protocol = "gemini"
-	ProtocolTask     Protocol = "task"
-	ProtocolInternal Protocol = "internal"
+	ProtocolPaddleOCR Protocol = "paddleocr_jobs"
+	ProtocolOpenAI    Protocol = "openai"
+	ProtocolClaude    Protocol = "claude"
+	ProtocolGemini    Protocol = "gemini"
+	ProtocolTask      Protocol = "task"
+	ProtocolInternal  Protocol = "internal"
 )
 
 type Operation string
 
 const (
+	OperationOCRCreate           Operation = "ocr.jobs.create"
+	OperationOCRRetrieve         Operation = "ocr.jobs.retrieve"
+	OperationOCRResource         Operation = "ocr.resources.retrieve"
 	OperationModelList           Operation = "models.list"
 	OperationModelRetrieve       Operation = "models.retrieve"
 	OperationModelDelete         Operation = "models.delete"
@@ -29,6 +33,7 @@ const (
 	OperationResponseCompact     Operation = "responses.compact"
 	OperationRealtimeConnect     Operation = "realtime.connect"
 	OperationClaudeMessageCreate Operation = "claude.messages.create"
+	OperationMultimodalEmbedding Operation = "multimodal.embeddings.create"
 	OperationEmbeddingCreate     Operation = "embeddings.create"
 	OperationAudioTranscription  Operation = "audio.transcriptions.create"
 	OperationAudioTranslation    Operation = "audio.translations.create"
@@ -51,9 +56,10 @@ const (
 )
 
 var allOperations = []Operation{
+	OperationOCRCreate, OperationOCRRetrieve, OperationOCRResource,
 	OperationModelList, OperationModelRetrieve, OperationModelDelete,
 	OperationChatCreate, OperationCompletionCreate, OperationResponseCreate, OperationResponseCompact,
-	OperationRealtimeConnect, OperationClaudeMessageCreate, OperationEmbeddingCreate,
+	OperationRealtimeConnect, OperationClaudeMessageCreate, OperationEmbeddingCreate, OperationMultimodalEmbedding,
 	OperationAudioTranscription, OperationAudioTranslation, OperationAudioSpeech,
 	OperationImageGeneration, OperationImageEdit, OperationImageVariation,
 	OperationRerankCreate, OperationModerationCreate,
@@ -68,6 +74,8 @@ func AllOperations() []Operation {
 
 func ProtocolForOperation(operation Operation) Protocol {
 	switch operation {
+	case OperationOCRCreate, OperationOCRRetrieve, OperationOCRResource:
+		return ProtocolPaddleOCR
 	case OperationClaudeMessageCreate:
 		return ProtocolClaude
 	case OperationGeminiGenerate, OperationGeminiEmbed:
@@ -111,11 +119,21 @@ func PublicRouteManifest() []RouteManifestEntry {
 }
 
 var publicRoutes = []routeSpec{
+	route(http.MethodPost, `^/v1/multimodal/embeddings$`, OperationMultimodalEmbedding),
+	route(http.MethodPost, `^/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding$`, OperationMultimodalEmbedding),
+	route(http.MethodPost, `^/api/v2/ocr/jobs$`, OperationOCRCreate),
+	route(http.MethodGet, `^/api/v2/ocr/jobs/[^/]+$`, OperationOCRRetrieve),
+	route(http.MethodPost, `^/v1/ocr$`, OperationOCRCreate),
+	route(http.MethodGet, `^/v1/ocr/[^/]+$`, OperationOCRRetrieve),
+	route(http.MethodGet, `^/api/ocr/jobs/[^/]+/resources/[^/]+$`, OperationOCRResource),
 	route(http.MethodGet, `^/v1/models$`, OperationModelList),
 	route(http.MethodGet, `^/v1/models/[^/]+$`, OperationModelRetrieve),
 	route(http.MethodDelete, `^/v1/models/[^/]+$`, OperationModelDelete),
 	route(http.MethodPost, `^/v1/chat/completions$`, OperationChatCreate),
 	route(http.MethodPost, `^/pg/chat/completions$`, OperationChatCreate),
+	route(http.MethodPost, `^/compatible-mode/v1/chat/completions$`, OperationChatCreate),
+	route(http.MethodPost, `^/compatible-mode/v1/embeddings$`, OperationEmbeddingCreate),
+	route(http.MethodPost, `^/api/v1/services/rerank/text-rerank/text-rerank$`, OperationRerankCreate),
 	route(http.MethodPost, `^/v1/completions$`, OperationCompletionCreate),
 	route(http.MethodPost, `^/v1/responses$`, OperationResponseCreate),
 	route(http.MethodPost, `^/v1/responses/compact$`, OperationResponseCompact),

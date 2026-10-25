@@ -2,9 +2,9 @@ package minimax
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/QuantumNous/new-api/common"
 	"io"
 	"net/http"
 
@@ -14,10 +14,10 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/service/accountpool"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
-	"github.com/samber/lo"
 )
 
 type Adaptor struct {
@@ -37,44 +37,22 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 		return nil, channel.ErrUnsupportedOperation
 	}
 
-	voiceID := request.Voice
-	speed := lo.FromPtrOr(request.Speed, 0.0)
-	outputFormat := request.ResponseFormat
-
-	minimaxRequest := MiniMaxTTSRequest{
-		Model: info.OriginModelName,
-		Text:  request.Input,
-		VoiceSetting: VoiceSetting{
-			VoiceID: voiceID,
-			Speed:   speed,
-		},
-		AudioSetting: &AudioSetting{
-			Format: outputFormat,
-		},
-		OutputFormat: outputFormat,
-	}
-
-	// 同步扩展字段的厂商自定义metadata
-	if len(request.Metadata) > 0 {
-		if err := json.Unmarshal(request.Metadata, &minimaxRequest); err != nil {
-			return nil, fmt.Errorf("error unmarshalling metadata to minimax request: %w", err)
-		}
-	}
-
-	jsonData, err := json.Marshal(minimaxRequest)
+	native, err := dto.BuildMiniMaxSpeech(request)
 	if err != nil {
-		return nil, fmt.Errorf("error marshalling minimax request: %w", err)
+		return nil, err
 	}
-	if outputFormat != "hex" {
-		outputFormat = "url"
+	raw, err := common.Marshal(native)
+	if err != nil {
+		return nil, err
 	}
-
-	c.Set("response_format", outputFormat)
-
-	// Debug: log the request structure
-	// fmt.Printf("MiniMax TTS Request: %s\n", string(jsonData))
-
-	return bytes.NewReader(jsonData), nil
+	info.OutputAudioFormat = native.AudioSetting.Format
+	info.DisablePing = true
+	info.IsStream = *native.Stream
+	if info.IsStream {
+		c.Set("binary_stream_content_type", getContentTypeByFormat(info.OutputAudioFormat))
+	}
+	accountpool.DeferAllStatusNativeOutcome(c)
+	return bytes.NewReader(raw), nil
 }
 
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {

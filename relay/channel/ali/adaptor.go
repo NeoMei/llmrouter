@@ -8,13 +8,16 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	requestconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/claude"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/accountpool"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -62,7 +65,7 @@ var syncModels = []string{
 }
 
 func isSyncImageModel(modelName string) bool {
-	return model_setting.IsSyncImageModel(modelName)
+	return modelName == "qwen-image-2.0" || modelName == "qwen-image-2.0-pro" || model_setting.IsSyncImageModel(modelName)
 }
 
 func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dto.GeminiChatRequest) (any, error) {
@@ -102,6 +105,8 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		}
 	default:
 		switch info.RelayMode {
+		case constant.RelayModeMultimodalEmbedding:
+			fullRequestURL = fmt.Sprintf("%s/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding", info.ChannelBaseUrl)
 		case constant.RelayModeEmbeddings:
 			fullRequestURL = fmt.Sprintf("%s/compatible-mode/v1/embeddings", info.ChannelBaseUrl)
 		case constant.RelayModeRerank:
@@ -109,15 +114,15 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		case constant.RelayModeResponses:
 			fullRequestURL = fmt.Sprintf("%s/api/v2/apps/protocols/compatible-mode/v1/responses", info.ChannelBaseUrl)
 		case constant.RelayModeImagesGenerations:
-			if isSyncImageModel(info.OriginModelName) {
+			if isSyncImageModel(info.UpstreamModelName) {
 				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/multimodal-generation/generation", info.ChannelBaseUrl)
 			} else {
 				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/text2image/image-synthesis", info.ChannelBaseUrl)
 			}
 		case constant.RelayModeImagesEdits:
-			if isOldWanModel(info.OriginModelName) {
+			if isOldWanModel(info.UpstreamModelName) {
 				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/image2image/image-synthesis", info.ChannelBaseUrl)
-			} else if isWanModel(info.OriginModelName) {
+			} else if isWanModel(info.UpstreamModelName) {
 				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/image-generation/generation", info.ChannelBaseUrl)
 			} else {
 				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/multimodal-generation/generation", info.ChannelBaseUrl)
@@ -135,6 +140,9 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
 	req.Set("Authorization", "Bearer "+info.ApiKey)
+	if info.RelayMode == constant.RelayModeAudioTranscription {
+		req.Set("Content-Type", "application/json")
+	}
 	if info.IsStream {
 		req.Set("X-DashScope-SSE", "enable")
 	}
@@ -142,14 +150,14 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 		req.Set("X-DashScope-Plugin", c.GetString("plugin"))
 	}
 	if info.RelayMode == constant.RelayModeImagesGenerations {
-		if isSyncImageModel(info.OriginModelName) {
+		if isSyncImageModel(info.UpstreamModelName) {
 
 		} else {
 			req.Set("X-DashScope-Async", "enable")
 		}
 	}
 	if info.RelayMode == constant.RelayModeImagesEdits {
-		if isWanModel(info.OriginModelName) {
+		if isWanModel(info.UpstreamModelName) {
 			req.Set("X-DashScope-Async", "enable")
 		}
 		req.Set("Content-Type", "application/json")
@@ -181,8 +189,18 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 }
 
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
+	if value, ok := c.Get(helper.DomesticImageRequestKey); ok {
+		native := value.(helper.DomesticImageRequest)
+		if native.Model != request.Model {
+			return nil, errors.New("validated image model changed")
+		}
+		a.IsSyncImageModel = true
+		accountpool.DeferAllStatusNativeOutcome(c)
+		return native, nil
+	}
+
 	if info.RelayMode == constant.RelayModeImagesGenerations {
-		if isSyncImageModel(info.OriginModelName) {
+		if isSyncImageModel(info.UpstreamModelName) {
 			a.IsSyncImageModel = true
 		}
 		aliRequest, err := oaiImage2AliImageRequest(info, request, a.IsSyncImageModel)
@@ -191,11 +209,11 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		}
 		return aliRequest, nil
 	} else if info.RelayMode == constant.RelayModeImagesEdits {
-		if isOldWanModel(info.OriginModelName) {
+		if isOldWanModel(info.UpstreamModelName) {
 			return oaiFormEdit2WanxImageEdit(c, info, request)
 		}
-		if isSyncImageModel(info.OriginModelName) {
-			if isWanModel(info.OriginModelName) {
+		if isSyncImageModel(info.UpstreamModelName) {
+			if isWanModel(info.UpstreamModelName) {
 				a.IsSyncImageModel = false
 			} else {
 				a.IsSyncImageModel = true
@@ -221,7 +239,11 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 }
 
 func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, request dto.RerankRequest) (any, error) {
-	return ConvertRerankRequest(request), nil
+	converted := ConvertRerankRequest(request)
+	if common.GetContextKeyBool(c, requestconstant.ContextKeyAliNativeRerank) {
+		converted.Parameters.ReturnDocuments = request.ReturnDocuments
+	}
+	return converted, nil
 }
 
 func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.EmbeddingRequest) (any, error) {
@@ -229,6 +251,9 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 }
 
 func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
+	if info.RelayMode == constant.RelayModeAudioTranscription {
+		return convertTranscription(c, request)
+	}
 	return nil, channel.ErrUnsupportedOperation
 }
 
@@ -241,6 +266,16 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 }
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
+	if info.RelayMode == constant.RelayModeAudioTranscription {
+		return transcriptionResponse(c, resp, info)
+	}
+	if info.UpstreamModelName == "qwen3.8-omni-flash" {
+		storage, validationErr := validateUnderstandingResponse(resp, info)
+		if validationErr != nil {
+			return nil, validationErr
+		}
+		defer storage.Close()
+	}
 	switch info.RelayFormat {
 	case types.RelayFormatClaude:
 		if supportsAliAnthropicMessages(info.UpstreamModelName) {

@@ -17,6 +17,7 @@ type EndpointInfo struct {
 
 // defaultEndpointInfoMap 保存内置端点的默认 Path 与 Method
 var defaultEndpointInfoMap = map[constant.EndpointType]EndpointInfo{
+	constant.EndpointTypePaddleOCR:             {Path: "/api/v2/ocr/jobs", Method: "POST"},
 	constant.EndpointTypeOpenAI:                {Path: "/v1/chat/completions", Method: "POST"},
 	constant.EndpointTypeOpenAIResponse:        {Path: "/v1/responses", Method: "POST"},
 	constant.EndpointTypeOpenAIResponseCompact: {Path: "/v1/responses/compact", Method: "POST"},

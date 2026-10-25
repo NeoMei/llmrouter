@@ -48,8 +48,8 @@ func nativeTokenTestPrice(op string, keys ...string) metering.Price {
 
 func TestNativeCumulativeAndExclusiveCounters(t *testing.T) {
 	e := NativeTokenEvidence{Source: BillingUsageSourceOAIChat}
-	e.Observe([]byte(`{"usage":{"prompt_tokens":10,"completion_tokens":4}}`), true)
-	e.Observe([]byte(`{"usage":{"prompt_tokens":10,"completion_tokens":8,"total_tokens":18,"prompt_tokens_details":{"cached_tokens":3},"completion_tokens_details":{"reasoning_tokens":2}}}`), true)
+	e.Observe([]byte(`{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":4}}`), true)
+	e.Observe([]byte(`{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":8,"total_tokens":18,"prompt_tokens_details":{"cached_tokens":3},"completion_tokens_details":{"reasoning_tokens":2}}}`), true)
 	u := e.Usage(nativeTokenTestPrice("chat", "input", "output", "cache_read", "reasoning"))
 	require.Equal(t, "confirmed", u.State)
 	for i, want := range []string{"7", "6", "3", "2"} {

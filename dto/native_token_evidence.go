@@ -95,7 +95,13 @@ func (e *NativeTokenEvidence) Observe(raw []byte, stream bool) {
 		}
 		e.values[name] = value
 	}
-	if !stream || e.Source != BillingUsageSourceClaudeMessages {
+	if !stream {
+		e.terminal = true
+	} else if e.Source == BillingUsageSourceOAIResponses && root.Get("type").String() == "response.completed" {
+		e.terminal = true
+	} else if e.Source == BillingUsageSourceOAIChat && root.Get("choices").Exists() {
+		e.terminal = true
+	} else if e.Source == BillingUsageSourceGeminiChat && root.Get("candidates").Exists() {
 		e.terminal = true
 	}
 }

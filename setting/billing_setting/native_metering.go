@@ -140,6 +140,35 @@ func ValidateModelNativePricing(c map[string]map[string]metering.Price) error {
 			if err := metering.ValidatePrice(p); err != nil {
 				return err
 			}
+			if operation == "image_generation" || operation == "image_edit" {
+				if err := ValidateNativeImageTiers(p); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// ValidateNativeImageTiers matches the output classifier used by native image
+// adapters. An aggregate tier cannot overlap explicit dimensions.
+func ValidateNativeImageTiers(p metering.Price) error {
+	for _, term := range p.Terms {
+		if term.Key == "images" {
+			if len(p.Terms) != 1 {
+				return errors.New("aggregate image tier cannot overlap size tiers")
+			}
+			continue
+		}
+		dimensions := strings.Split(term.Key, "x")
+		if len(dimensions) != 2 {
+			return errors.New("image tier requires canonical width x height")
+		}
+		for _, dimension := range dimensions {
+			n, err := strconv.ParseUint(dimension, 10, 31)
+			if err != nil || n == 0 || strconv.FormatUint(n, 10) != dimension {
+				return errors.New("invalid image tier dimension")
+			}
 		}
 	}
 	return nil

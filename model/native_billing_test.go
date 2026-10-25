@@ -65,6 +65,36 @@ func TestNativeSupplierQuantityBeyondFrozenCapRequiresReconciliation(t *testing.
 	require.NoError(t, err)
 	ocrBalances(t, s, old, 1000, 500, 0)
 }
+
+func TestNativeRejectedAdmissionDoesNotRemainRecoverable(t *testing.T) {
+	n, s, a, old := nativeFixture(t)
+	a.Reservation = nativeUsage("1000000")
+	j, err := n.Begin(context.Background(), a)
+	require.ErrorIs(t, err, ErrOCRInsufficient)
+	j, err = n.Inspect(context.Background(), j.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "rejected", j.State)
+	_, err = n.Begin(context.Background(), a)
+	require.ErrorIs(t, err, ErrOCRInsufficient)
+	require.NoError(t, n.Recover(context.Background(), 1))
+	ocrBalances(t, s, old, 1000, 500, 0)
+}
+
+func TestNativeRecoveryPagesPastFailedIntent(t *testing.T) {
+	n, s, a, old := nativeFixture(t)
+	ctx := context.Background()
+	// An interrupted/corrupt older intent must stay visible without blocking a
+	// later valid receipt. A page size of one makes that contract deterministic.
+	require.NoError(t, s.db.Create(&NativeBilling{ID: "000", UserID: a.UserID, CallID: "failed-old", State: "reserving", Contract: "invalid"}).Error)
+	j, err := n.Begin(ctx, a)
+	require.NoError(t, err)
+	require.NoError(t, n.RecordUsage(ctx, j.ID, nativeUsage("500")))
+	require.Error(t, n.Recover(ctx, 1))
+	j, err = n.Inspect(ctx, j.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "settled", j.State)
+	ocrBalances(t, s, old, 950, 450, 50)
+}
 func TestNativeFrozenPriceAndRestart(t *testing.T) {
 	n, s, a, old := nativeFixture(t)
 	ctx := context.Background()

@@ -80,6 +80,12 @@ func settleNativeTask(ctx context.Context, task *model.Task) error {
 			return err
 		}
 	} else if task.FundingOwner == "native" {
+		if task.Status == model.TaskStatusFailure && u.Source == "provider_confirmed_no_output" {
+			if _, err := FinishNativeBilling(ctx, bc.NativeCallID, "no_output"); err != nil {
+				return err
+			}
+			goto clear
+		}
 		if err := RecordNativeUsage(ctx, bc.NativeCallID, u); err != nil {
 			return err
 		}

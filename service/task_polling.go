@@ -147,13 +147,13 @@ type TaskPollSummary struct {
 // (processedPlatforms, totalPlatforms). It returns immediately if the task
 // adaptor factory has not been wired yet, to avoid a nil call during startup.
 func RunTaskPollingOnce(ctx context.Context, report func(processed, total int)) TaskPollSummary {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	recoverNativeTasks(ctx)
 	summary := TaskPollSummary{}
 	if GetTaskAdaptorFunc == nil {
 		return summary
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 
 	common.SysLog("任务进度轮询开始")

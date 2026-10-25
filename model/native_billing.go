@@ -150,11 +150,20 @@ func (s *NativeBillingStore) Begin(ctx context.Context, a NativeAdmission) (Nati
 	if err != nil {
 		return n, err
 	}
+	if n.State == "rejected" {
+		return n, ErrOCRInsufficient
+	}
 	if n.State != "reserving" {
 		return n, nil
 	}
 	if !a.Platform {
-		if _, err = s.ledger.Reserve(ctx, n.ID); err != nil {
+		var job OCRJob
+		if job, err = s.ledger.Reserve(ctx, n.ID); err != nil {
+			if job.BillingState == "rejected" {
+				if saveErr := s.ledger.db.WithContext(ctx).Model(&NativeBilling{}).Where("id = ? AND state = ?", n.ID, "reserving").Updates(map[string]any{"state": "rejected", "reason": "insufficient", "updated_at": time.Now().Unix()}).Error; saveErr != nil {
+					return n, saveErr
+				}
+			}
 			return n, err
 		}
 	}
@@ -440,45 +449,57 @@ func (s *NativeBillingStore) recoverSettlement(ctx context.Context, id string) (
 	return s.Inspect(ctx, id)
 }
 
-// Recover is bounded and never dispatches provider work or invents usage.
+// Recover pages through durable money intents within the caller's deadline.
+// A permanently failing older receipt cannot starve newer recoverable intents.
+// It never dispatches provider work or invents usage.
 func (s *NativeBillingStore) Recover(ctx context.Context, limit int) error {
 	if limit < 1 || limit > 100 {
 		return ErrOCRConflict
 	}
-	var rows []NativeBilling
-	if err := s.ledger.db.WithContext(ctx).Where("platform = ?", false).Where("state IN ? OR (admin_action_id <> ? AND outcome = ?)", []string{"reserving", "measured", "settlement_pending"}, "", "").Order("created_at,id").Limit(limit).Find(&rows).Error; err != nil {
-		return err
-	}
 	var first error
-	for _, n := range rows {
-		var err error
-		if n.State == "reserving" {
-			var a NativeAdmission
-			err = common.UnmarshalJsonStr(n.Contract, &a)
-			if err == nil {
-				_, err = s.Begin(ctx, a)
-			}
+	after := ""
+	for ctx.Err() == nil {
+		var rows []NativeBilling
+		if err := s.ledger.db.WithContext(ctx).Where("platform = ? AND id > ?", false, after).Where("state IN ? OR (admin_action_id <> ? AND outcome = ?)", []string{"reserving", "measured", "settlement_pending"}, "", "").Order("id").Limit(limit).Find(&rows).Error; err != nil {
+			return err
+		}
+		for _, n := range rows {
+			after = n.ID
+			var err error
+			if n.State == "reserving" {
+				var a NativeAdmission
+				err = common.UnmarshalJsonStr(n.Contract, &a)
+				if err == nil {
+					_, err = s.Begin(ctx, a)
+				}
 
-		} else if n.AdminActionID != "" && n.Outcome == "" {
-			var command struct {
-				Action string
-				Usage  *metering.Usage
-				Reason string
-				Actor  int
-			}
-			if e := common.UnmarshalJsonStr(n.AdminCommand, &command); e != nil {
-				err = e
+			} else if n.AdminActionID != "" && n.Outcome == "" {
+				var command struct {
+					Action string
+					Usage  *metering.Usage
+					Reason string
+					Actor  int
+				}
+				if e := common.UnmarshalJsonStr(n.AdminCommand, &command); e != nil {
+					err = e
+				} else {
+					_, err = s.ResolveMeasurement(ctx, n.ID, n.AdminActionID, command.Actor, command.Action, command.Usage, command.Reason)
+				}
+			} else if n.State == "measured" {
+				_, err = s.Finish(ctx, n.ID, "measured")
 			} else {
-				_, err = s.ResolveMeasurement(ctx, n.ID, n.AdminActionID, command.Actor, command.Action, command.Usage, command.Reason)
+				_, err = s.recoverSettlement(ctx, n.ID)
 			}
-		} else if n.State == "measured" {
-			_, err = s.Finish(ctx, n.ID, "measured")
-		} else {
-			_, err = s.recoverSettlement(ctx, n.ID)
+			if first == nil {
+				first = err
+			}
 		}
-		if first == nil {
-			first = err
+		if len(rows) < limit {
+			return first
 		}
+	}
+	if first == nil {
+		return ctx.Err()
 	}
 	return first
 }

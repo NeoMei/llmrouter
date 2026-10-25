@@ -35,3 +35,15 @@ func TestModelNativeReservationLimitsAreBoundedAndCopied(t *testing.T) {
 		"speech-model": {"speech": {Value: "2147483648"}},
 	}))
 }
+
+func TestNativeImageTiersRejectUnsupportedOrOverlappingClassifiers(t *testing.T) {
+	for _, keys := range [][]string{{"bad"}, {"01024x1024"}, {"0x1024"}, {"images", "1024x1024"}} {
+		p := metering.Price{Version: "metered_v2", Operation: "image_generation", Policy: "successful_outputs_v1"}
+		for _, key := range keys {
+			p.Terms = append(p.Terms, metering.Term{Key: key, Unit: "image", Price: metering.Rational{Numerator: "1", Denominator: "1"}})
+		}
+		require.Error(t, ValidateModelNativePricing(map[string]map[string]metering.Price{"image-model": {"image_generation": p}}))
+	}
+	p := metering.Price{Version: "metered_v2", Operation: "image_generation", Policy: "successful_outputs_v1", Terms: []metering.Term{{Key: "1024x1024", Unit: "image", Price: metering.Rational{Numerator: "1", Denominator: "1"}}, {Key: "1536x1024", Unit: "image", Price: metering.Rational{Numerator: "2", Denominator: "1"}}}}
+	require.NoError(t, ValidateModelNativePricing(map[string]map[string]metering.Price{"image-model": {"image_generation": p}}))
+}

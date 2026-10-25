@@ -8,7 +8,9 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/pkg/metering"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/accountpool"
@@ -73,6 +75,28 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		// reset status code 重置状态码
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 		return newAPIError
+	}
+	if info.NativeBilling != nil {
+		var nativeUsage metering.Usage
+		terminal := newAPIError == nil && c.Request.Context().Err() == nil
+		if info.IsStream && (info.StreamStatus == nil || info.StreamStatus.HasErrors() || !info.StreamStatus.IsNormalEnd()) {
+			terminal = false
+		}
+		if info.RelayMode == relayconstant.RelayModeAudioSpeech {
+			text := ""
+			if info.NativeSpeechText != nil {
+				text = *info.NativeSpeechText
+			} else {
+				terminal = false
+			}
+			nativeUsage = service.NativeSpeechUsage(info.NativeBilling.Price, text, info.NativeUsageCharacters, terminal)
+		} else {
+			nativeUsage = service.NativeAudioUsage(info.NativeBilling.Price, info.ActualAudioSeconds, terminal)
+		}
+		if err := service.RecordNativeUsageForRelay(c.Request.Context(), info, nativeUsage); err != nil {
+			return types.NewError(err, types.ErrorCodeBadResponseBody)
+		}
+		return nil
 	}
 	if info.ActualUsageValidated || usage.(*dto.Usage).CompletionTokenDetails.AudioTokens > 0 || usage.(*dto.Usage).PromptTokensDetails.AudioTokens > 0 {
 		service.PostAudioConsumeQuota(c, info, usage.(*dto.Usage), "")

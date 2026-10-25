@@ -13,15 +13,18 @@ import (
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 )
 
 // OperationLimits are server-certified execution bounds, never client estimates.
 // Duration/provider-unit operations require a configured cap enforced by their
 // producer; absence rejects admission before reserving funds.
 type OperationLimits struct {
-	MaxBodyBytes int64  `json:"max_body_bytes"`
-	MaxQuantity  int    `json:"max_quantity"`
-	Policy       string `json:"policy"`
+	MaxBodyBytes    int64  `json:"max_body_bytes"`
+	MaxQuantity     int    `json:"max_quantity"`
+	Policy          string `json:"policy"`
+	ProviderUnitCap string `json:"provider_unit_cap"`
+	ProviderUnit    string `json:"provider_unit"`
 }
 type operationRequest struct {
 	Model     string
@@ -208,7 +211,7 @@ func parseOperation(c Config, op, contentType string, body []byte) (operationReq
 			return result, ErrInvalid
 		}
 		result.Quantity, err = count("n", 1)
-		if err != nil || result.Quantity < 1 || result.Quantity > 16 {
+		if err != nil || result.Quantity < 1 || result.Quantity > dto.MaxImageN {
 			return result, ErrInvalid
 		}
 		if op == "image_edit" && request["image"] != "@file" {

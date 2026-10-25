@@ -86,6 +86,14 @@ func (a *Adapter) AdmitOperation(ctx context.Context, credential, task, id, oper
 	if limits, ok := a.config.OperationLimits[operation][req.Model]; ok && limits.Policy != "" && limits.Policy != chosen.Metered.Policy {
 		return nil, ErrInvalid
 	}
+	if operation == "video" && chosen.Metered.Terms[0].Unit == "provider_unit" {
+		limit := a.config.OperationLimits[operation][req.Model]
+		capValue, ok := new(big.Int).SetString(limit.ProviderUnitCap, 10)
+		if !ok || capValue.Sign() <= 0 || capValue.BitLen() > 31 || limit.ProviderUnit != chosen.Metered.Terms[0].ProviderUnit || limit.Policy != chosen.Metered.Policy {
+			return nil, ErrInvalid
+		}
+		req.Quantity = int(capValue.Int64())
+	}
 	amount, err := meteredReserve(*chosen.Metered, req)
 	if err != nil {
 		return nil, err

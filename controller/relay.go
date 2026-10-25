@@ -586,6 +586,7 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 		// Platform funding is owned by UniHub. Construct the neutral context
 		// from the frozen remote tariff before any helper can enter a provider;
 		// no local price/quota reservation is consulted.
+		info.InitChannelMeta(c)
 		price, ok := info.PlatformBilling.MeteredPrice()
 		if !ok {
 			// exclusive_v1 remains supported only by its Chat helper, which owns

@@ -348,6 +348,9 @@ export function UserAuthForm({
         className={cn('grid gap-4', className)}
         {...props}
       >
+        <Link to='/unihub' className='text-primary underline'>
+          {t('UniHub account and billing')}
+        </Link>
         {hasAlternativeLogin && alternativeLoginMethods}
 
         {passwordLoginEnabled && (

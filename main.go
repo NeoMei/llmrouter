@@ -19,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/internal/platformaccount"
 	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
@@ -227,6 +228,12 @@ func main() {
 		IndexPage: indexPage,
 	})
 	router.SetPlatformRouter(server, platformAdapter)
+	productConfig, productErr := platformaccount.FromEnv()
+	if productErr != nil {
+		common.FatalLog("invalid UniHub product configuration")
+		return
+	}
+	router.SetUniHubRouter(server, productConfig)
 	var port = os.Getenv("PORT")
 	if port == "" {
 		port = strconv.Itoa(*common.Port)

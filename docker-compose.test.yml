@@ -39,7 +39,11 @@ services:
       retries: 30
 
   minio:
-    image: quay.io/minio/minio:RELEASE.2024-08-03T04-33-23Z
+    image: llmrouter-test-minio:local
+    build:
+      context: .
+      dockerfile: tests/minio/Dockerfile
+      target: minio
     command: server /data
     environment:
       MINIO_ROOT_USER: test-access-key
@@ -52,7 +56,11 @@ services:
       retries: 30
 
   minio-init:
-    image: quay.io/minio/mc:RELEASE.2024-07-31T15-58-33Z
+    image: llmrouter-test-mc:local
+    build:
+      context: .
+      dockerfile: tests/minio/Dockerfile
+      target: mc
     depends_on:
       minio:
         condition: service_healthy

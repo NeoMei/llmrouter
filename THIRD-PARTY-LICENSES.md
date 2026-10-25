@@ -6,6 +6,12 @@ It is an engineering compliance artifact and should be kept with Docker images, 
 Scope: direct dependencies from `go.mod`, `web/package.json`, and `electron/package.json`.
 Transitive dependencies should be audited before a final external release.
 
+Integration-only container tools are built from the official MinIO sources:
+`minio/minio` at `RELEASE.2024-08-03T04-33-23Z` and `minio/mc` at
+`RELEASE.2024-07-31T15-58-33Z` (GNU AGPLv3). The source archives and builder/runtime
+images are SHA256-pinned in `tests/minio/Dockerfile`; each test image retains its
+upstream LICENSE. These tools are not bundled into the application image.
+
 ## Dependency Inventory
 
 | Area        | Scope       | Ecosystem | Dependency                                            | Version                              | License                                            |

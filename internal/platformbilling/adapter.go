@@ -101,6 +101,11 @@ func (a *Adapter) Enabled() bool            { return a != nil && a.config.Enable
 func (a *Adapter) Principal() (int, string) { return a.config.PrincipalID, a.config.Group }
 func (a *Adapter) BodyLimit() int64         { return a.config.MaxBodyBytes }
 func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body []byte) (*Session, error) {
+	// A configured chat metered tariff opts into metered_v2; otherwise the
+	// legacy exclusive_v1 contract remains byte-compatible.
+	if len(a.config.OperationRateIDs["chat"]) > 0 {
+		return a.AdmitOperation(ctx, credential, task, id, "chat", "application/json", body)
+	}
 	if !a.Enabled() || !stableID.MatchString(id) || !stableID.MatchString(task) || !strings.HasPrefix(credential, "uh_model_") || len(credential) > 1024 || int64(len(body)) > a.config.MaxBodyBytes || len(body) > a.config.MaxInputTokens/2 {
 		return nil, ErrInvalid
 	}

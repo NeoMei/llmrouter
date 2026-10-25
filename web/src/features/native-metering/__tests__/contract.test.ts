@@ -85,12 +85,107 @@ test('invalid unit, duplicate tier, zero denominator and operation mismatch reje
   )
 })
 
-
 test('reservation limits serialize independently and preserve other operations', () => {
- const saved = setReservationLimit('{"m":{"video":{"value":"10","scale":0}}}', 'm', 'speech', '2147483647')
- assert.deepEqual(JSON.parse(saved), {m:{speech:{value:'2147483647',scale:0},video:{value:'10',scale:0}}})
- assert.equal(reservationLimitsSchema.safeParse({m:{speech:{value:'0',scale:0}}}).success,false)
- assert.equal(reservationLimitsSchema.safeParse({m:{speech:{value:'2147483648',scale:0}}}).success,false)
- assert.equal(reservationLimitsSchema.safeParse({m:{video:{value:'1',scale:1}}}).success,false)
- assert.equal(reservationLimitsSchema.safeParse({m:{ocr:{value:'1',scale:0}}}).success,false)
+  const saved = setReservationLimit(
+    '{"m":{"video":{"value":"10","scale":0}}}',
+    'm',
+    'speech',
+    '2147483647'
+  )
+  assert.deepEqual(JSON.parse(saved), {
+    m: {
+      speech: { value: '2147483647', scale: 0 },
+      video: { value: '10', scale: 0 },
+    },
+  })
+  assert.equal(
+    reservationLimitsSchema.safeParse({
+      m: { speech: { value: '0', scale: 0 } },
+    }).success,
+    false
+  )
+  assert.equal(
+    reservationLimitsSchema.safeParse({
+      m: { speech: { value: '2147483648', scale: 0 } },
+    }).success,
+    false
+  )
+  assert.equal(
+    reservationLimitsSchema.safeParse({
+      m: { video: { value: '1', scale: 1 } },
+    }).success,
+    false
+  )
+  assert.equal(
+    reservationLimitsSchema.safeParse({ m: { ocr: { value: '1', scale: 0 } } })
+      .success,
+    false
+  )
+})
+
+test('image tiers require exclusive images or canonical bounded dimensions', () => {
+  const image = {
+    version: 'metered_v2',
+    operation: 'image_generation',
+    policy: 'successful_outputs_v1',
+    terms: [
+      {
+        key: '1024x1024',
+        unit: 'image',
+        price: { numerator: '1', denominator: '1' },
+      },
+    ],
+  }
+  assert.equal(priceSchema.safeParse(image).success, true)
+  for (const key of ['01024x1024', '1024x0', '2147483648x1024', 'large']) {
+    assert.equal(
+      priceSchema.safeParse({ ...image, terms: [{ ...image.terms[0], key }] })
+        .success,
+      false
+    )
+  }
+  assert.equal(
+    priceSchema.safeParse({
+      ...image,
+      terms: [image.terms[0], { ...image.terms[0], key: 'images' }],
+    }).success,
+    false
+  )
+  assert.equal(
+    priceSchema.safeParse({
+      ...image,
+      terms: [{ ...image.terms[0], key: 'images' }],
+    }).success,
+    true
+  )
+})
+test('server audio measurement is publishable but unimplemented generic video policies are rejected', () => {
+  const audio = {
+    version: 'metered_v2',
+    operation: 'transcription',
+    policy: 'server_audio_measurement_v1',
+    terms: [
+      {
+        key: 'audio',
+        unit: 'audio_second',
+        price: { numerator: '1', denominator: '1' },
+      },
+    ],
+  }
+  assert.equal(priceSchema.safeParse(audio).success, true)
+  for (const policy of [
+    'provider_reported_v1',
+    'successful_outputs_v1',
+    'veo_output_probe_v1',
+  ]) {
+    assert.equal(
+      priceSchema.safeParse({
+        ...audio,
+        operation: 'video',
+        policy,
+        terms: [{ ...audio.terms[0], key: 'video', unit: 'video_second' }],
+      }).success,
+      false
+    )
+  }
 })

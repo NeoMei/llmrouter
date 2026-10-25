@@ -11,19 +11,16 @@ export const policies: Record<string, readonly string[]> = {
   responses: ['provider_reported_v1'],
   embedding: ['provider_reported_v1'],
   speech: ['provider_reported_v1', 'unicode_scalar_v1'],
-  transcription: ['provider_reported_v1'],
+  transcription: ['provider_reported_v1', 'server_audio_measurement_v1'],
   image_generation: ['successful_outputs_v1'],
   image_edit: ['successful_outputs_v1'],
   ocr: ['success_request'],
   video: [
-    'provider_reported_v1',
-    'successful_outputs_v1',
     'sora_completed_seconds_v1',
     'kling_final_units_v1',
     'doubao_completion_tokens_v1',
     'ali_video_duration_v1',
     'ali_wan26_t2v_billable_duration_v1',
-    'veo_output_probe_v1',
   ],
 }
 export const operationUnits: Record<string, readonly string[]> = {
@@ -76,6 +73,19 @@ export const priceSchema = z
           : Boolean(term.provider_unit))
       ) {
         ctx.addIssue({ code: 'custom', message: 'Invalid native tariff' })
+      }
+      if (term.unit === 'image') {
+        const dimensions = /^([1-9][0-9]*)x([1-9][0-9]*)$/.exec(term.key)
+        const validSize =
+          dimensions &&
+          BigInt(dimensions[1]) <= 2147483647n &&
+          BigInt(dimensions[2]) <= 2147483647n
+        if (
+          (term.key === 'images' && p.terms.length !== 1) ||
+          (term.key !== 'images' && !validSize)
+        ) {
+          ctx.addIssue({ code: 'custom', message: 'Invalid native tariff' })
+        }
       }
       keys.add(term.key)
       if (
@@ -162,20 +172,38 @@ export function finalAmount(state: string, quota: string): string | undefined {
   return state === 'settled' ? quota : undefined
 }
 
-export const reservationLimitsSchema = z.record(
-  z.string().trim().min(1).max(128),
-  z.object({ speech: quantitySchema.optional(), video: quantitySchema.optional() }).strict()
-).superRefine((catalog, ctx) => {
-  for (const ops of Object.values(catalog)) {
-    for (const q of Object.values(ops)) {
-      if (q && (q.scale !== 0 || q.value === '0' || BigInt(q.value) > 2147483647n)) {
-        ctx.addIssue({ code: 'custom', message: 'Invalid reservation limit' })
+export const reservationLimitsSchema = z
+  .record(
+    z.string().trim().min(1).max(128),
+    z
+      .object({
+        speech: quantitySchema.optional(),
+        video: quantitySchema.optional(),
+      })
+      .strict()
+  )
+  .superRefine((catalog, ctx) => {
+    for (const ops of Object.values(catalog)) {
+      for (const q of Object.values(ops)) {
+        if (
+          q &&
+          (q.scale !== 0 || q.value === '0' || BigInt(q.value) > 2147483647n)
+        ) {
+          ctx.addIssue({ code: 'custom', message: 'Invalid reservation limit' })
+        }
       }
     }
-  }
-})
-export function setReservationLimit(raw: string, model: string, operation: 'speech' | 'video', value: string): string {
+  })
+export function setReservationLimit(
+  raw: string,
+  model: string,
+  operation: 'speech' | 'video',
+  value: string
+): string {
   const catalog = reservationLimitsSchema.parse(JSON.parse(raw) as unknown)
-  const next = { ...catalog, [model]: { ...catalog[model], [operation]: { value, scale: 0 } } }
+  const next = {
+    ...catalog,
+    [model]: { ...catalog[model], [operation]: { value, scale: 0 } },
+  }
   return JSON.stringify(reservationLimitsSchema.parse(next), null, 2)
 }

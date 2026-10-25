@@ -90,7 +90,7 @@ func (e *NativeTokenEvidence) Observe(raw []byte, stream bool) {
 			continue
 		}
 		value := n.Int64()
-		if previous, exists := e.values[name]; exists && value < previous {
+		if previous, exists := e.values[name]; exists && (value < previous || (e.terminal && value != previous)) {
 			e.invalid = true
 		}
 		e.values[name] = value

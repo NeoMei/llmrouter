@@ -1,6 +1,6 @@
 # LLMRouter UniHub Integration Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Integrate LLMRouter with UniHub identity, personal/team resources, recharge/subscription UI and unified model settlement.
 
@@ -32,11 +32,11 @@
 
 **Interfaces:** Consumes existing UniHub model credential/internal calls protocol. Produces opted-in `POST /platform/v1/chat/completions` and `GET /platform/v1/calls/:callID`, with existing ConfigFromEnv/New lifecycle.
 
-- [ ] Commit the pre-existing reviewed composable bridge changes as a preservation checkpoint; merge pinned current LLMRouter into this isolated worktree and resolve only integration conflicts.
-- [ ] Add a regression protecting current account-pool retry validation and the platform no-local-quota invariant. Use actual route/HTTP fixtures, including replay suppression after terminal response loss, rather than implementation-shape assertions.
-- [ ] Run `GOMAXPROCS=4 go test -p 4 ./internal/platformbilling ./service ./router -count=1` and verify a meaningful red for a newly uncovered integration defect before fixing it. Reused tests need not be rewritten.
-- [ ] Adapt platform integration to the new current route/usage/send boundaries. Preserve all current native paths; fail closed for unsupported formats and unknown sends.
-- [ ] Run the same suites plus `go test -race ./internal/platformbilling ./service/accountpool -count=1`; record commands/results and commit.
+- [x] Commit the pre-existing reviewed composable bridge changes as a preservation checkpoint; merge pinned current LLMRouter into this isolated worktree and resolve only integration conflicts.
+- [x] Add a regression protecting current account-pool retry validation and the platform no-local-quota invariant. Use actual route/HTTP fixtures, including replay suppression after terminal response loss, rather than implementation-shape assertions.
+- [x] Run `GOMAXPROCS=4 go test -p 4 ./internal/platformbilling ./service ./router -count=1` and verify a meaningful red for a newly uncovered integration defect before fixing it. Reused tests need not be rewritten.
+- [x] Adapt platform integration to the new current route/usage/send boundaries. Preserve all current native paths; fail closed for unsupported formats and unknown sends.
+- [x] Run the same suites plus `go test -race ./internal/platformbilling ./service/accountpool -count=1`; record commands/results and commit.
 
 ### Task 2: Add explicit unified model pool reporting in UniHub
 
@@ -44,10 +44,10 @@
 
 **Interfaces:** Produces `GET /v1/accounts/{account}/model-pool/calls`, `/model-pool/calls/{call}`, `/model-pool/usage/summary`, gated by `usage:all-products` AND llmrouter product AND current owner/billing_admin role. SDK produces `modelPoolCalls(account,filter)`, `modelPoolCall(account,id,origin?)`, `modelPoolUsage(account,filter)`.
 
-- [ ] Write real HTTP policy tests: ordinary product, missing scope and member/admin are denied; finance llmrouter client can aggregate SuperWagie/AgentWiki and filter one origin; existing `/calls` remains own-origin; account/cursor/asset boundaries remain intact.
-- [ ] Run focused tests with the established isolated PostgreSQL fixture and verify red, then add strict registry scope validation and handlers reusing existing billing queries. Update the offline product-client onboarding scope validator with the same llmrouter-only rule so operators can actually configure the capability.
-- [ ] Add SDK real HTTP contract tests for the named methods and OpenAPI paths; quantities stay strings, errors remain structured.
-- [ ] Run affected Go tests, SDK tests/typecheck, update exact configuration/docs and commit only Task 2 files. Never edit production configuration or waive RBAC to make UI work.
+- [x] Write real HTTP policy tests: ordinary product, missing scope and member/admin are denied; finance llmrouter client can aggregate SuperWagie/AgentWiki and filter one origin; existing `/calls` remains own-origin; account/cursor/asset boundaries remain intact.
+- [x] Run focused tests with the established isolated PostgreSQL fixture and verify red, then add strict registry scope validation and handlers reusing existing billing queries. Update the offline product-client onboarding scope validator with the same llmrouter-only rule so operators can actually configure the capability.
+- [x] Add SDK real HTTP contract tests for the named methods and OpenAPI paths; quantities stay strings, errors remain structured.
+- [x] Run affected Go tests, SDK tests/typecheck, update exact configuration/docs and commit only Task 2 files. Never edit production configuration or waive RBAC to make UI work.
 
 ### Task 3: Integrate LLMRouter product identity, account selection and financial UI
 
@@ -55,11 +55,11 @@
 
 **Interfaces:** Public non-secret integration config identifies fixed UniHub base URL/client/redirect. Proof endpoint validates supplied product token against fixed `/v1/capabilities`, `/v1/me` and `/v1/accounts` (never a browser supplied service URL), requires kind=product + product_id=llmrouter + exact configured client_id, and returns a request-scoped identity projection without creating a local User/session and returns immutable identity/account information; any local projection is least-privilege and cannot use local money/key endpoints. Product frontend independently calls UniHub with its own scoped token. Short-lived model grants carry chosen account/model/task and funding mode into Task 1 route. Task 2 SDK modelPool methods support optional finance overview.
 
-- [ ] Read applicable frontend/backend instructions, relevant auth/session and wallet source. Write failing HTTP/DB tests for fixed issuer/user mapping, untrusted proofs, no email merge/admin elevation, local financial bypass rejection and account scope. Write frontend behavior tests for PKCE state, logout/expiry clearing, exact money, account-switch request binding and finance visibility.
-- [ ] Implement explicit opt-in fixed integration config and proof mapping without storing product passwords/tokens in browser persistence or database. Keep operator/local login functioning and distinguish all credential types.
-- [ ] Add UniHub-native registration/login and product-owned account UI to discoverable login/wallet surfaces. Support personal/team selection, team creation/invitation acceptance, role-aware member/finance actions, resources, immutable catalog/subscriptions and recharge/order readback. Preserve one idempotency key through an uncertain financial operation, offer query/retry of the original object and do not automatically pay or settle sandbox orders. Do not promise durable API keys from model grants.
-- [ ] Add usage finance pool view with own-origin fallback and clear visibility labels; no provider secrets or request content. Display missing live payment capability and unsupported gateway protocols accurately. Support credential issuance/revocation and normal/streaming chat through the trusted gateway, with stable task/call IDs.
-- [ ] Run new tests plus existing auth/wallet regression tests, backend suites, frontend typecheck, touched-file lint and production build; fix failures; commit.
+- [x] Read applicable frontend/backend instructions, relevant auth/session and wallet source. Write failing HTTP/DB tests for fixed issuer/user mapping, untrusted proofs, no email merge/admin elevation, local financial bypass rejection and account scope. Write frontend behavior tests for PKCE state, logout/expiry clearing, exact money, account-switch request binding and finance visibility.
+- [x] Implement explicit opt-in fixed integration config and proof mapping without storing product passwords/tokens in browser persistence or database. Keep operator/local login functioning and distinguish all credential types.
+- [x] Add UniHub-native registration/login and product-owned account UI to discoverable login/wallet surfaces. Support personal/team selection, team creation/invitation acceptance, role-aware member/finance actions, resources, immutable catalog/subscriptions and recharge/order readback. Preserve one idempotency key through an uncertain financial operation, offer query/retry of the original object and do not automatically pay or settle sandbox orders. Do not promise durable API keys from model grants.
+- [x] Add usage finance pool view with own-origin fallback and clear visibility labels; no provider secrets or request content. Display missing live payment capability and unsupported gateway protocols accurately. Support credential issuance/revocation and normal/streaming chat through the trusted gateway, with stable task/call IDs.
+- [x] Run new tests plus existing auth/wallet regression tests, backend suites, frontend typecheck, touched-file lint and production build; fix failures; commit.
 
 ### Task 4: End-to-end acceptance, deployment recipe and whole integration review
 
@@ -67,7 +67,8 @@
 
 **Interfaces:** Consumes Tasks 1–3. Produces reproducible setup and acceptance without production mutation.
 
-- [ ] Run actual LLMRouter route against UniHub HTTP, isolated PostgreSQL and real Formance using the existing composable acceptance fixture. Cover CREDIT and CNY, stream, lost settlement response, durable recovery and zero duplicate provider sends/local charges.
-- [ ] Exercise product identity and UI against actual local UniHub/Casdoor if available; otherwise use explicit controlled HTTP fixtures and record that boundary. No credentials or actual provider keys in reports.
-- [ ] Document exact llmrouter client/Origin/redirect, scopes, funding profiles/rates, internal service networking, fixed routing identity, token lifecycle, supported protocols, legacy-account migration boundary and rollback for new traffic.
-- [ ] Run necessary affected tests/builds and final diff review. Resolve important findings, record exact results and mark completed tasks; leave a reviewable committed branch and honest acceptance report.
+- [x] Run actual LLMRouter route against UniHub HTTP, isolated PostgreSQL and real Formance using the existing composable acceptance fixture. Cover CREDIT and CNY, stream, lost settlement response, durable recovery and zero duplicate provider sends/local charges.
+- [x] Exercise product identity and UI against actual local UniHub/Casdoor if available; otherwise use explicit controlled HTTP fixtures and record that boundary. No credentials or actual provider keys in reports.
+- [x] Document exact llmrouter client/Origin/redirect, scopes, funding profiles/rates, internal service networking, fixed routing identity, token lifecycle, supported protocols, legacy-account migration boundary and rollback for new traffic.
+- [x] Run necessary affected tests/builds, resolve scoped-review findings, record exact results and leave reviewable committed local branches and an honest acceptance report.
+- [ ] Complete the final whole-branch diff review and resolve any resulting important findings (Task 4 remaining gate; no deployment/publication authorized).

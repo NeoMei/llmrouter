@@ -14,6 +14,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -313,6 +314,43 @@ func TestOpenaiImageStreamHandlerWrapsJSONResponse(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), `data: [DONE]`)
 	require.Equal(t, 2, strings.Count(recorder.Body.String(), `event: image_generation.completed`))
 	require.Equal(t, 2.0, info.PriceData.OtherRatios()["n"])
+}
+
+func TestOpenaiImageStreamJSONFallbackRecordsNativeUsage(t *testing.T) {
+	oldMode := gin.Mode()
+	gin.SetMode(gin.TestMode)
+	t.Cleanup(func() { gin.SetMode(oldMode) })
+
+	price := metering.Price{Version: "metered_v2", Operation: "image_generation", Policy: "successful_outputs_v1", Terms: []metering.Term{{Key: "images", Unit: "image", Price: metering.Rational{Numerator: "1", Denominator: "1"}}}}
+	for _, tt := range []struct {
+		name, body, state, count string
+	}{
+		{"completed images", `{"data":[{"url":"https://example.test/a"},{"url":"https://example.test/b"}]}`, "confirmed", "2"},
+		{"explicit zero outputs", `{"data":[]}`, "confirmed", "0"},
+		{"missing outputs", `{}`, "incomplete", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c, recorder, resp, info := newImageTestContext(t, tt.body, "application/json", true)
+			info.PlatformMode = true
+			var observed []metering.Usage
+			info.NativeBilling = &relaycommon.NativeBillingContext{Platform: true, Price: price, Observe: func(_ context.Context, u metering.Usage) error {
+				observed = append(observed, u)
+				return nil
+			}}
+
+			_, err := OpenaiImageStreamHandler(c, info, resp)
+			require.Nil(t, err)
+			require.Len(t, observed, 1)
+			assert.Equal(t, tt.state, observed[0].State)
+			if tt.count != "" {
+				require.Len(t, observed[0].Measurements, 1)
+				assert.Equal(t, tt.count, observed[0].Measurements[0].Quantity.Value)
+			} else {
+				assert.Empty(t, observed[0].Measurements)
+			}
+			assert.Contains(t, recorder.Body.String(), "data: [DONE]")
+		})
+	}
 }
 
 func TestOpenaiImageHandlerUsesPositiveActualCountForFixedPrice(t *testing.T) {

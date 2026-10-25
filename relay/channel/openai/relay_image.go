@@ -29,6 +29,41 @@ func updateOpenAIImageCount(info *relaycommon.RelayInfo, count int64) {
 	info.PriceData.AddOtherRatio("n", float64(count))
 }
 
+// recordNativeImageJSONUsage extracts completed image outputs from the
+// provider's JSON response and records them against the frozen native tariff.
+// The same evidence path is used by both regular JSON responses and the JSON
+// fallback for requests that asked for streaming, so content type negotiation
+// cannot bypass native settlement.
+func recordNativeImageJSONUsage(c *gin.Context, info *relaycommon.RelayInfo, responseBody []byte) error {
+	if info == nil || info.NativeBilling == nil {
+		return nil
+	}
+	var result struct {
+		Data []struct {
+			URL string `json:"url"`
+			B64 string `json:"b64_json"`
+		} `json:"data"`
+	}
+	terminal := common.UnmarshalUnique(responseBody, &result) == nil && gjson.GetBytes(responseBody, "data").IsArray() && len(result.Data) <= int(dto.MaxImageN)
+	outputs := make([]service.NativeImageOutput, 0, len(result.Data))
+	for _, o := range result.Data {
+		id := o.URL
+		w, h := 0, 0
+		if o.B64 != "" {
+			id = o.B64
+			fact, err := helper.DecodeMediaFact("image", o.B64)
+			if err == nil {
+				w, h = fact.Width, fact.Height
+			}
+		}
+		if id == "" {
+			terminal = false
+		}
+		outputs = append(outputs, service.NativeImageOutput{ID: id, Width: w, Height: h})
+	}
+	return service.RecordNativeUsageForRelay(c.Request.Context(), info, service.NativeImageUsage(info.NativeBilling.Price, outputs, terminal))
+}
+
 // OpenaiImageHandler handles non-streaming OpenAI image responses
 // (generations/edits), returning the parsed usage for billing.
 func OpenaiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
@@ -50,33 +85,8 @@ func OpenaiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 	}
 
 	updateOpenAIImageCount(info, gjson.GetBytes(responseBody, "data.#").Int())
-	if info.NativeBilling != nil {
-		var result struct {
-			Data []struct {
-				URL string `json:"url"`
-				B64 string `json:"b64_json"`
-			} `json:"data"`
-		}
-		terminal := common.UnmarshalUnique(responseBody, &result) == nil && gjson.GetBytes(responseBody, "data").IsArray() && len(result.Data) <= int(dto.MaxImageN)
-		outputs := []service.NativeImageOutput{}
-		for _, o := range result.Data {
-			id := o.URL
-			w, h := 0, 0
-			if o.B64 != "" {
-				id = o.B64
-				fact, e := helper.DecodeMediaFact("image", o.B64)
-				if e == nil {
-					w, h = fact.Width, fact.Height
-				}
-			}
-			if id == "" {
-				terminal = false
-			}
-			outputs = append(outputs, service.NativeImageOutput{ID: id, Width: w, Height: h})
-		}
-		if err := service.RecordNativeUsageForRelay(c.Request.Context(), info, service.NativeImageUsage(info.NativeBilling.Price, outputs, terminal)); err != nil {
-			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
-		}
+	if err := recordNativeImageJSONUsage(c, info, responseBody); err != nil {
+		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
 
 	// 写入新的 response body
@@ -302,6 +312,9 @@ func openaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 
 	imageCount := gjson.GetBytes(responseBody, "data.#").Int()
 	updateOpenAIImageCount(info, imageCount)
+	if err := recordNativeImageJSONUsage(c, info, responseBody); err != nil {
+		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+	}
 
 	helper.SetEventStreamHeaders(c)
 	c.Status(http.StatusOK)

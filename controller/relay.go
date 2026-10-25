@@ -950,6 +950,19 @@ func RelayTask(c *gin.Context) {
 		return
 	}
 
+	if relayInfo.PlatformMode {
+		if relayInfo.PlatformBilling == nil {
+			c.AbortWithStatus(http.StatusBadRequest)
+			return
+		}
+		price, ok := relayInfo.PlatformBilling.MeteredPrice()
+		if !ok || price.Operation != "video" {
+			c.AbortWithStatus(http.StatusBadRequest)
+			return
+		}
+		relayInfo.NativeBilling = &relaycommon.NativeBillingContext{CallID: relayInfo.PlatformBilling.CallID(), Platform: true, Price: price, Observe: relayInfo.PlatformBilling.ObserveMetering}
+	}
+
 	if taskErr := relay.ResolveOriginTask(c, relayInfo); taskErr != nil {
 		respondTaskError(c, taskErr)
 		return

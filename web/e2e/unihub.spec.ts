@@ -489,3 +489,91 @@ test('definitive finance scope denial shows failure without retaining uncertain 
   ).toBeEnabled()
   await expect(page.getByText('Original financial object')).toHaveCount(0)
 })
+
+for (const rejection of [
+  { status: 400, code: 'invalid_password' },
+  { status: 403, code: 'origin_not_allowed' },
+  { status: 409, code: 'registration_conflict' },
+]) {
+  test(`definitive registration ${rejection.code} unlocks correction and sign-in`, async ({
+    page,
+  }) => {
+    await fixture(page)
+    const writes: { key: string; username: string }[] = []
+    await page.route('**/identity/registrations', (route) => {
+      if (route.request().method() === 'OPTIONS') return route.fallback()
+      writes.push({
+        key: route.request().headers()['idempotency-key'],
+        username: route.request().postDataJSON().username,
+      })
+      const response =
+        writes.length === 1
+          ? { status: rejection.status, json: { error: rejection.code } }
+          : { status: 201, json: { registration_id: 'new', status: 'CREATED' } }
+      return route.fulfill({
+        headers: { 'Access-Control-Allow-Origin': 'http://127.0.0.1:58004' },
+        ...response,
+      })
+    })
+    await page.goto('/unihub')
+    await page.getByRole('button', { name: 'Register UniHub account' }).click()
+    await page.getByLabel('Username', { exact: true }).fill('rejected-user')
+    await page.getByLabel('Password', { exact: true }).fill('private')
+    await page.getByRole('button', { name: 'Register', exact: true }).click()
+    await expect(page.getByRole('status')).toContainText(rejection.code)
+    await expect(page.getByLabel('Username', { exact: true })).toBeEnabled()
+    await expect(
+      page.getByRole('button', { name: 'Back to sign in' })
+    ).toBeEnabled()
+    await page.getByLabel('Username', { exact: true }).fill('corrected-user')
+    await page.getByRole('button', { name: 'Register', exact: true }).click()
+    await expect(
+      page.getByRole('button', { name: 'Sign in', exact: true })
+    ).toBeVisible()
+    expect(writes).toHaveLength(2)
+    expect(writes[1].username).toBe('corrected-user')
+    expect(writes[0].key).not.toBe(writes[1].key)
+  })
+}
+
+for (const failure of ['network', 'pending', 'idempotency_conflict'] as const) {
+  test(`uncertain registration ${failure} retains original locked payload and key`, async ({
+    page,
+  }) => {
+    await fixture(page)
+    const writes: { key: string; body: string }[] = []
+    await page.route('**/identity/registrations', (route) => {
+      if (route.request().method() === 'OPTIONS') return route.fallback()
+      writes.push({
+        key: route.request().headers()['idempotency-key'],
+        body: route.request().postData() ?? '',
+      })
+      if (failure === 'network') return route.abort('failed')
+      return route.fulfill({
+        headers: { 'Access-Control-Allow-Origin': 'http://127.0.0.1:58004' },
+        status: failure === 'pending' ? 202 : 409,
+        json:
+          failure === 'pending'
+            ? { status: 'UNKNOWN', registration_id: 'original' }
+            : { error: 'idempotency_conflict' },
+      })
+    })
+    await page.goto('/unihub')
+    await page.getByRole('button', { name: 'Register UniHub account' }).click()
+    await page.getByLabel('Username', { exact: true }).fill('uncertain-user')
+    await page.getByLabel('Password', { exact: true }).fill('private')
+    await page.getByRole('button', { name: 'Register', exact: true }).click()
+    await expect(
+      page.getByRole('button', { name: 'Retry original registration' })
+    ).toBeEnabled()
+    await expect(page.getByLabel('Username', { exact: true })).toBeDisabled()
+    await expect(
+      page.getByRole('button', { name: 'Back to sign in' })
+    ).toBeDisabled()
+    await page
+      .getByRole('button', { name: 'Retry original registration' })
+      .click()
+    await expect.poll(() => writes.length).toBe(2)
+    expect(writes[0]).toEqual(writes[1])
+  })
+}

@@ -44,3 +44,11 @@ Root owns actual local Casdoor/UniHub/Formance/provider/browser acceptance and r
 - Pending financial intents are intentionally memory-only. Reload/logout loses the in-memory key; UI readback by original ID remains available after login. Uncertain live action should be queried/retried in its original tab before refresh. No automatic financial retry/settlement.
 - Optional non-Chinese locales currently fall back to English for new product labels.
 - Root owns final live readback and any further acceptance; this worker did not make production changes.
+
+## Round 1 — definitive registration rejection (P2)
+
+Review found that `pending` was established before registration dispatch and remained after definitive validation/policy/conflict rejection, disabling input correction and the sign-in switch. Added three rendered cases before the fix:400 invalid_password,403 origin_not_allowed and409 registration_conflict each failed on the expected disabled username field.
+
+Verified current UniHub identity implementation before classifying errors.400 invalid_request/invalid_password and403 client_not_enabled/origin_not_allowed occur before row creation.409 interaction_required is a pre-create policy refusal; registration_conflict is a definitive collision/reconciled conflicting identity. These exact known code/status combinations now clear the local pending intent so a corrected submission receives a fresh key and registration/sign-in remain reachable.409 idempotency_conflict can reference unresolved original work, so it retains the original locked body/key, as do UNKNOWN/network/service failures and unrecognized error codes. Any successful response other than explicit CREATED also stays unresolved rather than falsely reporting creation. No automatic retry.
+
+Validation:12 module unit tests passed;7 focused registration browser tests passed (three definitive correction/reachable-sign-in cases, original UNKNOWN test and network/pending/idempotency-conflict same-body/key tests). Touched lint, typecheck, production build and diff whitespace passed. No backend or running controller-owned services changed; Task4 docs left untouched.

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 
+import { registrationDefinitivelyRejected } from './registration'
 import type { User, Account, Registration } from './sdk'
 import { message, type ProductSession } from './session'
 import { Panel, Field, Submit } from './ui'
@@ -36,7 +37,7 @@ export function AuthPanel(props: {
           intent.body,
           intent.key
         )
-        if (result.status === 'UNKNOWN') {
+        if (result.status !== 'CREATED') {
           setNotice(
             t('Registration status unknown. Retry the original registration.')
           )
@@ -68,6 +69,7 @@ export function AuthPanel(props: {
       form.reset()
     } catch (error) {
       if (!register) props.session.clear()
+      else if (registrationDefinitivelyRejected(error)) setPending(null)
       setNotice(message(error))
     } finally {
       setBusy(false)

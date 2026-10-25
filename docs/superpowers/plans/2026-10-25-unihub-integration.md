@@ -40,12 +40,12 @@
 
 ### Task 2: Add explicit unified model pool reporting in UniHub
 
-**Files:** UniHub worktree internal/products/{registry,registry_test}.go; internal/httpapi/{product,product_queries}*.go; packages/sdk/src/index.ts and tests; api/openapi.yaml; docs/headless-product-api.md. Worktree is `/Users/neomei/.codex/worktrees/composable-billing/unihub`.
+**Files:** UniHub worktree internal/products/{registry,registry_test}.go; internal/httpapi/{product,product_queries}*.go; packages/sdk/src/index.ts and tests; api/openapi.yaml; scripts/product_client.py and scripts/test-product-client.py; docs/headless-product-api.md. Worktree is `/Users/neomei/.codex/worktrees/composable-billing/unihub`.
 
 **Interfaces:** Produces `GET /v1/accounts/{account}/model-pool/calls`, `/model-pool/calls/{call}`, `/model-pool/usage/summary`, gated by `usage:all-products` AND llmrouter product AND current owner/billing_admin role. SDK produces `modelPoolCalls(account,filter)`, `modelPoolCall(account,id,origin?)`, `modelPoolUsage(account,filter)`.
 
 - [ ] Write real HTTP policy tests: ordinary product, missing scope and member/admin are denied; finance llmrouter client can aggregate SuperWagie/AgentWiki and filter one origin; existing `/calls` remains own-origin; account/cursor/asset boundaries remain intact.
-- [ ] Run focused tests with the established isolated PostgreSQL fixture and verify red, then add strict registry scope validation and handlers reusing existing billing queries.
+- [ ] Run focused tests with the established isolated PostgreSQL fixture and verify red, then add strict registry scope validation and handlers reusing existing billing queries. Update the offline product-client onboarding scope validator with the same llmrouter-only rule so operators can actually configure the capability.
 - [ ] Add SDK real HTTP contract tests for the named methods and OpenAPI paths; quantities stay strings, errors remain structured.
 - [ ] Run affected Go tests, SDK tests/typecheck, update exact configuration/docs and commit only Task 2 files. Never edit production configuration or waive RBAC to make UI work.
 

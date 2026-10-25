@@ -12,7 +12,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/pkg/metering"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
@@ -52,12 +51,32 @@ func OpenaiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 
 	updateOpenAIImageCount(info, gjson.GetBytes(responseBody, "data.#").Int())
 	if info.NativeBilling != nil {
-		n := gjson.GetBytes(responseBody, "data.#").Int()
-		outs := make([]service.NativeImageOutput, n)
-		for i := range outs {
-			outs[i].ID = fmt.Sprintf("%d", i)
+		var result struct {
+			Data []struct {
+				URL string `json:"url"`
+				B64 string `json:"b64_json"`
+			} `json:"data"`
 		}
-		_ = service.RecordNativeUsageForRelay(c.Request.Context(), info, service.NativeImageUsage(info.NativeBilling.Price, outs, true))
+		terminal := common.UnmarshalUnique(responseBody, &result) == nil && gjson.GetBytes(responseBody, "data").IsArray() && len(result.Data) <= int(dto.MaxImageN)
+		outputs := []service.NativeImageOutput{}
+		for _, o := range result.Data {
+			id := o.URL
+			w, h := 0, 0
+			if o.B64 != "" {
+				id = o.B64
+				fact, e := helper.DecodeMediaFact("image", o.B64)
+				if e == nil {
+					w, h = fact.Width, fact.Height
+				}
+			}
+			if id == "" {
+				terminal = false
+			}
+			outputs = append(outputs, service.NativeImageOutput{ID: id, Width: w, Height: h})
+		}
+		if err := service.RecordNativeUsageForRelay(c.Request.Context(), info, service.NativeImageUsage(info.NativeBilling.Price, outputs, terminal)); err != nil {
+			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		}
 	}
 
 	// 写入新的 response body

@@ -59,8 +59,14 @@ func NativeAudioUsage(p metering.Price, seconds *float64, terminal bool) meterin
 		u.State = "invalid"
 		return u
 	}
-	s := strconv.FormatFloat(*seconds, 'f', 9, 64)
-	s = strings.TrimRight(strings.TrimRight(s, "0"), ".")
+	s := strconv.FormatFloat(*seconds, 'f', -1, 64)
+	if strings.Contains(s, ".") && len(strings.Split(s, ".")[1]) > 9 {
+		u.State = "invalid"
+		return u
+	}
+	if strings.Contains(s, ".") {
+		s = strings.TrimRight(strings.TrimRight(s, "0"), ".")
+	}
 	if s == "" {
 		s = "0"
 	}

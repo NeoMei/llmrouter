@@ -60,3 +60,16 @@ func TestNativeCompletedImages(t *testing.T) {
 	assert.Equal(t, "confirmed", NativeImageUsage(p, []NativeImageOutput{{ID: "a", Width: 1024, Height: 1024}}, true).State)
 	assert.Equal(t, "invalid", NativeImageUsage(p, []NativeImageOutput{{ID: "a", Width: 512, Height: 512}}, true).State)
 }
+
+func TestNativeImageMultipleTiersAndConflictingDuplicate(t *testing.T) {
+	p := mediaPrice("image_generation", "successful_outputs_v1", "1024x1024", "image")
+	p.Terms = append(p.Terms, metering.Term{Key: "512x512", Unit: "image", Price: metering.Rational{Numerator: "1", Denominator: "1"}})
+	u := NativeImageUsage(p, []NativeImageOutput{{"a", 1024, 1024}, {"b", 512, 512}}, true)
+	require.NoError(t, metering.ValidateUsage(p, u))
+	assert.Equal(t, "1", u.Measurements[0].Quantity.Value)
+	assert.Equal(t, "1", u.Measurements[1].Quantity.Value)
+	u = NativeImageUsage(p, nil, true)
+	assert.Equal(t, "0", u.Measurements[0].Quantity.Value)
+	assert.Equal(t, "0", u.Measurements[1].Quantity.Value)
+	assert.Equal(t, "invalid", NativeImageUsage(p, []NativeImageOutput{{"a", 1024, 1024}, {"a", 512, 512}}, true).State)
+}

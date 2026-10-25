@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/pkg/metering"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/gin-gonic/gin"
@@ -446,4 +447,22 @@ func TestOpenaiImageStreamHandlerRecordsUpstreamErrorEvent(t *testing.T) {
 	// is still forwarded in the data: payload (stream ID 77).
 	require.Contains(t, recorder.Body.String(), `event: upstream_error`)
 	require.Contains(t, recorder.Body.String(), `stream ID 77`)
+}
+
+func TestNativeImageHandlerPartialAndZeroReceipt(t *testing.T) {
+	for _, body := range []string{`{"data":[{"url":"https://example.test/a"},{"url":"https://example.test/b"}]}`, `{"data":[]}`} {
+		c, _, resp, info := newImageTestContext(t, body, "application/json", false)
+		info.PlatformMode = true
+		price := metering.Price{Version: "metered_v2", Operation: "image_generation", Policy: "successful_outputs_v1", Terms: []metering.Term{{Key: "images", Unit: "image", Price: metering.Rational{Numerator: "1", Denominator: "1"}}}}
+		info.NativeBilling = &relaycommon.NativeBillingContext{Platform: true, Price: price, Observe: func(context.Context, metering.Usage) error { return nil }}
+		_, e := OpenaiImageHandler(c, info, resp)
+		require.Nil(t, e)
+		require.NotNil(t, info.NativeBilling.Usage)
+		require.Equal(t, "confirmed", info.NativeBilling.Usage.State)
+		if body == `{"data":[]}` {
+			require.Equal(t, "0", info.NativeBilling.Usage.Measurements[0].Quantity.Value)
+		} else {
+			require.Equal(t, "2", info.NativeBilling.Usage.Measurements[0].Quantity.Value)
+		}
+	}
 }

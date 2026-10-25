@@ -506,6 +506,10 @@ func GetSelf(c *gin.Context) {
 // login and refresh. It intentionally excludes password, management PAT and
 // administrator-only remarks.
 func buildSelfUserData(user *model.User) map[string]interface{} {
+	affCode := user.AffCode
+	if user.IdentitySource == model.UniHubIdentitySource {
+		affCode = ""
+	}
 	userSetting := user.GetSetting()
 	permissions := calculateUserPermissions(user.Role)
 	permissions["admin_permissions"] = authz.Capabilities(user.Id, user.Role)
@@ -525,7 +529,7 @@ func buildSelfUserData(user *model.User) map[string]interface{} {
 		"quota":             user.Quota,
 		"used_quota":        user.UsedQuota,
 		"request_count":     user.RequestCount,
-		"aff_code":          user.AffCode,
+		"aff_code":          affCode,
 		"aff_count":         user.AffCount,
 		"aff_quota":         user.AffQuota,
 		"aff_history_quota": user.AffHistoryQuota,
@@ -533,10 +537,15 @@ func buildSelfUserData(user *model.User) map[string]interface{} {
 		"linux_do_id":       user.LinuxDOId,
 		"setting":           user.Setting,
 		"stripe_customer":   user.StripeCustomer,
+		"identity_source":   user.IdentitySource,
+		"unihub_user_id":    user.UniHubUserID,
 		"sidebar_modules":   userSetting.SidebarModules, // 正确提取sidebar_modules字段
 		"permissions":       permissions,
 	}
 }
+
+// BuildSelfUserData returns the dashboard-safe user contract for non-password logins.
+func BuildSelfUserData(user *model.User) map[string]interface{} { return buildSelfUserData(user) }
 
 // 计算用户权限的辅助函数
 func calculateUserPermissions(userRole int) map[string]interface{} {

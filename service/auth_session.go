@@ -61,6 +61,9 @@ func createLoginSession(userID int, expectedAuthVersion int64, loginMethod, ip, 
 	if user.Status != common.UserStatusEnabled || user.AuthVersion <= 0 {
 		return nil, ErrLoginSessionInvalid
 	}
+	if _, err := model.CheckUniHubProjection(userID); err != nil {
+		return nil, ErrLoginSessionInvalid
+	}
 	if expectedAuthVersion > 0 && user.AuthVersion != expectedAuthVersion {
 		return nil, ErrLoginSessionRevoked
 	}
@@ -223,6 +226,10 @@ func RefreshLoginSession(rawRefreshToken, expectedSID, ip, userAgent string) (*A
 	currentUser, err := model.GetUserById(session.UserID, false)
 	if err != nil {
 		return nil, nil, err
+	}
+	if _, err := model.CheckUniHubProjection(currentUser.Id); err != nil {
+		_, _ = model.RevokeUserSession(session.UserID, session.SID, "unihub_projection_invalid")
+		return nil, nil, ErrLoginSessionRevoked
 	}
 	if userCache.Status != common.UserStatusEnabled || userCache.AuthVersion != session.UserAuthVersion ||
 		currentUser.Status != common.UserStatusEnabled || currentUser.AuthVersion != session.UserAuthVersion {

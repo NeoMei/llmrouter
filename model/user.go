@@ -109,21 +109,25 @@ type User struct {
 	CreatedAt        int64                      `json:"created_at" gorm:"autoCreateTime;column:created_at"`
 	LastLoginAt      int64                      `json:"last_login_at" gorm:"default:0;column:last_login_at"`
 	AuthVersion      int64                      `json:"-" gorm:"type:bigint;not null;default:1;column:auth_version"`
+	IdentitySource   string                     `json:"identity_source,omitempty" gorm:"type:varchar(32);not null;default:'';index;column:identity_source"`
+	UniHubUserID     string                     `json:"unihub_user_id,omitempty" gorm:"type:varchar(128);index;column:unihub_user_id"`
 	AdminPermissions map[string]map[string]bool `json:"admin_permissions,omitempty" gorm:"-:all"`
 }
 
 func (user *User) ToBaseUser() *UserBase {
 	cache := &UserBase{
-		Id:          user.Id,
-		Group:       user.Group,
-		Quota:       user.Quota,
-		Status:      user.Status,
-		Role:        user.Role,
-		Username:    user.Username,
-		Setting:     user.Setting,
-		Email:       user.Email,
-		AuthVersion: user.AuthVersion,
-		CacheSchema: userCacheSchemaVersion,
+		Id:             user.Id,
+		Group:          user.Group,
+		Quota:          user.Quota,
+		Status:         user.Status,
+		Role:           user.Role,
+		Username:       user.Username,
+		Setting:        user.Setting,
+		Email:          user.Email,
+		AuthVersion:    user.AuthVersion,
+		IdentitySource: user.IdentitySource,
+		UniHubUserID:   user.UniHubUserID,
+		CacheSchema:    userCacheSchemaVersion,
 	}
 	return cache
 }
@@ -509,7 +513,7 @@ func GetUserIdByAffCode(affCode string) (int, error) {
 		return 0, errors.New("affCode 为空！")
 	}
 	var user User
-	err := DB.Select("id").First(&user, "aff_code = ?", affCode).Error
+	err := DB.Select("id").First(&user, "aff_code = ? AND identity_source = ?", affCode, "").Error
 	return user.Id, err
 }
 

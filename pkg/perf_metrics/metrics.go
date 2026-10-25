@@ -12,9 +12,26 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
+	"github.com/bytedance/gopkg/util/gopool"
 )
 
 var hotBuckets sync.Map
+var pendingRelaySamples sync.WaitGroup
+
+// RecordRelaySampleAsync queues a sample while tracking its lifetime for draining.
+func RecordRelaySampleAsync(info *relaycommon.RelayInfo, success bool, outputTokens int64) {
+	pendingRelaySamples.Add(1)
+	gopool.Go(func() {
+		defer pendingRelaySamples.Done()
+		RecordRelaySample(info, success, outputTokens)
+	})
+}
+
+// DrainRelaySamples waits for queued relay samples to finish. Callers must stop
+// admitting relay requests before draining or replacing shared runtime state.
+func DrainRelaySamples() {
+	pendingRelaySamples.Wait()
+}
 
 // seriesSchema is a stable client cache/schema marker. Do not change it when
 // hiding fields or making response-only privacy hardening changes.

@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/model"
+	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
@@ -232,6 +233,7 @@ func TestPlatformChatUsesFixedPayerAndNeverDebitsLegacy(t *testing.T) {
 			common.MemoryCacheEnabled = true
 			common.RetryTimes = 1
 			defer func() {
+				perfmetrics.DrainRelaySamples()
 				model.DB = oldDB
 				model.LOG_DB = oldLog
 				common.MemoryCacheEnabled = oldCache

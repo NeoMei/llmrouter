@@ -401,9 +401,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		logger.LogInfo(c, retryLogStr)
 	}
 	if newAPIError != nil {
-		gopool.Go(func() {
-			perfmetrics.RecordRelaySample(relayInfo, false, 0)
-		})
+		perfmetrics.RecordRelaySampleAsync(relayInfo, false, 0)
 	}
 }
 

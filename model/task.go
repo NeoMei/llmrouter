@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/pkg/metering"
 	commonRelay "github.com/QuantumNous/new-api/relay/common"
 )
 
@@ -46,27 +47,44 @@ const (
 const TaskRefundLegacyCutoff int64 = 1740182400 // 2025-02-22 00:00:00 UTC
 
 type Task struct {
-	ID         int64                 `json:"id" gorm:"primary_key;AUTO_INCREMENT"`
-	CreatedAt  int64                 `json:"created_at" gorm:"index"`
-	UpdatedAt  int64                 `json:"updated_at"`
-	TaskID     string                `json:"task_id" gorm:"type:varchar(191);index"` // 第三方id，不一定有/ song id\ Task id
-	Platform   constant.TaskPlatform `json:"platform" gorm:"type:varchar(30);index"` // 平台
-	UserId     int                   `json:"user_id" gorm:"index"`
-	Group      string                `json:"group" gorm:"type:varchar(50)"` // 修正计费用
-	ChannelId  int                   `json:"channel_id" gorm:"index"`
-	Quota      int                   `json:"quota"`
-	Action     string                `json:"action" gorm:"type:varchar(40);index"` // 任务类型, song, lyrics, description-mode
-	Status     TaskStatus            `json:"status" gorm:"type:varchar(20);index"` // 任务状态
-	FailReason string                `json:"fail_reason"`
-	SubmitTime int64                 `json:"submit_time" gorm:"index"`
-	StartTime  int64                 `json:"start_time" gorm:"index"`
-	FinishTime int64                 `json:"finish_time" gorm:"index"`
-	Progress   string                `json:"progress" gorm:"type:varchar(20);index"`
-	Properties Properties            `json:"properties" gorm:"type:json"`
-	Username   string                `json:"username,omitempty" gorm:"-"`
+	PlatformCallID string `json:"-" gorm:"size:128;index"`
+	// NativePending is an indexed durable settlement outbox, written with terminal status.
+	NativePending          bool                  `json:"-" gorm:"index"`
+	NativeEvidence         string                `json:"-" gorm:"type:text"`
+	NativeConflictEvidence string                `json:"-" gorm:"type:text"`
+	FundingOwner           string                `json:"-" gorm:"size:16;index"`
+	ID                     int64                 `json:"id" gorm:"primary_key;AUTO_INCREMENT"`
+	CreatedAt              int64                 `json:"created_at" gorm:"index"`
+	UpdatedAt              int64                 `json:"updated_at"`
+	TaskID                 string                `json:"task_id" gorm:"type:varchar(191);index"` // 第三方id，不一定有/ song id\ Task id
+	Platform               constant.TaskPlatform `json:"platform" gorm:"type:varchar(30);index"` // 平台
+	UserId                 int                   `json:"user_id" gorm:"index"`
+	Group                  string                `json:"group" gorm:"type:varchar(50)"` // 修正计费用
+	ChannelId              int                   `json:"channel_id" gorm:"index"`
+	Quota                  int                   `json:"quota"`
+	Action                 string                `json:"action" gorm:"type:varchar(40);index"` // 任务类型, song, lyrics, description-mode
+	Status                 TaskStatus            `json:"status" gorm:"type:varchar(20);index"` // 任务状态
+	FailReason             string                `json:"fail_reason"`
+	SubmitTime             int64                 `json:"submit_time" gorm:"index"`
+	StartTime              int64                 `json:"start_time" gorm:"index"`
+	FinishTime             int64                 `json:"finish_time" gorm:"index"`
+	Progress               string                `json:"progress" gorm:"type:varchar(20);index"`
+	Properties             Properties            `json:"properties" gorm:"type:json"`
+	Username               string                `json:"username,omitempty" gorm:"-"`
 	// 禁止返回给用户，内部可能包含key等隐私信息
 	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
 	Data        json.RawMessage `json:"data" gorm:"type:json"`
+}
+
+// RecordNativeTaskConflict durably retains a terminal observation that lost
+// the status CAS. A conflicting receipt must block settlement rather than be
+// silently discarded by a concurrent poller.
+func RecordNativeTaskConflict(id int64, evidence string) error {
+	if id == 0 || evidence == "" {
+		return nil
+	}
+	return DB.Model(&Task{}).Where("id = ? AND native_evidence <> ?", id, evidence).
+		Updates(map[string]any{"native_conflict_evidence": evidence, "native_pending": true}).Error
 }
 
 func (t *Task) SetData(data any) {
@@ -115,6 +133,9 @@ type TaskPrivateData struct {
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
 type TaskBillingContext struct {
+	NativePrice     *metering.Price    `json:"native_price,omitempty"`
+	NativeCallID    string             `json:"native_call_id,omitempty"`
+	PlatformCallID  string             `json:"platform_call_id,omitempty"`
 	ModelPrice      float64            `json:"model_price,omitempty"`       // 模型单价
 	GroupRatio      float64            `json:"group_ratio,omitempty"`       // 分组倍率
 	ModelRatio      float64            `json:"model_ratio,omitempty"`       // 模型倍率
@@ -211,6 +232,19 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 		Properties:  properties,
 		PrivateData: privateData,
 	}
+	if relayInfo.NativeBilling != nil {
+		n := relayInfo.NativeBilling
+		p := n.Price
+		t.PrivateData.BillingContext = &TaskBillingContext{NativePrice: &p, NativeCallID: n.CallID}
+		t.FundingOwner = "native"
+		if n.Platform {
+			t.FundingOwner = "platform"
+			t.PlatformCallID = n.CallID
+			t.PrivateData.BillingContext.PlatformCallID = n.CallID
+			t.PrivateData.BillingContext.NativeCallID = ""
+			t.PrivateData.Key = ""
+		}
+	}
 	return t
 }
 
@@ -219,7 +253,7 @@ func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQ
 	var err error
 
 	// 初始化查询构建器
-	query := DB.Where("user_id = ?", userId)
+	query := DB.Where("user_id = ?", userId).Where("funding_owner IS NULL OR funding_owner != ?", "platform")
 
 	if queryParams.TaskID != "" {
 		query = query.Where("task_id = ?", queryParams.TaskID)
@@ -361,6 +395,10 @@ func HasUnfinishedSyncTasks() bool {
 // a failed task with a pending, non-legacy refund. The latter keeps the system
 // task scheduler active when reconciliation is the only work left.
 func HasTaskPollingWork() bool {
+	var pending int64
+	if DB.Model(&Task{}).Where("native_pending = ?", true).Limit(1).Pluck("id", &pending).Error == nil && pending != 0 {
+		return true
+	}
 	if HasUnfinishedSyncTasks() {
 		return true
 	}
@@ -395,7 +433,7 @@ func GetByTaskId(userId int, taskId string) (*Task, bool, error) {
 	}
 	var task *Task
 	var err error
-	err = DB.Where("user_id = ? and task_id = ?", userId, taskId).
+	err = DB.Where("user_id = ? and task_id = ?", userId, taskId).Where("funding_owner IS NULL OR funding_owner != ?", "platform").
 		First(&task).Error
 	exist, err := RecordExist(err)
 	if err != nil {
@@ -410,7 +448,7 @@ func GetByTaskIds(userId int, taskIds []any) ([]*Task, error) {
 	}
 	var task []*Task
 	var err error
-	err = DB.Where("user_id = ? and task_id in (?)", userId, taskIds).
+	err = DB.Where("user_id = ? and task_id in (?)", userId, taskIds).Where("funding_owner IS NULL OR funding_owner != ?", "platform").
 		Find(&task).Error
 	if err != nil {
 		return nil, err

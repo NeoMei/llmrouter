@@ -184,13 +184,59 @@ export interface Authorization {
   used?: IntegerString
   actor_id?: string
 }
-export interface Usage {
-  input: IntegerString
-  output: IntegerString
-  cache_read: IntegerString
-  cache_write: IntegerString
-  reasoning: IntegerString
+export interface MeteringQuantity {
+  value: string
+  scale: number
 }
+export interface MeteringRational {
+  numerator: string
+  denominator: string
+}
+export interface MeteringTerm {
+  key: string
+  unit: string
+  provider_unit?: string
+  price: MeteringRational
+  step?: MeteringQuantity
+  minimum?: MeteringQuantity
+}
+export interface MeteringPrice {
+  version: 'metered_v2'
+  operation: string
+  policy: string
+  terms: MeteringTerm[]
+}
+export interface MeteringMeasurement {
+  key: string
+  unit: string
+  provider_unit?: string
+  quantity: MeteringQuantity
+}
+export interface MeteringUsage {
+  version: 'metered_v2'
+  operation: string
+  state: string
+  source: string
+  measurements: MeteringMeasurement[]
+  provider_request_id?: string
+}
+export type Usage =
+  | {
+      input: IntegerString
+      output: IntegerString
+      cache_read: IntegerString
+      cache_write: IntegerString
+      reasoning: IntegerString
+      metered?: never
+    }
+  | {
+      metered: MeteringUsage
+      input?: never
+      output?: never
+      cache_read?: never
+      cache_write?: never
+      reasoning?: never
+    }
 export interface QueryScope {
   account_id: string
   origin_product_id?: string
@@ -208,7 +254,22 @@ export interface CallQuery extends CallFilter {
   limit?: number
   cursor?: string
 }
+export interface Rate {
+  asset: BillingAsset
+  id: string
+  model: string
+  status: string
+  semantics: string
+  input?: MeteringRational
+  output?: MeteringRational
+  cache_read?: MeteringRational
+  cache_write?: MeteringRational
+  reasoning?: MeteringRational
+  metered?: MeteringPrice
+}
+
 export interface CallView {
+  rate?: Rate
   scope: QueryScope
   financial_details: boolean
   asset: BillingAsset
@@ -239,7 +300,12 @@ export interface CallPage {
   consistency: string
 }
 /** mixed omits charged. All charge amounts are omitted without a finance role. */
+export interface NativeUsageTotal {
+  operation: string
+  measurements: MeteringMeasurement[]
+}
 export interface UsageSummary {
+  native_usage?: NativeUsageTotal[]
   scope: QueryScope
   filter: CallFilter
   financial_details: boolean

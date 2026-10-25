@@ -49,5 +49,24 @@ func ConfigFromEnv(get func(string) string) (Config, error) {
 			}
 		}
 	}
+	// Explicit operation pins opt requests into metered_v2. Duration and media
+	// caps are deployment-owned bounds, never values trusted from client JSON.
+	if raw := get("UNIHUB_OPERATION_RATE_IDS"); raw != "" {
+		if common.UnmarshalJsonStr(raw, &c.OperationRateIDs) != nil {
+			return c, ErrInvalid
+		}
+	}
+	if raw := get("UNIHUB_OPERATION_LIMITS"); raw != "" {
+		if common.UnmarshalJsonStr(raw, &c.OperationLimits) != nil {
+			return c, ErrInvalid
+		}
+		for _, models := range c.OperationLimits {
+			for _, limit := range models {
+				if limit.MaxBodyBytes < 0 || limit.MaxBodyBytes > 64<<20 || limit.MaxQuantity < 0 || limit.MaxQuantity > 86400 {
+					return c, ErrInvalid
+				}
+			}
+		}
+	}
 	return c, nil
 }

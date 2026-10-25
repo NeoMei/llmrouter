@@ -1,12 +1,14 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/metering"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay"
 	"github.com/QuantumNous/new-api/relay/capability"
@@ -28,6 +31,7 @@ import (
 	"github.com/QuantumNous/new-api/service/accountpool"
 	"github.com/QuantumNous/new-api/service/modelcatalog"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -37,6 +41,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"gorm.io/gorm"
 )
 
 func relayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIError {
@@ -89,6 +94,11 @@ func relaySelectedChannel(c *gin.Context, relayInfo *relaycommon.RelayInfo, chan
 		return types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry()), false
 	}
 	c.Request.Body = io.NopCloser(bodyStorage)
+	if relayInfo.NativeBilling != nil && !relayInfo.PlatformMode {
+		if err := service.MarkNativeBillingDispatched(c.Request.Context(), relayInfo); err != nil {
+			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry()), false
+		}
+	}
 
 	switch relayFormat {
 	case types.RelayFormatOpenAIRealtime:
@@ -227,6 +237,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	defer func() {
 		// Only return quota if downstream failed and quota was actually pre-consumed
 		if newAPIError != nil && billingLifecycleStarted && !relayInfo.PlatformMode {
+			if relayInfo.NativeBilling != nil {
+				// The durable dispatch flag refuses release once output is uncertain.
+				_, _ = service.FinishNativeBilling(context.WithoutCancel(c.Request.Context()), relayInfo.NativeBilling.CallID, "pre_dispatch_failure")
+				return
+			}
 			newAPIError = service.NormalizeViolationFeeError(newAPIError)
 			if relayInfo.Billing != nil {
 				relayInfo.Billing.Refund(c)
@@ -569,6 +584,74 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 		if info.PlatformBilling == nil {
 			return types.NewError(errors.New("platform billing missing"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		}
+		// Platform funding is owned by UniHub. Construct the neutral context
+		// from the frozen remote tariff before any helper can enter a provider;
+		// no local price/quota reservation is consulted.
+		info.InitChannelMeta(c)
+		price, ok := info.PlatformBilling.MeteredPrice()
+		if !ok {
+			// exclusive_v1 remains supported only by its Chat helper, which owns
+			// Session.Dispatch and raw usage observation.
+			return nil
+		}
+		if (price.Operation == "chat" || price.Operation == "responses" || price.Operation == "embedding") && c.GetInt("channel_type") != constant.ChannelTypeOpenAI {
+			return types.NewError(errors.New("platform metered producer unavailable for this channel"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		if len(info.ParamOverride) > 0 || len(info.HeadersOverride) > 0 || info.ChannelSetting.SystemPrompt != "" || info.ChannelSetting.PassThroughBodyEnabled || model_setting.GetGlobalSettings().PassThroughRequestEnabled {
+			return types.NewError(errors.New("platform metering requires unchanged validated request"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		if price.Operation == "transcription" && price.Policy == "server_audio_measurement_v1" {
+			if err := helper.ValidateNativeAudioAdmission(c, info); err != nil {
+				return types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+			}
+		}
+		if info.NativeBilling == nil {
+			info.NativeBilling = &relaycommon.NativeBillingContext{
+				CallID: info.PlatformBilling.CallID(), Platform: true, Price: price,
+				Observe: info.PlatformBilling.ObserveMetering,
+			}
+		}
+		return nil
+	}
+
+	operation := ""
+	switch info.RelayMode {
+	case relayconstant.RelayModeChatCompletions, relayconstant.RelayModeCompletions, relayconstant.RelayModeGemini:
+		operation = "chat"
+	case relayconstant.RelayModeResponses:
+		operation = "responses"
+	case relayconstant.RelayModeEmbeddings, relayconstant.RelayModeMultimodalEmbedding:
+		operation = "embedding"
+	case relayconstant.RelayModeAudioSpeech:
+		operation = "speech"
+	case relayconstant.RelayModeAudioTranscription, relayconstant.RelayModeAudioTranslation:
+		operation = "transcription"
+	case relayconstant.RelayModeImagesGenerations:
+		operation = "image_generation"
+	case relayconstant.RelayModeImagesEdits, relayconstant.RelayModeImagesVariations:
+		operation = "image_edit"
+	}
+	if info.NativeBilling != nil {
+		return types.NewError(errors.New("native dispatch cannot be retried without final evidence"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+	if price, configured := billing_setting.ResolveModelNativePrice(info.BillingModelNameOrOrigin(), operation); configured {
+		var reservation metering.Usage
+		var err error
+		if operation != "chat" && operation != "responses" && operation != "embedding" {
+			if err = helper.ValidateNativeAudioAdmission(c, info); err == nil {
+				reservation, err = service.EstimateNativeMediaUsage(info, info.Request, price)
+			}
+		} else {
+			reservation, err = service.NativeTokenReservation(info, price)
+		}
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		ratio := helper.HandleGroupRatio(c, info)
+		a := model.NativeAdmission{CallID: info.RequestId, UserID: info.UserId, TokenID: info.TokenId, ChannelID: info.ChannelId, Model: info.BillingModelNameOrOrigin(), Group: info.UsingGroup, Preference: info.UserSetting.BillingPreference, Price: price, GroupRatio: strconv.FormatFloat(ratio.GroupRatio, 'f', -1, 64), QuotaPerUnit: strconv.FormatFloat(common.QuotaPerUnit, 'f', -1, 64), Reservation: reservation}
+		if err := service.BeginNativeBillingForRelay(c.Request.Context(), info, a); err != nil {
+			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+		}
 		return nil
 	}
 	// Native per-image pricing uses the validated selected model contract. The
@@ -874,6 +957,19 @@ func RelayTask(c *gin.Context) {
 		return
 	}
 
+	if relayInfo.PlatformMode {
+		if relayInfo.PlatformBilling == nil {
+			c.AbortWithStatus(http.StatusBadRequest)
+			return
+		}
+		price, ok := relayInfo.PlatformBilling.MeteredPrice()
+		if !ok || price.Operation != "video" {
+			c.AbortWithStatus(http.StatusBadRequest)
+			return
+		}
+		relayInfo.NativeBilling = &relaycommon.NativeBillingContext{CallID: relayInfo.PlatformBilling.CallID(), Platform: true, Price: price, Observe: relayInfo.PlatformBilling.ObserveMetering}
+	}
+
 	if taskErr := relay.ResolveOriginTask(c, relayInfo); taskErr != nil {
 		respondTaskError(c, taskErr)
 		return
@@ -941,7 +1037,7 @@ func RelayTask(c *gin.Context) {
 				types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode))
 		}
 
-		if !shouldRetryTaskRelay(c, channel.Id, taskErr, common.RetryTimes-retryParam.GetRetry()) {
+		if relayInfo.NativeBilling != nil || !shouldRetryTaskRelay(c, channel.Id, taskErr, common.RetryTimes-retryParam.GetRetry()) {
 			break
 		}
 		samePool, poolErr := accountpool.PrepareNext(c)
@@ -961,10 +1057,12 @@ func RelayTask(c *gin.Context) {
 
 	// ── 成功：结算 + 日志 + 插入任务 ──
 	if taskErr == nil {
-		if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
-			common.SysError("settle task billing error: " + settleErr.Error())
+		if relayInfo.NativeBilling == nil && !relayInfo.PlatformMode {
+			if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
+				common.SysError("settle task billing error: " + settleErr.Error())
+			}
+			service.LogTaskConsumption(c, relayInfo)
 		}
-		service.LogTaskConsumption(c, relayInfo)
 
 		task := model.InitTask(result.Platform, relayInfo)
 		task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
@@ -981,18 +1079,26 @@ func RelayTask(c *gin.Context) {
 		task.PrivateData.SubscriptionId = relayInfo.SubscriptionId
 		task.PrivateData.TokenId = relayInfo.TokenId
 		task.PrivateData.NodeName = common.NodeName
-		task.PrivateData.BillingContext = &model.TaskBillingContext{
-			ModelPrice:      relayInfo.PriceData.ModelPrice,
-			GroupRatio:      relayInfo.PriceData.GroupRatioInfo.GroupRatio,
-			ModelRatio:      relayInfo.PriceData.ModelRatio,
-			OtherRatios:     relayInfo.PriceData.OtherRatios(),
-			OriginModelName: relayInfo.OriginModelName,
-			PerCallBilling:  common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice,
+		if task.PrivateData.BillingContext == nil {
+			task.PrivateData.BillingContext = &model.TaskBillingContext{
+				ModelPrice:      relayInfo.PriceData.ModelPrice,
+				GroupRatio:      relayInfo.PriceData.GroupRatioInfo.GroupRatio,
+				ModelRatio:      relayInfo.PriceData.ModelRatio,
+				OtherRatios:     relayInfo.PriceData.OtherRatios(),
+				OriginModelName: relayInfo.OriginModelName,
+				PerCallBilling:  common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice,
+			}
 		}
 		task.Quota = result.Quota
 		task.Data = result.TaskData
 		task.Action = relayInfo.Action
-		if insertErr := task.Insert(); insertErr != nil {
+		if relayInfo.PlatformMode {
+			err := relayInfo.PlatformBilling.BindTaskTransaction(context.WithoutCancel(c.Request.Context()), result.UpstreamTaskID, func(tx *gorm.DB) error { return tx.Create(task).Error })
+			if err != nil {
+				common.SysError("platform task handoff pending: " + err.Error())
+				return
+			}
+		} else if insertErr := task.Insert(); insertErr != nil {
 			common.SysError("insert task error: " + insertErr.Error())
 		}
 	}

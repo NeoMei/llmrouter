@@ -37,6 +37,7 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 		return nil, channel.ErrUnsupportedOperation
 	}
 
+	info.NativeSpeechText = &request.Input
 	native, err := dto.BuildMiniMaxSpeech(request)
 	if err != nil {
 		return nil, err

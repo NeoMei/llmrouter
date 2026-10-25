@@ -126,9 +126,15 @@ func OpenaiSTTHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
 	var responseData struct {
-		Usage *dto.Usage `json:"usage"`
+		Usage    *dto.Usage `json:"usage"`
+		Duration *float64   `json:"duration"`
 	}
-	if err := common.Unmarshal(responseBody, &responseData); err == nil && responseData.Usage != nil {
+	parseErr := common.Unmarshal(responseBody, &responseData)
+	if parseErr == nil && responseData.Duration != nil && (info.NativeBilling == nil || info.NativeBilling.Price.Policy == "provider_reported_v1") {
+		info.ActualAudioSeconds = responseData.Duration
+		info.AudioDurationSource = "provider_reported"
+	}
+	if parseErr == nil && responseData.Usage != nil {
 		if responseData.Usage.TotalTokens > 0 {
 			usage := responseData.Usage
 			if usage.PromptTokens == 0 {

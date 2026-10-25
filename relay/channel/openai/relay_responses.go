@@ -20,11 +20,14 @@ import (
 )
 
 func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+	nativeEvidence, finishNativeEvidence := service.NativeTokenObserver(c.Request.Context(), info, dto.BillingUsageSourceOAIResponses)
+	defer finishNativeEvidence()
 	defer service.CloseResponseBodyGracefully(resp)
 
 	// read response body
 	var responsesResponse dto.OpenAIResponsesResponse
 	responseBody, err := io.ReadAll(resp.Body)
+	nativeEvidence.Observe(responseBody, false)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
@@ -82,6 +85,8 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 }
 
 func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+	nativeEvidence, finishNativeEvidence := service.NativeTokenObserver(c.Request.Context(), info, dto.BillingUsageSourceOAIResponses)
+	defer finishNativeEvidence()
 	if resp == nil || resp.Body == nil {
 		logger.LogError(c, "invalid response or response body")
 		return nil, types.NewError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse)
@@ -179,6 +184,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	}
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		nativeEvidence.Observe([]byte(data), true)
 		if streamErr != nil {
 			sr.Stop(streamErr)
 			return

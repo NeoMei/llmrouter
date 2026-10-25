@@ -127,6 +127,8 @@ func main() {
 
 	// Subscription quota reset task (daily/weekly/monthly/custom)
 	service.StartSubscriptionQuotaResetTask()
+	stopNativeBillingRecovery := service.StartNativeBillingRecovery(context.Background())
+	defer stopNativeBillingRecovery()
 
 	// Report this process as a system instance so the System Info page can show
 	// all currently alive nodes in multi-instance deployments.

@@ -147,12 +147,13 @@ type TaskPollSummary struct {
 // (processedPlatforms, totalPlatforms). It returns immediately if the task
 // adaptor factory has not been wired yet, to avoid a nil call during startup.
 func RunTaskPollingOnce(ctx context.Context, report func(processed, total int)) TaskPollSummary {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	recoverNativeTasks(ctx)
 	summary := TaskPollSummary{}
 	if GetTaskAdaptorFunc == nil {
 		return summary
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 
 	common.SysLog("任务进度轮询开始")
@@ -370,6 +371,11 @@ func updateSunoAccountTasks(ctx context.Context, ch *model.Channel, taskIds []st
 		if err != nil {
 			logger.LogError(ctx, fmt.Sprintf("UpdateSunoTask task %s error: %v", task.TaskID, err))
 		} else if !won {
+			if task.NativeEvidence != "" {
+				if conflictErr := model.RecordNativeTaskConflict(task.ID, task.NativeEvidence); conflictErr != nil {
+					logger.LogError(ctx, fmt.Sprintf("Task %s native conflict persistence failed: %s", task.TaskID, conflictErr.Error()))
+				}
+			}
 			logger.LogWarn(ctx, fmt.Sprintf("Task %s CAS lost or no-op update, skip billing", task.TaskID))
 		} else if isFailure && prevStatus != model.TaskStatusFailure && task.Quota != 0 {
 			RefundTaskQuota(ctx, task, task.FailReason)
@@ -640,6 +646,9 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 
 	isDone := task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure
 	if isDone && snap.Status != task.Status {
+		if err := prepareNativeTaskIntent(task, responseBody); err != nil {
+			return err
+		}
 		won, err := task.UpdateWithStatus(snap.Status)
 		if err != nil {
 			logger.LogError(ctx, fmt.Sprintf("UpdateWithStatus failed for task %s: %s", task.TaskID, err.Error()))
@@ -709,6 +718,12 @@ func truncateBase64(s string) string {
 //  2. taskResult.TotalTokens > 0 → 按 token 重算
 //  3. 都不满足 → 保持预扣额度不变
 func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor, task *model.Task, taskResult *relaycommon.TaskInfo) {
+	if task.FundingOwner == "native" || task.FundingOwner == "platform" {
+		if err := settleNativeTask(ctx, task); err != nil {
+			logger.LogError(ctx, err.Error())
+		}
+		return
+	}
 	// 0. 按次计费的任务不做差额结算
 	if bc := task.PrivateData.BillingContext; bc != nil && bc.PerCallBilling {
 		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 按次计费，跳过差额结算", task.TaskID))

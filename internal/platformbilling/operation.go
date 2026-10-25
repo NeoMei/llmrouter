@@ -134,8 +134,10 @@ func parseOperation(c Config, op, contentType string, body []byte) (operationReq
 		if !ok {
 			return fallback, nil
 		}
-		if mediaType == "multipart/form-data" {
-			v = json.Number(v.(string))
+		if mediaType == "multipart/form-data" || (op == "video" && key == "seconds") {
+			if text, ok := v.(string); ok {
+				v = json.Number(text)
+			}
 		}
 		return confirmedCount(v)
 	}

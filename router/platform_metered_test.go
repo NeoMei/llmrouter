@@ -2,6 +2,7 @@ package router
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"github.com/QuantumNous/new-api/common"
@@ -11,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/metering"
+	"github.com/QuantumNous/new-api/relay/channel/task/sora"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/objectstore"
 	"github.com/QuantumNous/new-api/service/ocr"
@@ -31,6 +33,7 @@ import (
 
 func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 	for _, tc := range []struct{ op, path, body, response, unit, key, policy string }{
+		{"video", "/videos", `{"model":"platform-test","prompt":"hello","seconds":"4","size":"720x1280"}`, "", "video_second", "video", "sora_completed_seconds_v1"},
 		{"ocr", "/ocr/jobs", "", "", "request", "requests", "success_request"},
 		{"chat", "/chat/completions", `{"model":"platform-test","messages":[{"role":"user","content":"hello"}],"max_tokens":10}`, `{"id":"chat","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`, "token", "input", "sum"},
 		{"responses", "/responses", `{"model":"platform-test","input":"hello","max_output_tokens":10}`, `{"id":"resp","object":"response","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`, "token", "input", "sum"},
@@ -46,6 +49,15 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 			sends, settles := 0, 0
 			var up *httptest.Server
 			up = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.op == "video" {
+					if r.Method == "POST" {
+						sends++
+						_, _ = w.Write([]byte(`{"id":"provider-video","object":"video","status":"queued","model":"platform-test"}`))
+					} else {
+						_, _ = w.Write([]byte(`{"id":"provider-video","object":"video","status":"completed","seconds":"4","progress":100,"model":"platform-test"}`))
+					}
+					return
+				}
 				if tc.op == "ocr" {
 					switch r.URL.Path {
 					case "/api/v2/ocr/jobs":
@@ -103,7 +115,7 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 			defer hub.Close()
 			db, e := gorm.Open(sqlite.Open("file:"+t.TempDir()+"/db"), &gorm.Config{})
 			require.NoError(t, e)
-			require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.Ability{}, &model.UserSubscription{}, &model.ClientModelRoute{}, &model.ClientModelTarget{}, &model.UpstreamAccountPool{}, &model.UpstreamAccountMember{}, &model.UpstreamAccountState{}, &model.OCRJob{}, &model.OCROperation{}, &model.OCRAuditEvent{}, &model.OCRResource{}, &model.OCRResourceGrant{}))
+			require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.Ability{}, &model.UserSubscription{}, &model.ClientModelRoute{}, &model.ClientModelTarget{}, &model.UpstreamAccountPool{}, &model.UpstreamAccountMember{}, &model.UpstreamAccountState{}, &model.OCRJob{}, &model.OCROperation{}, &model.OCRAuditEvent{}, &model.OCRResource{}, &model.OCRResourceGrant{}, &model.Task{}))
 			oldDB, oldLog, oldCache, oldRedis := model.DB, model.LOG_DB, common.MemoryCacheEnabled, common.RedisEnabled
 			model.DB = db
 			model.LOG_DB = db
@@ -119,6 +131,12 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 			require.NoError(t, db.Create(&user).Error)
 			base := up.URL
 			channelType := constant.ChannelTypeOpenAI
+			if tc.op == "video" {
+				channelType = constant.ChannelTypeSora
+				old := service.GetTaskAdaptorFunc
+				service.GetTaskAdaptorFunc = func(constant.TaskPlatform) service.TaskPollingAdaptor { return &sora.TaskAdaptor{} }
+				defer func() { service.GetTaskAdaptorFunc = old }()
+			}
 			if tc.op == "ocr" {
 				channelType = constant.ChannelTypePaddleOCR
 			}
@@ -129,7 +147,7 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 			model.InitChannelCache()
 			service.InitHttpClient()
 			service.InitTokenEncoders()
-			a, e := platformbilling.New(db, platformbilling.Config{Enabled: true, Origin: hub.URL, ServiceToken: "service-service-service-service-token", PrincipalID: 1, Group: "platform", MaxInputTokens: 1000, MaxOutputTokens: 100, MaxBodyBytes: 65536, OperationLimits: map[string]map[string]platformbilling.OperationLimits{"transcription": {"platform-test": {MaxQuantity: 60, Policy: "server_audio_measurement_v1"}}}, OperationRateIDs: map[string]map[string]map[string]string{"chat": {"CREDIT/6": {"platform-test": "rate"}}}})
+			a, e := platformbilling.New(db, platformbilling.Config{Enabled: true, Origin: hub.URL, ServiceToken: "service-service-service-service-token", PrincipalID: 1, Group: "platform", MaxInputTokens: 1000, MaxOutputTokens: 100, MaxBodyBytes: 65536, OperationLimits: map[string]map[string]platformbilling.OperationLimits{"transcription": {"platform-test": {MaxQuantity: 60, Policy: "server_audio_measurement_v1"}}, "video": {"platform-test": {MaxQuantity: 60, Policy: "sora_completed_seconds_v1"}}}, OperationRateIDs: map[string]map[string]map[string]string{"chat": {"CREDIT/6": {"platform-test": "rate"}}}})
 			require.NoError(t, e)
 			if tc.op == "ocr" {
 				objects, e := objectstore.NewLocal(t.TempDir())
@@ -209,6 +227,18 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 				require.Equal(t, 200, w.Code, w.Body.String())
 			}
 
+			if tc.op == "video" {
+				oldLimit := constant.TaskQueryLimit
+				constant.TaskQueryLimit = 100
+				service.RunTaskPollingOnce(context.Background(), nil)
+				constant.TaskQueryLimit = oldLimit
+				r := httptest.NewRequest("GET", "/platform/v1/videos/call", nil)
+				r.Header.Set("Authorization", "Bearer uh_model_token")
+				r.Header.Set("X-UniHub-Task-ID", "task")
+				w = httptest.NewRecorder()
+				engine.ServeHTTP(w, r)
+				require.Equal(t, 200, w.Code, w.Body.String())
+			}
 			require.Equal(t, 1, sends)
 			var call platformbilling.Call
 			require.NoError(t, db.First(&call).Error)

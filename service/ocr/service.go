@@ -292,6 +292,9 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (JobStatus, err
 		}
 		if response.Refused() {
 			retry := !req.DisableRetry && !response.RetryVeto() && ctx.Err() == nil && healthErr == nil && j.SubmitAttempts+1 < j.MaxAttempts
+			if req.Admission.PlatformCallID != "" {
+				retry = false
+			}
 			err = s.billing.RecordOCRRefusal(persistCtx, claim, response.Status, retry)
 			if err == nil && !retry {
 				_, err = s.billing.Finish(persistCtx, j.ID, "failure")

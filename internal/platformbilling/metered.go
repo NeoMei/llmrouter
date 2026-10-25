@@ -15,6 +15,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/metering"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -82,6 +83,11 @@ func (a *Adapter) AdmitOperation(ctx context.Context, credential, task, id, oper
 	}
 	if err = metering.ValidatePrice(*chosen.Metered); err != nil {
 		return nil, ErrInvalid
+	}
+	if operation == "image_generation" || operation == "image_edit" {
+		if billing_setting.ValidateNativeImageTiers(*chosen.Metered) != nil {
+			return nil, ErrInvalid
+		}
 	}
 	if limits, ok := a.config.OperationLimits[operation][req.Model]; ok && limits.Policy != "" && limits.Policy != chosen.Metered.Policy {
 		return nil, ErrInvalid
@@ -221,6 +227,12 @@ func (s *Session) ObserveMetering(ctx context.Context, u metering.Usage) error {
 	}
 	var conflict bool
 	err = s.adapter.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Acquire the writer lock before reading evidence. A read-then-CAS loser
+		// must never discard a contradictory terminal receipt. A no-op UPDATE
+		// serializes this on SQLite too, without unsupported FOR UPDATE syntax.
+		if err := tx.Model(&Call{}).Where("call_id = ?", s.call.CallID).UpdateColumn("updated_at", gorm.Expr("updated_at")).Error; err != nil {
+			return err
+		}
 		var row Call
 		if e := tx.First(&row, "call_id = ?", s.call.CallID).Error; e != nil {
 			return e
@@ -228,12 +240,7 @@ func (s *Session) ObserveMetering(ctx context.Context, u metering.Usage) error {
 		if row.EvidenceConflict {
 			return ErrConflict
 		}
-		if row.Status != "UNKNOWN" {
-			if row.Evidence == string(b) {
-				return nil
-			}
-			return ErrPending
-		}
+
 		if row.Evidence != "" {
 			var previous metering.Usage
 			if common.Unmarshal([]byte(row.Evidence), &previous) != nil {
@@ -243,6 +250,12 @@ func (s *Session) ObserveMetering(ctx context.Context, u metering.Usage) error {
 				conflict = true
 				return tx.Model(&Call{}).Where("call_id = ? AND evidence = ?", row.CallID, row.Evidence).Update("evidence_conflict", true).Error
 			}
+		}
+		if row.Status != "UNKNOWN" {
+			if row.Evidence == string(b) {
+				return nil
+			}
+			return ErrPending
 		}
 		saved := tx.Model(&Call{}).Where("call_id = ? AND evidence = ? AND evidence_conflict = ?", row.CallID, row.Evidence, false).Update("evidence", string(b))
 		if saved.Error != nil {
@@ -356,11 +369,14 @@ func (a *Adapter) Task(ctx context.Context, credential, task, callID string) (Ca
 // ReleaseTask is callable only with the immutable provider task binding and a
 // supplier-confirmed no-output terminal. It writes RELEASE_PENDING intent first.
 func (a *Adapter) ReleaseTask(ctx context.Context, callID, providerTaskID string) error {
-	if providerTaskID == "" {
-		return ErrInvalid
-	}
 	var row Call
-	if err := a.db.WithContext(ctx).Where("call_id = ? AND provider_task_id = ?", callID, providerTaskID).First(&row).Error; err != nil {
+	query := a.db.WithContext(ctx).Where("call_id = ?", callID)
+	if providerTaskID != "" {
+		query = query.Where("provider_task_id = ?", providerTaskID)
+	} else {
+		query = query.Where("provider_task_id = ?", "")
+	}
+	if err := query.First(&row).Error; err != nil {
 		return ErrInvalid
 	}
 	if row.EvidenceConflict {
@@ -392,4 +408,35 @@ func (a *Adapter) ReleaseTask(ctx context.Context, callID, providerTaskID string
 	row.Status = "RELEASE_PENDING"
 	row.Intent = string(b)
 	return a.deliver(ctx, row)
+}
+
+// BindTask reconstructs only a service-owned durable submission; callers must
+// have read the provider binding from their own persisted execution record.
+func (a *Adapter) BindTask(ctx context.Context, callID, providerTaskID string) error {
+	var row Call
+	if err := a.db.WithContext(ctx).First(&row, "call_id = ?", callID).Error; err != nil {
+		return ErrInvalid
+	}
+	if row.ProviderTaskID == providerTaskID && providerTaskID != "" {
+		return nil
+	}
+	return (&Session{adapter: a, call: row}).BindTask(ctx, providerTaskID)
+}
+
+// BindTaskTransaction atomically stores the provider binding and the durable
+// business task; an insert failure cannot leave a bound but unpollable job.
+func (s *Session) BindTaskTransaction(ctx context.Context, providerTaskID string, persist func(*gorm.DB) error) error {
+	if providerTaskID == "" || len(providerTaskID) > 255 || persist == nil {
+		return ErrInvalid
+	}
+	return s.adapter.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&Call{}).Where("call_id = ? AND status = ? AND provider_task_id = ?", s.call.CallID, "UNKNOWN", "").Update("provider_task_id", providerTaskID)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrConflict
+		}
+		return persist(tx)
+	})
 }

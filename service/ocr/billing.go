@@ -149,8 +149,17 @@ func (b *Billing) Finish(ctx context.Context, id, outcome string) (model.OCRJob,
 	if j.BillingState == "settled" || j.BillingState == "refunded" {
 		return j, nil
 	}
+	if j.ProviderJobID != "" {
+		if base.PlatformTaskBind == nil {
+			return j, errors.New("platform binding recovery unavailable")
+		}
+		if err = base.PlatformTaskBind(ctx, j.PlatformCallID, j.ProviderJobID); err != nil {
+			return j, err
+		}
+	}
 	if outcome != "success" {
-		if j.ProviderState != "failed" || j.ProviderJobID == "" || base.PlatformTaskRelease == nil {
+		refused := j.SubmissionState == "rejected" && !j.RetryRefusal && j.Decision == "failure" && j.ProviderJobID == ""
+		if (!refused && (j.ProviderState != "failed" || j.ProviderJobID == "")) || base.PlatformTaskRelease == nil {
 			return j, errors.New("platform OCR no-output release pending")
 		}
 		if err = base.PlatformTaskRelease(ctx, j.PlatformCallID, j.ProviderJobID); err != nil {

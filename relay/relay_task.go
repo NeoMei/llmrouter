@@ -291,11 +291,6 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, taskErr
 	}
 
-	if info.PlatformMode {
-		if err := info.PlatformBilling.BindTask(c, upstreamTaskID); err != nil {
-			return nil, service.TaskErrorWrapperLocal(err, "platform_bind_task", 500)
-		}
-	}
 	// 11. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios
 	finalQuota := info.PriceData.Quota
 	if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); info.NativeBilling == nil && len(adjustedRatios) > 0 {

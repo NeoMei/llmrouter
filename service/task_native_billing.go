@@ -15,6 +15,8 @@ var PlatformTaskObserver func(context.Context, string, string, metering.Usage) e
 // PlatformTaskRelease is installed by platformbilling for trusted no-output terminals.
 var PlatformTaskRelease func(context.Context, string, string) error
 
+var PlatformTaskBind func(context.Context, string, string) error
+
 // prepareNativeTaskIntent runs before the terminal CAS, so success and evidence
 // are one row mutation. A crash after this point is replayable without a provider
 // request or current pricing lookup.

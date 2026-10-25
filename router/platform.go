@@ -23,6 +23,7 @@ import (
 func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 	service.PlatformTaskObserver = adapter.ObserveTask
 	service.PlatformTaskRelease = adapter.ReleaseTask
+	service.PlatformTaskBind = adapter.BindTask
 	if !adapter.Enabled() {
 		return
 	}

@@ -41,6 +41,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"gorm.io/gorm"
 )
 
 func relayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIError {
@@ -1091,7 +1092,13 @@ func RelayTask(c *gin.Context) {
 		task.Quota = result.Quota
 		task.Data = result.TaskData
 		task.Action = relayInfo.Action
-		if insertErr := task.Insert(); insertErr != nil {
+		if relayInfo.PlatformMode {
+			err := relayInfo.PlatformBilling.BindTaskTransaction(context.WithoutCancel(c.Request.Context()), result.UpstreamTaskID, func(tx *gorm.DB) error { return tx.Create(task).Error })
+			if err != nil {
+				common.SysError("platform task handoff pending: " + err.Error())
+				return
+			}
+		} else if insertErr := task.Insert(); insertErr != nil {
 			common.SysError("insert task error: " + insertErr.Error())
 		}
 	}

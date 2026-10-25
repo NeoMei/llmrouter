@@ -53,6 +53,11 @@ type NativeBilling struct {
 }
 type NativeBillingStore struct{ ledger *OCRBillingStore }
 
+// NativeDispatchLeaseSeconds bounds the gap between durable reservation and
+// supplier dispatch. Expired un-dispatched holds are releasable after restart;
+// the dispatch CAS checks the same fence before allowing any supplier work.
+const NativeDispatchLeaseSeconds int64 = 60
+
 func NewNativeBillingStore(db *gorm.DB, cache *redis.Client) *NativeBillingStore {
 	return &NativeBillingStore{ledger: NewOCRBillingStore(db, cache)}
 }
@@ -182,7 +187,7 @@ func (s *NativeBillingStore) MarkDispatched(ctx context.Context, id, attempt str
 		if err := lockForUpdate(tx).First(&n, "id = ?", id).Error; err != nil {
 			return err
 		}
-		if n.AttemptID != attempt || n.State != "reserved" || n.Dispatched {
+		if n.AttemptID != attempt || n.State != "reserved" || n.Dispatched || n.CreatedAt <= time.Now().Unix()-NativeDispatchLeaseSeconds {
 			return ErrOCRConflict
 		}
 		return tx.Model(&n).Updates(map[string]any{"dispatched": true, "state": "pending_measurement"}).Error
@@ -460,7 +465,8 @@ func (s *NativeBillingStore) Recover(ctx context.Context, limit int) error {
 	after := ""
 	for ctx.Err() == nil {
 		var rows []NativeBilling
-		if err := s.ledger.db.WithContext(ctx).Where("platform = ? AND id > ?", false, after).Where("state IN ? OR (admin_action_id <> ? AND outcome = ?)", []string{"reserving", "measured", "settlement_pending"}, "", "").Order("id").Limit(limit).Find(&rows).Error; err != nil {
+		expired := time.Now().Unix() - NativeDispatchLeaseSeconds
+		if err := s.ledger.db.WithContext(ctx).Where("platform = ? AND id > ?", false, after).Where("state IN ? OR (admin_action_id <> ? AND outcome = ?) OR (state = ? AND dispatched = ? AND created_at <= ?)", []string{"reserving", "measured", "settlement_pending"}, "", "", "reserved", false, expired).Order("id").Limit(limit).Find(&rows).Error; err != nil {
 			return err
 		}
 		for _, n := range rows {
@@ -472,7 +478,12 @@ func (s *NativeBillingStore) Recover(ctx context.Context, limit int) error {
 				if err == nil {
 					_, err = s.Begin(ctx, a)
 				}
+				if err == nil && n.CreatedAt <= expired {
+					_, err = s.Finish(ctx, n.ID, "pre_dispatch_failure")
+				}
 
+			} else if n.State == "reserved" && !n.Dispatched && n.CreatedAt <= expired {
+				_, err = s.Finish(ctx, n.ID, "pre_dispatch_failure")
 			} else if n.AdminActionID != "" && n.Outcome == "" {
 				var command struct {
 					Action string

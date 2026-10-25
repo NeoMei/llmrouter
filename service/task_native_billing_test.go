@@ -67,3 +67,39 @@ func TestNativeTaskRecoveryPagesPastMeasurementHolds(t *testing.T) {
 	assert.NotEmpty(t, last.NativeConflictEvidence)
 	assert.True(t, last.NativePending)
 }
+
+func TestNativeTaskConfirmedNoOutputReleasesLocalHoldOnce(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "native-failure.db")), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	old, redisEnabled := model.DB, common.RedisEnabled
+	model.DB, common.RedisEnabled = db, false
+	t.Cleanup(func() { model.DB, common.RedisEnabled = old, redisEnabled; require.NoError(t, sqlDB.Close()) })
+	require.NoError(t, db.AutoMigrate(&model.Task{}, &model.User{}, &model.Token{}, &model.Channel{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.OCRJob{}, &model.OCROperation{}, &model.OCRAuditEvent{}, &model.NativeBilling{}))
+	user := model.User{Username: "native-video", Quota: 100, Status: common.UserStatusEnabled}
+	require.NoError(t, db.Create(&user).Error)
+	token := model.Token{UserId: user.Id, Key: "native-video", RemainQuota: 100, Status: common.TokenStatusEnabled, ExpiredTime: -1}
+	require.NoError(t, db.Create(&token).Error)
+	channel := model.Channel{Name: "native-video"}
+	require.NoError(t, db.Create(&channel).Error)
+	price := metering.Price{Version: "metered_v2", Operation: "video", Policy: "sora_completed_seconds_v1", Terms: []metering.Term{{Key: "video", Unit: "video_second", Price: metering.Rational{Numerator: "1", Denominator: "1"}}}}
+	reservation := metering.Usage{Version: "metered_v2", Operation: "video", State: "incomplete", Source: "reservation", Measurements: []metering.Measurement{{Key: "video", Unit: "video_second", Quantity: metering.Quantity{Value: "5"}}}}
+	ctx := context.Background()
+	journal, err := BeginNativeBilling(ctx, model.NativeAdmission{CallID: "failed-video", UserID: user.Id, TokenID: token.Id, ChannelID: channel.Id, Model: "video", Group: "default", Preference: "wallet_only", Price: price, GroupRatio: "1", QuotaPerUnit: "1", Reservation: reservation})
+	require.NoError(t, err)
+	task := model.Task{TaskID: "failed-video", FundingOwner: "native", Status: model.TaskStatusFailure, PrivateData: model.TaskPrivateData{BillingContext: &model.TaskBillingContext{NativePrice: &price, NativeCallID: journal.ID}}}
+	require.NoError(t, prepareNativeTaskIntent(&task, []byte(`{"status":"failed","videos":[]}`)))
+	require.NoError(t, db.Create(&task).Error)
+	require.NoError(t, settleNativeTask(ctx, &task))
+	require.NoError(t, settleNativeTask(ctx, &task))
+	require.NoError(t, db.First(&user, user.Id).Error)
+	require.NoError(t, db.First(&token, token.Id).Error)
+	require.NoError(t, db.First(&journal, "id = ?", journal.ID).Error)
+	assert.Equal(t, 100, user.Quota)
+	assert.Equal(t, 100, token.RemainQuota)
+	assert.Zero(t, user.UsedQuota)
+	assert.Equal(t, "released", journal.State)
+	assert.False(t, task.NativePending)
+}

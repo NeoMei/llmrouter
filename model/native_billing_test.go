@@ -80,6 +80,31 @@ func TestNativeRejectedAdmissionDoesNotRemainRecoverable(t *testing.T) {
 	ocrBalances(t, s, old, 1000, 500, 0)
 }
 
+func TestNativeUnsentReservationExpiresWithDispatchFence(t *testing.T) {
+	n, s, a, old := nativeFixture(t)
+	ctx := context.Background()
+	j, err := n.Begin(ctx, a)
+	require.NoError(t, err)
+	ocrBalances(t, s, old, 900, 400, 100)
+	require.NoError(t, s.db.Model(&j).Update("created_at", time.Now().Unix()-NativeDispatchLeaseSeconds-1).Error)
+	require.ErrorIs(t, n.MarkDispatched(ctx, j.ID, j.AttemptID), ErrOCRConflict)
+	require.NoError(t, n.Recover(ctx, 1))
+	j, err = n.Inspect(ctx, j.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "released", j.State)
+	require.ErrorIs(t, n.MarkDispatched(ctx, j.ID, j.AttemptID), ErrOCRConflict)
+	ocrBalances(t, s, old, 1000, 500, 0)
+
+	// A send that won the fence remains held even after the same expiry.
+	a.CallID = "sent-before-expiry"
+	j, err = n.Begin(ctx, a)
+	require.NoError(t, err)
+	require.NoError(t, n.MarkDispatched(ctx, j.ID, j.AttemptID))
+	require.NoError(t, s.db.Model(&j).Update("created_at", time.Now().Unix()-NativeDispatchLeaseSeconds-1).Error)
+	require.NoError(t, n.Recover(ctx, 1))
+	ocrBalances(t, s, old, 900, 400, 100)
+}
+
 func TestNativeRecoveryPagesPastFailedIntent(t *testing.T) {
 	n, s, a, old := nativeFixture(t)
 	ctx := context.Background()

@@ -210,6 +210,8 @@ func TestPlatformChatUsesFixedPayerAndNeverDebitsLegacy(t *testing.T) {
 			require.NoError(t, e)
 			require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.Ability{}, &model.UserSubscription{}, &model.ClientModelRoute{}, &model.ClientModelTarget{}, &model.UpstreamAccountPool{}, &model.UpstreamAccountMember{}, &model.UpstreamAccountState{}))
 			oldDB, oldLog, oldCache, oldRetry := model.DB, model.LOG_DB, common.MemoryCacheEnabled, common.RetryTimes
+			oldRedis := common.RedisEnabled
+			common.RedisEnabled = false
 			model.DB = db
 			model.LOG_DB = db
 			common.MemoryCacheEnabled = true
@@ -219,6 +221,7 @@ func TestPlatformChatUsesFixedPayerAndNeverDebitsLegacy(t *testing.T) {
 				model.LOG_DB = oldLog
 				common.MemoryCacheEnabled = oldCache
 				common.RetryTimes = oldRetry
+				common.RedisEnabled = oldRedis
 			}()
 			user := model.User{Id: 1, Username: "platform-principal", Status: common.UserStatusEnabled, Quota: 12345, UsedQuota: 7, RequestCount: 3, Group: "platform"}
 			require.NoError(t, db.Create(&user).Error)
@@ -287,6 +290,18 @@ func TestPlatformChatUsesFixedPayerAndNeverDebitsLegacy(t *testing.T) {
 				require.NoError(t, db.Model(&platformbilling.Call{}).Count(&n).Error)
 				assert.Zero(t, n)
 				return
+			}
+			if scenario == "success" {
+				legacy := gin.New()
+				SetRelayRouter(legacy)
+				req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+				req.Header.Set("Authorization", "Bearer uh_model_token")
+				req.Header.Set("Content-Type", "application/json")
+				rejected := httptest.NewRecorder()
+				legacy.ServeHTTP(rejected, req)
+				assert.Equal(t, http.StatusUnauthorized, rejected.Code, rejected.Body.String())
+				assert.Zero(t, upstreamCalls, "a model grant must not fall back to local quota")
+				assert.Nil(t, reserved, "legacy authentication must not reserve platform funds")
 			}
 			w := send(body)
 			assert.Equal(t, "call", w.Header().Get("X-UniHub-Call-ID"))

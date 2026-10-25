@@ -761,7 +761,9 @@ func (s *OCRBillingStore) Finish(ctx context.Context, id, outcome string) (OCRJo
 				if j.Decision != outcome {
 					return ErrOCRConflict
 				}
-				return nil
+				if j.BillingState == "settled" || j.BillingState == "refunded" || j.BillingState == "platform_pending" {
+					return nil
+				}
 			}
 			if outcome == "success" && (j.SubmissionState != "submitted" || j.ProviderState != "done") {
 				return ErrOCRConflict

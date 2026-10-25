@@ -94,6 +94,15 @@ func (a *Adapter) AdmitOperation(ctx context.Context, credential, task, id, oper
 		}
 		req.Quantity = int(capValue.Int64())
 	}
+	if operation == "speech" && chosen.Metered.Policy == "provider_reported_v1" {
+		limit, configured := a.config.OperationLimits[operation][req.Model]
+		if !configured || limit.Policy != "provider_reported_v1" || limit.MaxQuantity <= 0 {
+			return nil, ErrInvalid
+		}
+		req.Quantity = limit.MaxQuantity
+	}
+	row.ReservationQuantity = int64(req.Quantity)
+	row.ReservationOutput = int64(req.Output)
 	amount, err := meteredReserve(*chosen.Metered, req)
 	if err != nil {
 		return nil, err
@@ -192,6 +201,18 @@ func (s *Session) ObserveMetering(ctx context.Context, u metering.Usage) error {
 	if u.State == "confirmed" {
 		if err := metering.ValidateUsage(price, u); err != nil {
 			return ErrInvalid
+		}
+		for _, measurement := range u.Measurements {
+			cap := s.call.ReservationQuantity
+			if measurement.Key == "output" || measurement.Key == "reasoning" {
+				cap = s.call.ReservationOutput
+			}
+			value, _ := new(big.Int).SetString(measurement.Quantity.Value, 10)
+			bound := new(big.Int).Mul(big.NewInt(cap), new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(measurement.Quantity.Scale)), nil))
+			if value.Cmp(bound) > 0 {
+				u.State = "incomplete"
+				break
+			}
 		}
 	}
 	b, err := common.Marshal(u)

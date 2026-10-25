@@ -22,6 +22,8 @@ import (
 // Call stores immutable verified payer scope and terminal command intent. Model
 // credentials are never persisted: recovery cannot authorize another dispatch.
 type Call struct {
+	ReservationQuantity   int64
+	ReservationOutput     int64
 	Operation             string `gorm:"size:32"`
 	RateSnapshot          string `gorm:"type:text"`
 	FundingSnapshot       string `gorm:"type:text"`

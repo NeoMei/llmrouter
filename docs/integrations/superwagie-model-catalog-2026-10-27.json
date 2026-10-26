@@ -1,0 +1,188 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-10-27",
+  "product_id": "llmrouter",
+  "source_product": "SuperWagie",
+  "source_provider": "quukk",
+  "models": [
+    {
+      "id": "glm-5.3",
+      "llmrouter_native": true,
+      "unihub_platform": true,
+      "asset": "CNY/6",
+      "rate_id": "llmrouter-glm-5-3-cny-v1",
+      "semantics": "exclusive_v1"
+    },
+    {
+      "id": "glm-5.3-flash",
+      "llmrouter_native": true,
+      "unihub_platform": true,
+      "asset": "CNY/6",
+      "rate_id": "llmrouter-glm-5-3-flash-cny-v1",
+      "semantics": "exclusive_v1"
+    },
+    {
+      "id": "glm-5.2",
+      "llmrouter_native": true,
+      "unihub_platform": true,
+      "asset": "CNY/6",
+      "rate_id": "llmrouter-glm-5-2-cny-v1",
+      "semantics": "exclusive_v1"
+    },
+    {
+      "id": "glm-5.1",
+      "llmrouter_native": true,
+      "unihub_platform": true,
+      "asset": "CNY/6",
+      "rate_id": "llmrouter-glm-5-1-cny-v1",
+      "semantics": "exclusive_v1"
+    },
+    {
+      "id": "glm-5",
+      "llmrouter_native": true,
+      "unihub_platform": true,
+      "asset": "CNY/6",
+      "rate_id": "llmrouter-glm-5-cny-v1",
+      "semantics": "exclusive_v1"
+    },
+    {
+      "id": "glm-5-turbo",
+      "llmrouter_native": true,
+      "unihub_platform": true,
+      "asset": "CNY/6",
+      "rate_id": "llmrouter-glm-5-turbo-cny-v1",
+      "semantics": "exclusive_v1"
+    },
+    {
+      "id": "glm-4.7",
+      "llmrouter_native": true,
+      "unihub_platform": true,
+      "asset": "CNY/6",
+      "rate_id": "llmrouter-glm-4-7-cny-v1",
+      "semantics": "exclusive_v1"
+    },
+    {
+      "id": "glm-4.6",
+      "llmrouter_native": true,
+      "unihub_platform": true,
+      "asset": "CNY/6",
+      "rate_id": "llmrouter-glm-4-6-cny-v1",
+      "semantics": "exclusive_v1"
+    },
+    {
+      "id": "glm-4.5",
+      "llmrouter_native": true,
+      "unihub_platform": true,
+      "asset": "CNY/6",
+      "rate_id": "llmrouter-glm-4-5-cny-v1",
+      "semantics": "exclusive_v1"
+    },
+    {
+      "id": "glm-4.5-air",
+      "llmrouter_native": true,
+      "unihub_platform": true,
+      "asset": "CNY/6",
+      "rate_id": "llmrouter-glm-4-5-air-cny-v1",
+      "semantics": "exclusive_v1"
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "llmrouter_native": true,
+      "unihub_platform": true,
+      "asset": "CNY/6",
+      "rate_id": "llmrouter-deepseek-v4-pro-cny-v1",
+      "semantics": "exclusive_v1"
+    },
+    {
+      "id": "deepseek-v4-flash",
+      "llmrouter_native": true,
+      "unihub_platform": true,
+      "asset": "CNY/6",
+      "rate_id": "llmrouter-deepseek-v4-flash-cny-v1",
+      "semantics": "exclusive_v1"
+    },
+    {
+      "id": "deepseek-v4-flash-vision-exp",
+      "llmrouter_native": true,
+      "unihub_platform": true,
+      "asset": "CNY/6",
+      "rate_id": "llmrouter-deepseek-v4-flash-vision-exp-cny-v1",
+      "semantics": "exclusive_v1"
+    },
+    {
+      "id": "DeepSeek-V4-Pro-A",
+      "llmrouter_native": true,
+      "unihub_platform": true,
+      "asset": "CNY/6",
+      "rate_id": "llmrouter-deepseek-v4-pro-a-cny-v1",
+      "semantics": "exclusive_v1"
+    },
+    {
+      "id": "DeepSeek-V4-Flash-A",
+      "llmrouter_native": true,
+      "unihub_platform": true,
+      "asset": "CNY/6",
+      "rate_id": "llmrouter-deepseek-v4-flash-a-cny-v1",
+      "semantics": "exclusive_v1"
+    },
+    {
+      "id": "Doubao-Seed-2.0-Pro-A",
+      "llmrouter_native": true,
+      "unihub_platform": true,
+      "asset": "CNY/6",
+      "rate_id": "llmrouter-doubao-seed-2-0-pro-a-cny-v1",
+      "semantics": "exclusive_v1"
+    },
+    {
+      "id": "MiniMax-M3-A",
+      "llmrouter_native": true,
+      "unihub_platform": true,
+      "asset": "CNY/6",
+      "rate_id": "llmrouter-minimax-m3-a-cny-v1",
+      "semantics": "exclusive_v1"
+    },
+    {
+      "id": "Qwen3.7-Max-A",
+      "llmrouter_native": true,
+      "unihub_platform": true,
+      "asset": "CNY/6",
+      "rate_id": "llmrouter-qwen3-7-max-a-cny-v1",
+      "semantics": "exclusive_v1"
+    },
+    {
+      "id": "kimi-k2.7-code",
+      "llmrouter_native": true,
+      "unihub_platform": true,
+      "asset": "CNY/6",
+      "rate_id": "llmrouter-kimi-k2-7-code-cny-v1",
+      "semantics": "exclusive_v1"
+    },
+    {
+      "id": "Kimi-K2.6-A",
+      "llmrouter_native": true,
+      "unihub_platform": true,
+      "asset": "CNY/6",
+      "rate_id": "llmrouter-kimi-k2-6-a-cny-v1",
+      "semantics": "exclusive_v1"
+    },
+    {
+      "id": "k3",
+      "llmrouter_native": true,
+      "unihub_platform": true,
+      "asset": "CNY/6",
+      "rate_id": "llmrouter-k3-cny-v1",
+      "semantics": "exclusive_v1"
+    },
+    {
+      "id": "GLM-5.2-A",
+      "llmrouter_native": true,
+      "unihub_platform": true,
+      "asset": "CNY/6",
+      "rate_id": "llmrouter-glm-5-2-a-cny-v1",
+      "semantics": "exclusive_v1"
+    }
+  ],
+  "supported_platform_operation": "chat.completions",
+  "operation_note": "OCR, embeddings, rerank, speech, image and video consumers remain operation-specific routes and require their own UniHub contract before being added to this chat grant allowlist.",
+  "pricing_note": "CNY/6 rates are derived from the deployed LLMRouter native model/completion ratios; no credentials or provider secrets are included."
+}

@@ -19,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/internal/platformaccount"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/go-redis/redis/v8"
 	"gorm.io/gorm"
 )
 
@@ -198,10 +199,38 @@ func main() {
 		common.SQLitePath = *databasePath
 	}
 	common.IsMasterNode = false // A dry run never seeds roles or migrates the schema.
+	common.RedisEnabled = false // An isolated CLI process has no application initializer.
+	if *apply && os.Getenv("REDIS_CONN_STRING") != "" {
+		// The shared application initializer exits with raw transport errors. Keep
+		// this administrative entry point fail-closed without repeating credentials.
+		options, cacheErr := redis.ParseURL(os.Getenv("REDIS_CONN_STRING"))
+		if cacheErr != nil {
+			fmt.Fprintln(os.Stderr, "cache configuration is invalid")
+			os.Exit(1)
+		}
+		options.PoolSize = common.GetEnvOrDefault("REDIS_POOL_SIZE", 10)
+		cache := redis.NewClient(options)
+		cacheCtx, stopCache := context.WithTimeout(context.Background(), 5*time.Second)
+		cacheErr = cache.Ping(cacheCtx).Err()
+		stopCache()
+		if cacheErr != nil {
+			_ = cache.Close()
+			fmt.Fprintln(os.Stderr, "cache is unavailable; migration was not started")
+			os.Exit(1)
+		}
+		common.RDB, common.RedisEnabled = cache, true
+		defer cache.Close()
+	}
 	if err = model.InitDB(); err != nil {
 		fmt.Fprintln(os.Stderr, "database unavailable")
 		os.Exit(1)
 	}
+	database, err := model.DB.DB()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "database unavailable")
+		os.Exit(1)
+	}
+	defer database.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	if err = run(ctx, in, *apply); err != nil {

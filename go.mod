@@ -4,6 +4,10 @@ module github.com/QuantumNous/new-api
 go 1.26.10
 
 require (
+	github.com/NeoMei/UniHub/packages/userkit-go v0.0.0
+	github.com/coreos/go-oidc/v3 v3.14.1 // indirect
+	github.com/go-jose/go-jose/v4 v4.0.5 // indirect
+	golang.org/x/oauth2 v0.28.0 // indirect
 	github.com/Calcium-Ion/go-epay v0.0.4
 	github.com/abema/go-mp4 v1.4.1
 	github.com/andybalholm/brotli v1.1.1
@@ -176,3 +180,5 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 	modernc.org/sqlite v1.40.1 // indirect
 )
+
+replace github.com/NeoMei/UniHub/packages/userkit-go => ./third_party/unihub-userkit

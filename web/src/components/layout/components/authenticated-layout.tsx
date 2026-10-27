@@ -16,7 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Link } from '@tanstack/react-router'
+import { useEffect } from 'react'
+import { Link, useLocation } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
 import { LanguageSwitcher } from '@/components/language-switcher'
@@ -25,7 +26,9 @@ import { SkipToMain } from '@/components/skip-to-main'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { LayoutProvider } from '@/context/layout-provider'
 import { SearchProvider } from '@/context/search-provider'
+import { refreshProductAccess } from '@/features/unihub/session'
 import { UniHub } from '@/features/unihub'
+import { hasPermission } from '@/lib/admin-permissions'
 import { getCookie } from '@/lib/cookies'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
@@ -40,9 +43,23 @@ type AuthenticatedLayoutProps = {
 
 export function AuthenticatedLayout(props: AuthenticatedLayoutProps) {
   const { t } = useTranslation()
+  const pathname = useLocation({ select: (location) => location.pathname })
+  const user = useAuthStore((state) => state.auth.user)
   const projected = useAuthStore(
-    (state) => state.auth.user?.identity_source === 'unihub'
+    (state) => state.auth.user?.identity_source === 'unihub',
   )
+  useEffect(() => {
+    if (!projected) return
+    const refresh = () => {
+      void refreshProductAccess().catch(() => {})
+    }
+    window.addEventListener('focus', refresh)
+    const timer = window.setInterval(refresh, 60000)
+    return () => {
+      window.removeEventListener('focus', refresh)
+      window.clearInterval(timer)
+    }
+  }, [projected])
   if (projected) {
     return (
       <div className='min-h-svh'>
@@ -57,12 +74,18 @@ export function AuthenticatedLayout(props: AuthenticatedLayoutProps) {
               className='flex flex-wrap gap-4 md:flex-col'
             >
               <Link to='/dashboard'>{t('Console')}</Link>
-              <Link to='/wallet'>{t('Wallet')}</Link>
+              {hasPermission(user, 'channel', 'read') ? (
+                <Link to='/channels'>{t('Channels')}</Link>
+              ) : null}
               <Link to='/unihub'>{t('UniHub account')}</Link>
             </nav>
           </aside>
           <div className='min-w-0 flex-1'>
-            <UniHub />
+            {pathname.startsWith('/channels') || pathname === '/403' ? (
+              (props.children ?? <AnimatedOutlet />)
+            ) : (
+              <UniHub />
+            )}
           </div>
         </div>
       </div>
@@ -83,7 +106,7 @@ export function AuthenticatedLayout(props: AuthenticatedLayoutProps) {
                 '@container/content',
                 'h-[calc(100svh-var(--app-header-height,0px))]',
                 'min-h-0 overflow-hidden',
-                'peer-data-[variant=inset]:h-[calc(100svh-var(--app-header-height,0px)-(var(--spacing)*4))]'
+                'peer-data-[variant=inset]:h-[calc(100svh-var(--app-header-height,0px)-(var(--spacing)*4))]',
               )}
             >
               {props.children ?? <AnimatedOutlet />}

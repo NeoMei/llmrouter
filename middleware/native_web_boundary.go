@@ -1,7 +1,10 @@
 package middleware
 
 import (
+	"net/http"
 	"strings"
+
+	"github.com/QuantumNous/new-api/internal/unihubaccess"
 
 	"github.com/gin-gonic/gin"
 )
@@ -23,6 +26,18 @@ func NativeWebBoundary() gin.HandlerFunc {
 		if path == "/" || path == "/unihub" || path == "/about" || path == "/docs" || path == "/privacy-policy" || path == "/user-agreement" || path == "/install" || strings.HasPrefix(path, "/install/") || strings.HasPrefix(path, "/assets/") || strings.HasPrefix(path, "/static/") || strings.HasPrefix(path, "/brand/") || path == "/favicon.ico" || path == "/logo.png" || path == "/logo.svg" || path == "/manifest.json" || path == "/robots.txt" {
 			c.Next()
 			return
+		}
+		// These exact paths serve only the product SPA shell. Browser guards
+		// hydrate live access; management and finance APIs keep their own gates.
+		if c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead {
+			policy, err := unihubaccess.FromEnv()
+			if err == nil && policy.PublicEnabled {
+				switch path {
+				case "/sign-in", "/dashboard", "/channels", "/channels/", "/wallet", "/403":
+					c.Next()
+					return
+				}
+			}
 		}
 		native(c)
 	}

@@ -491,7 +491,7 @@ func GetSelf(c *gin.Context) {
 	// row role, but use it for capabilities so GetSelf and login/refresh remain
 	// consistent with the authorization decision made for this request.
 	permissions := calculateUserPermissions(userRole)
-	permissions["admin_permissions"] = authz.Capabilities(id, userRole)
+	permissions["admin_permissions"] = authz.RequestCapabilities(c)
 	responseData["permissions"] = permissions
 
 	c.JSON(http.StatusOK, gin.H{

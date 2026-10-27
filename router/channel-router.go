@@ -29,6 +29,7 @@ func registerChannelRoutes(apiRouter *gin.RouterGroup) {
 	)
 
 	for _, route := range channelPermissionRoutes {
+		middleware.RegisterUniHubManagementRoute(route.method, "/api/channel"+route.path, route.permission)
 		channelRoute.Handle(route.method, route.path,
 			middleware.RequirePermission(route.permission),
 			route.handler,

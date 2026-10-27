@@ -183,7 +183,7 @@ func GetAllChannels(c *gin.Context) {
 		typeCounts[r.Type] = r.Count
 	}
 	common.ApiSuccess(c, gin.H{
-		"items":       channelData,
+		"items":       productChannelViews(c, channelData),
 		"total":       total,
 		"page":        pageInfo.GetPage(),
 		"page_size":   pageInfo.GetPageSize(),
@@ -385,7 +385,7 @@ func SearchChannels(c *gin.Context) {
 		"success": true,
 		"message": "",
 		"data": gin.H{
-			"items":       pagedData,
+			"items":       productChannelViews(c, pagedData),
 			"total":       total,
 			"type_counts": typeCounts,
 		},
@@ -410,7 +410,7 @@ func GetChannel(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    channel,
+		"data":    productChannelView(c, channel),
 	})
 	return
 }
@@ -845,7 +845,7 @@ func EditTagChannels(c *gin.Context) {
 		return
 	}
 	if (channelTag.ParamOverride != nil || channelTag.HeaderOverride != nil) &&
-		!authz.Can(c.GetInt("id"), c.GetInt("role"), authz.ChannelSensitiveWrite) {
+		!authz.CanRequest(c, authz.ChannelSensitiveWrite) {
 		common.ApiErrorI18n(c, i18n.MsgAuthInsufficientPrivilege)
 		return
 	}
@@ -976,6 +976,10 @@ func UpdateChannel(c *gin.Context) {
 		})
 		return
 	}
+	if err := mergeProductChannelSettings(c, &channel, originChannel, requestData); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	originProxy := originChannel.GetSetting().Proxy
 	proxyChanged := false
 	if _, settingProvided := requestData["setting"]; settingProvided {
@@ -988,7 +992,7 @@ func UpdateChannel(c *gin.Context) {
 	channel.ChannelInfo = originChannel.ChannelInfo
 
 	if channelHasSensitiveChanges(&channel, originChannel, requestData) &&
-		!authz.Can(c.GetInt("id"), c.GetInt("role"), authz.ChannelSensitiveWrite) {
+		!authz.CanRequest(c, authz.ChannelSensitiveWrite) {
 		common.ApiErrorI18n(c, i18n.MsgAuthInsufficientPrivilege)
 		return
 	}
@@ -1111,10 +1115,14 @@ func UpdateChannel(c *gin.Context) {
 	})
 	channel.Key = ""
 	clearChannelInfo(&channel.Channel)
+	responseChannel := any(channel)
+	if _, product := authz.ProductPrincipal(c); product {
+		responseChannel = productChannelView(c, &channel.Channel)
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    channel,
+		"data":    responseChannel,
 	})
 	return
 }
@@ -1511,7 +1519,7 @@ func ManageMultiKeys(c *gin.Context) {
 		return
 	}
 	if multiKeyActionRequiresSensitiveWrite(request.Action) &&
-		!authz.Can(c.GetInt("id"), c.GetInt("role"), authz.ChannelSensitiveWrite) {
+		!authz.CanRequest(c, authz.ChannelSensitiveWrite) {
 		common.ApiErrorI18n(c, i18n.MsgAuthInsufficientPrivilege)
 		return
 	}

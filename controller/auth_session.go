@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -30,6 +31,21 @@ func RefreshAuth(c *gin.Context) {
 		writeAuthSessionError(c, err)
 		return
 	}
+	data := buildSelfUserData(user)
+	if user.IdentitySource == model.UniHubIdentitySource {
+		identity, e := service.ParseAccessToken(bundle.AccessToken)
+		if e != nil {
+			writeAuthSessionError(c, e)
+			return
+		}
+		p, _, e := service.ResolveUniHubSession(c.Request.Context(), identity)
+		if e != nil {
+			writeAuthSessionError(c, service.ErrLoginSessionRevoked)
+			return
+		}
+		authz.SetProductPrincipal(c, p)
+		data["permissions"] = gin.H{"admin_permissions": authz.RequestCapabilities(c)}
+	}
 	service.WriteRefreshCookie(c, bundle.RefreshToken)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -38,7 +54,7 @@ func RefreshAuth(c *gin.Context) {
 			"access_token":      bundle.AccessToken,
 			"token_type":        bundle.TokenType,
 			"access_expires_at": bundle.AccessExpiresAt,
-			"user":              buildSelfUserData(user),
+			"user":              data,
 			"session":           bundle.Session,
 		},
 	})

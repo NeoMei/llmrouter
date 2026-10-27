@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/controller"
@@ -22,13 +23,17 @@ func TestUniHubSessionCreatesNativeBrowserBundle(t *testing.T) {
 	oldDB, oldRedis, oldSecret := model.DB, common.RedisEnabled, common.SessionSecret
 	db, err := gorm.Open(sqlite.Open(t.TempDir()+"/session.db"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.UniHubIdentityMapping{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.UniHubIdentityMapping{}, &model.UniHubSessionBinding{}))
 	model.DB, common.RedisEnabled, common.SessionSecret = db, false, "unihub-session-test-secret"
 	t.Cleanup(func() { model.DB, common.RedisEnabled, common.SessionSecret = oldDB, oldRedis, oldSecret })
-	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var up *httptest.Server
+	up = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/capabilities":
-			_, _ = w.Write([]byte(`{"kind":"product","product_id":"llmrouter","client_id":"client"}`))
+			_, _ = w.Write([]byte(`{"kind":"product","product_id":"llmrouter","client_id":"client","instance_id":"default","scopes":["access:read"]}`))
+		case "/v1/me/product-access":
+			raw, _ := common.Marshal(gin.H{"issuer": up.URL, "subject": "subject-1", "product_id": "llmrouter", "instance_id": "default", "user": gin.H{"id": "subject-1", "name": "Ada", "email": "ada@test"}, "roles": []string{"member"}, "permissions": []string{"product:use"}, "version": 1, "active": true, "expires_at": time.Now().Add(time.Hour).Unix()})
+			_, _ = w.Write(raw)
 		case "/v1/me":
 			_, _ = w.Write([]byte(`{"id":"subject-1","name":"Ada","email":"ada@test"}`))
 		case "/v1/accounts":

@@ -31,7 +31,8 @@ func NativeAPIBoundary() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		if err == nil && policy.PublicEnabled && publicProjectionPath(c) {
+		_, management := uniHubManagementPermission(c)
+		if err == nil && policy.PublicEnabled && (publicProjectionPath(c) || management) {
 			if !hasUniHubBrowserSession(c) {
 				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "UNIHUB_SESSION_REQUIRED"})
 				return

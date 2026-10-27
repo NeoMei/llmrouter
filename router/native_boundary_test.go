@@ -88,7 +88,7 @@ func TestPublicNativePagesAndPlatformFallback(t *testing.T) {
 	// Registration order is the production order: web then platform/UniHub.
 	SetPlatformRouter(r, nil)
 	SetUniHubRouter(r, platformaccount.Config{})
-	for _, path := range []string{"/sign-in", "/sign-up", "/oauth/github", "/forgot-password", "/user/reset", "/wallet", "/keys", "/subscriptions", "/playground", "/dashboard", "/profile", "/index.html", "/pricing"} {
+	for _, path := range []string{"/sign-up", "/oauth/github", "/forgot-password", "/user/reset", "/keys", "/subscriptions", "/playground", "/profile", "/index.html", "/pricing"} {
 		req := httptest.NewRequest("GET", path, nil)
 		req.Header.Set("Origin", "https://admin.example")
 		req.Header.Set("X-Forwarded-For", "127.0.0.1")
@@ -112,4 +112,26 @@ func TestPublicNativePagesAndPlatformFallback(t *testing.T) {
 		r.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
 		assert.Equal(t, 200, w.Code, path)
 	}
+}
+
+func TestProductShellDirectRoutesRemainRenderOnly(t *testing.T) {
+	enableUniHubBoundary(t)
+	r := gin.New()
+	r.Use(middleware.NativeWebBoundary())
+	r.NoRoute(func(c *gin.Context) { c.Header("Content-Type", "text/html"); c.String(200, "product shell") })
+	for _, path := range []string{"/sign-in", "/dashboard", "/channels", "/channels/", "/wallet", "/403"} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		require.Equal(t, 200, w.Code, path)
+		require.Contains(t, w.Body.String(), "product shell", path)
+	}
+	for _, path := range []string{"/api/channel/", "/api/user/topup", "/v1/chat/completions", "/unknown", "/channels/secrets", "/keys", "/sign-up"} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		require.Equal(t, 403, w.Code, path)
+		require.NotContains(t, w.Body.String(), "product shell", path)
+	}
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("POST", "/channels", nil))
+	require.Equal(t, 403, w.Code)
 }

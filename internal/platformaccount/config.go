@@ -17,6 +17,9 @@ import (
 )
 
 type Config struct {
+	InstanceID   string   `json:"instance_id"`
+	OIDCIssuer   string   `json:"-"`
+	ClientSecret string   `json:"-"`
 	Enabled      bool     `json:"enabled"`
 	PublicOrigin string   `json:"public_origin"`
 	APIOrigin    string   `json:"-"`
@@ -43,6 +46,12 @@ func FromEnv() (Config, error) {
 	if !c.Enabled {
 		return c, nil
 	}
+	c.InstanceID = os.Getenv("UNIHUB_PRODUCT_INSTANCE_ID")
+	if c.InstanceID == "" {
+		c.InstanceID = "default"
+	}
+	c.OIDCIssuer = os.Getenv("UNIHUB_PRODUCT_OIDC_ISSUER")
+	c.ClientSecret = os.Getenv("UNIHUB_PRODUCT_CLIENT_SECRET")
 	c.PublicOrigin = strings.TrimRight(os.Getenv("UNIHUB_PRODUCT_PUBLIC_ORIGIN"), "/")
 	c.APIOrigin = strings.TrimRight(os.Getenv("UNIHUB_PRODUCT_API_ORIGIN"), "/")
 	c.ClientID = os.Getenv("UNIHUB_PRODUCT_CLIENT_ID")
@@ -54,6 +63,15 @@ func FromEnv() (Config, error) {
 	}
 	if e := validateURL(c.RedirectURI, false); e != nil {
 		return c, e
+	}
+	if c.OIDCIssuer != "" {
+		if e := validateURL(c.OIDCIssuer, false); e != nil {
+			return c, e
+		}
+		callback, _ := url.Parse(c.RedirectURI)
+		if callback.Path != "/api/unihub/callback" {
+			return c, errors.New("UniHub browser SSO requires /api/unihub/callback")
+		}
 	}
 	if c.ClientID == "" {
 		return c, errors.New("missing UniHub client")

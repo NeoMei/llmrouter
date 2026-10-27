@@ -39,6 +39,9 @@ func cleanupAuthArtifacts() {
 			int64(time.Hour/time.Second),
 		))
 	}
+	if err := model.PurgeUniHubSessionBindings(now.Unix()); err != nil {
+		common.SysError("failed to delete expired UniHub proofs")
+	}
 	if err := model.DeleteExpiredUserSessions(now.Unix()); err != nil {
 		common.SysError("failed to delete expired user sessions: " + err.Error())
 	}

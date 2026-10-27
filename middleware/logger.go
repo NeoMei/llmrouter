@@ -30,7 +30,8 @@ func SetUpLogger(server *gin.Engine) {
 		}
 		path := param.Path
 		// OAuth codes/state are credentials too; redact logs without changing the request.
-		if strings.HasPrefix(param.Request.URL.Path, "/api/oauth/") || strings.HasPrefix(param.Request.URL.Path, "/oauth/") {
+		if param.Request.URL.Path == "/api/unihub/callback" ||
+			strings.HasPrefix(param.Request.URL.Path, "/api/oauth/") || strings.HasPrefix(param.Request.URL.Path, "/oauth/") {
 			path = param.Request.URL.Path
 		} else if param.Request.URL.RawQuery != "" {
 			query := param.Request.URL.Query().Encode()

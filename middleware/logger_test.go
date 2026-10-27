@@ -31,6 +31,11 @@ func TestSetUpLoggerMasksQueryCredentials(t *testing.T) {
 		{"/v1/models?alt=sse&api-version=2024-02-01", "/v1/models?alt=sse&api-version=2024-02-01"},
 		{"/v1/models", "/v1/models"},
 		{"/%61pi/oauth/test?code=secret&state=secret", "/api/oauth/test"},
+		{"/api/unihub/callback?code=callback-code-marker&state=callback-state-marker&extra=callback-extra-marker", "/api/unihub/callback"},
+		{"/api/unihub/callback?error=callback-error-marker&error_description=callback-description-marker&state=callback-state-marker", "/api/unihub/callback"},
+		{"/%61pi/unihub/callback?code=callback-code-marker&state=callback-state-marker", "/api/unihub/callback"},
+		{"/api/unihub/access?view=summary", "/api/unihub/access?view=summary"},
+		{"/api/unihub/callback/status?view=summary", "/api/unihub/callback/status?view=summary"},
 	} {
 		t.Run(tc.target, func(t *testing.T) {
 			var output bytes.Buffer
@@ -51,6 +56,9 @@ func TestSetUpLoggerMasksQueryCredentials(t *testing.T) {
 			_, loggedPath, found := strings.Cut(strings.TrimSuffix(output.String(), "\n"), "GET ")
 			require.True(t, found)
 			assert.Equal(t, tc.loggedPath, loggedPath)
+			for _, marker := range []string{"callback-code-marker", "callback-state-marker", "callback-extra-marker", "callback-error-marker", "callback-description-marker"} {
+				assert.NotContains(t, output.String(), marker)
+			}
 			assert.Equal(t, originalURL, *request.URL)
 			assert.Equal(t, tc.target, request.RequestURI)
 		})

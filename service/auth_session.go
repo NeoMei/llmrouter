@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -43,17 +44,17 @@ type AuthBundle struct {
 }
 
 func CreateLoginSession(userID int, loginMethod, ip, userAgent string) (*AuthBundle, error) {
-	return createLoginSession(userID, 0, loginMethod, ip, userAgent)
+	return createLoginSession(userID, 0, loginMethod, ip, userAgent, 0)
 }
 
 func CreateLoginSessionAtAuthVersion(userID int, expectedAuthVersion int64, loginMethod, ip, userAgent string) (*AuthBundle, error) {
 	if expectedAuthVersion <= 0 {
 		return nil, ErrLoginSessionInvalid
 	}
-	return createLoginSession(userID, expectedAuthVersion, loginMethod, ip, userAgent)
+	return createLoginSession(userID, expectedAuthVersion, loginMethod, ip, userAgent, 0)
 }
 
-func createLoginSession(userID int, expectedAuthVersion int64, loginMethod, ip, userAgent string) (*AuthBundle, error) {
+func createLoginSession(userID int, expectedAuthVersion int64, loginMethod, ip, userAgent string, expiresAt int64) (*AuthBundle, error) {
 	user, err := model.GetUserCache(userID)
 	if err != nil {
 		return nil, err
@@ -99,6 +100,14 @@ func createLoginSession(userID int, expectedAuthVersion int64, loginMethod, ip, 
 		CreatedAt:       now,
 		LastActiveAt:    now,
 		ExpiresAt:       time.Unix(now, 0).Add(LoginSessionTTL).Unix(),
+	}
+	if expiresAt > 0 {
+		if expiresAt <= now {
+			return nil, ErrLoginSessionInvalid
+		}
+		if session.ExpiresAt > expiresAt {
+			session.ExpiresAt = expiresAt
+		}
 	}
 	if session.LoginMethod == "" {
 		session.LoginMethod = "unknown"
@@ -236,6 +245,12 @@ func RefreshLoginSession(rawRefreshToken, expectedSID, ip, userAgent string) (*A
 		_, _ = model.RevokeUserSession(session.UserID, session.SID, "user_security_changed")
 		return nil, nil, ErrLoginSessionRevoked
 	}
+	if session.LoginMethod == "unihub" {
+		identity := AuthIdentity{UserID: session.UserID, SessionID: sid, SessionVersion: session.Version, UserAuthVersion: session.UserAuthVersion}
+		if _, _, e := ResolveUniHubSession(context.Background(), identity); e != nil {
+			return nil, nil, ErrLoginSessionRevoked
+		}
+	}
 	nextSecret := deriveNextRefreshSecret(sid, secret)
 	rotated, err := model.RotateUserSessionRefresh(session.UserID, sid, hashRefreshSecret(secret), hashRefreshSecret(nextSecret), time.Now().Unix(), RefreshReplayWindow)
 	if err != nil {
@@ -331,7 +346,7 @@ func issueAuthBundle(session *model.UserSession, rawRefreshToken string, current
 		UserAuthVersion: session.UserAuthVersion,
 		SessionVersion:  session.Version,
 	}
-	accessToken, accessExpiresAt, err := IssueAccessToken(identity)
+	accessToken, accessExpiresAt, err := issueAccessTokenUntil(identity, session.ExpiresAt)
 	if err != nil {
 		return nil, err
 	}
@@ -414,4 +429,8 @@ func FormatAuthError(err error) string {
 		return ""
 	}
 	return fmt.Sprintf("authentication failed: %v", err)
+}
+
+func CreateUniHubLoginSession(userID int, expiresAt int64, ip, userAgent string) (*AuthBundle, error) {
+	return createLoginSession(userID, 0, "unihub", ip, userAgent, expiresAt)
 }

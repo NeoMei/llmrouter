@@ -845,7 +845,7 @@ func EditTagChannels(c *gin.Context) {
 		return
 	}
 	if (channelTag.ParamOverride != nil || channelTag.HeaderOverride != nil) &&
-		!authz.Can(c.GetInt("id"), c.GetInt("role"), authz.ChannelSensitiveWrite) {
+		!authz.CanRequest(c, authz.ChannelSensitiveWrite) {
 		common.ApiErrorI18n(c, i18n.MsgAuthInsufficientPrivilege)
 		return
 	}
@@ -988,7 +988,7 @@ func UpdateChannel(c *gin.Context) {
 	channel.ChannelInfo = originChannel.ChannelInfo
 
 	if channelHasSensitiveChanges(&channel, originChannel, requestData) &&
-		!authz.Can(c.GetInt("id"), c.GetInt("role"), authz.ChannelSensitiveWrite) {
+		!authz.CanRequest(c, authz.ChannelSensitiveWrite) {
 		common.ApiErrorI18n(c, i18n.MsgAuthInsufficientPrivilege)
 		return
 	}
@@ -1511,7 +1511,7 @@ func ManageMultiKeys(c *gin.Context) {
 		return
 	}
 	if multiKeyActionRequiresSensitiveWrite(request.Action) &&
-		!authz.Can(c.GetInt("id"), c.GetInt("role"), authz.ChannelSensitiveWrite) {
+		!authz.CanRequest(c, authz.ChannelSensitiveWrite) {
 		common.ApiErrorI18n(c, i18n.MsgAuthInsufficientPrivilege)
 		return
 	}

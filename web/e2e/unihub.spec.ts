@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type Page, type Route } from '@playwright/test'
 
 const accounts = [
   { id: 'personal-a', name: 'Personal A', kind: 'personal', role: 'owner' },
@@ -11,12 +11,91 @@ async function fixture(
     registerUnknown?: boolean
     models?: string[]
     mismatch?: boolean
-  } = {}
+    permissions?: string[]
+  } = {},
 ) {
   let authorized = false
-  let nativeBundle: unknown
+  const permissions = {
+    channel: {
+      read: (options.permissions ?? []).includes('channel:read'),
+      operate: (options.permissions ?? []).includes('channel:operate'),
+      write: (options.permissions ?? []).includes('channel:write'),
+    },
+  }
+  const expiry = Math.floor(Date.now() / 1000) + (options.expiry ?? 300)
+  const nativeBundle = {
+    access_token: 'native-session-token',
+    token_type: 'Bearer',
+    access_expires_at: expiry,
+    user: {
+      id: 42,
+      username: 'product-user',
+      display_name: 'Product user',
+      role: 1,
+      identity_source: 'unihub',
+      unihub_user_id: 'immutable-user',
+      permissions: { admin_permissions: permissions },
+    },
+    session: {
+      sid: 'sid-unihub',
+      current: true,
+      login_method: 'unihub',
+      ip: '',
+      user_agent: 'fixture',
+      created_at: 1,
+      last_active_at: 1,
+      expires_at: expiry,
+    },
+  }
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname
+    if (path === '/api/unihub/login') {
+      authorized = true
+      return route.fulfill({
+        status: 303,
+        headers: {
+          Location:
+            new URL(route.request().url()).searchParams.get('return_to') ??
+            '/dashboard',
+        },
+      })
+    }
+    if (path === '/api/unihub/access') {
+      if (!authorized || options.mismatch || Date.now() / 1000 >= expiry)
+        {return route.fulfill({ status: 401, json: { success: false } })}
+      return route.fulfill({
+        json: {
+          access: {
+            subject: 'immutable-user',
+            user: { id: 'immutable-user', name: 'Product user', email: '' },
+            roles: ['member'],
+            permissions: options.permissions ?? ['product:use'],
+            expires_at: expiry,
+          },
+          permissions: { admin_permissions: permissions },
+          csrf_token: 'csrf',
+        },
+      })
+    }
+    if (path.startsWith('/api/unihub/bff/')) return productRouteHandler(route)
+    if (
+      [
+        '/api/channel/models',
+        '/api/channel/models_enabled',
+        '/api/models/',
+        '/api/prefill_group/',
+      ].includes(path)
+    )
+      {return route.fulfill({ json: { success: true, data: [] } })}
+    if (['/api/group/', '/api/group'].includes(path))
+      {return route.fulfill({ json: { success: true, data: [] } })}
+    if (path === '/api/channel' || path === '/api/channel/')
+      {return route.fulfill({
+        json: {
+          success: true,
+          data: { items: [], total: 0, page: 1, page_size: 10 },
+        },
+      })}
     if (path === '/api/unihub/config') {
       return route.fulfill({
         json: {
@@ -32,43 +111,14 @@ async function fixture(
     }
     if (path === '/api/user/auth/refresh') {
       return route.fulfill(
-        authorized
+        authorized && Date.now() / 1000 < expiry
           ? { json: { success: true, data: nativeBundle } }
-          : { status: 401, json: { success: false } }
+          : { status: 401, json: { success: false } },
       )
     }
     if (path === '/api/user/auth/logout') {
       authorized = false
       return route.fulfill({ json: { success: true } })
-    }
-    if (path === '/api/unihub/session') {
-      authorized = true
-      nativeBundle = {
-        access_token: 'native-session-token',
-        token_type: 'Bearer',
-        access_expires_at: Math.floor(Date.now() / 1000) + 300,
-        user: {
-          id: 42,
-          username: 'product-user',
-          display_name: 'Product user',
-          role: 1,
-          identity_source: 'unihub',
-          unihub_user_id: options.mismatch
-            ? 'different-subject'
-            : 'immutable-user',
-        },
-        session: {
-          sid: 'sid-unihub',
-          current: true,
-          login_method: 'unihub',
-          ip: '127.0.0.1',
-          user_agent: 'fixture',
-          created_at: 1,
-          last_active_at: 1,
-          expires_at: 9999999999,
-        },
-      }
-      return route.fulfill({ json: { success: true, data: nativeBundle } })
     }
     if (path === '/api/unihub/identity') {
       return route.fulfill({
@@ -82,9 +132,9 @@ async function fixture(
   })
   let state = ''
   const mutations: { account: string; key: string; body: string }[] = []
-  await page.route('http://127.0.0.1:58006/**', async (route) => {
+  const productRouteHandler = async (route: Route) => {
     const request = route.request()
-    const path = new URL(request.url()).pathname
+    const path = new URL(request.url()).pathname.replace('/api/unihub/bff', '')
     const headers = {
       'Access-Control-Allow-Origin': 'http://127.0.0.1:58004',
       'Access-Control-Allow-Headers': '*',
@@ -204,50 +254,46 @@ async function fixture(
       })
     }
     return route.fulfill({ headers, json: body })
-  })
+  }
+  await page.route('http://127.0.0.1:58006/**', productRouteHandler)
   return mutations
 }
 async function login(page: Page) {
   await page.goto('/unihub')
-  await page.getByLabel('Username', { exact: true }).fill('product')
-  await page.getByLabel('Password', { exact: true }).fill('private')
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
   await expect(page.getByText('Product user · immutable-user')).toBeVisible()
-  await page.getByRole('combobox').first().selectOption('personal-a')
+  await expect(page.getByRole('combobox').first()).toHaveValue('personal-a')
 }
-test('PKCE login keeps tokens memory-only and explicit payer controls role visibility', async ({
+test('SSO restores backend session after reload and payer controls role visibility', async ({
   page,
 }) => {
   await fixture(page)
   await login(page)
   await expect(
-    page.getByText('9007199254740.993123 CNY', { exact: false })
+    page.getByText('9007199254740.993123 CNY', { exact: false }),
   ).toBeVisible()
   await expect(
-    page.getByText('Own-origin usage only.', { exact: false })
+    page.getByText('Own-origin usage only.', { exact: false }),
   ).toBeVisible()
   await expect(
-    page.getByRole('button', { name: 'Create recharge', exact: true })
+    page.getByRole('button', { name: 'Create recharge', exact: true }),
   ).toBeVisible()
   await page.getByRole('combobox').first().selectOption('team-b')
   await expect(
-    page.getByText('Finance actions require owner or billing_admin role.')
+    page.getByText('Finance actions require owner or billing_admin role.'),
   ).toBeVisible()
   await expect(
-    page.getByRole('button', { name: 'Create recharge', exact: true })
+    page.getByRole('button', { name: 'Create recharge', exact: true }),
   ).toHaveCount(0)
   expect(
     await page.evaluate(() =>
       JSON.stringify({
         local: { ...localStorage },
         session: { ...sessionStorage },
-      })
-    )
+      }),
+    ),
   ).not.toContain('memory-only-product')
   await page.reload()
-  await expect(
-    page.getByRole('button', { name: 'Sign in', exact: true })
-  ).toBeVisible()
+  await expect(page.getByText('Product user · immutable-user')).toBeVisible()
 })
 test('uncertain recharge retries retain original key and payer after switching', async ({
   page,
@@ -259,7 +305,7 @@ test('uncertain recharge retries retain original key and payer after switching',
     .getByRole('button', { name: 'Create recharge', exact: true })
     .click()
   await expect(
-    page.getByRole('button', { name: 'Retry original operation' })
+    page.getByRole('button', { name: 'Retry original operation' }),
   ).toBeVisible()
   await page.getByRole('combobox').first().selectOption('team-b')
   await page.getByRole('combobox').first().selectOption('personal-a')
@@ -269,27 +315,31 @@ test('uncertain recharge retries retain original key and payer after switching',
   expect(writes[0].account).toBe('personal-a')
   expect(JSON.parse(writes[0].body).amount).toBe('10500000')
 })
-test('expiry removes account resources and requires re-login', async ({
+test('revoked proof removes account resources and stops automatic sign-in', async ({
   page,
 }) => {
-  await fixture(page, { expiry: 2 })
+  await fixture(page)
   await login(page)
+  await page.route('**/api/unihub/access', (route) =>
+    route.fulfill({ status: 401, json: { success: false } }),
+  )
+  await page.reload()
   await expect(
-    page.getByRole('button', { name: 'Sign in', exact: true })
-  ).toBeVisible({ timeout: 6000 })
+    page.getByRole('button', { name: 'Sign in with UniHub', exact: true }),
+  ).toBeVisible()
   await expect(page.getByText('Product user · immutable-user')).toHaveCount(0)
 })
 test('unknown registration retries original payload and idempotency key', async ({
   page,
 }) => {
   const writes = await fixture(page, { registerUnknown: true })
-  await page.goto('/unihub')
+  await page.goto('/unihub?signed_out=1')
   await page.getByRole('button', { name: 'Register UniHub account' }).click()
   await page.getByLabel('Username', { exact: true }).fill('new-user')
   await page.getByLabel('Password', { exact: true }).fill('private')
   await page.getByRole('button', { name: 'Register', exact: true }).click()
   await expect(
-    page.getByRole('button', { name: 'Retry original registration' })
+    page.getByRole('button', { name: 'Retry original registration' }),
   ).toBeVisible()
   await page
     .getByRole('button', { name: 'Retry original registration' })
@@ -325,7 +375,7 @@ test('ordinary and streamed sends show text, bind stable task/call IDs and allow
             contentType: 'text/event-stream',
             body: 'data: {"choices":[{"delta":{"content":"streamed text"}}]}\n\ndata: [DONE]\n\n',
           }
-        : { json: { choices: [{ message: { content: 'ordinary text' } }] } }
+        : { json: { choices: [{ message: { content: 'ordinary text' } }] } },
     )
   })
   await login(page)
@@ -343,7 +393,7 @@ test('ordinary and streamed sends show text, bind stable task/call IDs and allow
   expect(sends[0].task).not.toBe(sends[1].task)
   await page.getByRole('button', { name: 'Revoke task credential' }).click()
   await expect(
-    page.getByRole('button', { name: 'Revoke task credential' })
+    page.getByRole('button', { name: 'Revoke task credential' }),
   ).toHaveCount(0)
 })
 
@@ -393,7 +443,7 @@ test('late grant response after payer switch cannot send a model request', async
   release()
   await expect(page.getByText('Payer: Team B', { exact: false })).toBeVisible()
   await expect(
-    page.getByRole('button', { name: 'Send new task' })
+    page.getByRole('button', { name: 'Send new task' }),
   ).toBeEnabled()
   expect(sends).toBe(0)
   await expect(page.getByLabel('Model output')).toHaveCount(0)
@@ -425,10 +475,10 @@ test('explicit account refresh shows a member who accepted remotely', async ({
   accepted = true
   await page.getByRole('button', { name: 'Refresh accounts and roles' }).click()
   await expect(
-    page.getByText('Remote member · new-recipient · member')
+    page.getByText('Remote member · new-recipient · member'),
   ).toBeVisible()
   await expect(
-    page.getByRole('combobox', { name: 'Member role new-recipient' })
+    page.getByRole('combobox', { name: 'Member role new-recipient' }),
   ).toHaveValue('member')
 })
 
@@ -474,11 +524,11 @@ test('created recharge shows exact amount unconfirmed status and queries origina
     .getByRole('button', { name: 'Create recharge', exact: true })
     .click()
   await expect(
-    page.getByText('original-recharge', { exact: true })
+    page.getByText('original-recharge', { exact: true }),
   ).toBeVisible()
   await expect(page.getByText('10.500000 CNY', { exact: true })).toBeVisible()
   await expect(
-    page.getByText('Created; payment and posting are not confirmed.')
+    page.getByText('Created; payment and posting are not confirmed.'),
   ).toBeVisible()
   await page.getByRole('button', { name: 'Query this original object' }).click()
   await expect.poll(() => reads).toBe(1)
@@ -490,24 +540,21 @@ test('mobile payer control and long team name do not overflow the viewport', asy
 }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await fixture(page)
-  await page.route('**/api/unihub/identity', (route) =>
+  await page.route('**/api/unihub/bff/v1/accounts', (route) =>
     route.fulfill({
-      json: {
-        user: { id: 'immutable-user', name: 'Product user' },
-        accounts: [
-          accounts[0],
-          { ...accounts[1], name: 'Long team name '.repeat(12) },
-        ],
-      },
-    })
+      json: [
+        accounts[0],
+        { ...accounts[1], name: 'Long team name '.repeat(12) },
+      ],
+    }),
   )
   await login(page)
   await page.getByRole('combobox').first().selectOption('team-b')
   await expect(
-    page.getByText('Finance actions require owner or billing_admin role.')
+    page.getByText('Finance actions require owner or billing_admin role.'),
   ).toBeVisible()
   expect(
-    await page.evaluate(() => document.documentElement.scrollWidth)
+    await page.evaluate(() => document.documentElement.scrollWidth),
   ).toBeLessThanOrEqual(390)
 })
 
@@ -530,10 +577,10 @@ test('definitive finance scope denial shows failure without retaining uncertain 
     .click()
   await expect(page.getByRole('alert')).toContainText('scope_denied')
   await expect(
-    page.getByRole('button', { name: 'Retry original operation' })
+    page.getByRole('button', { name: 'Retry original operation' }),
   ).toHaveCount(0)
   await expect(
-    page.getByRole('button', { name: 'Create recharge', exact: true })
+    page.getByRole('button', { name: 'Create recharge', exact: true }),
   ).toBeEnabled()
   await expect(page.getByText('Original financial object')).toHaveCount(0)
 })
@@ -563,7 +610,7 @@ for (const rejection of [
         ...response,
       })
     })
-    await page.goto('/unihub')
+    await page.goto('/unihub?signed_out=1')
     await page.getByRole('button', { name: 'Register UniHub account' }).click()
     await page.getByLabel('Username', { exact: true }).fill('rejected-user')
     await page.getByLabel('Password', { exact: true }).fill('private')
@@ -571,12 +618,12 @@ for (const rejection of [
     await expect(page.getByRole('status')).toContainText(rejection.code)
     await expect(page.getByLabel('Username', { exact: true })).toBeEnabled()
     await expect(
-      page.getByRole('button', { name: 'Back to sign in' })
+      page.getByRole('button', { name: 'Back to sign in' }),
     ).toBeEnabled()
     await page.getByLabel('Username', { exact: true }).fill('corrected-user')
     await page.getByRole('button', { name: 'Register', exact: true }).click()
     await expect(
-      page.getByRole('button', { name: 'Sign in', exact: true })
+      page.getByRole('button', { name: 'Sign in with UniHub', exact: true }),
     ).toBeVisible()
     expect(writes).toHaveLength(2)
     expect(writes[1].username).toBe('corrected-user')
@@ -606,17 +653,17 @@ for (const failure of ['network', 'pending', 'idempotency_conflict'] as const) {
             : { error: 'idempotency_conflict' },
       })
     })
-    await page.goto('/unihub')
+    await page.goto('/unihub?signed_out=1')
     await page.getByRole('button', { name: 'Register UniHub account' }).click()
     await page.getByLabel('Username', { exact: true }).fill('uncertain-user')
     await page.getByLabel('Password', { exact: true }).fill('private')
     await page.getByRole('button', { name: 'Register', exact: true }).click()
     await expect(
-      page.getByRole('button', { name: 'Retry original registration' })
+      page.getByRole('button', { name: 'Retry original registration' }),
     ).toBeEnabled()
     await expect(page.getByLabel('Username', { exact: true })).toBeDisabled()
     await expect(
-      page.getByRole('button', { name: 'Back to sign in' })
+      page.getByRole('button', { name: 'Back to sign in' }),
     ).toBeDisabled()
     await page
       .getByRole('button', { name: 'Retry original registration' })
@@ -655,7 +702,7 @@ for (const manual of [false, true]) {
                 subscription: { enabled: false },
               },
             },
-          })
+          }),
     )
     await page.route('**/personal-a/usage/summary', (route) =>
       route.request().method() === 'OPTIONS'
@@ -669,7 +716,7 @@ for (const manual of [false, true]) {
               charges_by_asset: { 'CREDIT/6': settled ? '20' : '0' },
               as_of: 'now',
             },
-          })
+          }),
     )
     await page.route('**/platform/v1/**', (route) => {
       if (route.request().method() === 'POST') {
@@ -689,7 +736,7 @@ for (const manual of [false, true]) {
     })
     await login(page)
     await expect(
-      page.getByText('Spendable credits: 3.000000 CREDIT', { exact: false })
+      page.getByText('Spendable credits: 3.000000 CREDIT', { exact: false }),
     ).toBeVisible()
     await page
       .getByLabel('Funding mode', { exact: true })
@@ -698,19 +745,19 @@ for (const manual of [false, true]) {
     await page.getByRole('button', { name: 'Send new task' }).click()
     if (manual) {
       await expect(
-        page.getByText('Task status: RESERVED', { exact: false })
+        page.getByText('Task status: RESERVED', { exact: false }),
       ).toBeVisible()
       await page.getByRole('button', { name: 'Query task receipt' }).click()
     }
     await expect(
-      page.getByText('Task status: SETTLED', { exact: false })
+      page.getByText('Task status: SETTLED', { exact: false }),
     ).toBeVisible()
     await expect(
-      page.getByText('Spendable credits: 2.999980 CREDIT', { exact: false })
+      page.getByText('Spendable credits: 2.999980 CREDIT', { exact: false }),
     ).toBeVisible()
     await expect(page.getByText('Calls: 1', { exact: false })).toBeVisible()
     await expect(
-      page.getByText('Charged: 0.000020 CREDIT', { exact: true })
+      page.getByText('Charged: 0.000020 CREDIT', { exact: true }),
     ).toBeVisible()
   })
 }
@@ -724,7 +771,7 @@ test('upgrade controls show only higher-rank same-period offers and accepted quo
     id: string,
     rank: number,
     period = 'month',
-    kind = 'membership'
+    kind = 'membership',
   ) => ({
     id,
     name: id,
@@ -747,7 +794,7 @@ test('upgrade controls show only higher-rank same-period offers and accepted quo
   await page.route('**/catalog', (route) =>
     route.request().method() === 'OPTIONS'
       ? route.fallback()
-      : route.fulfill({ headers, json: offers })
+      : route.fulfill({ headers, json: offers }),
   )
   await page.route('**/personal-a/resources', (route) =>
     route.request().method() === 'OPTIONS'
@@ -770,7 +817,7 @@ test('upgrade controls show only higher-rank same-period offers and accepted quo
               subscription: { enabled: true },
             },
           },
-        })
+        }),
   )
   await page.route('**/personal-a/quotes', (route) =>
     route.request().method() === 'OPTIONS'
@@ -785,7 +832,7 @@ test('upgrade controls show only higher-rank same-period offers and accepted quo
             amount: '1000000',
             expires_at: '2099-01-01T00:00:00Z',
           },
-        })
+        }),
   )
   await page.route('**/quotes/upgrade-quote/accept', (route) =>
     route.request().method() === 'OPTIONS'
@@ -800,11 +847,11 @@ test('upgrade controls show only higher-rank same-period offers and accepted quo
             payment_status: 'PENDING',
             fulfillment_status: 'PENDING',
           },
-        })
+        }),
   )
   await login(page)
   await expect(page.getByRole('button', { name: 'Quote upgrade' })).toHaveCount(
-    1
+    1,
   )
   await page
     .getByRole('article')
@@ -812,14 +859,14 @@ test('upgrade controls show only higher-rank same-period offers and accepted quo
     .getByRole('button', { name: 'Quote upgrade' })
     .click()
   await expect(
-    page.getByText('Upgrade quote: upgrade-quote', { exact: false })
+    page.getByText('Upgrade quote: upgrade-quote', { exact: false }),
   ).toBeVisible()
   await page
     .getByRole('button', { name: 'Accept quote and create order' })
     .click()
   await expect(page.getByText('upgrade-order', { exact: true })).toBeVisible()
   await expect(
-    page.getByRole('button', { name: 'Accept quote and create order' })
+    page.getByRole('button', { name: 'Accept quote and create order' }),
   ).toHaveCount(0)
 })
 
@@ -883,104 +930,67 @@ test('late settled receipt after payer switch cannot populate or refetch the new
   await requested
   await page.getByRole('combobox').first().selectOption('team-b')
   await expect(
-    page.getByText('Finance actions require owner or billing_admin role.')
+    page.getByText('Finance actions require owner or billing_admin role.'),
   ).toBeVisible()
   release()
   await completed
   await expect(
-    page.getByText('Task status: SETTLED', { exact: false })
+    page.getByText('Task status: SETTLED', { exact: false }),
   ).toHaveCount(0)
   expect(newPayerReads).toBe(1)
 })
 
-test('public sign-in and wallet routes remain in UniHub and exclude native actions', async ({
+test('public sign-in keeps the safe requested wallet and excludes native actions', async ({
   page,
 }) => {
   await fixture(page)
-  const denied: string[] = []
-  page.on('request', (request) => {
-    if (
-      /\/api\/(?:token|user\/(?:topup|subscription|access_token)|channels)/.test(
-        new URL(request.url()).pathname
-      )
-    ) {
-      denied.push(request.url())
-    }
-  })
   await page.goto('/sign-in?redirect=%2Fwallet')
-  await expect(page).toHaveURL(/\/unihub$/)
-  await expect(
-    page.getByRole('link', { name: /Local operator sign in/ })
-  ).toHaveCount(0)
-  await page.getByLabel('Username', { exact: true }).fill('product')
-  await page.getByLabel('Password', { exact: true }).fill('private')
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
-  await expect(page).toHaveURL(/\/unihub$/)
+  await expect(page).toHaveURL(/\/wallet$/)
   await expect(page.getByText('Product user · immutable-user')).toBeVisible()
   await expect(
-    page.getByRole('link', { name: /API keys|Change password|Recharge/ })
+    page.getByRole('link', {
+      name: /Local operator sign in|API keys|Change password/,
+    }),
   ).toHaveCount(0)
-  await page.getByRole('combobox').first().selectOption('personal-a')
-  await expect(
-    page.getByText('9007199254740.993123 CNY', { exact: false })
-  ).toBeVisible()
-  expect(denied).toEqual([])
   await page.getByRole('button', { name: 'Sign out', exact: true }).click()
-  await expect(page).toHaveURL(/\/unihub$/)
+  await expect(page).toHaveURL(/signed_out=1/)
   await page.reload()
   await page.goto('/dashboard')
-  await expect(page).toHaveURL(/\/unihub$/)
-  await page.goto('/wallet')
-  await expect(page).toHaveURL(/\/unihub$/)
   await expect(
-    page.getByRole('button', { name: 'Sign in', exact: true })
+    page.getByRole('button', { name: 'Sign in with UniHub', exact: true }),
   ).toBeVisible()
+  await expect(page.getByText('Product user · immutable-user')).toHaveCount(0)
 })
-
-test('external redirect is rejected and public login retains the unified account session', async ({
+test('external redirect is rejected and public SSO retains account session', async ({
   page,
 }) => {
   await fixture(page)
   await page.goto('/unihub?redirect=https%3A%2F%2Fevil.test%2Fsteal')
-  await page.getByLabel('Username', { exact: true }).fill('product')
-  await page.getByLabel('Password', { exact: true }).fill('private')
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
-  await expect(page).toHaveURL(/\/unihub$/)
+  await expect(page).toHaveURL(/\/dashboard$/)
   await expect(page.getByText('Product user · immutable-user')).toBeVisible()
   await expect(page.getByLabel('Password', { exact: true })).toHaveCount(0)
 })
-
-test('immutable subject mismatch rejects native bundle and leaves product sign-in visible', async ({
+test('immutable subject mismatch clears unusable local proof and offers explicit retry', async ({
   page,
 }) => {
   await fixture(page, { mismatch: true })
   await page.goto('/unihub')
-  await page.getByLabel('Username', { exact: true }).fill('product')
-  await page.getByLabel('Password', { exact: true }).fill('private')
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
-  await expect(page.getByRole('status')).toContainText(
-    'Product identity proof rejected'
-  )
-  await expect(page).toHaveURL(/\/unihub$/)
-  await expect(page.getByText('Product user · immutable-user')).toHaveCount(0)
-  await page.reload()
-  await page.goto('/dashboard')
-  await expect(page).toHaveURL(/\/unihub$/)
   await expect(
-    page.getByRole('button', { name: 'Sign in', exact: true })
+    page.getByRole('button', { name: 'Sign in with UniHub', exact: true }),
   ).toBeVisible()
+  await expect(page.getByText('Product user · immutable-user')).toHaveCount(0)
+  await expect(page).toHaveURL(/sso_error=1/)
 })
-
 test('closed model gate shows unavailable state and disables provider send', async ({
   page,
 }) => {
   await fixture(page, { models: [] })
   await login(page)
   await expect(
-    page.getByText('No available models', { exact: true })
+    page.getByText('No available models', { exact: true }),
   ).toBeVisible()
   await expect(
-    page.getByRole('button', { name: 'Send new task' })
+    page.getByRole('button', { name: 'Send new task' }),
   ).toBeDisabled()
 })
 
@@ -1021,7 +1031,7 @@ for (const scenario of [
             },
       })
     })
-    await page.goto('/unihub')
+    await page.goto('/unihub?signed_out=1')
     await page.getByRole('button', { name: 'Register UniHub account' }).click()
     await page.getByLabel('Username', { exact: true }).fill('throttled-user')
     await page.getByLabel('Password', { exact: true }).fill('private')
@@ -1032,13 +1042,13 @@ for (const scenario of [
         .click()
     }
     await expect(page.getByRole('status')).toContainText(
-      'Too many registration attempts'
+      'Too many registration attempts',
     )
     await expect(page.getByLabel('Username', { exact: true })).toBeEnabled({
       enabled: safe,
     })
     await expect(
-      page.getByRole('button', { name: 'Back to sign in' })
+      page.getByRole('button', { name: 'Back to sign in' }),
     ).toBeEnabled({ enabled: safe })
     if (scenario === 'edited') {
       await page.getByLabel('Username', { exact: true }).fill('corrected-user')
@@ -1050,8 +1060,8 @@ for (const scenario of [
       .locator('form')
       .evaluate((form: HTMLFormElement) =>
         form.dispatchEvent(
-          new Event('submit', { bubbles: true, cancelable: true })
-        )
+          new Event('submit', { bubbles: true, cancelable: true }),
+        ),
       )
     expect(writes).toHaveLength(count)
     await page.clock.fastForward(11000)
@@ -1066,8 +1076,47 @@ for (const scenario of [
     if (safe) {
       await page.getByRole('button', { name: 'Back to sign in' }).click()
       await expect(
-        page.getByRole('button', { name: 'Sign in', exact: true })
+        page.getByRole('button', { name: 'Sign in with UniHub', exact: true }),
       ).toBeEnabled()
     }
   })
 }
+
+test('viewer opens channels with common stored role and no native finance links', async ({
+  page,
+}) => {
+  await fixture(page, { permissions: ['channel:read'] })
+  await page.goto('/channels')
+  await expect(
+    page.getByRole('heading', { name: 'Channels', exact: true }),
+  ).toBeVisible()
+  await expect(
+    page
+      .getByRole('navigation', { name: 'UniHub account' })
+      .getByRole('link', { name: 'Channels', exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Add Channel', exact: true }),
+  ).toHaveCount(0)
+  await expect(
+    page.getByRole('link', { name: 'Users', exact: true }),
+  ).toHaveCount(0)
+})
+
+test('ordinary user cannot open channels and logout waits for explicit re-entry', async ({
+  page,
+}) => {
+  await fixture(page)
+  await login(page)
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click()
+  await expect(
+    page.getByRole('button', { name: 'Sign in with UniHub', exact: true }),
+  ).toBeVisible()
+  await expect(page).toHaveURL(/signed_out=1/)
+  await page
+    .getByRole('button', { name: 'Sign in with UniHub', exact: true })
+    .click()
+  await expect(page.getByText('Product user · immutable-user')).toBeVisible()
+  await page.goto('/channels')
+  await expect(page).toHaveURL(/\/403$/)
+})

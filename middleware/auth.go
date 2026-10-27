@@ -53,7 +53,23 @@ func authHelper(c *gin.Context, minRole int) {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "AUTH_USER_DISABLED", "message": common.TranslateMessage(c, i18n.MsgAuthUserBanned)})
 		return
 	}
-	if user.Role < minRole {
+	permission, management := uniHubManagementPermission(c)
+	projected := user.IdentitySource == model.UniHubIdentitySource
+	if projected {
+		if useAccessToken || !loadUniHubAuthority(c, identity) {
+			return
+		}
+		if management {
+			if minRole > common.RoleAdminUser || !authz.CanRequest(c, permission) {
+				c.AbortWithStatusJSON(403, gin.H{"success": false, "code": "UNIHUB_PERMISSION_DENIED"})
+				return
+			}
+		} else if !allowedUniHubPath(c) {
+			c.AbortWithStatusJSON(403, gin.H{"success": false, "code": "UNIHUB_NATIVE_PATH_FORBIDDEN"})
+			return
+		}
+	}
+	if user.Role < minRole && !(projected && management && minRole <= common.RoleAdminUser) {
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "AUTH_INSUFFICIENT_PRIVILEGE", "message": common.TranslateMessage(c, i18n.MsgAuthInsufficientPrivilege)})
 		return
 	}
@@ -61,7 +77,7 @@ func authHelper(c *gin.Context, minRole int) {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "AUTH_USER_INVALID", "message": common.TranslateMessage(c, i18n.MsgAuthUserInfoInvalid)})
 		return
 	}
-	if user.IdentitySource == model.UniHubIdentitySource && !allowedUniHubPath(c) {
+	if user.IdentitySource == model.UniHubIdentitySource && !allowedUniHubPath(c) && !management {
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "UNIHUB_NATIVE_PATH_FORBIDDEN", "message": "native operation is not available for UniHub users"})
 		return
 	}
@@ -81,9 +97,13 @@ func authHelper(c *gin.Context, minRole int) {
 }
 
 func allowedUniHubPath(c *gin.Context) bool {
+	if c.FullPath() == "/api/unihub/bff/*path" {
+		return true
+	}
 	if c.Request.Method == http.MethodGet {
 		switch c.Request.URL.Path {
-		case "/api/models", "/api/capabilities", "/api/user/self", "/api/user/self/groups", "/api/user/models", "/api/user/sessions":
+		case "/api/unihub/access",
+			"/api/models", "/api/capabilities", "/api/user/self", "/api/user/self/groups", "/api/user/models", "/api/user/sessions":
 			return true
 		}
 	}
@@ -185,6 +205,9 @@ func authenticateDashboardRequest(c *gin.Context) (*model.UserBase, service.Auth
 }
 
 func classifyDashboardCredential(c *gin.Context) (*model.UserBase, service.AuthIdentity, dashboardCredentialKind, error) {
+	if len(c.Request.Header.Values("Authorization")) > 1 {
+		return nil, service.AuthIdentity{}, dashboardCredentialInternal, service.ErrAuthTokenInvalid
+	}
 	raw, ok := authorizationToken(c.GetHeader("Authorization"))
 	if !ok {
 		return nil, service.AuthIdentity{}, dashboardCredentialUnmatched, nil
@@ -281,7 +304,9 @@ func RequirePermission(permission authz.Permission) func(c *gin.Context) {
 	return func(c *gin.Context) {
 		role := c.GetInt("role")
 		userID := c.GetInt("id")
-		if authz.Can(userID, role, permission) {
+		_ = role
+		_ = userID
+		if authz.CanRequest(c, permission) {
 			c.Next()
 			return
 		}

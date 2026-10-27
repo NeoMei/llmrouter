@@ -20,6 +20,7 @@ import { createFileRoute, redirect } from '@tanstack/react-router'
 import z from 'zod'
 
 import { Channels } from '@/features/channels'
+import { hasPermission } from '@/lib/admin-permissions'
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -37,7 +38,12 @@ export const Route = createFileRoute('/_authenticated/channels/')({
   beforeLoad: () => {
     const { auth } = useAuthStore.getState()
 
-    if (!auth.user || auth.user.role < ROLE.ADMIN) {
+    if (
+      !auth.user ||
+      (auth.user.identity_source === 'unihub'
+        ? !hasPermission(auth.user, 'channel', 'read')
+        : auth.user.role < ROLE.ADMIN)
+    ) {
       throw redirect({
         to: '/403',
       })

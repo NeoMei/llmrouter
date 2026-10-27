@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,8 +21,11 @@ import (
 )
 
 type uniHubRegressionFixture struct {
-	db     *gorm.DB
-	router *gin.Engine
+	revoked     *atomic.Bool
+	forwarded   *atomic.Int32
+	unavailable *atomic.Bool
+	db          *gorm.DB
+	router      *gin.Engine
 }
 type uniHubRegressionBundle struct {
 	Success bool `json:"success"`
@@ -42,7 +46,7 @@ func newUniHubRegressionFixture(t *testing.T) *uniHubRegressionFixture {
 	oldCritical, oldGlobal, oldMode := common.CriticalRateLimitEnable, common.GlobalApiRateLimitEnable, gin.Mode()
 	db, err := gorm.Open(sqlite.Open(t.TempDir()+"/matrix.db"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.UniHubIdentityMapping{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.UniHubIdentityMapping{}, &model.UniHubSessionBinding{}))
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
 	model.DB, common.RedisEnabled, common.SessionSecret = db, false, "unihub-regression-test-secret"
@@ -56,24 +60,72 @@ func newUniHubRegressionFixture(t *testing.T) *uniHubRegressionFixture {
 		gin.SetMode(oldMode)
 		require.NoError(t, sqlDB.Close())
 	})
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Origin") != "https://dashboard.test" {
+	revoked := &atomic.Bool{}
+	forwarded := &atomic.Int32{}
+	unavailable := &atomic.Bool{}
+	var upstream *httptest.Server
+	upstream = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Origin") != "" && r.Header.Get("Origin") != "https://dashboard.test" {
 			w.WriteHeader(403)
 			return
 		}
 		subject := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if unavailable.Load() {
+			w.WriteHeader(503)
+			return
+		}
 		switch r.URL.Path {
 		case "/v1/capabilities":
 			client := "client"
 			if subject == "wrong-client" {
 				client = "other"
 			}
-			_ = json.NewEncoder(w).Encode(gin.H{"kind": "product", "product_id": "llmrouter", "client_id": client})
+			_ = json.NewEncoder(w).Encode(gin.H{"kind": "product", "product_id": "llmrouter", "client_id": client, "instance_id": "default", "scopes": []string{"access:read"}})
+		case "/v1/me/product-access":
+			if revoked.Load() {
+				w.WriteHeader(403)
+				return
+			}
+			permissions := []string{"product:use"}
+			if subject == "viewer" || subject == "operator" || subject == "admin" {
+				permissions = append(permissions, "channel:read")
+			}
+			if subject == "operator" || subject == "admin" {
+				permissions = append(permissions, "channel:operate")
+			}
+			if subject == "admin" {
+				permissions = append(permissions, "channel:write")
+			}
+			_ = json.NewEncoder(w).Encode(gin.H{"issuer": upstream.URL, "subject": subject, "product_id": "llmrouter", "instance_id": "default", "user": gin.H{"id": subject, "name": "Same", "email": "same@test"}, "roles": []string{subject}, "permissions": permissions, "active": true, "version": 1, "expires_at": time.Now().Add(time.Hour).Unix()})
 		case "/v1/me":
 			_ = json.NewEncoder(w).Encode(gin.H{"id": subject, "name": "Same", "email": "same@test", "role": "root"})
 		case "/v1/accounts":
+			if r.URL.Query().Has("redirect") {
+				w.Header().Set("Location", "https://not-followed.invalid")
+				w.WriteHeader(302)
+				return
+			}
+			if r.URL.Query().Has("oversized") {
+				_, _ = w.Write([]byte(strings.Repeat("x", (4<<20)+1)))
+				return
+			}
+
+			if r.Method == "POST" {
+				if r.Header.Get("Idempotency-Key") != "same-original-key" {
+					w.WriteHeader(400)
+					return
+				}
+				_, _ = w.Write([]byte(`{"id":"created"}`))
+				return
+			}
 			_, _ = w.Write([]byte(`[]`))
 		default:
+			if strings.HasSuffix(r.URL.Path, "/recharges") && r.Method == "POST" {
+				forwarded.Add(1)
+				w.WriteHeader(503)
+				_, _ = w.Write([]byte(`{"error":"response_unknown"}`))
+				return
+			}
 			w.WriteHeader(404)
 		}
 	}))
@@ -87,7 +139,7 @@ func newUniHubRegressionFixture(t *testing.T) *uniHubRegressionFixture {
 	r.GET("/optional-native", middleware.TryUserAuth(), reached)
 	r.GET("/native-control", middleware.UserAuth(), reached)
 	r.GET("/admin-control", middleware.AdminAuth(), reached)
-	return &uniHubRegressionFixture{db: db, router: r}
+	return &uniHubRegressionFixture{db: db, router: r, revoked: revoked, forwarded: forwarded, unavailable: unavailable}
 }
 
 func (f *uniHubRegressionFixture) request(method, path, token string, cookie *http.Cookie) *httptest.ResponseRecorder {

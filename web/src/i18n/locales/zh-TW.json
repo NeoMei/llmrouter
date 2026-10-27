@@ -5505,6 +5505,9 @@
     "Zero retention": "零數據保留",
     "Zhipu": "智譜",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放"
+    "Zoom": "縮放",
+    "Sign in with UniHub": "使用 UniHub 登录",
+    "UniHub sign in failed. Try again to continue.": "UniHub 登录失败，请重试。",
+    "Redirecting to UniHub sign in…": "正在跳转到 UniHub 登录…"
   }
 }

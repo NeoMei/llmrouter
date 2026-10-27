@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { clearAuthentication, getFreshAuthHeaders } from '@/lib/auth-session'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { UniHubClient, UniHubError, type User, type Account } from './sdk'
@@ -49,7 +50,7 @@ export class FinancialIntent {
   assertAccount(account: string): void {
     if (this.account !== account) {
       throw new Error(
-        'Original payer differs; select the original account to query or retry'
+        'Original payer differs; select the original account to query or retry',
       )
     }
   }
@@ -60,6 +61,8 @@ export class ProductSession {
   accounts: Account[] = []
   account = ''
   epoch = 0
+  csrfToken = ''
+  restorePromise: Promise<void> | null = null
   readonly client: UniHubClient
   private controller = new AbortController()
   private timer: ReturnType<typeof setTimeout> | undefined
@@ -128,8 +131,41 @@ export function getActiveProductSession(): ProductSession | null {
 export function createProductSession(config: ProductConfig): ProductSession {
   const send: typeof fetch = async (input, init) => {
     const epoch = session.epoch
-    const result = await fetch(input, { ...init, signal: session.signal })
-    if (result.status === 401 && epoch === session.epoch) session.clear()
+    const projected =
+      useAuthStore.getState().auth.user?.identity_source === 'unihub'
+    let result: Response
+    if (projected) {
+      const source = new URL(String(input))
+      if (
+        source.origin !== new URL(config.public_origin).origin ||
+        !source.pathname.startsWith('/v1/')
+      ) {
+        throw new Error('Cross-origin product request')
+      }
+      const headers = new Headers(init?.headers)
+      const native = await getFreshAuthHeaders()
+      headers.set('Authorization', native.Authorization ?? '')
+      if (init?.method !== 'GET') {
+        headers.set('X-UniHub-CSRF', session.csrfToken)
+      }
+      result = await fetch(
+        `/api/unihub/bff${source.pathname}${source.search}`,
+        {
+          ...init,
+          headers,
+          credentials: 'same-origin',
+          redirect: 'error',
+          signal: session.signal,
+        },
+      )
+    } else {
+      result = await fetch(input, { ...init, signal: session.signal })
+    }
+
+    if (result.status === 401 && epoch === session.epoch) {
+      session.clear()
+      if (projected) clearAuthentication()
+    }
     return result
   }
   const session = new ProductSession(
@@ -138,7 +174,7 @@ export function createProductSession(config: ProductConfig): ProductSession {
       clientId: config.client_id,
       redirectUri: config.redirect_uri,
       fetch: send,
-    })
+    }),
   )
   activeProductSession = session
   return session
@@ -155,4 +191,82 @@ export function cnyMillionths(value: string): string {
   const amount = (whole + fraction.padEnd(6, '0')).replace(/^0+(?=\d)/, '')
   if (amount === '0') throw new TypeError('Recharge amount must be positive')
   return amount
+}
+
+export interface ProductAccessSnapshot {
+  access: {
+    subject: string
+    user: User
+    roles: string[]
+    permissions: string[]
+    expires_at: number
+  }
+  permissions: NonNullable<
+    ReturnType<typeof useAuthStore.getState>['auth']['user']
+  >['permissions']
+  csrf_token: string
+}
+export async function refreshProductAccess(): Promise<ProductAccessSnapshot> {
+  const auth = useAuthStore.getState().auth
+  if (auth.user?.identity_source !== 'unihub') {
+    throw new Error('Product identity proof rejected')
+  }
+  const sid = auth.session?.sid
+  const response = await fetch('/api/unihub/access', {
+    headers: await getFreshAuthHeaders(),
+    credentials: 'same-origin',
+    cache: 'no-store',
+    redirect: 'error',
+    signal: AbortSignal.timeout(10000),
+  })
+  if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
+      clearAuthentication()
+      throw new Error('Product identity proof rejected')
+    }
+    const current = useAuthStore.getState().auth
+    if (current.user?.id === auth.user.id) {
+      current.setUser({ ...auth.user, permissions: { admin_permissions: {} } })
+    }
+    throw new Error('Product identity proof rejected')
+  }
+  const data = (await response.json()) as ProductAccessSnapshot
+  if (
+    data.access.subject !== auth.user.unihub_user_id ||
+    sid !== useAuthStore.getState().auth.session?.sid
+  ) {
+    throw new Error('UniHub session or payer changed')
+  }
+  useAuthStore
+    .getState()
+    .auth.setUser({ ...auth.user, permissions: data.permissions })
+  return data
+}
+// Hydrate through the session-authenticated BFF. A restored identity cannot
+// silently replace an existing payer or a pending financial intent.
+export function restoreProductSession(session: ProductSession): Promise<void> {
+  session.restorePromise ??= restoreProductSessionOnce(session).finally(() => {
+    session.restorePromise = null
+  })
+  return session.restorePromise
+}
+async function restoreProductSessionOnce(
+  session: ProductSession,
+): Promise<void> {
+  if (useAuthStore.getState().auth.user?.identity_source !== 'unihub') return
+  const epoch = session.epoch
+  const data = await refreshProductAccess()
+  const accounts = await session.bound(() => session.client.accounts())
+  if (epoch !== session.epoch) {
+    throw new Error('UniHub session or payer changed')
+  }
+  session.csrfToken = data.csrf_token
+  session.user = data.access.user
+  session.accounts = accounts
+  if (!session.account && session.intents.size === 0) {
+    const personal = accounts
+      .filter((account) => account.kind === 'personal')
+      .sort((a, b) => a.id.localeCompare(b.id))[0]
+    if (personal) session.select(personal.id)
+  }
 }

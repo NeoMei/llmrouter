@@ -5505,6 +5505,9 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Sign in with UniHub": "Sign in with UniHub",
+    "UniHub sign in failed. Try again to continue.": "UniHub sign in failed. Try again to continue.",
+    "Redirecting to UniHub sign in…": "Redirecting to UniHub sign in…"
   }
 }

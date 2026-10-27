@@ -16,31 +16,39 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useNavigate } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
-import { sanitizeAuthRedirect } from '@/features/auth/lib/auth-redirect'
 
-import { authorizeProductSession } from './native-session'
+import { safeProductReturn, startProductLogin } from './sso'
 import {
   registrationDefinitivelyRejected,
   registrationThrottle,
 } from './registration'
-import type { User, Account, Registration } from './sdk'
+import type { Registration } from './sdk'
 import { message, type ProductSession } from './session'
 import { Panel, Field, Submit } from './ui'
 
-export function AuthPanel(props: {
-  session: ProductSession
-  onLogin: (user: User, accounts: Account[]) => void
-}) {
+export function AuthPanel(props: { session: ProductSession }) {
   const { t } = useTranslation()
-  const navigate = useNavigate()
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [register, setRegister] = useState(false)
+  const started = useRef(false)
+  const query = new URLSearchParams(window.location.search)
+  const failed = query.has('sso_error')
+  const manual =
+    query.has('signed_out') ||
+    window.sessionStorage.getItem('unihub:signed-out') === '1'
+  const destination = safeProductReturn(query.get('redirect'))
+  useEffect(() => {
+    if (!register && !failed && !manual && !started.current) {
+      started.current = true
+      startProductLogin(destination)
+    }
+  }, [register, failed, manual, destination])
+
   const sending = useRef(false)
   const [retryAt, setRetryAt] = useState(0)
   const [now, setNow] = useState(Date.now)
@@ -81,11 +89,11 @@ export function AuthPanel(props: {
         setPending({ ...intent, unresolved: true })
         const result = await props.session.client.register(
           intent.body,
-          intent.key
+          intent.key,
         )
         if (result.status !== 'CREATED') {
           setNotice(
-            t('Registration status unknown. Retry the original registration.')
+            t('Registration status unknown. Retry the original registration.'),
           )
           return
         }
@@ -95,15 +103,7 @@ export function AuthPanel(props: {
         form.reset()
         return
       }
-      const identity = await authorizeProductSession(props.session, body)
-      props.onLogin(identity.user, identity.accounts)
-      form.reset()
-      const target =
-        sanitizeAuthRedirect(
-          new URLSearchParams(window.location.search).get('redirect'),
-          window.location.origin
-        ) ?? '/dashboard'
-      await navigate({ href: target, replace: true })
+      startProductLogin(destination)
     } catch (error) {
       if (!register && !props.session.user) props.session.clear()
       const throttle = register ? registrationThrottle(error) : null
@@ -133,7 +133,7 @@ export function AuthPanel(props: {
     statusText = cooldown
       ? t(
           'Too many registration attempts. Please wait {{seconds}} seconds before trying again.',
-          { seconds: Math.ceil((retryAt - now) / 1000) }
+          { seconds: Math.ceil((retryAt - now) / 1000) },
         )
       : t('Too many registration attempts. You can now retry manually.')
     if (pending?.unresolved) {
@@ -142,12 +142,26 @@ export function AuthPanel(props: {
   }
   let submitText = register ? 'Register' : 'Sign in'
   if (pending) submitText = 'Retry original registration'
+  if (!register) {
+    let status = 'Redirecting to UniHub sign in…'
+    if (failed) status = 'UniHub sign in failed. Try again to continue.'
+    else if (manual) status = 'Signed out'
+    return (
+      <Panel title='UniHub account'>
+        <p>{t(status)}</p>
+        <Button onClick={() => startProductLogin(destination)}>
+          {t('Sign in with UniHub')}
+        </Button>
+        <Button variant='outline' onClick={() => setRegister(true)}>
+          {t('Register UniHub account')}
+        </Button>
+      </Panel>
+    )
+  }
   return (
     <Panel title='UniHub account'>
       <p className='text-muted-foreground text-sm'>
-        {t(
-          'UniHub login is required again after refresh. Tokens stay in memory.'
-        )}
+        {t('Register UniHub account')}
       </p>
       <form
         className='grid max-w-md gap-3'

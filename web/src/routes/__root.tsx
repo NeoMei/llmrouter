@@ -42,6 +42,8 @@ import {
 } from '@/lib/auth-session'
 import { subscribeAuthSessionEvents } from '@/lib/auth-session-sync'
 import { resolveLegacyRoute } from '@/lib/legacy-route'
+import { safeProductReturn } from '@/features/unihub/sso'
+import { refreshProductAccess } from '@/features/unihub/session'
 import { useAuthStore } from '@/stores/auth-store'
 
 function RootComponent() {
@@ -67,7 +69,7 @@ function RootComponent() {
           queryClient.clear()
         }
       }),
-    [queryClient]
+    [queryClient],
   )
 
   useEffect(
@@ -89,7 +91,7 @@ function RootComponent() {
           void navigate({ to: '/sign-in', replace: true })
         }
       }),
-    [navigate, queryClient]
+    [navigate, queryClient],
   )
 
   return (
@@ -150,28 +152,56 @@ export const Route = createRootRouteWithContext<{
     }
 
     const pathname = location?.pathname || ''
-    if (pathname === '/unihub') return
+    if (pathname === '/unihub') {
+      await bootstrapAuthentication()
+      return
+    }
     // The server derives this flag from the listener's local socket. Never
     // infer operator access from browser origin, stored credentials, or query.
-    const nativeAccess = await fetch('/api/unihub/config', {
+    const productConfig = await fetch('/api/unihub/config', {
       credentials: 'omit',
       cache: 'no-store',
     })
-      .then(async (response) => {
-        if (!response.ok) return false
-        const config = (await response.json()) as { native_access?: boolean }
-        return config.native_access === true
-      })
-      .catch(() => false)
-    if (!nativeAccess) {
+      .then(async (response) =>
+        response.ok
+          ? ((await response.json()) as {
+              native_access?: boolean
+              enabled?: boolean
+            })
+          : null,
+      )
+      .catch(() => null)
+    if (!productConfig?.native_access) {
       if (
         ['/about', '/docs', '/privacy-policy', '/user-agreement'].includes(
-          pathname
+          pathname,
         )
       ) {
         return
       }
-      throw redirect({ to: '/unihub', replace: true })
+      if (productConfig?.enabled) {
+        await bootstrapAuthentication()
+        const auth = useAuthStore.getState().auth
+        if (auth.user?.identity_source === 'unihub' && auth.accessToken) {
+          try {
+            await refreshProductAccess()
+          } catch {
+            throw redirect({ href: '/unihub?sso_error=1', replace: true })
+          }
+          if (
+            !['/dashboard', '/wallet', '/channels', '/403'].some(
+              (route) => pathname === route || pathname.startsWith(`${route}/`),
+            )
+          ) {
+            throw redirect({ to: '/403', replace: true })
+          }
+          return
+        }
+      }
+      throw redirect({
+        href: `/unihub?redirect=${encodeURIComponent(pathname === '/sign-in' ? safeProductReturn(new URL(location.href, window.location.origin).searchParams.get('redirect')) : location.href)}`,
+        replace: true,
+      })
     }
     const needsSetupCheck =
       !setupStatusChecked && !pathname.startsWith('/setup')

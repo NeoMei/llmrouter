@@ -31,11 +31,13 @@ import { clearAuthentication } from '@/lib/auth-session'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { TeamPanel } from './account-panel'
+import { markProductSignedOut, startProductLogin } from './sso'
 import { AuthPanel } from './auth-panel'
 import { BillingPanel } from './billing-panel'
 import type { User, Account } from './sdk'
 import {
   createProductSession,
+  restoreProductSession,
   getActiveProductSession,
   type ProductConfig,
   type ProductSession,
@@ -47,7 +49,7 @@ import { UsagePanel } from './usage-panel'
 function ProductShell(props: { config: ProductConfig }) {
   const { t } = useTranslation()
   const [session] = useState<ProductSession>(
-    () => getActiveProductSession() ?? createProductSession(props.config)
+    () => getActiveProductSession() ?? createProductSession(props.config),
   )
   const [cache] = useState(
     () =>
@@ -56,12 +58,13 @@ function ProductShell(props: { config: ProductConfig }) {
           queries: { retry: false },
           mutations: { retry: false },
         },
-      })
+      }),
   )
   const navigate = useNavigate()
   const [user, setUser] = useState<User | null>(session.user)
   const [accounts, setAccounts] = useState<Account[]>(session.accounts)
   const [payer, setPayer] = useState(session.account)
+  const [restoring, setRestoring] = useState(true)
   const [error, setError] = useState('')
   useEffect(() => {
     session.onClear = () => {
@@ -76,6 +79,26 @@ function ProductShell(props: { config: ProductConfig }) {
       cache.clear()
     }
   }, [session, cache])
+  useEffect(() => {
+    let active = true
+    void restoreProductSession(session)
+      .then(() => {
+        if (active) {
+          setUser(session.user)
+          setAccounts(session.accounts)
+          setPayer(session.account)
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) setError(message(error))
+      })
+      .finally(() => {
+        if (active) setRestoring(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [session])
   async function refresh() {
     const result = await session.bound(() => session.client.accounts())
     const current = accounts.find((item) => item.id === payer)
@@ -99,16 +122,33 @@ function ProductShell(props: { config: ProductConfig }) {
   const account = accounts.find((item) => item.id === payer)
   return (
     <QueryClientProvider client={cache}>
-      {!user ? (
-        <AuthPanel
-          session={session}
-          onLogin={(identity, list) => {
-            session.user = identity
-            session.accounts = list
-            setUser(identity)
-            setAccounts(list)
-          }}
-        />
+      {restoring ? (
+        <p>{t('Loading')}</p>
+      ) : !user ? (
+        error ? (
+          <div>
+            <p role='alert'>{error}</p>
+            <Button onClick={() => startProductLogin('/dashboard')}>
+              {t('Sign in with UniHub')}
+            </Button>
+            <Button
+              onClick={() => {
+                void logout()
+                  .then(() => {
+                    markProductSignedOut()
+                    session.clear()
+                    clearAuthentication()
+                    setError('')
+                  })
+                  .catch((error: unknown) => setError(message(error)))
+              }}
+            >
+              {t('Sign out')}
+            </Button>
+          </div>
+        ) : (
+          <AuthPanel session={session} />
+        )
       ) : (
         <>
           <header className='flex flex-wrap items-center justify-between gap-3 rounded-xl border p-4'>
@@ -120,9 +160,13 @@ function ProductShell(props: { config: ProductConfig }) {
               onClick={() => {
                 void logout()
                   .then(() => {
+                    markProductSignedOut()
                     session.clear()
                     clearAuthentication()
-                    void navigate({ to: '/unihub', replace: true })
+                    void navigate({
+                      href: '/unihub?signed_out=1',
+                      replace: true,
+                    })
                   })
                   .catch((e) => setError(message(e)))
               }}
@@ -191,7 +235,7 @@ function ProductShell(props: { config: ProductConfig }) {
 export function UniHub() {
   const { t } = useTranslation()
   const projected = useAuthStore(
-    (state) => state.auth.user?.identity_source === 'unihub'
+    (state) => state.auth.user?.identity_source === 'unihub',
   )
   const config = useQuery({
     queryKey: ['unihub-public-config'],

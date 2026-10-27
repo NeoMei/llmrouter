@@ -10,17 +10,17 @@ import (
 
 var productRoutes = struct {
 	sync.RWMutex
-	permissions map[string]authz.Permission
-}{permissions: map[string]authz.Permission{}}
+	permissions map[string][]authz.Permission
+}{permissions: map[string][]authz.Permission{}}
 
 // RegisterUniHubManagementRoute is populated from the same router table that
 // installs RequirePermission. Unknown routes and the secret-key route stay shut.
-func RegisterUniHubManagementRoute(method, path string, p authz.Permission) {
+func RegisterUniHubManagementRoute(method, path string, p authz.Permission, alternatives ...authz.Permission) {
 	productRoutes.Lock()
 	defer productRoutes.Unlock()
-	productRoutes.permissions[method+" "+path] = p
+	productRoutes.permissions[method+" "+path] = append([]authz.Permission{p}, alternatives...)
 }
-func uniHubManagementPermission(c *gin.Context) (authz.Permission, bool) {
+func uniHubManagementPermission(c *gin.Context) ([]authz.Permission, bool) {
 	productRoutes.RLock()
 	defer productRoutes.RUnlock()
 	p, ok := productRoutes.permissions[c.Request.Method+" "+c.FullPath()]

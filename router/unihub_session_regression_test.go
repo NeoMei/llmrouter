@@ -87,6 +87,12 @@ func newUniHubRegressionFixture(t *testing.T) *uniHubRegressionFixture {
 				return
 			}
 			permissions := []string{"product:use"}
+			if subject == "product-viewer" || subject == "product-admin" {
+				permissions = append(permissions, "channel:read", "catalog:read", "log:read", "routing:read", "settings:read")
+			}
+			if subject == "product-admin" {
+				permissions = append(permissions, "channel:operate", "channel:write", "channel:sensitive_write", "catalog:write", "routing:write", "settings:write")
+			}
 			if subject == "sensitive" {
 				permissions = append(permissions, "channel:sensitive_write")
 			}

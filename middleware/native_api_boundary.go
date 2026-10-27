@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/internal/unihubaccess"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
@@ -35,6 +36,12 @@ func NativeAPIBoundary() gin.HandlerFunc {
 		if err == nil && policy.PublicEnabled && (publicProjectionPath(c) || management) {
 			if !hasUniHubBrowserSession(c) {
 				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "UNIHUB_SESSION_REQUIRED"})
+				return
+			}
+			if management {
+				// Catalog/header routes may have no UserAuth downstream. Resolve
+				// current product authority before a registered handler can run.
+				authHelper(c, common.RoleCommonUser)
 				return
 			}
 			c.Next()

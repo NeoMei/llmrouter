@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/console_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -77,10 +78,14 @@ func buildCompletionRatioMetaValue(optionValues map[string]string) string {
 }
 
 func GetOptions(c *gin.Context) {
+	_, projected := authz.ProductPrincipal(c)
 	var options []*model.Option
 	optionValues := make(map[string]string)
 	common.OptionMapRWMutex.Lock()
 	for k, v := range common.OptionMap {
+		if projected && !ProductRuntimeOption(k) {
+			continue
+		}
 		if k == "theme.frontend" {
 			continue
 		}
@@ -105,10 +110,12 @@ func GetOptions(c *gin.Context) {
 		}
 	}
 	common.OptionMapRWMutex.Unlock()
-	options = append(options, &model.Option{
-		Key:   "CompletionRatioMeta",
-		Value: buildCompletionRatioMetaValue(optionValues),
-	})
+	if !projected {
+		options = append(options, &model.Option{
+			Key:   "CompletionRatioMeta",
+			Value: buildCompletionRatioMetaValue(optionValues),
+		})
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -131,6 +138,10 @@ func UpdateOption(c *gin.Context) {
 		})
 		return
 	}
+	if _, projected := authz.ProductPrincipal(c); projected && !ProductRuntimeOption(option.Key) {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "UNIHUB_RUNTIME_OPTION_FORBIDDEN"})
+		return
+	}
 	switch option.Value.(type) {
 	case bool:
 		option.Value = common.Interface2String(option.Value.(bool))
@@ -140,6 +151,12 @@ func UpdateOption(c *gin.Context) {
 		option.Value = common.Interface2String(option.Value.(int))
 	default:
 		option.Value = fmt.Sprintf("%v", option.Value)
+	}
+	if _, projected := authz.ProductPrincipal(c); projected {
+		if err := validateProductRuntimeOption(option.Key, option.Value.(string)); err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"success": false, "code": "UNIHUB_RUNTIME_OPTION_INVALID"})
+			return
+		}
 	}
 	switch option.Key {
 	case "QuotaForInviter", "QuotaForInvitee":

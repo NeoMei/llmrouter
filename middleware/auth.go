@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/internal/platformaccount"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
@@ -53,14 +54,27 @@ func authHelper(c *gin.Context, minRole int) {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "AUTH_USER_DISABLED", "message": common.TranslateMessage(c, i18n.MsgAuthUserBanned)})
 		return
 	}
-	permission, management := uniHubManagementPermission(c)
+	permissions, management := uniHubManagementPermission(c)
+	productRuntimeSettings := management && minRole == common.RoleRootUser && len(permissions) == 1 && permissions[0].Resource == "settings"
 	projected := user.IdentitySource == model.UniHubIdentitySource
 	if projected {
 		if useAccessToken || !loadUniHubAuthority(c, identity) {
 			return
 		}
 		if management {
-			if minRole > common.RoleAdminUser || !authz.CanRequest(c, permission) {
+			if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead && c.Request.Method != http.MethodOptions {
+				config, err := platformaccount.Current()
+				callback, parseError := url.Parse(config.RedirectURI)
+				if err != nil || parseError != nil || len(c.Request.Header.Values("Origin")) != 1 || c.GetHeader("Origin") != callback.Scheme+"://"+callback.Host {
+					c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "UNIHUB_ORIGIN_FORBIDDEN"})
+					return
+				}
+			}
+			permitted := false
+			for _, permission := range permissions {
+				permitted = permitted || authz.CanRequest(c, permission)
+			}
+			if (minRole > common.RoleAdminUser && !productRuntimeSettings) || !permitted {
 				c.AbortWithStatusJSON(403, gin.H{"success": false, "code": "UNIHUB_PERMISSION_DENIED"})
 				return
 			}
@@ -69,7 +83,7 @@ func authHelper(c *gin.Context, minRole int) {
 			return
 		}
 	}
-	if user.Role < minRole && !(projected && management && minRole <= common.RoleAdminUser) {
+	if user.Role < minRole && !(projected && management && (minRole <= common.RoleAdminUser || productRuntimeSettings)) {
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "AUTH_INSUFFICIENT_PRIVILEGE", "message": common.TranslateMessage(c, i18n.MsgAuthInsufficientPrivilege)})
 		return
 	}
@@ -124,9 +138,15 @@ func TryUserAuth() func(c *gin.Context) {
 			return
 		}
 		if credentialKind != dashboardCredentialUnmatched {
-			if user.IdentitySource == model.UniHubIdentitySource && !allowedUniHubPath(c) {
-				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "UNIHUB_NATIVE_PATH_FORBIDDEN", "message": "native operation is not available for UniHub users"})
-				return
+			if user.IdentitySource == model.UniHubIdentitySource {
+				_, management := uniHubManagementPermission(c)
+				if !allowedUniHubPath(c) && !management {
+					c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "UNIHUB_NATIVE_PATH_FORBIDDEN", "message": "native operation is not available for UniHub users"})
+					return
+				}
+				if !loadUniHubAuthority(c, identity) {
+					return
+				}
 			}
 			setDashboardAuthContext(c, user, identity, credentialKind == dashboardCredentialPAT)
 		}

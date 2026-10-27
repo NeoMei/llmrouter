@@ -3,8 +3,6 @@ package router
 import (
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/middleware"
-	"github.com/QuantumNous/new-api/service/authz"
-	"net/http"
 
 	// Import oauth package to register providers via init()
 	_ "github.com/QuantumNous/new-api/oauth"
@@ -14,15 +12,7 @@ import (
 )
 
 func SetApiRouter(router *gin.Engine) {
-	for _, path := range []string{"/api/authz/catalog", "/api/group/", "/api/prefill_group/", "/api/models/", "/api/models/search", "/api/models/:id", "/api/vendors/", "/api/vendors/search", "/api/vendors/:id"} {
-		middleware.RegisterUniHubManagementRoute(http.MethodGet, path, authz.ChannelRead)
-	}
-	for _, path := range []string{"/api/log/", "/api/log/stat", "/api/log/search", "/api/log/channel_affinity_usage_cache", "/api/log/:request_id/route-decision"} {
-		middleware.RegisterUniHubManagementRoute(http.MethodGet, path, authz.Permission{Resource: "log", Action: "read"})
-	}
-	for _, path := range []string{"/api/client_model_routes/", "/api/client_model_routes/options"} {
-		middleware.RegisterUniHubManagementRoute(http.MethodGet, path, authz.Permission{Resource: "routing", Action: "read"})
-	}
+	registerUniHubProductApplicationRoutes()
 	apiRouter := router.Group("/api")
 	apiRouter.Use(middleware.RouteTag("api"), middleware.NativeAPIBoundary())
 	apiRouter.Use(gzip.Gzip(gzip.DefaultCompression))

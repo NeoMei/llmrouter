@@ -5,6 +5,7 @@ import (
 	userkit "github.com/NeoMei/UniHub/packages/userkit-go"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/internal/platformaccount"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -24,6 +25,15 @@ func registerUniHubSSO(r *gin.Engine, config platformaccount.Config) {
 		c.Header("Cache-Control", "no-store")
 		if !config.Enabled || config.OIDCIssuer == "" {
 			c.Redirect(303, "/unihub?sso_error=1")
+			return
+		}
+		destination := c.Query("return_to")
+		if destination == "" {
+			destination = "/dashboard"
+		}
+		returnURL, returnError := url.Parse(destination)
+		if !userkit.SafeReturn(destination) || returnError != nil || !middleware.IsProductApplicationPath(returnURL.Path) {
+			c.Status(http.StatusBadRequest)
 			return
 		}
 		browserMu.RLock()
@@ -65,10 +75,6 @@ func registerUniHubSSO(r *gin.Engine, config platformaccount.Config) {
 		if e != nil {
 			c.Status(500)
 			return
-		}
-		destination := c.Query("return_to")
-		if destination == "" {
-			destination = "/dashboard"
 		}
 		authorize, e := activeBrowser.Begin(binding, destination)
 		if e != nil {

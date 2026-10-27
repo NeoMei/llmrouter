@@ -18,6 +18,9 @@ platforms=(
   "windows/arm64"
 )
 
+# Helpers are embedded assets: stamping the changing source commit would make
+# their tracked checksum file recursively dirty every release. Their manifest
+# is verified by the main artifact, which retains its exact clean VCS revision.
 ldflags="-s -w -buildid="
 
 # --- --check mode: verify every expected binary exists and checksums match ---
@@ -72,7 +75,7 @@ for cmd in "${commands[@]}"; do
     [[ "$os" == "windows" ]] && ext=".exe"
     artifact="$bin_dir/${cmd}-${os}-${arch}${ext}"
     echo "Building $artifact..."
-    GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "$artifact" "./cmd/$cmd"
+    GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "$ldflags" -o "$artifact" "./cmd/$cmd"
   done
 done
 

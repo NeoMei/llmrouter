@@ -61,6 +61,11 @@ issuer, ID nonce, matching IdP subjects and expiries before resolving central
 product access. The central business UUID is distinct from the IdP subject.
 Bounded one-time transactions live for five minutes in-process; use sticky
 login/callback routing with replicas. Code exchange has no automatic retries.
+OIDC discovery initialization has a ten-second deadline. Concurrent logins share
+the in-flight attempt and a canceled request can stop waiting. A failed discovery
+returns the explicit SSO failure view; a later Sign in attempt retries against
+the same issuer without a process restart. A successful Browser is retained for
+the process lifetime, including its existing one-time callback transactions.
 
 The server JIT provisioner preserves existing transactional issuer+central UUID
 projection invariants. A native UniHub dashboard SID has an AES-GCM encrypted

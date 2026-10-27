@@ -8,31 +8,58 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
+	"golang.org/x/sync/singleflight"
 	"net/http"
 	"net/url"
 	"strconv"
 	"sync"
+	"time"
 )
 
 func registerUniHubSSO(r *gin.Engine, config platformaccount.Config) {
-	var once sync.Once
+	var initialization singleflight.Group
 	var browserMu sync.RWMutex
 	var browser *userkit.Browser
-	var initErr error
 	r.GET("/api/unihub/login", func(c *gin.Context) {
 		c.Header("Cache-Control", "no-store")
 		if !config.Enabled || config.OIDCIssuer == "" {
 			c.Redirect(303, "/unihub?sso_error=1")
 			return
 		}
-		once.Do(func() {
-			browserMu.Lock()
-			defer browserMu.Unlock()
-			browser, initErr = userkit.NewBrowser(context.Background(), userkit.BrowserConfig{Issuer: config.OIDCIssuer, ClientID: config.ClientID, ClientSecret: config.ClientSecret, RedirectURI: config.RedirectURI, AccessTokenType: "access-token"})
-		})
-		if initErr != nil {
-			c.Redirect(303, "/unihub?sso_error=1")
-			return
+		browserMu.RLock()
+		activeBrowser := browser
+		browserMu.RUnlock()
+		if activeBrowser == nil {
+			result := initialization.DoChan("browser", func() (any, error) {
+				browserMu.RLock()
+				cached := browser
+				browserMu.RUnlock()
+				if cached != nil {
+					return cached, nil
+				}
+				// Share one bounded discovery attempt; a failed attempt is not cached.
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				discovered, err := userkit.NewBrowser(ctx, userkit.BrowserConfig{Issuer: config.OIDCIssuer, ClientID: config.ClientID, ClientSecret: config.ClientSecret, RedirectURI: config.RedirectURI, AccessTokenType: "access-token"})
+				if err != nil {
+					return nil, err
+				}
+				browserMu.Lock()
+				browser = discovered
+				browserMu.Unlock()
+				return discovered, nil
+			})
+			select {
+			case initialized := <-result:
+				if initialized.Err != nil {
+					c.Redirect(303, "/unihub?sso_error=1")
+					return
+				}
+				activeBrowser = initialized.Val.(*userkit.Browser)
+			case <-c.Request.Context().Done():
+				c.Redirect(303, "/unihub?sso_error=1")
+				return
+			}
 		}
 		binding, e := common.GenerateRandomCharsKey(48)
 		if e != nil {
@@ -43,7 +70,7 @@ func registerUniHubSSO(r *gin.Engine, config platformaccount.Config) {
 		if destination == "" {
 			destination = "/dashboard"
 		}
-		authorize, e := browser.Begin(binding, destination)
+		authorize, e := activeBrowser.Begin(binding, destination)
 		if e != nil {
 			c.Status(400)
 			return

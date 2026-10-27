@@ -38,6 +38,7 @@ import { refreshProductAccess } from '@/features/unihub/session'
 import { safeProductReturn } from '@/features/unihub/sso'
 import { useSystemConfig } from '@/hooks/use-system-config'
 import {
+  AuthRefreshUnavailableError,
   bootstrapAuthentication,
   clearAuthenticatedClientState,
   clearAuthentication,
@@ -154,7 +155,10 @@ export const Route = createRootRouteWithContext<{
 
     const pathname = location?.pathname || ''
     if (pathname === '/unihub') {
-      await bootstrapAuthentication()
+      const bootstrap = await bootstrapAuthentication()
+      if (bootstrap.kind === 'transient_error') {
+        throw new AuthRefreshUnavailableError()
+      }
       return
     }
     // The server derives this flag from the listener's local socket. Never
@@ -196,7 +200,10 @@ export const Route = createRootRouteWithContext<{
         if (pathname === '/' || pathname === '/sign-in') {
           throw redirect({ href: destination, replace: true })
         }
-        await bootstrapAuthentication()
+        const bootstrap = await bootstrapAuthentication()
+        if (bootstrap.kind === 'transient_error') {
+          throw new AuthRefreshUnavailableError()
+        }
         const auth = useAuthStore.getState().auth
         if (auth.user?.identity_source === 'unihub' && auth.accessToken) {
           try {

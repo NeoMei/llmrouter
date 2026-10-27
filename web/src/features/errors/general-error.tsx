@@ -17,9 +17,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useNavigate, useRouter } from '@tanstack/react-router'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import { AuthRefreshUnavailableError } from '@/lib/auth-session'
 import { cn } from '@/lib/utils'
 
 const FEEDBACK_URL = 'https://github.com/QuantumNous/new-api/issues'
@@ -44,7 +46,9 @@ export function GeneralError({
 }: GeneralErrorProps) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const { history } = useRouter()
+  const router = useRouter()
+  const { history } = router
+  const [retrying, setRetrying] = useState(false)
   const status = getHttpStatus(error)
   const isRateLimited = status === 429
   const title = isRateLimited
@@ -53,6 +57,28 @@ export function GeneralError({
   const description = isRateLimited
     ? t('Please wait a moment before trying again.')
     : t('Please try again later.')
+
+  if (error instanceof AuthRefreshUnavailableError) {
+    return (
+      <div className={cn('h-svh w-full', className)}>
+        <div className='m-auto flex h-full w-full flex-col items-center justify-center gap-4 p-4'>
+          <h1 className='text-xl font-semibold'>{t('Request failed')}</h1>
+          <p role='alert' className='text-muted-foreground text-center'>
+            {t('Please wait a moment before trying again.')}
+          </p>
+          <Button
+            disabled={retrying}
+            onClick={() => {
+              setRetrying(true)
+              void router.invalidate().finally(() => setRetrying(false))
+            }}
+          >
+            {t('Retry')}
+          </Button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className={cn('h-svh w-full', className)}>

@@ -206,6 +206,24 @@ func CriticalRateLimit() func(c *gin.Context) {
 	return defNext
 }
 
+// AuthRefreshRateLimit isolates ordinary session renewal from password attempts.
+// Global API limits and the route's Origin/refresh-proof checks still apply.
+func AuthRefreshRateLimit() func(c *gin.Context) {
+	if common.CriticalRateLimitEnable {
+		return rateLimitFactory(120, 60, "AR")
+	}
+	return defNext
+}
+
+// AuthLogoutRateLimit keeps session revocation independent from refresh/login
+// bursts while retaining a bounded per-IP lifecycle endpoint.
+func AuthLogoutRateLimit() func(c *gin.Context) {
+	if common.CriticalRateLimitEnable {
+		return rateLimitFactory(120, 60, "AL")
+	}
+	return defNext
+}
+
 func UserCriticalRateLimit(scope string) func(c *gin.Context) {
 	if !common.CriticalRateLimitEnable {
 		return defNext

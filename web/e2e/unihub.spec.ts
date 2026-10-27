@@ -61,8 +61,9 @@ async function fixture(
       })
     }
     if (path === '/api/unihub/access') {
-      if (!authorized || options.mismatch || Date.now() / 1000 >= expiry)
-        {return route.fulfill({ status: 401, json: { success: false } })}
+      if (!authorized || options.mismatch || Date.now() / 1000 >= expiry) {
+        return route.fulfill({ status: 401, json: { success: false } })
+      }
       return route.fulfill({
         json: {
           access: {
@@ -85,17 +86,20 @@ async function fixture(
         '/api/models/',
         '/api/prefill_group/',
       ].includes(path)
-    )
-      {return route.fulfill({ json: { success: true, data: [] } })}
-    if (['/api/group/', '/api/group'].includes(path))
-      {return route.fulfill({ json: { success: true, data: [] } })}
-    if (path === '/api/channel' || path === '/api/channel/')
-      {return route.fulfill({
+    ) {
+      return route.fulfill({ json: { success: true, data: [] } })
+    }
+    if (['/api/group/', '/api/group'].includes(path)) {
+      return route.fulfill({ json: { success: true, data: [] } })
+    }
+    if (path === '/api/channel' || path === '/api/channel/') {
+      return route.fulfill({
         json: {
           success: true,
           data: { items: [], total: 0, page: 1, page_size: 10 },
         },
-      })}
+      })
+    }
     if (path === '/api/unihub/config') {
       return route.fulfill({
         json: {
@@ -1119,4 +1123,40 @@ test('ordinary user cannot open channels and logout waits for explicit re-entry'
   await expect(page.getByText('Product user · immutable-user')).toBeVisible()
   await page.goto('/channels')
   await expect(page).toHaveURL(/\/403$/)
+})
+
+test('first product entry at root completes SSO at the dashboard', async ({
+  page,
+}) => {
+  await fixture(page)
+  await page.goto('/')
+  await expect(page).toHaveURL(/\/dashboard$/)
+  await expect(page.getByText('Product user · immutable-user')).toBeVisible()
+})
+
+test('restored product root reload opens dashboard instead of denied route', async ({
+  page,
+}) => {
+  await fixture(page)
+  await login(page)
+  await page.goto('/')
+  await expect(page).toHaveURL(/\/dashboard$/)
+  await page.reload()
+  await expect(page).toHaveURL(/\/dashboard$/)
+  await expect(page.getByText('Product user · immutable-user')).toBeVisible()
+})
+
+test('authenticated sign-in honors safe wallet and channel destinations', async ({
+  page,
+}) => {
+  await fixture(page, { permissions: ['channel:read'] })
+  await login(page)
+  await page.goto('/sign-in?redirect=%2Fwallet')
+  await expect(page).toHaveURL(/\/wallet$/)
+  await expect(page.getByText('Product user · immutable-user')).toBeVisible()
+  await page.goto('/sign-in?redirect=%2Fchannels%3Ffilter%3Dsentinel')
+  await expect(page).toHaveURL(/\/channels\?filter=sentinel$/)
+  await expect(
+    page.getByRole('heading', { name: 'Channels', exact: true }),
+  ).toBeVisible()
 })

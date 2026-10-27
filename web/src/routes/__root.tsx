@@ -180,6 +180,21 @@ export const Route = createRootRouteWithContext<{
         return
       }
       if (productConfig?.enabled) {
+        // Normalize entry routes before either restoring or preserving an SSO
+        // return path, so fresh and already-authenticated visits agree.
+        let destination = location.href
+        if (pathname === '/') destination = '/dashboard'
+        else if (pathname === '/sign-in') {
+          destination = safeProductReturn(
+            new URL(location.href, window.location.origin).searchParams.get(
+              'redirect',
+            ),
+          )
+        }
+        if (destination === '/') destination = '/dashboard'
+        if (pathname === '/' || pathname === '/sign-in') {
+          throw redirect({ href: destination, replace: true })
+        }
         await bootstrapAuthentication()
         const auth = useAuthStore.getState().auth
         if (auth.user?.identity_source === 'unihub' && auth.accessToken) {

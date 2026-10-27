@@ -35,6 +35,7 @@ export const channelInfoSchema = z.object({
 export type ChannelInfo = z.infer<typeof channelInfoSchema>
 
 export const channelSchema = z.object({
+  configuration_redacted: z.boolean().optional(),
   id: z.number(),
   type: z.number(),
   key: z.string(),

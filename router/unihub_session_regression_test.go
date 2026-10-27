@@ -87,13 +87,16 @@ func newUniHubRegressionFixture(t *testing.T) *uniHubRegressionFixture {
 				return
 			}
 			permissions := []string{"product:use"}
-			if subject == "viewer" || subject == "operator" || subject == "admin" {
+			if subject == "sensitive" {
+				permissions = append(permissions, "channel:sensitive_write")
+			}
+			if subject == "viewer" || subject == "operator" || subject == "admin" || subject == "sensitive" {
 				permissions = append(permissions, "channel:read")
 			}
-			if subject == "operator" || subject == "admin" {
+			if subject == "operator" || subject == "admin" || subject == "sensitive" {
 				permissions = append(permissions, "channel:operate")
 			}
-			if subject == "admin" {
+			if subject == "admin" || subject == "sensitive" {
 				permissions = append(permissions, "channel:write")
 			}
 			_ = json.NewEncoder(w).Encode(gin.H{"issuer": upstream.URL, "subject": subject, "product_id": "llmrouter", "instance_id": "default", "user": gin.H{"id": subject, "name": "Same", "email": "same@test"}, "roles": []string{subject}, "permissions": permissions, "active": true, "version": 1, "expires_at": time.Now().Add(time.Hour).Unix()})

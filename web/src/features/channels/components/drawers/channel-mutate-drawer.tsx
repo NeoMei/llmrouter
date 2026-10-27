@@ -1605,6 +1605,7 @@ export function ChannelMutateDrawer({
     currentRow,
     isEditing,
     isMultiKeyChannel,
+    dirtyFields: form.formState.dirtyFields,
     onSuccess: handleSuccess,
   })
 

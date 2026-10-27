@@ -100,8 +100,16 @@ immediate on every request. Failed proof stops automatic login; retry is explici
 
 The channel router's exact method/path/permission table also registers the UniHub
 allowlist. A GET channel test or balance refresh requires channel:operate; it is
-not classified as a read. Sensitive fields use the same current-request CanRequest
-helper in controllers and middleware. Channel secrets still require native root
+not classified as a read. Product channel list/tag/search/detail and update responses use an explicit safe
+DTO. Opaque config, credential-bearing URLs/overrides, remarks and provider error
+metadata are never returned to product sessions. A configuration_redacted marker
+makes the editor send only explicitly changed fields; object setting/settings
+updates merge their changed keys server-side so unseen credentials survive normal
+routing edits. Native operators keep the full existing configuration contract.
+Sensitive fields use the same current-request CanRequest
+helper in controllers and middleware. Codex usage/reset-credit GETs cannot refresh/persist credentials for a product
+reader without current channel:sensitive_write; the explicitly protected refresh
+endpoint and standalone native behavior remain available. Channel secrets still require native root
 and secure verification and are never opened to projected users. Actual local
 user ID/username and stored common role remain in audit records.
 

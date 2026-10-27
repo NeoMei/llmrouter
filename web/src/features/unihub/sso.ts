@@ -17,7 +17,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 export function safeProductReturn(value: string | null | undefined): string {
-  if (!value || !value.startsWith('/') || value.startsWith('//')) {
+  if (
+    !value ||
+    value === '/' ||
+    !value.startsWith('/') ||
+    value.startsWith('//')
+  ) {
     return '/dashboard'
   }
   try {

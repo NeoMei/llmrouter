@@ -120,115 +120,121 @@ function ProductShell(props: { config: ProductConfig }) {
     setPayer(id)
   }
   const account = accounts.find((item) => item.id === payer)
+  if (restoring) {
+    return (
+      <QueryClientProvider client={cache}>
+        <p>{t('Loading')}</p>
+      </QueryClientProvider>
+    )
+  }
+  if (!user) {
+    let content = <AuthPanel session={session} />
+    if (error) {
+      content = (
+        <div>
+          <p role='alert'>{error}</p>
+          <Button onClick={() => startProductLogin('/dashboard')}>
+            {t('Sign in with UniHub')}
+          </Button>
+          <Button
+            onClick={() => {
+              void logout()
+                .then(() => {
+                  markProductSignedOut()
+                  session.clear()
+                  clearAuthentication()
+                  setError('')
+                })
+                .catch((error: unknown) => setError(message(error)))
+            }}
+          >
+            {t('Sign out')}
+          </Button>
+        </div>
+      )
+    }
+    return <QueryClientProvider client={cache}>{content}</QueryClientProvider>
+  }
   return (
     <QueryClientProvider client={cache}>
-      {restoring ? (
-        <p>{t('Loading')}</p>
-      ) : !user ? (
-        error ? (
-          <div>
-            <p role='alert'>{error}</p>
-            <Button onClick={() => startProductLogin('/dashboard')}>
-              {t('Sign in with UniHub')}
-            </Button>
-            <Button
-              onClick={() => {
-                void logout()
-                  .then(() => {
-                    markProductSignedOut()
-                    session.clear()
-                    clearAuthentication()
-                    setError('')
+      <>
+        <header className='flex flex-wrap items-center justify-between gap-3 rounded-xl border p-4'>
+          <p>
+            {user.name} · {user.id}
+          </p>
+          <Button
+            variant='outline'
+            onClick={() => {
+              void logout()
+                .then(() => {
+                  markProductSignedOut()
+                  session.clear()
+                  clearAuthentication()
+                  void navigate({
+                    href: '/unihub?signed_out=1',
+                    replace: true,
                   })
-                  .catch((error: unknown) => setError(message(error)))
-              }}
+                })
+                .catch((e) => setError(message(e)))
+            }}
+          >
+            {t('Sign out')}
+          </Button>
+        </header>
+        <section className='space-y-3 rounded-xl border p-4'>
+          <label className='flex max-w-full min-w-0 flex-col items-start gap-3 sm:flex-row sm:items-center'>
+            {t('Explicit payer account')}
+            <select
+              value={payer}
+              onChange={(e) => select(e.target.value)}
+              className='bg-background w-full max-w-full min-w-0 rounded border p-2 sm:flex-1'
             >
-              {t('Sign out')}
-            </Button>
+              <option value=''>{t('Select personal or team account')}</option>
+              {accounts.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name} · {item.kind} · {item.role}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Button
+            variant='outline'
+            onClick={() => void refresh().catch((e) => setError(message(e)))}
+          >
+            {t('Refresh accounts and roles')}
+          </Button>
+        </section>
+        {account ? (
+          <div key={`${account.id}:${account.role}`} className='space-y-5'>
+            <TeamPanel
+              session={session}
+              account={account}
+              config={props.config}
+              refresh={refresh}
+            />
+            <BillingPanel
+              session={session}
+              account={account}
+              config={props.config}
+            />
+            <TaskPanel
+              session={session}
+              account={account}
+              config={props.config}
+            />
+            <UsagePanel
+              session={session}
+              account={account}
+              config={props.config}
+            />
           </div>
         ) : (
-          <AuthPanel session={session} />
-        )
-      ) : (
-        <>
-          <header className='flex flex-wrap items-center justify-between gap-3 rounded-xl border p-4'>
-            <p>
-              {user.name} · {user.id}
-            </p>
-            <Button
-              variant='outline'
-              onClick={() => {
-                void logout()
-                  .then(() => {
-                    markProductSignedOut()
-                    session.clear()
-                    clearAuthentication()
-                    void navigate({
-                      href: '/unihub?signed_out=1',
-                      replace: true,
-                    })
-                  })
-                  .catch((e) => setError(message(e)))
-              }}
-            >
-              {t('Sign out')}
-            </Button>
-          </header>
-          <section className='space-y-3 rounded-xl border p-4'>
-            <label className='flex max-w-full min-w-0 flex-col items-start gap-3 sm:flex-row sm:items-center'>
-              {t('Explicit payer account')}
-              <select
-                value={payer}
-                onChange={(e) => select(e.target.value)}
-                className='bg-background w-full max-w-full min-w-0 rounded border p-2 sm:flex-1'
-              >
-                <option value=''>{t('Select personal or team account')}</option>
-                {accounts.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name} · {item.kind} · {item.role}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <Button
-              variant='outline'
-              onClick={() => void refresh().catch((e) => setError(message(e)))}
-            >
-              {t('Refresh accounts and roles')}
-            </Button>
-          </section>
-          {account ? (
-            <div key={`${account.id}:${account.role}`} className='space-y-5'>
-              <TeamPanel
-                session={session}
-                account={account}
-                config={props.config}
-                refresh={refresh}
-              />
-              <BillingPanel
-                session={session}
-                account={account}
-                config={props.config}
-              />
-              <TaskPanel
-                session={session}
-                account={account}
-                config={props.config}
-              />
-              <UsagePanel
-                session={session}
-                account={account}
-                config={props.config}
-              />
-            </div>
-          ) : (
-            <p>
-              {t('Choose a payer before viewing resources or sending tasks.')}
-            </p>
-          )}
-          {error ? <p role='alert'>{error}</p> : null}
-        </>
-      )}
+          <p>
+            {t('Choose a payer before viewing resources or sending tasks.')}
+          </p>
+        )}
+        {error ? <p role='alert'>{error}</p> : null}
+      </>
     </QueryClientProvider>
   )
 }
@@ -246,17 +252,22 @@ export function UniHub() {
     },
     retry: false,
   })
+  let navigation = null
+  if (config.data?.native_access) {
+    navigation = <Link to='/sign-in'>{t('Local operator sign in')}</Link>
+    if (projected) {
+      navigation = (
+        <nav aria-label={t('UniHub account')}>
+          <Link to='/dashboard'>{t('Console')}</Link>
+        </nav>
+      )
+    }
+  }
   return (
     <main className='mx-auto max-w-6xl space-y-5 p-4 md:p-8'>
       <header className='flex items-center justify-between'>
         <h1 className='text-2xl font-semibold'>{t('LLMRouter · UniHub')}</h1>
-        {config.data?.native_access && projected ? (
-          <nav aria-label={t('UniHub account')}>
-            <Link to='/dashboard'>{t('Console')}</Link>
-          </nav>
-        ) : config.data?.native_access ? (
-          <Link to='/sign-in'>{t('Local operator sign in')}</Link>
-        ) : null}
+        {navigation}
       </header>
       {config.isPending ? <p>{t('Loading')}</p> : null}
       {config.error ? <p role='alert'>{message(config.error)}</p> : null}

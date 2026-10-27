@@ -34,12 +34,14 @@ import {
   transformFormDataToUpdatePayload,
   type ChannelFormValues,
 } from '../lib'
+import { productChannelUpdate } from '../lib/product-channel-update'
 import type { Channel } from '../types'
 
 type UseChannelMutateFormParams = {
   currentRow?: Channel | null
   isEditing: boolean
   isMultiKeyChannel: boolean
+  dirtyFields?: Record<string, unknown>
   onSuccess: () => void
 }
 
@@ -92,7 +94,7 @@ export function useChannelMutateForm(props: UseChannelMutateFormParams) {
   return useMutation({
     mutationFn: async (data: ChannelFormValues): Promise<string> => {
       if (props.isEditing && props.currentRow) {
-        const payload = transformFormDataToUpdatePayload(
+        let payload = transformFormDataToUpdatePayload(
           data,
           props.currentRow.id
         )
@@ -103,6 +105,9 @@ export function useChannelMutateForm(props: UseChannelMutateFormParams) {
           for (const field of SENSITIVE_UPDATE_FIELDS) {
             delete payload[field]
           }
+        }
+        if (props.currentRow.configuration_redacted) {
+          payload = productChannelUpdate(payload, props.dirtyFields ?? {})
         }
         const payloadWithKeyMode =
           canEditSensitive &&

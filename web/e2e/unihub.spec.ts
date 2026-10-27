@@ -32,7 +32,7 @@ async function fixture(
       id: 42,
       username: 'product-user',
       display_name: 'Product user',
-      role: 1,
+      role: options.permissions?.includes('channel:read') ? 10 : 1,
       identity_source: 'unihub',
       unihub_user_id: 'immutable-user',
       permissions: { admin_permissions: permissions },
@@ -51,6 +51,15 @@ async function fixture(
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname
     if (path === '/api/unihub/login') {
+      if (
+        new URL(route.request().url()).searchParams.get('prompt') === 'none' &&
+        options.mismatch
+      ) {
+        return route.fulfill({
+          status: 303,
+          headers: { Location: '/sign-in?unihub_silent=done' },
+        })
+      }
       authorized = true
       return route.fulfill({
         status: 303,
@@ -132,6 +141,39 @@ async function fixture(
           accounts,
         },
       })
+    }
+    if (path === '/api/user/self') {
+      return route.fulfill({ json: { success: true, data: nativeBundle.user } })
+    }
+    if (path === '/api/token/') {
+      return route.fulfill({
+        json: {
+          success: true,
+          data: { items: [], total: 0, page: 1, page_size: 10 },
+        },
+      })
+    }
+    if (path === '/api/user/topup/info') {
+      return route.fulfill({
+        json: {
+          success: true,
+          data: {
+            min_topup: 1,
+            amount_options: [1, 10],
+            discount: {},
+            pay_methods: [],
+          },
+        },
+      })
+    }
+    if (path === '/api/subscription/self') {
+      return route.fulfill({ json: { success: true, data: [] } })
+    }
+    if (path === '/api/home_page_content') {
+      return route.fulfill({ json: { success: true, data: '' } })
+    }
+    if (path === '/api/subscription/plans') {
+      return route.fulfill({ json: { success: true, data: [] } })
     }
     if (path === '/api/notice') {
       return route.fulfill({ json: { success: true, data: '' } })
@@ -340,7 +382,7 @@ test('revoked proof removes account resources and stops automatic sign-in', asyn
   )
   await page.reload()
   await expect(
-    page.getByRole('button', { name: 'Sign in with UniHub', exact: true })
+    page.getByRole('heading', { name: 'Sign in', exact: true })
   ).toBeVisible()
   await expect(page.getByText('Product user · immutable-user')).toHaveCount(0)
 })
@@ -955,26 +997,15 @@ test('late settled receipt after payer switch cannot populate or refetch the new
   expect(newPayerReads).toBe(1)
 })
 
-test('public sign-in keeps the safe requested wallet and excludes native actions', async ({
+test('public sign-in keeps the requested original wallet page', async ({
   page,
 }) => {
   await fixture(page)
   await page.goto('/sign-in?redirect=%2Fwallet')
-  await expect(page).toHaveURL(/\/unihub$/)
-  await expect(page.getByText('Product user · immutable-user')).toBeVisible()
+  await expect(page).toHaveURL(/\/wallet$/)
   await expect(
-    page.getByRole('link', {
-      name: /Local operator sign in|API keys|Change password/,
-    })
-  ).toHaveCount(0)
-  await page.getByRole('button', { name: 'Sign out', exact: true }).click()
-  await expect(page).toHaveURL(/signed_out=1/)
-  await page.reload()
-  await page.goto('/dashboard')
-  await expect(
-    page.getByRole('button', { name: 'Sign in with UniHub', exact: true })
+    page.getByRole('heading', { name: 'Wallet', exact: true })
   ).toBeVisible()
-  await expect(page.getByText('Product user · immutable-user')).toHaveCount(0)
 })
 test('external redirect is rejected and public SSO retains account session', async ({
   page,
@@ -987,16 +1018,16 @@ test('external redirect is rejected and public SSO retains account session', asy
   ).toBeVisible()
   await expect(page.getByLabel('Password', { exact: true })).toHaveCount(0)
 })
-test('immutable subject mismatch clears unusable local proof and offers explicit retry', async ({
+test('immutable subject mismatch clears unusable proof and returns to the original login form', async ({
   page,
 }) => {
   await fixture(page, { mismatch: true })
   await page.goto('/unihub')
   await expect(
-    page.getByRole('button', { name: 'Sign in with UniHub', exact: true })
+    page.getByRole('heading', { name: 'Sign in', exact: true })
   ).toBeVisible()
   await expect(page.getByText('Product user · immutable-user')).toHaveCount(0)
-  await expect(page).toHaveURL(/sso_error=1/)
+  await expect(page).toHaveURL(/unihub_silent=done/)
 })
 test('closed model gate shows unavailable state and disables provider send', async ({
   page,
@@ -1099,7 +1130,7 @@ for (const scenario of [
   })
 }
 
-test('viewer opens channels with common stored role and no native finance links', async ({
+test('product role and capabilities preserve channel reader controls', async ({
   page,
 }) => {
   await fixture(page, { permissions: ['channel:read'] })
@@ -1108,71 +1139,50 @@ test('viewer opens channels with common stored role and no native finance links'
     page.getByRole('heading', { name: 'Channels', exact: true })
   ).toBeVisible()
   await expect(
-    page
-      .locator('[data-slot="sidebar"]')
-      .getByRole('link', { name: 'Channels', exact: true })
-  ).toBeVisible()
-  await expect(
     page.getByRole('button', { name: 'Add Channel', exact: true })
   ).toHaveCount(0)
   await expect(
-    page.getByRole('link', { name: 'Users', exact: true })
-  ).toHaveCount(0)
+    page.locator('[data-slot="sidebar"] a[href="/wallet"]')
+  ).toBeVisible()
 })
 
-test('ordinary user cannot open channels and logout waits for explicit re-entry', async ({
-  page,
-}) => {
+test('ordinary product user cannot open channels', async ({ page }) => {
   await fixture(page)
   await login(page)
-  await page.getByRole('button', { name: 'Sign out', exact: true }).click()
-  await expect(
-    page.getByRole('button', { name: 'Sign in with UniHub', exact: true })
-  ).toBeVisible()
-  await expect(page).toHaveURL(/signed_out=1/)
-  await page
-    .getByRole('button', { name: 'Sign in with UniHub', exact: true })
-    .click()
-  await expect(
-    page.getByRole('heading', { name: 'Overview', exact: true })
-  ).toBeVisible()
   await page.goto('/channels')
   await expect(page).toHaveURL(/\/403$/)
 })
 
-test('first product entry at root completes SSO at the dashboard', async ({
+test('product integration preserves the original public homepage', async ({
   page,
 }) => {
   await fixture(page)
   await page.goto('/')
-  await expect(page).toHaveURL(/\/dashboard\/overview$/)
-  await expect(
-    page.getByRole('heading', { name: 'Overview', exact: true })
-  ).toBeVisible()
+  await expect(page).toHaveURL(/:58004\/$/)
+  await expect(page.locator('a[href="/sign-in"]').first()).toBeVisible()
 })
 
-test('restored product root reload opens dashboard instead of denied route', async ({
+test('restored product session keeps the original homepage after reload', async ({
   page,
 }) => {
   await fixture(page)
   await login(page)
   await page.goto('/')
-  await expect(page).toHaveURL(/\/dashboard\/overview$/)
+  await expect(page).toHaveURL(/:58004\/$/)
   await page.reload()
-  await expect(page).toHaveURL(/\/dashboard\/overview$/)
-  await expect(
-    page.getByRole('heading', { name: 'Overview', exact: true })
-  ).toBeVisible()
+  await expect(page).toHaveURL(/:58004\/$/)
 })
 
-test('authenticated sign-in honors safe wallet and channel destinations', async ({
+test('authenticated sign-in honors the original wallet and channel destinations', async ({
   page,
 }) => {
   await fixture(page, { permissions: ['channel:read'] })
   await login(page)
   await page.goto('/sign-in?redirect=%2Fwallet')
-  await expect(page).toHaveURL(/\/unihub$/)
-  await expect(page.getByText('Product user · immutable-user')).toBeVisible()
+  await expect(page).toHaveURL(/\/wallet$/)
+  await expect(
+    page.getByRole('heading', { name: 'Wallet', exact: true })
+  ).toBeVisible()
   await page.goto('/sign-in?redirect=%2Fchannels%3Ffilter%3Dsentinel')
   await expect(page).toHaveURL(/\/channels\?filter=sentinel$/)
   await expect(

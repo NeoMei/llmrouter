@@ -81,7 +81,7 @@ func TestUniHubProductApplicationSPARoutes(t *testing.T) {
 	r := gin.New()
 	r.Use(middleware.NativeWebBoundary())
 	r.NoRoute(func(c *gin.Context) { c.String(200, "application shell") })
-	for _, path := range []string{"/dashboard/overview", "/dashboard/models", "/dashboard/flow", "/usage-logs/common", "/usage-logs/task", "/models/metadata", "/client-model-routes", "/system-settings/models/global", "/system-settings/models/routing-reliability", "/pricing", "/keys"} {
+	for _, path := range []string{"/dashboard/overview", "/dashboard/models", "/dashboard/flow", "/usage-logs/common", "/usage-logs/task", "/models/metadata", "/client-model-routes", "/system-settings/models/global", "/system-settings/models/routing-reliability", "/pricing", "/keys", "/users", "/playground", "/system-settings/auth/oidc", "/keys/secrets"} {
 		t.Run(path, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
@@ -89,7 +89,7 @@ func TestUniHubProductApplicationSPARoutes(t *testing.T) {
 			assert.Contains(t, w.Body.String(), "application shell")
 		})
 	}
-	for _, path := range []string{"/api/unsupported", "/platform/v1/unsupported", "/system-settings/models/unknown", "/system-settings/auth/oidc", "/keys/secrets"} {
+	for _, path := range []string{"/api/unsupported", "/platform/v1/unsupported"} {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
 		assert.GreaterOrEqual(t, w.Code, 400, path)
@@ -232,7 +232,7 @@ func TestUniHubProductSSOApplicationDestinations(t *testing.T) {
 		require.Equal(t, 303, callback.Code)
 		assert.Equal(t, destination, callback.Header().Get("Location"))
 	}
-	for _, destination := range []string{"https://attacker.test/", "//attacker.test", "/%2f%2fattacker.test", "/api/user/token", "/unknown", "/system-settings/auth/oidc"} {
+	for _, destination := range []string{"https://attacker.test/", "//attacker.test", "/%2f%2fattacker.test", "/api/user/token", "/unknown"} {
 		w := httptest.NewRecorder()
 		f.router.ServeHTTP(w, httptest.NewRequest("GET", "http://127.0.0.1:58119/api/unihub/login?return_to="+url.QueryEscape(destination), nil))
 		assert.Equal(t, 400, w.Code, destination)

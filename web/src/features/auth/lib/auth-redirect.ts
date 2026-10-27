@@ -78,3 +78,16 @@ export function sanitizeAuthRedirect(
 
   return `${redirectURL.pathname}${redirectURL.search}${redirectURL.hash}`
 }
+
+/** A completed native login may establish the central browser session without
+ * changing the product's form, verifier, or final destination. Refresh and SSO
+ * responses omit this flag so bootstrap never starts another handoff. */
+export function getProductLoginDestination(
+  centralSessionHandoff: unknown,
+  redirectTo: unknown,
+  origin: string
+): string {
+  const destination = sanitizeAuthRedirect(redirectTo, origin) ?? '/dashboard'
+  if (centralSessionHandoff !== true) return destination
+  return `/api/user/auth/unihub-handoff?${new URLSearchParams({ return_to: destination })}`
+}

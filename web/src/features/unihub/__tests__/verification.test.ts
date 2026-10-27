@@ -23,7 +23,7 @@ import { api } from '../../../lib/http-client'
 import { useAuthStore } from '../../../stores/auth-store'
 import { checkVerificationMethods } from '../../auth/secure-verification/api'
 
-test('product identity never queries native password verification methods', async () => {
+test('central and local identities retain the same configured second-factor verification methods', async () => {
   const previous = api.defaults.adapter
   const paths: string[] = []
   api.defaults.adapter = async (config) => {
@@ -44,9 +44,13 @@ test('product identity never queries native password verification methods', asyn
       identity_source: 'unihub',
     })
     const methods = await checkVerificationMethods()
-    assert.deepEqual(paths, [])
-    assert.equal(methods.has2FA, false)
-    assert.equal(methods.hasPasskey, false)
+    assert.deepEqual(paths.sort(), [
+      '/api/user/2fa/status',
+      '/api/user/passkey',
+    ])
+    assert.equal(methods.has2FA, true)
+    assert.equal(methods.hasPasskey, true)
+    paths.length = 0
     useAuthStore
       .getState()
       .auth.setUser({ id: 2, username: 'native', role: 10 })

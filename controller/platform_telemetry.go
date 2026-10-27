@@ -18,6 +18,9 @@ import (
 // The authenticated product principal owns self scope. Query parameters can
 // narrow display filters but cannot substitute an actor or elevate to accounts.
 func productTelemetry(c *gin.Context, allActors bool) (service.PlatformTelemetry, bool, bool) {
+	if platformaccount.RuntimeEnabled() {
+		return service.PlatformTelemetry{}, false, false
+	}
 	p, projected := authz.ProductPrincipal(c)
 	if !projected {
 		return service.PlatformTelemetry{}, false, false

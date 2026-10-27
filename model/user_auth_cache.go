@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 
@@ -153,6 +154,11 @@ return 1`
 // reject an arbitrarily delayed cache fill after a committed security change.
 // It also removes this transaction's now-obsolete pending fence.
 func publishCommittedUserAuthVersion(userId int, authVersion int64) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if e := SyncProductAuthVersions(ctx, userId); e != nil {
+		return e
+	}
 	if !common.RedisEnabled {
 		return nil
 	}
@@ -203,6 +209,9 @@ func IncrementUserAuthVersionWithTx(tx *gorm.DB, userId int) (int64, error) {
 			return 0, result.Error
 		}
 		if result.RowsAffected == 1 {
+			if e := queueProductAuthVersion(tx, userId, current, next); e != nil {
+				return 0, e
+			}
 			return next, nil
 		}
 	}
@@ -229,6 +238,11 @@ func BumpUserAuthVersion(userId int) (int64, error) {
 // PublishUserAuthCache refreshes the current database state after a successful
 // auth-sensitive transaction without touching the cached quota field.
 func PublishUserAuthCache(userId int) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if e := SyncProductAuthVersions(ctx, userId); e != nil {
+		return e
+	}
 	user, err := GetUserById(userId, false)
 	if err != nil {
 		return err

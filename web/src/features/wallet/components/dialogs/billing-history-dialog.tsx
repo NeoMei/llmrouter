@@ -226,6 +226,15 @@ export function BillingHistoryDialog({
                         />
                       </div>
 
+                      {record.credit_status === 'pending' && (
+                        <p
+                          role='status'
+                          className='mt-2 text-xs text-amber-700 dark:text-amber-400'
+                        >
+                          {t('支付已确认，额度正在入账，请勿重复支付')}
+                        </p>
+                      )}
+
                       {/* Details Grid */}
                       <div className='mt-3 grid grid-cols-2 gap-3 sm:mt-4 sm:grid-cols-3 sm:gap-4'>
                         <div className='space-y-1'>

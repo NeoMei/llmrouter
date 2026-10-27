@@ -34,7 +34,6 @@ import type {
 } from '@/features/dashboard/types'
 import { toIntlLocale } from '@/i18n/languages'
 import { formatCompactNumber, formatNumber, formatQuota } from '@/lib/format'
-import { canUseProductFeature } from '@/lib/product-access'
 import { computeTimeRange } from '@/lib/time'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
@@ -60,10 +59,10 @@ function formatStatNumber(value: number, locale: Intl.LocalesArgument) {
 }
 
 export function LogStatCards(props: LogStatCardsProps) {
-  const { i18n, t } = useTranslation()
+  const { i18n } = useTranslation()
   const statCardsConfig = useModelStatCardsConfig()
   const user = useAuthStore((state) => state.auth.user)
-  const isAdmin = canUseProductFeature(user, 'log')
+  const isAdmin = !!(user?.role && user.role >= 10)
   const [stats, setStats] = useState<{
     totalQuota: number
     totalCount: number
@@ -128,22 +127,13 @@ export function LogStatCards(props: LogStatCardsProps) {
     const formatted =
       config.key === 'quota'
         ? {
-            displayValue:
-              user?.identity_source === 'unihub'
-                ? t('UniHub billing')
-                : formatQuota(rawValue),
-            fullValue:
-              user?.identity_source === 'unihub'
-                ? t('View account charges in UniHub')
-                : formatQuota(rawValue),
+            displayValue: formatQuota(rawValue),
+            fullValue: formatQuota(rawValue),
           }
         : formatStatNumber(rawValue, locale)
 
     return {
-      title:
-        config.key === 'quota' && user?.identity_source === 'unihub'
-          ? t('Billing')
-          : config.title,
+      title: config.title,
       value: formatted.displayValue,
       fullValue: formatted.fullValue,
       desc: config.description,

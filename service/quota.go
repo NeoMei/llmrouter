@@ -1,10 +1,12 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -30,13 +32,14 @@ type TokenDetails struct {
 }
 
 type QuotaInfo struct {
-	InputDetails  TokenDetails
-	OutputDetails TokenDetails
-	ModelName     string
-	UsePrice      bool
-	ModelPrice    float64
-	ModelRatio    float64
-	GroupRatio    float64
+	ProductPriceSnapshot *types.PriceData
+	InputDetails         TokenDetails
+	OutputDetails        TokenDetails
+	ModelName            string
+	UsePrice             bool
+	ModelPrice           float64
+	ModelRatio           float64
+	GroupRatio           float64
 }
 
 func hasCustomModelRatio(modelName string, currentRatio float64) bool {
@@ -60,6 +63,11 @@ func calculateAudioQuota(info QuotaInfo) (int, *common.QuotaClamp) {
 	completionRatio := decimal.NewFromFloat(ratio_setting.GetCompletionRatio(info.ModelName))
 	audioRatio := decimal.NewFromFloat(ratio_setting.GetAudioRatio(info.ModelName))
 	audioCompletionRatio := decimal.NewFromFloat(ratio_setting.GetAudioCompletionRatio(info.ModelName))
+	if info.ProductPriceSnapshot != nil {
+		completionRatio = decimal.NewFromFloat(info.ProductPriceSnapshot.CompletionRatio)
+		audioRatio = decimal.NewFromFloat(info.ProductPriceSnapshot.AudioRatio)
+		audioCompletionRatio = decimal.NewFromFloat(info.ProductPriceSnapshot.AudioCompletionRatio)
+	}
 
 	groupRatio := decimal.NewFromFloat(info.GroupRatio)
 	modelRatio := decimal.NewFromFloat(info.ModelRatio)
@@ -93,14 +101,19 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 	if relayInfo.UsePrice {
 		return nil
 	}
-	userQuota, err := model.GetUserQuota(relayInfo.UserId, false)
-	if err != nil {
-		return err
-	}
-
-	token, err := model.GetTokenByKey(strings.TrimPrefix(relayInfo.TokenKey, "sk-"), false)
-	if err != nil {
-		return err
+	central := relayInfo.BillingSource == "unihub" && relayInfo.Billing != nil
+	var userQuota int
+	var token *model.Token
+	var err error
+	if !central {
+		userQuota, err = model.GetUserQuota(relayInfo.UserId, false)
+		if err != nil {
+			return err
+		}
+		token, err = model.GetTokenByKey(strings.TrimPrefix(relayInfo.TokenKey, "sk-"), false)
+		if err != nil {
+			return err
+		}
 	}
 
 	modelName := relayInfo.OriginModelName
@@ -138,9 +151,39 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 		ModelRatio: modelRatio,
 		GroupRatio: actualGroupRatio,
 	}
+	if central {
+		quotaInfo.ProductPriceSnapshot = &relayInfo.PriceData
+		quotaInfo.ModelPrice = relayInfo.PriceData.ModelPrice
+		quotaInfo.ModelRatio = relayInfo.PriceData.ModelRatio
+		quotaInfo.GroupRatio = relayInfo.PriceData.GroupRatioInfo.GroupRatio
+	}
 
 	quota, clamp := calculateAudioQuota(quotaInfo)
 	noteQuotaClamp(relayInfo, clamp)
+	if central {
+		// Realtime usage arrives in chunks, but the original session settles
+		// its aggregate once. Chunks only extend that session's existing hold.
+		const key = "internal.product.realtime_quota"
+		productRealtimeInitMu.Lock()
+		value, ok := ctx.Get(key)
+		if !ok {
+			value = &productRealtimeQuota{}
+			ctx.Set(key, value)
+		}
+		productRealtimeInitMu.Unlock()
+		state := value.(*productRealtimeQuota)
+		state.Lock()
+		defer state.Unlock()
+		if int64(state.quota)+int64(quota) > int64(common.MaxQuota) {
+			return errors.New("realtime quota exceeds supported range")
+		}
+		target := state.quota + quota
+		if err = relayInfo.Billing.Reserve(target); err != nil {
+			return err
+		}
+		state.quota = target
+		return nil
+	}
 
 	if userQuota < quota {
 		return fmt.Errorf("user quota is not enough, user quota: %s, need quota: %s", logger.FormatQuota(userQuota), logger.FormatQuota(quota))
@@ -157,6 +200,13 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 	logger.LogInfo(ctx, "realtime streaming consume quota success, quota: "+fmt.Sprintf("%d", quota))
 	return nil
 }
+
+type productRealtimeQuota struct {
+	sync.Mutex
+	quota int
+}
+
+var productRealtimeInitMu sync.Mutex
 
 func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelName string,
 	usage *dto.RealtimeUsage, extraContent string) {
@@ -205,6 +255,10 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		ModelRatio: modelRatio,
 		GroupRatio: groupRatio,
 	}
+	if relayInfo.BillingSource == "unihub" {
+		quotaInfo.ProductPriceSnapshot = &relayInfo.PriceData
+		quotaInfo.ModelPrice = relayInfo.PriceData.ModelPrice
+	}
 
 	quota, clamp := calculateAudioQuota(quotaInfo)
 	noteQuotaClamp(relayInfo, clamp)
@@ -230,7 +284,9 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, modelName, relayInfo.FinalPreConsumedQuota))
 	} else {
-		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
+		if relayInfo.BillingSource != "unihub" {
+			model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
+		}
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
 	}
 
@@ -374,7 +430,9 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		if totalTokens == 0 && validatedActualUsage && !usePrice {
 			quota = 0
 		}
-		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
+		if relayInfo.BillingSource != "unihub" {
+			model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
+		}
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
 	}
 
@@ -424,6 +482,10 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	perfmetrics.RecordRelaySampleAsync(relayInfo, true, int64(usage.CompletionTokens))
 }
 
+// ErrInsufficientTokenQuota proves the atomic reservation declined without a
+// debit. Transport/SQL errors deliberately retain their uncertain semantics.
+var ErrInsufficientTokenQuota = errors.New("token quota is not enough")
+
 func PreConsumeTokenQuota(relayInfo *relaycommon.RelayInfo, quota int) error {
 	if relayInfo != nil && relayInfo.PlatformMode {
 		return errors.New("platform calls cannot use local token quota")
@@ -444,7 +506,7 @@ func PreConsumeTokenQuota(relayInfo *relaycommon.RelayInfo, quota int) error {
 		if token, tokenErr := model.GetTokenByKey(relayInfo.TokenKey, false); tokenErr == nil && token != nil {
 			remainQuota = token.RemainQuota
 		}
-		return fmt.Errorf("token quota is not enough, token remain quota: %s, need quota: %s", logger.FormatQuota(remainQuota), logger.FormatQuota(quota))
+		return fmt.Errorf("%w, token remain quota: %s, need quota: %s", ErrInsufficientTokenQuota, logger.FormatQuota(remainQuota), logger.FormatQuota(quota))
 	}
 	return nil
 }
@@ -462,6 +524,33 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 func postConsumeQuotaWithResult(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQuota int, sendEmail bool) (result postConsumeQuotaResult, err error) {
 	if relayInfo != nil && relayInfo.PlatformMode {
 		return result, errors.New("platform calls cannot use local quota")
+	}
+	if relayInfo != nil && relayInfo.BillingSource != BillingSourceSubscription {
+		store, managed, e := model.ProductFundingStoreForUser(context.Background(), relayInfo.UserId)
+		if e != nil {
+			return result, e
+		}
+		if managed {
+			if quota < 0 {
+				return result, errors.New("central post-charge refund requires an original financial call")
+			}
+			if relayInfo.Billing == nil {
+				session, _, e := newProductFundingSession(context.Background(), relayInfo, quota+preConsumedQuota)
+				if e != nil {
+					return result, e
+				}
+				relayInfo.Billing = session
+				if e = store.MarkDispatched(context.Background(), relayInfo.RequestId); e != nil {
+					return result, e
+				}
+			}
+			if e = relayInfo.Billing.Settle(quota + preConsumedQuota); e != nil {
+				return result, e
+			}
+			result.FundingApplied = true
+			result.TokenApplied = !relayInfo.IsPlayground
+			return result, nil
+		}
 	}
 
 	// 1) Consume from wallet quota OR subscription item

@@ -17,8 +17,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Link, useSearch } from '@tanstack/react-router'
+import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { silentProductLoginURL } from '@/features/unihub/sso'
 import { useStatus } from '@/hooks/use-status'
 
 import { AuthLayout } from '../auth-layout'
@@ -29,6 +31,37 @@ export function SignIn() {
   const { t } = useTranslation()
   const { redirect } = useSearch({ from: '/(auth)/sign-in' })
   const { status } = useStatus()
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void fetch('/api/unihub/config', {
+      credentials: 'same-origin',
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) return
+        const config = (await response.json()) as {
+          enabled?: boolean
+          browser_sso_enabled?: boolean
+        }
+        if (
+          controller.signal.aborted ||
+          document.activeElement?.matches('input')
+        ) {
+          return
+        }
+        const target = silentProductLoginURL(
+          config.enabled === true || config.browser_sso_enabled === true,
+          window.location.search,
+          redirect ?? '/dashboard',
+          window.sessionStorage
+        )
+        if (target) window.location.replace(target)
+      })
+      .catch(() => {})
+    return () => controller.abort()
+  }, [redirect])
 
   return (
     <AuthLayout>

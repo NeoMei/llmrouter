@@ -28,6 +28,7 @@ type Token struct {
 	UsedQuota          int            `json:"used_quota" gorm:"default:0"` // used quota
 	Group              string         `json:"group" gorm:"default:''"`
 	CrossGroupRetry    bool           `json:"cross_group_retry"` // 跨分组重试，仅auto分组有效
+	FundingAccountID   string         `json:"-" gorm:"size:128"`
 	Purpose            string         `json:"-" gorm:"type:varchar(32);index"`
 	BoundOrigin        string         `json:"-" gorm:"type:varchar(512)"`
 	DeletedAt          gorm.DeletedAt `gorm:"index"`
@@ -359,6 +360,11 @@ func IncreaseTokenQuota(tokenId int, key string, quota int) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
+	if managed, e := managedProductToken(tokenId); e != nil {
+		return e
+	} else if managed {
+		return mutateManagedProductToken(tokenId, key, -quota)
+	}
 	if common.RedisEnabled {
 		gopool.Go(func() {
 			// 守卫式增量：哈希不存在时跳过，由下次读取从数据库水合，
@@ -389,6 +395,11 @@ func increaseTokenQuota(id int, quota int) (err error) {
 func DecreaseTokenQuota(id int, key string, quota int) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
+	}
+	if managed, e := managedProductToken(id); e != nil {
+		return e
+	} else if managed {
+		return mutateManagedProductToken(id, key, quota)
 	}
 	if common.RedisEnabled {
 		gopool.Go(func() {

@@ -20,7 +20,11 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import { useAuthStore } from '../../../stores/auth-store'
-import { createProductSession, restoreProductSession } from '../session'
+import {
+  createProductSession,
+  refreshProductAccess,
+  restoreProductSession,
+} from '../session'
 import { safeProductReturn, productLoginURL } from '../sso'
 
 test('SSO keeps a safe management deep link and rejects foreign returns', () => {
@@ -127,6 +131,10 @@ test('SSO retains only known product interface destinations', () => {
     '/system-settings/models/global',
     '/unihub',
     '/keys',
+    '/users',
+    '/system-settings/auth/login',
+    '/models/deployments',
+    '/playground',
   ]) {
     assert.equal(safeProductReturn(value), value)
   }
@@ -134,10 +142,71 @@ test('SSO retains only known product interface destinations', () => {
     '/api/user/self',
     '/platform/v1/chat/completions',
     '/not-a-product-page',
-    '/system-settings/auth/login',
-    '/models/deployments',
     '/dashboard/%2e%2e/%2e%2e/api/user/self',
   ]) {
     assert.equal(safeProductReturn(value), '/dashboard')
+  }
+})
+
+test('a current access refresh applies the effective product role and original business fields together', async () => {
+  const previous = globalThis.fetch
+  const expiry = Math.floor(Date.now() / 1000) + 3600
+  useAuthStore.getState().auth.setBundle({
+    access_token: 'current-session',
+    token_type: 'Bearer',
+    access_expires_at: expiry,
+    session: {
+      sid: 'role-session',
+      current: true,
+      login_method: 'unihub',
+      ip: '',
+      user_agent: '',
+      created_at: 1,
+      last_active_at: 1,
+      expires_at: expiry,
+    },
+    user: {
+      id: 1,
+      username: 'member',
+      role: 100,
+      identity_source: 'unihub',
+      unihub_user_id: 'central',
+    },
+  })
+  globalThis.fetch = async () =>
+    Response.json({
+      access: {
+        subject: 'central',
+        user: { id: 'central', name: 'Member', email: '' },
+        roles: ['member'],
+        permissions: ['product:use'],
+        expires_at: expiry,
+      },
+      user: {
+        id: 1,
+        username: 'member',
+        role: 1,
+        identity_source: 'unihub',
+        unihub_user_id: 'central',
+        quota: 123,
+        used_quota: 45,
+        request_count: 6,
+      },
+      permissions: { admin_permissions: { product: { use: true } } },
+      csrf_token: 'csrf',
+    })
+  try {
+    await refreshProductAccess()
+    const user = useAuthStore.getState().auth.user
+    assert.equal(user?.role, 1)
+    assert.equal(user?.quota, 123)
+    assert.equal(user?.used_quota, 45)
+    assert.equal(user?.request_count, 6)
+    assert.deepEqual(user?.permissions, {
+      admin_permissions: { product: { use: true } },
+    })
+  } finally {
+    globalThis.fetch = previous
+    useAuthStore.getState().auth.reset()
   }
 })

@@ -85,7 +85,6 @@ import type {
   FlowRole,
 } from '@/features/dashboard/types'
 import { formatQuota } from '@/lib/format'
-import { canUseProductFeature } from '@/lib/product-access'
 import { ROLE } from '@/lib/roles'
 import { computeTimeRange } from '@/lib/time'
 import { useChartTheme } from '@/lib/use-chart-theme'
@@ -259,16 +258,14 @@ export function FlowCharts(props: FlowChartsProps) {
   const chartInstanceRef = useRef<IVChart | null>(null)
   const user = useAuthStore((state) => state.auth.user)
   const isRoot = Boolean(user?.role && user.role >= ROLE.SUPER_ADMIN)
-  const isAdmin = canUseProductFeature(user, 'log')
+  const isAdmin = Boolean(user?.role && user.role >= ROLE.ADMIN)
   let flowRole: FlowRole = 'user'
   if (isRoot) {
     flowRole = 'root'
   } else if (isAdmin) {
     flowRole = 'admin'
   }
-  const [metric, setMetric] = useState<FlowMetric>(() =>
-    user?.identity_source === 'unihub' ? 'requests' : 'quota'
-  )
+  const [metric, setMetric] = useState<FlowMetric>('quota')
   const [topNodeLimit, setTopNodeLimit] = useState(DEFAULT_FLOW_TOP_NODE_LIMIT)
   const [overflowMode, setOverflowMode] =
     useState<FlowOverflowMode>('aggregate')
@@ -567,11 +564,7 @@ export function FlowCharts(props: FlowChartsProps) {
               className='shrink-0'
             >
               <TabsList aria-label={t('Flow width metric')}>
-                {FLOW_METRIC_OPTIONS.filter(
-                  (option) =>
-                    user?.identity_source !== 'unihub' ||
-                    option.value !== 'quota'
-                ).map((option) => {
+                {FLOW_METRIC_OPTIONS.map((option) => {
                   const Icon = option.icon
                   return (
                     <TabsTrigger

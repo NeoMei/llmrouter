@@ -250,7 +250,7 @@ func TestUniHubSessionStableSubjectAndRefreshLogout(t *testing.T) {
 		require.Empty(t, user.Password)
 		require.Nil(t, user.AccessToken)
 		require.Empty(t, user.StripeCustomer)
-		require.Empty(t, b.Data.User.AffCode)
+		require.Equal(t, user.AffCode, b.Data.User.AffCode)
 	}
 	refreshed, rotatedCookie := decodeUniHubBundle(t, f.request("POST", "/api/user/auth/refresh", "", cookie))
 	require.Equal(t, again.Data.User.Id, refreshed.Data.User.Id)
@@ -269,46 +269,50 @@ func TestUniHubSessionStableSubjectAndRefreshLogout(t *testing.T) {
 	require.Equal(t, 42, local.Quota)
 }
 
-func TestUniHubSessionProjectionMutationRegressionMatrix(t *testing.T) {
+func TestUniHubSessionIdentityLinkAndBusinessStateRegressionMatrix(t *testing.T) {
 	for _, tc := range []struct {
-		field string
-		value any
+		field             string
+		value             any
+		corrupt, disabled bool
 	}{
-		{"status", common.UserStatusDisabled}, {"deleted_at", time.Unix(1, 0)},
-		{"identity_source", ""}, {"unihub_user_id", "replaced"}, {"role", common.RoleAdminUser},
-		{"stripe_customer", "cus_mutated"}, {"aff_code", "mutated"}, {"aff_count", 1},
-		{"aff_quota", 1}, {"aff_history", 1}, {"inviter_id", 1},
-		{"quota", 1}, {"used_quota", 1}, {"request_count", 1},
-		{"password", "mutated"}, {"access_token", "mutated-pat"},
+		{"status", common.UserStatusDisabled, false, true}, {"deleted_at", time.Unix(1, 0), true, true},
+		{"identity_source", "", true, false}, {"unihub_user_id", "replaced", true, false},
+		{"role", common.RoleRootUser, false, false}, {"stripe_customer", "cus_product", false, false},
+		{"aff_code", "original-product-aff", false, false}, {"aff_count", 1, false, false}, {"aff_quota", 1, false, false},
+		{"aff_history", 1, false, false}, {"inviter_id", 1, false, false}, {"quota", 123, false, false},
+		{"used_quota", 77, false, false}, {"request_count", 8, false, false}, {"password", "product-password", false, false}, {"access_token", "product-pat", false, false},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			f := newUniHubRegressionFixture(t)
 			bundle, cookie := decodeUniHubBundle(t, f.request("POST", "/api/unihub/session", "subject", nil))
-			refreshBundle, refreshCookie := decodeUniHubBundle(t, f.request("POST", "/api/unihub/session", "subject", nil))
 			require.NoError(t, f.db.Model(&model.User{}).Where("id = ?", bundle.Data.User.Id).UpdateColumn(tc.field, tc.value).Error)
-			require.Equal(t, 401, f.request("POST", "/api/unihub/session", "subject", nil).Code)
-			for _, path := range []string{"/api/user/self", "/optional-native", "/v1/chat/completions"} {
-				method := "GET"
-				if path == "/v1/chat/completions" {
-					method = "POST"
+			self := f.request("GET", "/api/user/self", bundle.Data.AccessToken, nil)
+			if tc.corrupt || tc.disabled {
+				require.GreaterOrEqual(t, self.Code, 400)
+				require.GreaterOrEqual(t, f.request("POST", "/api/unihub/session", "subject", nil).Code, 400)
+			} else {
+				require.Equal(t, 200, self.Code, self.Body.String())
+				var data struct {
+					Data map[string]any `json:"data"`
 				}
-				w := f.request(method, path, bundle.Data.AccessToken, nil)
-				require.GreaterOrEqual(t, w.Code, 400, path)
+				require.NoError(t, json.Unmarshal(self.Body.Bytes(), &data))
+				require.EqualValues(t, common.RoleCommonUser, data.Data["role"], "local role must not overwrite central authority")
+				if tc.field == "quota" || tc.field == "used_quota" || tc.field == "request_count" {
+					require.EqualValues(t, tc.value, data.Data[tc.field])
+				}
+				again, _ := decodeUniHubBundle(t, f.request("POST", "/api/unihub/session", "subject", nil))
+				require.Equal(t, bundle.Data.User.Id, again.Data.User.Id)
+				f.revoked.Store(true)
+				require.Equal(t, 401, f.request("GET", "/api/user/self", bundle.Data.AccessToken, nil).Code)
+				f.revoked.Store(false)
 			}
-			_, err := model.CheckUniHubProjection(bundle.Data.User.Id)
-			require.ErrorIs(t, err, model.ErrUniHubProjectionInvalid)
-			_, err = service.CreateLoginSession(bundle.Data.User.Id, "unihub", "", "")
-			require.Error(t, err)
-			// Check refresh while its session is still active, independently of logout.
-			var refreshSession model.UserSession
-			require.NoError(t, f.db.Where("sid = ?", refreshBundle.Data.Session.SID).First(&refreshSession).Error)
-			require.Equal(t, model.UserSessionStatusActive, refreshSession.Status)
-			require.GreaterOrEqual(t, f.request("POST", "/api/user/auth/refresh", "", refreshCookie).Code, 400)
-			// Logout remains usable for compromised projections; it only revokes authority.
+			_, e := model.CheckUniHubProjection(bundle.Data.User.Id)
+			if tc.corrupt {
+				require.ErrorIs(t, e, model.ErrUniHubProjectionInvalid)
+			} else {
+				require.NoError(t, e)
+			}
 			require.Equal(t, 200, f.request("POST", "/api/user/auth/logout", bundle.Data.AccessToken, cookie).Code)
-			var session model.UserSession
-			require.NoError(t, f.db.Where("sid = ?", bundle.Data.Session.SID).First(&session).Error)
-			require.NotEqual(t, model.UserSessionStatusActive, session.Status)
 			require.GreaterOrEqual(t, f.request("POST", "/api/user/auth/refresh", "", cookie).Code, 400)
 			var count int64
 			require.NoError(t, f.db.Unscoped().Model(&model.User{}).Count(&count).Error)
@@ -324,13 +328,19 @@ func TestUniHubSessionNativeAuthRegressionMatrix(t *testing.T) {
 		{"POST", "/api/user/topup"}, {"GET", "/api/user/token"}, {"POST", "/api/token/"},
 		{"POST", "/api/user/chat-credential"}, {"PUT", "/api/user/self"},
 		{"POST", "/api/user/2fa/setup"}, {"POST", "/api/oauth/email/bind"},
-		{"GET", "/api/user/"}, {"GET", "/optional-native"},
-		{"GET", "/api/oauth/github"}, {"POST", "/v1/chat/completions"},
+		{"GET", "/api/user/"},
+		{"GET", "/api/oauth/github"},
 	} {
 		t.Run(tc.method+tc.path, func(t *testing.T) {
 			require.Equal(t, 403, f.request(tc.method, tc.path, bundle.Data.AccessToken, nil).Code)
 		})
 	}
+	for _, tc := range []struct{ method, path string }{{"GET", "/optional-native"}, {"POST", "/v1/chat/completions"}} {
+		require.Equal(t, 204, f.request(tc.method, tc.path, bundle.Data.AccessToken, nil).Code)
+	}
+	f.revoked.Store(true)
+	require.Equal(t, 401, f.request("GET", "/optional-native", bundle.Data.AccessToken, nil).Code)
+	f.revoked.Store(false)
 	// A corrupt PAT must not bypass the persistent mapping/marker validation.
 	require.NoError(t, f.db.Model(&model.User{}).Where("id = ?", bundle.Data.User.Id).UpdateColumn("access_token", "projection-pat").Error)
 	for _, path := range []string{"/api/user/self", "/optional-native", "/admin-control"} {
@@ -377,8 +387,9 @@ func TestPublicProjectionRejectsNativeSessionsAndOmitsNativeWallet(t *testing.T)
 		f.request("POST", "/api/user/auth/refresh", "", projectedCookie),
 	} {
 		require.Equal(t, 200, w.Code, w.Body.String())
-		for _, field := range []string{"quota", "used_quota", "aff_quota", "stripe_customer", "github_id", "password"} {
-			require.NotContains(t, w.Body.String(), `"`+field+`":`)
+		for _, field := range []string{"quota", "used_quota", "request_count", "aff_quota", "stripe_customer", "github_id"} {
+			require.Contains(t, w.Body.String(), `"`+field+`":`)
 		}
+		require.NotContains(t, w.Body.String(), `"password":`)
 	}
 }

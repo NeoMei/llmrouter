@@ -49,5 +49,26 @@ func TestUniHubProjectionConcurrentFirstLoginAndMutation(t *testing.T) {
 	require.NotEqual(t, ids[0], otherUser.Id)
 	require.NoError(t, db.Exec("UPDATE users SET role = ? WHERE id = ?", common.RoleAdminUser, ids[0]).Error)
 	_, err = CheckUniHubProjection(ids[0])
-	require.ErrorIs(t, err, ErrUniHubProjectionInvalid)
+	require.NoError(t, err)
+}
+
+func TestRuntimeSSOReusesDisabledProjectionBeforeCurrentCentralProof(t *testing.T) {
+	old, redis := DB, common.RedisEnabled
+	db, e := gorm.Open(sqlite.Open(t.TempDir()+"/reenable.db"), &gorm.Config{})
+	require.NoError(t, e)
+	require.NoError(t, db.AutoMigrate(&User{}, &UniHubIdentityMapping{}))
+	DB = db
+	common.RedisEnabled = false
+	t.Cleanup(func() { DB = old; common.RedisEnabled = redis })
+	identity := platformaccount.Identity{Issuer: "https://hub.test", User: platformaccount.User{ID: "canonical"}}
+	u, e := ResolveUniHubProjection(identity)
+	require.NoError(t, e)
+	require.NoError(t, db.Model(&User{}).Where("id = ?", u.Id).Update("status", common.UserStatusDisabled).Error)
+	_, e = ResolveUniHubProjection(identity)
+	require.Error(t, e, "standalone legacy disabled user remains denied")
+	t.Setenv("UNIHUB_PRODUCT_RUNTIME_ENABLED", "true")
+	current, e := ResolveUniHubProjection(identity)
+	require.NoError(t, e)
+	require.Equal(t, u.Id, current.Id)
+	require.Equal(t, common.UserStatusDisabled, current.Status, "mapping resolution cannot invent authority or enable locally")
 }

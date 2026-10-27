@@ -1,7 +1,9 @@
 package model
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"math/rand"
 	"time"
 
@@ -100,6 +102,14 @@ func userCheckinWithTransaction(checkin *Checkin, userId int, quotaAwarded int) 
 			return errors.New("签到失败，请稍后重试")
 		}
 
+		handled, err := QueueProductCreditAward(tx, userId, "checkin", fmt.Sprintf("%d:%s", userId, checkin.CheckinDate), quotaAwarded, map[string]any{"user_id": userId, "date": checkin.CheckinDate, "quota": quotaAwarded})
+		if err != nil {
+			return err
+		}
+		if handled {
+			return nil
+		}
+
 		// 步骤2: 在事务中增加用户额度
 		if err := tx.Model(&User{}).Where("id = ?", userId).
 			Update("quota", gorm.Expr("quota + ?", quotaAwarded)).Error; err != nil {
@@ -113,16 +123,21 @@ func userCheckinWithTransaction(checkin *Checkin, userId int, quotaAwarded int) 
 		return nil, err
 	}
 
-	// 事务成功后，异步更新缓存
-	go func() {
-		_ = cacheIncrUserQuota(userId, int64(quotaAwarded))
-	}()
+	syncProductCreditResult(userId, quotaAwarded, "checkin")
 
 	return checkin, nil
 }
 
 // userCheckinWithoutTransaction 不使用事务执行签到（适用于 SQLite）
 func userCheckinWithoutTransaction(checkin *Checkin, userId int, quotaAwarded int) (*Checkin, error) {
+	state, err := ProductFundingState(context.Background(), userId)
+	if err != nil {
+		return nil, err
+	}
+	if state != "local" {
+		return userCheckinWithTransaction(checkin, userId, quotaAwarded)
+	}
+
 	// 步骤1: 创建签到记录
 	// 数据库有唯一约束 (user_id, checkin_date)，可以防止并发重复签到
 	if err := DB.Create(checkin).Error; err != nil {

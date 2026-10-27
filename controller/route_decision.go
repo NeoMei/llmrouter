@@ -8,7 +8,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/service/modelcatalog"
 	"github.com/gin-gonic/gin"
 )
@@ -153,7 +152,7 @@ func GetRouteDecisionEndpoint(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "route decision not found"})
 		return
 	}
-	if _, projected := authz.ProductPrincipal(c); projected {
+	if legacyProductView(c) {
 		for i := range trace.Attempts {
 			trace.Attempts[i].Reason = ""
 			trace.Attempts[i].RejectedReason = ""

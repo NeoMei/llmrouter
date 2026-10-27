@@ -364,26 +364,16 @@ export function Dashboard() {
               )}
               <FadeIn delay={0.1}>
                 <Suspense fallback={<ModelChartsFallback />}>
-                  {user?.identity_source === 'unihub' ? (
-                    <div className='space-y-2 rounded-lg border p-5'>
-                      <p>{t('View account charges in UniHub')}</p>
-                      <a className='underline' href='/unihub'>
-                        {t('UniHub billing')}
-                      </a>
-                    </div>
-                  ) : (
-                    <LazyConsumptionDistributionChart
-                      data={modelData}
-                      loading={dataLoading}
-                      defaultChartType={
-                        chartPreferences.consumptionDistributionChart
-                      }
-                      timeGranularity={
-                        modelFilters.time_granularity ||
-                        DEFAULT_TIME_GRANULARITY
-                      }
-                    />
-                  )}
+                  <LazyConsumptionDistributionChart
+                    data={modelData}
+                    loading={dataLoading}
+                    defaultChartType={
+                      chartPreferences.consumptionDistributionChart
+                    }
+                    timeGranularity={
+                      modelFilters.time_granularity || DEFAULT_TIME_GRANULARITY
+                    }
+                  />
                 </Suspense>
               </FadeIn>
               <FadeIn delay={0.15}>

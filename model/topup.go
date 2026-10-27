@@ -1,8 +1,10 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -28,6 +30,7 @@ type TopUp struct {
 	CreateTime        int64   `json:"create_time"`
 	CompleteTime      int64   `json:"complete_time"`
 	Status            string  `json:"status"`
+	CreditStatus      string  `json:"credit_status,omitempty" gorm:"-"`
 }
 
 const (
@@ -255,16 +258,17 @@ func SettleWeChatTopUp(settlement WeChatTopUpSettlement) (
 		if err := tx.Save(topUp).Error; err != nil {
 			return err
 		}
-		return creditTopUpQuota(tx, topUp.UserId, topUp.CreditedQuota, nil)
+		return creditTopUpQuota(tx, topUp.UserId, topUp.CreditedQuota, nil, topUp)
 	})
 	if err != nil {
 		return false, 0, 0, err
 	}
 	if alreadyDone {
+		syncProductCreditResult(userID, 0, "WeChat Pay replay")
 		return true, userID, creditedQuota, nil
 	}
 
-	syncCreditUserQuotaCache(userID, creditedQuota, "WeChat Pay topup")
+	syncProductCreditResult(userID, creditedQuota, "WeChat Pay topup")
 	RecordTopupLog(
 		userID,
 		fmt.Sprintf("微信支付充值成功，充值额度: %v，支付金额：%s %s", logger.FormatQuota(creditedQuota), formatTopUpMinor(topUp.PaidAmountMinor), topUp.Currency),
@@ -428,11 +432,11 @@ func ValidateTopUpQuotaCapacity(userId int, creditedQuota int) error {
 		return err
 	}
 
-	var user User
-	if err := DB.Select("quota").Where("id = ?", userId).First(&user).Error; err != nil {
+	quota, err := GetUserQuota(userId, true)
+	if err != nil {
 		return err
 	}
-	if user.Quota > maxCurrentQuota {
+	if quota > maxCurrentQuota {
 		return ErrTopUpQuotaLimitExceeded
 	}
 	return nil
@@ -441,10 +445,34 @@ func ValidateTopUpQuotaCapacity(userId int, creditedQuota int) error {
 // creditTopUpQuota atomically enforces the int32 wallet ceiling while adding
 // quota. Keeping the predicate and increment in one UPDATE prevents two
 // concurrent callbacks from both passing a separate read/check.
-func creditTopUpQuota(tx *gorm.DB, userId int, creditedQuota int, updates map[string]interface{}) error {
+func creditTopUpQuota(tx *gorm.DB, userId int, creditedQuota int, updates map[string]interface{}, order *TopUp) error {
 	maxCurrentQuota, err := topUpQuotaMaxCurrent(creditedQuota)
 	if err != nil {
 		return err
+	}
+
+	if order == nil || order.UserId != userId || order.TradeNo == "" || order.Status != common.TopUpStatusSuccess {
+		return ErrTopUpOrderConflict
+	}
+	// Match cutover's user -> funding-account lock order, including customer
+	// metadata writes that would otherwise acquire the user after the account.
+	var owner User
+	if err := lockForUpdate(tx).Select("id").First(&owner, userId).Error; err != nil {
+		return err
+	}
+	handled, err := QueueProductCreditAward(tx, userId, "payment", productDigest(order.PaymentProvider+":"+order.TradeNo), creditedQuota, map[string]any{
+		"order_id": order.Id, "trade_no": order.TradeNo, "provider": order.PaymentProvider,
+		"provider_trade_no": order.ProviderTradeNo, "currency": order.Currency,
+		"paid_amount_minor": order.PaidAmountMinor, "money": decimal.NewFromFloat(order.Money).String(), "credited_quota": creditedQuota,
+	})
+	if err != nil {
+		return err
+	}
+	if handled {
+		if len(updates) > 0 {
+			return tx.Model(&User{}).Where("id = ?", userId).Updates(updates).Error
+		}
+		return nil
 	}
 
 	updateFields := make(map[string]interface{}, len(updates)+1)
@@ -583,7 +611,7 @@ func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string) (
 		if err := tx.Save(topUp).Error; err != nil {
 			return err
 		}
-		return creditTopUpQuota(tx, topUp.UserId, quotaToAdd, nil)
+		return creditTopUpQuota(tx, topUp.UserId, quotaToAdd, nil, topUp)
 	})
 	if err != nil {
 		if !errors.Is(err, ErrTopUpNotFound) && !errors.Is(err, ErrPaymentMethodMismatch) && !errors.Is(err, ErrTopUpStatusInvalid) {
@@ -592,9 +620,10 @@ func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string) (
 		return false, err
 	}
 	if alreadyDone {
+		syncProductCreditResult(topUp.UserId, 0, "epay replay")
 		return true, nil
 	}
-	syncCreditUserQuotaCache(topUp.UserId, quotaToAdd, "epay topup")
+	syncProductCreditResult(topUp.UserId, quotaToAdd, "epay topup")
 
 	common.SysLog(fmt.Sprintf("易支付充值成功 trade_no=%s user_id=%d quota_to_add=%d money=%.2f", topUp.TradeNo, topUp.UserId, quotaToAdd, topUp.Money))
 	RecordTopupLog(topUp.UserId, fmt.Sprintf("使用在线充值成功，充值金额: %v，支付金额：%f", logger.LogQuota(quotaToAdd), topUp.Money), callerIp, topUp.PaymentMethod, PaymentProviderEpay)
@@ -643,14 +672,14 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 		}
 		return creditTopUpQuota(tx, topUp.UserId, quota, map[string]interface{}{
 			"stripe_customer": customerId,
-		})
+		}, topUp)
 	})
 
 	if err != nil {
 		common.SysError("topup failed: " + err.Error())
 		return errors.New("充值失败，请稍后重试")
 	}
-	syncCreditUserQuotaCache(topUp.UserId, quota, "stripe topup")
+	syncProductCreditResult(topUp.UserId, quota, "stripe topup")
 
 	RecordTopupLog(topUp.UserId, fmt.Sprintf("使用在线充值成功，充值金额: %v，支付金额：%d", logger.FormatQuota(quota), topUp.Amount), callerIp, topUp.PaymentMethod, PaymentMethodStripe)
 
@@ -877,7 +906,7 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 		}
 
 		// 增加用户额度（立即写库，保持一致性）
-		if err := creditTopUpQuota(tx, topUp.UserId, quotaToAdd, nil); err != nil {
+		if err := creditTopUpQuota(tx, topUp.UserId, quotaToAdd, nil, topUp); err != nil {
 			return err
 		}
 
@@ -892,7 +921,7 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 	}
 
 	// 事务外记录日志，避免阻塞
-	syncCreditUserQuotaCache(userId, quotaToAdd, "manual topup")
+	syncProductCreditResult(userId, quotaToAdd, "manual topup")
 	RecordTopupLog(userId, fmt.Sprintf("管理员补单成功，充值金额: %v，支付金额：%f", logger.FormatQuota(quotaToAdd), payMoney), callerIp, paymentMethod, "admin")
 	return nil
 }
@@ -954,14 +983,14 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 			}
 		}
 
-		return creditTopUpQuota(tx, topUp.UserId, quota, updateFields)
+		return creditTopUpQuota(tx, topUp.UserId, quota, updateFields, topUp)
 	})
 
 	if err != nil {
 		common.SysError("creem topup failed: " + err.Error())
 		return errors.New("充值失败，请稍后重试")
 	}
-	syncCreditUserQuotaCache(topUp.UserId, quota, "creem topup")
+	syncProductCreditResult(topUp.UserId, quota, "creem topup")
 
 	RecordTopupLog(topUp.UserId, fmt.Sprintf("使用Creem充值成功，充值额度: %v，支付金额：%.2f", quota, topUp.Money), callerIp, topUp.PaymentMethod, PaymentMethodCreem)
 
@@ -1012,14 +1041,14 @@ func RechargeWaffo(tradeNo string, callerIp string) (err error) {
 			return err
 		}
 
-		return creditTopUpQuota(tx, topUp.UserId, quotaToAdd, nil)
+		return creditTopUpQuota(tx, topUp.UserId, quotaToAdd, nil, topUp)
 	})
 
 	if err != nil {
 		common.SysError("waffo topup failed: " + err.Error())
 		return errors.New("充值失败，请稍后重试")
 	}
-	syncCreditUserQuotaCache(topUp.UserId, quotaToAdd, "waffo topup")
+	syncProductCreditResult(topUp.UserId, quotaToAdd, "waffo topup")
 
 	if quotaToAdd > 0 {
 		RecordTopupLog(topUp.UserId, fmt.Sprintf("Waffo充值成功，充值额度: %v，支付金额: %.2f", logger.FormatQuota(quotaToAdd), topUp.Money), callerIp, topUp.PaymentMethod, PaymentMethodWaffo)
@@ -1072,18 +1101,38 @@ func RechargeWaffoPancake(tradeNo string) (err error) {
 			return err
 		}
 
-		return creditTopUpQuota(tx, topUp.UserId, quotaToAdd, nil)
+		return creditTopUpQuota(tx, topUp.UserId, quotaToAdd, nil, topUp)
 	})
 
 	if err != nil {
 		common.SysError("waffo pancake topup failed: " + err.Error())
 		return errors.New("充值失败，请稍后重试")
 	}
-	syncCreditUserQuotaCache(topUp.UserId, quotaToAdd, "waffo pancake topup")
+	syncProductCreditResult(topUp.UserId, quotaToAdd, "waffo pancake topup")
 
 	if quotaToAdd > 0 {
 		RecordLog(topUp.UserId, LogTypeTopup, fmt.Sprintf("Waffo Pancake充值成功，充值额度: %v，支付金额: %.2f", logger.FormatQuota(quotaToAdd), topUp.Money))
 	}
 
 	return nil
+}
+
+// syncProductCreditResult acknowledges the original receipt once. A central
+// transport failure leaves the durable award pending; it must not credit the
+// local cache or cause the verified payment to be collected a second time.
+func syncProductCreditResult(userID, quota int, operation string) {
+	state, err := ProductFundingState(context.Background(), userID)
+	if err != nil {
+		common.SysError("product credit state pending reconciliation")
+		return
+	}
+	if state != "local" {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := FlushProductCreditAwards(ctx, userID); err != nil {
+			common.SysError("product credit pending central acknowledgement")
+		}
+		return
+	}
+	syncCreditUserQuotaCache(userID, quota, operation)
 }

@@ -44,24 +44,12 @@ export const Route = createFileRoute('/_authenticated/models/$section')({
   beforeLoad: ({ params }) => {
     const { auth } = useAuthStore.getState()
 
-    if (
-      !(
-        canUseProductFeature(auth.user, 'catalog') ||
-        (auth.user?.identity_source === 'unihub' &&
-          canUseProductFeature(auth.user, 'channel'))
-      )
-    ) {
+    if (!canUseProductFeature(auth.user, 'catalog')) {
       throw redirect({
         to: '/403',
       })
     }
 
-    if (
-      auth.user?.identity_source === 'unihub' &&
-      params.section !== 'metadata'
-    ) {
-      throw redirect({ to: '/403' })
-    }
     const validSections = MODELS_SECTION_IDS as unknown as string[]
     if (!validSections.includes(params.section)) {
       throw redirect({

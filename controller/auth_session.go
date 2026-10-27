@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/QuantumNous/new-api/internal/platformaccount"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
@@ -31,8 +32,19 @@ func RefreshAuth(c *gin.Context) {
 		writeAuthSessionError(c, err)
 		return
 	}
-	data := buildSelfUserData(user)
-	if user.IdentitySource == model.UniHubIdentitySource {
+	service.WriteRefreshCookie(c, bundle.RefreshToken)
+	if platformaccount.RuntimeEnabled() {
+		if e := applyCurrentProductIdentity(c, user, false); e != nil {
+			productIdentityError(c, e)
+			return
+		}
+		if e := model.RefreshProductBalance(c.Request.Context(), user); e != nil {
+			productIdentityError(c, e)
+			return
+		}
+	}
+	data := productSelfData(c, user)
+	if !platformaccount.RuntimeEnabled() && user.IdentitySource == model.UniHubIdentitySource {
 		identity, e := service.ParseAccessToken(bundle.AccessToken)
 		if e != nil {
 			writeAuthSessionError(c, e)
@@ -45,8 +57,8 @@ func RefreshAuth(c *gin.Context) {
 		}
 		authz.SetProductPrincipal(c, p)
 		data["permissions"] = gin.H{"admin_permissions": authz.RequestCapabilities(c)}
+		data["role"] = middleware.RoleFromAccess(p.Access)
 	}
-	service.WriteRefreshCookie(c, bundle.RefreshToken)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",

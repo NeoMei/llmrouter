@@ -1,28 +1,30 @@
 package model
 
 type Midjourney struct {
-	Id          int    `json:"id"`
-	Code        int    `json:"code"`
-	UserId      int    `json:"user_id" gorm:"index"`
-	Action      string `json:"action" gorm:"type:varchar(40);index"`
-	MjId        string `json:"mj_id" gorm:"index"`
-	Prompt      string `json:"prompt"`
-	PromptEn    string `json:"prompt_en"`
-	Description string `json:"description"`
-	State       string `json:"state"`
-	SubmitTime  int64  `json:"submit_time" gorm:"index"`
-	StartTime   int64  `json:"start_time" gorm:"index"`
-	FinishTime  int64  `json:"finish_time" gorm:"index"`
-	ImageUrl    string `json:"image_url"`
-	VideoUrl    string `json:"video_url"`
-	VideoUrls   string `json:"video_urls"`
-	Status      string `json:"status" gorm:"type:varchar(20);index"`
-	Progress    string `json:"progress" gorm:"type:varchar(30);index"`
-	FailReason  string `json:"fail_reason"`
-	ChannelId   int    `json:"channel_id"`
-	Quota       int    `json:"quota"`
-	Buttons     string `json:"buttons"`
-	Properties  string `json:"properties"`
+	ProductCallID         string `json:"-" gorm:"size:128;index"`
+	ProductBillingVersion int64  `json:"-" gorm:"default:0"`
+	Id                    int    `json:"id"`
+	Code                  int    `json:"code"`
+	UserId                int    `json:"user_id" gorm:"index"`
+	Action                string `json:"action" gorm:"type:varchar(40);index"`
+	MjId                  string `json:"mj_id" gorm:"index"`
+	Prompt                string `json:"prompt"`
+	PromptEn              string `json:"prompt_en"`
+	Description           string `json:"description"`
+	State                 string `json:"state"`
+	SubmitTime            int64  `json:"submit_time" gorm:"index"`
+	StartTime             int64  `json:"start_time" gorm:"index"`
+	FinishTime            int64  `json:"finish_time" gorm:"index"`
+	ImageUrl              string `json:"image_url"`
+	VideoUrl              string `json:"video_url"`
+	VideoUrls             string `json:"video_urls"`
+	Status                string `json:"status" gorm:"type:varchar(20);index"`
+	Progress              string `json:"progress" gorm:"type:varchar(30);index"`
+	FailReason            string `json:"fail_reason"`
+	ChannelId             int    `json:"channel_id"`
+	Quota                 int    `json:"quota"`
+	Buttons               string `json:"buttons"`
+	Properties            string `json:"properties"`
 
 	TokenId          int `json:"-" gorm:"default:0"`
 	BillingChannelId int `json:"-" gorm:"default:0"`
@@ -168,14 +170,20 @@ func (midjourney *Midjourney) Insert() error {
 }
 
 func (midjourney *Midjourney) Update() error {
+	if midjourney.ProductCallID != "" {
+		return DB.Model(midjourney).Select("*").Omit("quota", "product_billing_version", "product_call_id").Updates(midjourney).Error
+	}
 	var err error
 	err = DB.Save(midjourney).Error
 	return err
 }
 
 func (midjourney *Midjourney) UpdateBillingState() error {
+	if midjourney.ProductCallID != "" {
+		return DB.Model(midjourney).Select("token_id", "billing_channel_id").Updates(midjourney).Error
+	}
 	return DB.Model(midjourney).
-		Select("quota", "token_id", "billing_channel_id").
+		Select("quota", "token_id", "billing_channel_id", "product_call_id").
 		Updates(midjourney).Error
 }
 
@@ -192,7 +200,11 @@ func (midjourney *Midjourney) GetBillingChannelId() int {
 // UpdateWithStatus performs a conditional UPDATE guarded by fromStatus (CAS).
 // Uses Model().Select("*").Updates() to avoid GORM Save()'s INSERT fallback.
 func (midjourney *Midjourney) UpdateWithStatus(fromStatus string) (bool, error) {
-	result := DB.Model(midjourney).Where("status = ?", fromStatus).Select("*").Updates(midjourney)
+	query := DB.Model(midjourney).Where("status = ?", fromStatus).Select("*")
+	if midjourney.ProductCallID != "" {
+		query = query.Omit("quota", "product_billing_version", "product_call_id")
+	}
+	result := query.Updates(midjourney)
 	if result.Error != nil {
 		return false, result.Error
 	}

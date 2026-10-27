@@ -88,7 +88,7 @@ func TestPublicNativePagesAndPlatformFallback(t *testing.T) {
 	// Registration order is the production order: web then platform/UniHub.
 	SetPlatformRouter(r, nil)
 	SetUniHubRouter(r, platformaccount.Config{})
-	for _, path := range []string{"/sign-up", "/oauth/github", "/forgot-password", "/user/reset", "/subscriptions", "/playground", "/index.html"} {
+	for _, path := range []string{"/sign-up", "/oauth/github", "/forgot-password", "/user/reset", "/subscriptions", "/index.html"} {
 		req := httptest.NewRequest("GET", path, nil)
 		req.Header.Set("Origin", "https://admin.example")
 		req.Header.Set("X-Forwarded-For", "127.0.0.1")
@@ -119,7 +119,7 @@ func TestProductShellDirectRoutesRemainRenderOnly(t *testing.T) {
 	r := gin.New()
 	r.Use(middleware.NativeWebBoundary())
 	r.NoRoute(func(c *gin.Context) { c.Header("Content-Type", "text/html"); c.String(200, "product shell") })
-	for _, path := range []string{"/sign-in", "/dashboard", "/channels", "/channels/", "/wallet", "/keys", "/403"} {
+	for _, path := range []string{"/sign-in", "/dashboard", "/channels", "/channels/", "/wallet", "/keys", "/403", "/playground", "/users", "/keys/", "/keys/secrets", "/channels/secrets"} {
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
 			w := httptest.NewRecorder()
 			r.ServeHTTP(w, httptest.NewRequest(method, path, nil))
@@ -127,7 +127,7 @@ func TestProductShellDirectRoutesRemainRenderOnly(t *testing.T) {
 			require.Contains(t, w.Body.String(), "product shell", "%s %s", method, path)
 		}
 	}
-	for _, path := range []string{"/api/channel/", "/api/user/topup", "/api/token/", "/v1/chat/completions", "/unknown", "/channels/secrets", "/keys/secrets", "/keys/", "/sign-up"} {
+	for _, path := range []string{"/api/channel/", "/api/user/topup", "/api/token/", "/v1/chat/completions", "/unknown", "/sign-up"} {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
 		require.Equal(t, 403, w.Code, path)

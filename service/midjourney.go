@@ -31,6 +31,47 @@ func CovertMjpActionToModelName(mjAction string) string {
 	return modelName
 }
 
+// Original Midjourney pricing and response semantics are retained. Only the
+// financial hold is established before the existing supplier send.
+func PrepareMidjourneyAdmission(ctx context.Context, info *relaycommon.RelayInfo, quota int, charge bool) error {
+	if !charge {
+		return nil
+	}
+	if info == nil {
+		return errors.New("relay info is nil")
+	}
+	_, managed, e := model.ProductFundingStoreForUser(ctx, info.UserId)
+	if e != nil || !managed {
+		return e
+	}
+	if info.RequestId == "" {
+		return errors.New("stable Midjourney financial call id is required")
+	}
+	if info.Billing == nil {
+		session, _, e := newProductFundingSession(ctx, info, quota)
+		if e != nil {
+			return e
+		}
+		info.Billing = session
+	} else if e = info.Billing.Reserve(quota); e != nil {
+		return e
+	}
+	return MarkProductFundingDispatched(ctx, info)
+}
+func FinishMidjourneyAdmission(ctx context.Context, info *relaycommon.RelayInfo, accepted bool) error {
+	if accepted || info == nil || info.BillingSource != "unihub" {
+		return nil
+	}
+	store, managed, e := model.ProductFundingStoreForUser(ctx, info.UserId)
+	if e != nil {
+		return e
+	}
+	if !managed {
+		return errors.New("Midjourney central funding owner changed")
+	}
+	return store.Release(ctx, info.RequestId, "midjourney_supplier_rejected")
+}
+
 // PrepareMidjourneyTaskBilling sets the durable refund marker before the task is inserted.
 func PrepareMidjourneyTaskBilling(relayInfo *relaycommon.RelayInfo, task *model.Midjourney, quota int, shouldBill bool) (bool, error) {
 	if task == nil {
@@ -39,6 +80,9 @@ func PrepareMidjourneyTaskBilling(relayInfo *relaycommon.RelayInfo, task *model.
 	task.Quota = 0
 	task.TokenId = 0
 	task.BillingChannelId = 0
+	if relayInfo != nil && relayInfo.BillingSource == "unihub" {
+		task.ProductCallID = relayInfo.RequestId
+	}
 	if !shouldBill {
 		return false, nil
 	}
@@ -53,6 +97,10 @@ func PrepareMidjourneyTaskBilling(relayInfo *relaycommon.RelayInfo, task *model.
 	}
 
 	task.Quota = quota
+	if relayInfo.BillingSource == "unihub" {
+		task.ProductCallID = relayInfo.RequestId
+		task.TokenId = relayInfo.TokenId
+	}
 	task.BillingChannelId = task.ChannelId
 	if relayInfo.ChannelMeta != nil && relayInfo.ChannelId > 0 {
 		task.BillingChannelId = relayInfo.ChannelId
@@ -70,6 +118,16 @@ func SettleMidjourneyTaskBilling(relayInfo *relaycommon.RelayInfo, task *model.M
 	}
 	if task == nil || task.Id == 0 {
 		return false, errors.New("Midjourney task must be persisted before billing")
+	}
+	if task.ProductCallID != "" {
+		if relayInfo.Billing == nil {
+			return false, errors.New("Midjourney central funding session missing")
+		}
+		e := relayInfo.Billing.Settle(task.Quota)
+		if updateErr := task.UpdateBillingState(); updateErr != nil {
+			return true, errors.Join(e, updateErr)
+		}
+		return true, e
 	}
 
 	result, billingErr := postConsumeQuotaWithResult(relayInfo, task.Quota, 0, true)
@@ -95,17 +153,44 @@ func SettleMidjourneyTaskBilling(relayInfo *relaycommon.RelayInfo, task *model.M
 
 // RefundMidjourneyQuota reverses every accounting element recorded for a billed legacy task.
 func RefundMidjourneyQuota(ctx context.Context, task *model.Midjourney, reason string) bool {
+	if task.ProductCallID != "" {
+		var current model.Midjourney
+		if e := model.DB.First(&current, task.Id).Error; e != nil {
+			return false
+		}
+		task.Quota = current.Quota
+		task.ProductBillingVersion = current.ProductBillingVersion
+	}
 	quota := task.Quota
 	if quota == 0 {
 		return true
 	}
+	central := task.ProductCallID != ""
+	if central {
+		if e := model.RepriceProductCall(ctx, task.ProductCallID, fmt.Sprintf("midjourney-failed:%s:%d", task.MjId, task.ProductBillingVersion), 0, "midjourney_task_failed", model.RecordTaskBillingLogParams{ModelName: CovertMjpActionToModelName(task.Action), Other: map[string]interface{}{"task_id": task.MjId, "reason": reason}}); e != nil {
+			logger.LogWarn(ctx, "central Midjourney refund pending")
+			return false
+		}
+		changed, e := model.ApplyProductMidjourneyQuota(ctx, task, 0)
+		if e != nil {
+			return false
+		}
+		if !changed {
+			return true
+		}
+	}
 
-	if err := model.IncreaseUserQuota(task.UserId, quota, false); err != nil {
+	if err := func() error {
+		if central {
+			return nil
+		}
+		return model.IncreaseUserQuota(task.UserId, quota, false)
+	}(); err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("退还 Midjourney 用户额度失败 task %s: %s", task.MjId, err.Error()))
 		return false
 	}
 
-	if task.TokenId > 0 {
+	if !central && task.TokenId > 0 {
 		tokenKey := resolveTokenKey(ctx, task.TokenId, task.MjId)
 		if tokenKey != "" {
 			if err := model.IncreaseTokenQuota(task.TokenId, tokenKey, quota); err != nil {
@@ -115,8 +200,12 @@ func RefundMidjourneyQuota(ctx context.Context, task *model.Midjourney, reason s
 	}
 
 	billingChannelId := task.GetBillingChannelId()
-	model.UpdateUserUsedQuota(task.UserId, -quota)
-	model.UpdateChannelUsedQuota(billingChannelId, -quota)
+	if !central {
+		model.UpdateUserUsedQuota(task.UserId, -quota)
+	}
+	if !central {
+		model.UpdateChannelUsedQuota(billingChannelId, -quota)
+	}
 	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
 		UserId:    task.UserId,
 		LogType:   model.LogTypeRefund,
@@ -132,7 +221,12 @@ func RefundMidjourneyQuota(ctx context.Context, task *model.Midjourney, reason s
 	})
 
 	task.Quota = 0
-	if err := task.UpdateBillingState(); err != nil {
+	if err := func() error {
+		if central {
+			return nil
+		}
+		return task.UpdateBillingState()
+	}(); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("Midjourney 退款成功但清除 quota 失败 task %s: %s", task.MjId, err.Error()))
 	}
 	return true

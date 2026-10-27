@@ -25,7 +25,6 @@ import {
   prepareCredentialRequestOptions,
   isPasskeySupported as detectPasskeySupport,
 } from '@/lib/passkey'
-import { useAuthStore } from '@/stores/auth-store'
 
 import {
   beginPasskeyVerification,
@@ -43,11 +42,6 @@ import type {
  * Fetch available verification methods for the current user.
  */
 export async function checkVerificationMethods(): Promise<VerificationMethods> {
-  // Product identity credentials are managed by its issuer. Native password
-  // step-up methods cannot apply to this product session.
-  if (useAuthStore.getState().auth.user?.identity_source === 'unihub') {
-    return { has2FA: false, hasPasskey: false, passkeySupported: false }
-  }
   try {
     const [twoFAResponse, passkeyResponse, passkeySupported] =
       await Promise.all([

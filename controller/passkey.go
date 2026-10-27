@@ -387,6 +387,12 @@ func PasskeyLoginFinish(c *gin.Context) {
 			return nil, fmt.Errorf("用户信息获取失败: %w", err)
 		}
 
+		if e := model.SyncProductAuthVersions(c.Request.Context(), user.Id); e != nil {
+			return nil, e
+		}
+		if e := model.ReconcileProductIdentity(c.Request.Context(), user); e != nil {
+			return nil, e
+		}
 		if user.Status != common.UserStatusEnabled {
 			return nil, errors.New("该用户已被禁用")
 		}
@@ -448,11 +454,17 @@ func AdminResetPasskey(c *gin.Context) {
 		return
 	}
 	myRole := c.GetInt("role")
+	if !refreshManagedTarget(c, user) {
+		return
+	}
 	if !canManageTargetRole(myRole, user.Role) {
 		common.ApiErrorMsg(c, "no permission")
 		return
 	}
 
+	if !authorizeProductIdentityWrite(c, user.Id, "passkey") {
+		return
+	}
 	if _, err := model.GetPasskeyByUserID(user.Id); err != nil {
 		if errors.Is(err, model.ErrPasskeyNotFound) {
 			c.JSON(http.StatusOK, gin.H{

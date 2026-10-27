@@ -17,7 +17,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
+import { useAuthStore } from '@/stores/auth-store'
 
+import { balancePurchaseRequests } from './balance-purchase-request'
 import type {
   ApiResponse,
   PlanRecord,
@@ -158,7 +160,12 @@ export async function paySubscriptionWaffoPancake(
 export async function paySubscriptionBalance(
   data: SubscriptionPayRequest
 ): Promise<SubscriptionPayResponse> {
-  const res = await api.post('/api/subscription/balance/pay', data)
+  const userId = useAuthStore.getState().auth.user?.id || 0
+  const key = balancePurchaseRequests.key(userId, data.plan_id)
+  const res = await api.post('/api/subscription/balance/pay', data, {
+    headers: { 'Idempotency-Key': key },
+  })
+  balancePurchaseRequests.responded(userId, data.plan_id, key, res.data)
   return res.data
 }
 

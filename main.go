@@ -130,6 +130,8 @@ func main() {
 	service.StartSubscriptionQuotaResetTask()
 	stopNativeBillingRecovery := service.StartNativeBillingRecovery(context.Background())
 	defer stopNativeBillingRecovery()
+	stopProductFundingRecovery := service.StartProductFundingRecovery(context.Background())
+	defer stopProductFundingRecovery()
 
 	// Report this process as a system instance so the System Info page can show
 	// all currently alive nodes in multi-instance deployments.

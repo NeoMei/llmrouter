@@ -22,7 +22,7 @@ import { useEffect } from 'react'
 import { toast } from 'sonner'
 
 import { wechatLoginByCode } from '@/features/auth/api'
-import { sanitizeAuthRedirect } from '@/features/auth/lib/auth-redirect'
+import { getProductLoginDestination } from '@/features/auth/lib/auth-redirect'
 import { applyAuthBundle, isAuthBundle } from '@/lib/api'
 import { getServerErrorMessageKey } from '@/lib/server-error-message'
 
@@ -42,9 +42,15 @@ function OAuthComponent() {
           const res = await wechatLoginByCode(search.code)
           if (res?.success && isAuthBundle(res.data)) {
             applyAuthBundle(res.data)
-            const target =
-              sanitizeAuthRedirect(search?.redirect, window.location.origin) ??
-              '/dashboard'
+            const target = getProductLoginDestination(
+              res.data.central_session_handoff,
+              search?.redirect,
+              window.location.origin
+            )
+            if (res.data.central_session_handoff === true) {
+              window.location.replace(target)
+              return
+            }
             navigate({ href: target, replace: true })
             return
           }

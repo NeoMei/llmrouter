@@ -175,13 +175,20 @@ func Redeem(key string, userId int) (quota int, err error) {
 		if result.RowsAffected == 0 {
 			return errors.New("该兑换码已被使用")
 		}
+		handled, err := QueueProductCreditAward(tx, userId, "redemption", fmt.Sprintf("code-%d", redemption.Id), redemption.Quota, map[string]any{"redemption_id": redemption.Id, "quota": redemption.Quota})
+		if err != nil {
+			return err
+		}
+		if handled {
+			return nil
+		}
 		return tx.Model(&User{}).Where("id = ?", userId).Update("quota", gorm.Expr("quota + ?", redemption.Quota)).Error
 	})
 	if err != nil {
 		common.SysError("redemption failed: " + err.Error())
 		return 0, ErrRedeemFailed
 	}
-	syncCreditUserQuotaCache(userId, redemption.Quota, "redemption")
+	syncProductCreditResult(userId, redemption.Quota, "redemption")
 	RecordLog(userId, LogTypeTopup, fmt.Sprintf("通过兑换码充值 %s，兑换码ID %d", logger.LogQuota(redemption.Quota), redemption.Id))
 	return redemption.Quota, nil
 }

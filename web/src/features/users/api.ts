@@ -18,7 +18,9 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { PermissionCatalog } from '@/lib/admin-permissions'
 import { api } from '@/lib/api'
+import { useAuthStore } from '@/stores/auth-store'
 
+import { quotaAdjustmentRequests } from './lib/quota-adjustment-request'
 import type {
   User,
   GetUsersParams,
@@ -134,7 +136,12 @@ export async function manageUser(
 export async function adjustUserQuota(
   payload: ManageUserQuotaPayload
 ): Promise<ApiResponse<Partial<User>>> {
-  const res = await api.post('/api/user/manage', payload)
+  const actor = useAuthStore.getState().auth.user?.id ?? 0
+  const key = quotaAdjustmentRequests.key(actor, payload)
+  const res = await api.post('/api/user/manage', payload, {
+    headers: { 'Idempotency-Key': key },
+  })
+  quotaAdjustmentRequests.responded(actor, payload, key, res.data)
   return res.data
 }
 

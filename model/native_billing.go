@@ -122,6 +122,25 @@ func (s *NativeBillingStore) Begin(ctx context.Context, a NativeAdmission) (Nati
 	now := time.Now().Unix()
 	n := NativeBilling{ID: uuid.NewString(), UserID: a.UserID, CallID: a.CallID, AttemptID: uuid.NewString(), Contract: string(raw), State: "reserving", Platform: a.Platform, ReservedQuota: q, CreatedAt: now, UpdatedAt: now}
 	err = s.ledger.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if !a.Platform {
+			if err := lockProductFundingAdmission(tx, a.UserID); err != nil {
+				return err
+			}
+			if tx.Migrator().HasTable(&ProductFundingAccount{}) {
+				var prior NativeBilling
+				e := tx.Where("user_id = ? AND call_id = ?", a.UserID, a.CallID).First(&prior).Error
+				if e == nil {
+					if prior.Contract != string(raw) {
+						return ErrOCRConflict
+					}
+					n = prior
+					return nil
+				}
+				if !errors.Is(e, gorm.ErrRecordNotFound) {
+					return e
+				}
+			}
+		}
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&n).Error; err != nil {
 			return err
 		}
@@ -309,7 +328,7 @@ func (s *NativeBillingStore) Finish(ctx context.Context, id, outcome string) (Na
 		if err != nil {
 			return err
 		}
-		if j.Redis != (s.ledger.cache != nil) {
+		if j.Funding != "unihub" && j.CentralAccountID == "" && j.Redis != (s.ledger.cache != nil) {
 			return ErrOCRReconciliation
 		}
 		if j.BillingState != "reserved" {
@@ -358,7 +377,10 @@ func (s *NativeBillingStore) recoverSettlement(ctx context.Context, id string) (
 	if err != nil {
 		return n, err
 	}
-	if snap.Job.Redis != (s.ledger.cache != nil) {
+	if snap.Job.Funding == "unihub" {
+		return s.recoverProductSettlement(ctx, n)
+	}
+	if snap.Job.CentralAccountID == "" && snap.Job.Redis != (s.ledger.cache != nil) {
 		return n, ErrOCRReconciliation
 	}
 	if snap.Job.Redis {

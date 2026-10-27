@@ -8,7 +8,6 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay"
-	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -34,7 +33,7 @@ func GetAllTask(c *gin.Context) {
 	total := model.TaskCountAllTasks(queryParams)
 	pageInfo.SetTotal(int(total))
 	views := tasksToDto(items, true)
-	if _, projected := authz.ProductPrincipal(c); projected {
+	if legacyProductView(c) {
 		for _, item := range views {
 			item.Data = nil
 			item.FailReason = ""
@@ -66,7 +65,7 @@ func GetUserTask(c *gin.Context) {
 	total := model.TaskCountAllUserTask(userId, queryParams)
 	pageInfo.SetTotal(int(total))
 	views := tasksToDto(items, false)
-	if _, projected := authz.ProductPrincipal(c); projected {
+	if legacyProductView(c) {
 		for _, item := range views {
 			item.Data = nil
 			item.FailReason = ""

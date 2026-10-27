@@ -1,10 +1,16 @@
 package middleware
 
 import (
+	"errors"
+	userkit "github.com/NeoMei/UniHub/packages/userkit-go"
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/internal/platformaccount"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/gin-gonic/gin"
 	"net/http"
+	"strconv"
 	"sync"
 )
 
@@ -33,6 +39,55 @@ func loadUniHubAuthority(c *gin.Context, identity service.AuthIdentity) bool {
 	p, _, e := service.ResolveUniHubSession(c.Request.Context(), identity)
 	if e != nil {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "UNIHUB_REAUTH_REQUIRED"})
+		return false
+	}
+	authz.SetProductPrincipal(c, p)
+	return true
+}
+
+// RoleFromAccess is only a compatibility projection for the product's original
+// role guards. An explicit central role is authoritative; granular capabilities
+// remain mandatory. A delegated permission never implies product root.
+func RoleFromAccess(a userkit.Access) int {
+	if a.ProductRole == 1 || a.ProductRole == 10 || a.ProductRole == 100 {
+		return a.ProductRole
+	}
+	for _, p := range a.Permissions {
+		if p != "product:use" {
+			return common.RoleAdminUser
+		}
+	}
+	return common.RoleCommonUser
+}
+func LoadRuntimeAuthority(c *gin.Context, localID int, authVersion int64) bool {
+	if _, ok := authz.ProductPrincipal(c); ok {
+		return true
+	}
+	if e := model.SyncProductAuthVersions(c.Request.Context(), localID); e != nil {
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"success": false, "code": "UNIHUB_LIFECYCLE_PENDING"})
+		return false
+	}
+	v, e := platformaccount.IdentityForLocal(c.Request.Context(), strconv.Itoa(localID))
+	if e != nil {
+		status := http.StatusServiceUnavailable
+		var failure *userkit.RuntimeError
+		if errors.As(e, &failure) && (failure.Status == 401 || failure.Status == 403 || failure.Status == 404) {
+			status = http.StatusUnauthorized
+		}
+		c.AbortWithStatusJSON(status, gin.H{"success": false, "code": "UNIHUB_AUTHORITY_UNAVAILABLE"})
+		return false
+	}
+	if authVersion > 0 && v.AuthVersion != authVersion {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "AUTH_USER_VERSION_REVOKED"})
+		return false
+	}
+	if e := model.VerifyUniHubIdentityBinding(localID, v.Access.Issuer, v.Access.Subject); e != nil {
+		c.AbortWithStatusJSON(401, gin.H{"success": false, "code": "UNIHUB_MAPPING_MISMATCH"})
+		return false
+	}
+	p := userkit.Principal{LocalUser: userkit.LocalUser{ID: strconv.Itoa(localID)}, Access: v.Access}
+	if !p.HasPermission("product:use") {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "UNIHUB_PERMISSION_DENIED"})
 		return false
 	}
 	authz.SetProductPrincipal(c, p)

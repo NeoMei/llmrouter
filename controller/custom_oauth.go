@@ -501,6 +501,9 @@ func GetUserOAuthBindingsByAdmin(c *gin.Context) {
 	}
 
 	myRole := c.GetInt("role")
+	if !refreshManagedTarget(c, targetUser) {
+		return
+	}
 	if !canManageTargetRole(myRole, targetUser.Role) {
 		common.ApiErrorMsg(c, "no permission")
 		return
@@ -560,6 +563,9 @@ func UnbindCustomOAuthByAdmin(c *gin.Context) {
 	}
 
 	myRole := c.GetInt("role")
+	if !refreshManagedTarget(c, targetUser) {
+		return
+	}
 	if !canManageTargetRole(myRole, targetUser.Role) {
 		common.ApiErrorMsg(c, "no permission")
 		return
@@ -572,6 +578,9 @@ func UnbindCustomOAuthByAdmin(c *gin.Context) {
 		return
 	}
 
+	if !authorizeProductIdentityWrite(c, userId, "oauth") {
+		return
+	}
 	if err := model.DeleteUserOAuthBinding(userId, providerId); err != nil {
 		common.ApiError(c, err)
 		return

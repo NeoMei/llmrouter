@@ -34,9 +34,7 @@ import { saveAffiliateCode } from '@/features/auth/lib/storage'
 import { GeneralError } from '@/features/errors/general-error'
 import { NotFoundError } from '@/features/errors/not-found-error'
 import { getSetupStatus } from '@/features/setup/api'
-import { shouldUseUnifiedEntry } from '@/features/unihub/entry-mode'
 import { refreshProductAccess } from '@/features/unihub/session'
-import { safeProductReturn } from '@/features/unihub/sso'
 import { useSystemConfig } from '@/hooks/use-system-config'
 import {
   AuthRefreshUnavailableError,
@@ -46,7 +44,7 @@ import {
 } from '@/lib/auth-session'
 import { subscribeAuthSessionEvents } from '@/lib/auth-session-sync'
 import { resolveLegacyRoute } from '@/lib/legacy-route'
-import { canOpenProductPage, canUseProductFeature } from '@/lib/product-access'
+import { refreshProductUser } from '@/lib/product-user'
 import { useAuthStore } from '@/stores/auth-store'
 
 function RootComponent() {
@@ -155,103 +153,6 @@ export const Route = createRootRouteWithContext<{
     }
 
     const pathname = location?.pathname || ''
-    if (pathname === '/unihub') {
-      const bootstrap = await bootstrapAuthentication()
-      if (bootstrap.kind === 'transient_error') {
-        throw new AuthRefreshUnavailableError()
-      }
-      return
-    }
-    // The server determines compatibility access. The native-entry query only
-    // selects a login screen; it never grants backend authority.
-    const productConfig = await fetch('/api/unihub/config', {
-      credentials: 'omit',
-      cache: 'no-store',
-    })
-      .then(async (response) =>
-        response.ok
-          ? ((await response.json()) as {
-              native_access?: boolean
-              enabled?: boolean
-            })
-          : null
-      )
-      .catch(() => null)
-    if (productConfig?.enabled) {
-      const bootstrap = await bootstrapAuthentication()
-      if (bootstrap.kind === 'transient_error') {
-        throw new AuthRefreshUnavailableError()
-      }
-    }
-    if (
-      shouldUseUnifiedEntry(
-        productConfig,
-        pathname,
-        new URL(location.href, window.location.origin).search,
-        useAuthStore.getState().auth.user
-      )
-    ) {
-      if (
-        ['/about', '/docs', '/privacy-policy', '/user-agreement'].includes(
-          pathname
-        )
-      ) {
-        return
-      }
-      if (productConfig?.enabled) {
-        // Normalize entry routes before either restoring or preserving an SSO
-        // return path, so fresh and already-authenticated visits agree.
-        let destination = location.href
-        if (pathname === '/') destination = '/dashboard'
-        else if (pathname === '/sign-in') {
-          destination = safeProductReturn(
-            new URL(location.href, window.location.origin).searchParams.get(
-              'redirect'
-            )
-          )
-        }
-        if (destination === '/') destination = '/dashboard'
-        if (pathname === '/' || pathname === '/sign-in') {
-          throw redirect({ href: destination, replace: true })
-        }
-        const bootstrap = await bootstrapAuthentication()
-        if (bootstrap.kind === 'transient_error') {
-          throw new AuthRefreshUnavailableError()
-        }
-        const auth = useAuthStore.getState().auth
-        if (auth.user?.identity_source === 'unihub' && auth.accessToken) {
-          try {
-            await refreshProductAccess()
-          } catch {
-            throw redirect({ href: '/unihub?sso_error=1', replace: true })
-          }
-          if (
-            ['/system-settings', '/system-settings/models'].includes(
-              pathname
-            ) &&
-            canUseProductFeature(useAuthStore.getState().auth.user, 'settings')
-          ) {
-            throw redirect({
-              href: '/system-settings/models/global',
-              replace: true,
-            })
-          }
-          if (['/wallet', '/profile'].includes(pathname)) {
-            throw redirect({ href: '/unihub', replace: true })
-          }
-          if (
-            !canOpenProductPage(useAuthStore.getState().auth.user, pathname)
-          ) {
-            throw redirect({ to: '/403', replace: true })
-          }
-          return
-        }
-      }
-      throw redirect({
-        href: `/unihub?redirect=${encodeURIComponent(pathname === '/sign-in' ? safeProductReturn(new URL(location.href, window.location.origin).searchParams.get('redirect')) : location.href)}`,
-        replace: true,
-      })
-    }
     const needsSetupCheck =
       !setupStatusChecked && !pathname.startsWith('/setup')
     const authBootstrap = bootstrapAuthentication()
@@ -276,6 +177,33 @@ export const Route = createRootRouteWithContext<{
       setSetupStatusCache(true)
     } else {
       await authBootstrap
+    }
+    const auth = useAuthStore.getState().auth
+    if (auth.user?.identity_source === 'unihub' && auth.accessToken) {
+      try {
+        await refreshProductAccess()
+      } catch {
+        if (!useAuthStore.getState().auth.user) {
+          throw redirect({
+            href: `/sign-in?unihub_silent=done&redirect=${encodeURIComponent(location.href)}`,
+            replace: true,
+          })
+        }
+        throw new AuthRefreshUnavailableError()
+      }
+    }
+    if (useAuthStore.getState().auth.user) {
+      try {
+        await refreshProductUser()
+      } catch {
+        if (!useAuthStore.getState().auth.user) {
+          throw redirect({
+            href: `/sign-in?unihub_silent=done&redirect=${encodeURIComponent(location.href)}`,
+            replace: true,
+          })
+        }
+        throw new AuthRefreshUnavailableError()
+      }
     }
   },
   component: RootComponent,

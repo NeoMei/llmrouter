@@ -52,7 +52,7 @@ func TestNativeCoexistenceKeepsAPIKeyAuthenticationConstraints(t *testing.T) {
 		{"/relay", "nativeip", 403}, {"/relay", "missing", 401},
 		{"/usage", "nativeexpired", 200}, {"/usage", "nativeempty", 200},
 		{"/usage", "nativedisabled", 401},
-		{"/relay", "projectedkey", 403}, {"/usage", "projectedkey", 403},
+		{"/relay", "projectedkey", 503}, {"/usage", "projectedkey", 503},
 	} {
 		t.Run(tc.path+"/"+tc.key, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, tc.path, nil)

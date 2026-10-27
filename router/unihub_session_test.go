@@ -90,10 +90,10 @@ func TestUniHubSessionCreatesNativeBrowserBundle(t *testing.T) {
 	for _, tc := range []struct {
 		path string
 		want int
-	}{{"/api/user/self", 200}, {"/api/user/topup", 403}, {"/v1/chat/completions", 403}} {
+	}{{"/api/user/self", 200}, {"/api/user/topup", 204}, {"/v1/chat/completions", 204}} {
 		w = httptest.NewRecorder()
 		method := http.MethodGet
-		if tc.want == 403 {
+		if tc.path != "/api/user/self" {
 			method = http.MethodPost
 		}
 		req = httptest.NewRequest(method, tc.path, nil)

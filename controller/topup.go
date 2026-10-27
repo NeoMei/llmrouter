@@ -548,6 +548,10 @@ func GetUserTopUps(c *gin.Context) {
 		return
 	}
 
+	if err = model.PopulateProductTopUpCreditStatuses(c.Request.Context(), topups); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(topups)
 	common.ApiSuccess(c, pageInfo)
@@ -573,6 +577,10 @@ func GetAllTopUps(c *gin.Context) {
 		return
 	}
 
+	if err = model.PopulateProductTopUpCreditStatuses(c.Request.Context(), topups); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(topups)
 	common.ApiSuccess(c, pageInfo)

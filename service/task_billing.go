@@ -65,7 +65,9 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		Group:     info.UsingGroup,
 		Other:     other,
 	})
-	model.UpdateUserUsedQuotaAndRequestCount(info.UserId, info.PriceData.Quota)
+	if info.BillingSource != "unihub" {
+		model.UpdateUserUsedQuotaAndRequestCount(info.UserId, info.PriceData.Quota)
+	}
 	model.UpdateChannelUsedQuota(info.ChannelId, info.PriceData.Quota)
 }
 
@@ -170,23 +172,55 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 	if task.FundingOwner == "native" || task.FundingOwner == "platform" {
 		return false
 	}
+	if task.ProductCallID != "" {
+		var current model.Task
+		if e := model.DB.First(&current, task.ID).Error; e != nil {
+			return false
+		}
+		task.Quota = current.Quota
+		task.ProductBillingVersion = current.ProductBillingVersion
+	}
 	quota := task.Quota
 	if quota == 0 {
 		return true
 	}
+	central := task.ProductCallID != ""
 
 	// 1. 退还资金来源（钱包或订阅）
-	if err := taskAdjustFunding(task, -quota); err != nil {
+	var fundingErr error
+	if central {
+		other := taskBillingOther(task)
+		other["task_id"], other["reason"] = task.TaskID, reason
+		fundingErr = model.RepriceProductCall(ctx, task.ProductCallID, fmt.Sprintf("task-failure:%s:%d", task.TaskID, task.ProductBillingVersion), 0, "legacy_task_failed", model.RecordTaskBillingLogParams{Content: "", ModelName: taskModelName(task), Other: other, NodeName: task.PrivateData.NodeName})
+	} else {
+		fundingErr = taskAdjustFunding(task, -quota)
+	}
+	if err := fundingErr; err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("退还资金来源失败 task %s: %s", task.TaskID, err.Error()))
 		return false
 	}
 
 	// 2. 退还令牌额度
-	taskAdjustTokenQuota(ctx, task, -quota)
+	if !central {
+		taskAdjustTokenQuota(ctx, task, -quota)
+	}
+	if central {
+		changed, e := model.ApplyProductTaskQuota(ctx, task, 0)
+		if e != nil {
+			return false
+		}
+		if !changed {
+			return true
+		}
+	}
 
 	// 3. 回减预扣时累计的用户和渠道用量，请求次数保持不变
-	model.UpdateUserUsedQuota(task.UserId, -quota)
-	model.UpdateChannelUsedQuota(task.ChannelId, -quota)
+	if !central {
+		model.UpdateUserUsedQuota(task.UserId, -quota)
+	}
+	if !central {
+		model.UpdateChannelUsedQuota(task.ChannelId, -quota)
+	}
 
 	// 4. 记录日志
 	other := taskBillingOther(task)
@@ -207,7 +241,12 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 	// 5. 资金退款完成后再清除持久化标记。
 	// 回写失败必须显式告警，避免漏掉潜在的重复退款风险。
 	task.Quota = 0
-	if err := task.UpdateQuota(); err != nil {
+	if err := func() error {
+		if central {
+			return nil
+		}
+		return task.UpdateQuota()
+	}(); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("退款成功但清除 task quota 失败 task %s: %s", task.TaskID, err.Error()))
 	}
 	return true
@@ -221,11 +260,20 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	if task.FundingOwner == "native" || task.FundingOwner == "platform" {
 		return
 	}
+	if task.ProductCallID != "" {
+		var current model.Task
+		if e := model.DB.First(&current, task.ID).Error; e != nil {
+			return
+		}
+		task.Quota = current.Quota
+		task.ProductBillingVersion = current.ProductBillingVersion
+	}
 	if actualQuota <= 0 {
 		return
 	}
 	preConsumedQuota := task.Quota
 	quotaDelta := actualQuota - preConsumedQuota
+	central := task.ProductCallID != ""
 
 	if quotaDelta == 0 {
 		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 预扣费准确（%s，%s）",
@@ -242,22 +290,50 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	))
 
 	// 调整资金来源
-	if err := taskAdjustFunding(task, quotaDelta); err != nil {
+	var fundingErr error
+	if central {
+		other := taskBillingOther(task)
+		other["task_id"], other["pre_consumed_quota"], other["actual_quota"] = task.TaskID, preConsumedQuota, actualQuota
+		for _, clamp := range clamps {
+			attachQuotaSaturationToOther(other, clamp)
+		}
+		fundingErr = model.RepriceProductCall(ctx, task.ProductCallID, fmt.Sprintf("task-actual:%s:%d:%d", task.TaskID, task.ProductBillingVersion, actualQuota), actualQuota, "legacy_task_final_quota", model.RecordTaskBillingLogParams{Content: reason, ModelName: taskModelName(task), Other: other, NodeName: task.PrivateData.NodeName})
+	} else {
+		fundingErr = taskAdjustFunding(task, quotaDelta)
+	}
+	if err := fundingErr; err != nil {
 		logger.LogError(ctx, fmt.Sprintf("差额结算资金调整失败 task %s: %s", task.TaskID, err.Error()))
 		return
 	}
 
 	// 调整令牌额度
-	taskAdjustTokenQuota(ctx, task, quotaDelta)
+	if !central {
+		taskAdjustTokenQuota(ctx, task, quotaDelta)
+	}
+	if central {
+		changed, e := model.ApplyProductTaskQuota(ctx, task, actualQuota)
+		if e != nil || !changed {
+			return
+		}
+	}
 
 	task.Quota = actualQuota
-	if err := task.UpdateQuota(); err != nil {
+	if err := func() error {
+		if central {
+			return nil
+		}
+		return task.UpdateQuota()
+	}(); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("差额结算回写 quota 失败 task %s: %s", task.TaskID, err.Error()))
 	}
 
 	// 提交阶段已经累计过一次请求；结算阶段只调整最终用量。
-	model.UpdateUserUsedQuota(task.UserId, quotaDelta)
-	model.UpdateChannelUsedQuota(task.ChannelId, quotaDelta)
+	if !central {
+		model.UpdateUserUsedQuota(task.UserId, quotaDelta)
+	}
+	if !central {
+		model.UpdateChannelUsedQuota(task.ChannelId, quotaDelta)
+	}
 
 	var logType int
 	var logQuota int
@@ -301,6 +377,10 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 
 	// 获取模型价格和倍率
 	modelRatio, hasRatioSetting, _ := ratio_setting.GetModelRatio(modelName)
+	if task.ProductCallID != "" && task.PrivateData.BillingContext != nil {
+		modelRatio = task.PrivateData.BillingContext.ModelRatio
+		hasRatioSetting = modelRatio > 0
+	}
 	// 只有配置了倍率(非固定价格)时才按 token 重新计费
 	if !hasRatioSetting || modelRatio <= 0 {
 		return
@@ -328,6 +408,9 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 		finalGroupRatio = groupRatio
 	}
 
+	if task.ProductCallID != "" && task.PrivateData.BillingContext != nil {
+		finalGroupRatio = task.PrivateData.BillingContext.GroupRatio
+	}
 	// 计算 OtherRatios 乘积（视频折扣、时长等）
 	otherMultiplier := 1.0
 	if priceData := taskBillingContextPriceData(task.PrivateData.BillingContext); priceData != nil {

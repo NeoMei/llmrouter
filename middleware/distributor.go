@@ -66,6 +66,28 @@ func Distribute() func(c *gin.Context) {
 			return
 		}
 
+		// Select a channel for the user
+		// check token model mapping
+		modelLimitEnable := common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled)
+		if modelLimitEnable {
+			s, ok := common.GetContextKey(c, constant.ContextKeyTokenModelLimit)
+			if !ok {
+				// token model limit is empty, all models are not allowed
+				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorTokenNoModelAccess))
+				return
+			}
+			var tokenModelLimit map[string]bool
+			tokenModelLimit, ok = s.(map[string]bool)
+			if !ok {
+				tokenModelLimit = map[string]bool{}
+			}
+			matchName := ratio_setting.FormatMatchingModelName(modelRequest.Model) // match gpts & thinking-*
+			if _, ok := tokenModelLimit[matchName]; !ok {
+				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorTokenModelForbidden, map[string]any{"Model": modelRequest.Model}))
+				return
+			}
+		}
+
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
 			if err != nil {
@@ -85,28 +107,24 @@ func Distribute() func(c *gin.Context) {
 				abortWithOpenAiMessage(c, http.StatusBadRequest, err.Error(), types.ErrorCodeUnsupportedOperation)
 				return
 			}
-		} else {
-			// Select a channel for the user
-			// check token model mapping
-			modelLimitEnable := common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled)
-			if modelLimitEnable {
-				s, ok := common.GetContextKey(c, constant.ContextKeyTokenModelLimit)
-				if !ok {
-					// token model limit is empty, all models are not allowed
-					abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorTokenNoModelAccess))
-					return
+			if group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup); group != "" {
+				allowedGroup := slices.Contains(channel.GetGroups(), group)
+				if group == "auto" {
+					allowedGroup = false
+					for _, g := range service.GetUserAutoGroup(common.GetContextKeyString(c, constant.ContextKeyUserGroup)) {
+						if slices.Contains(channel.GetGroups(), g) {
+							allowedGroup = true
+							break
+						}
+					}
 				}
-				var tokenModelLimit map[string]bool
-				tokenModelLimit, ok = s.(map[string]bool)
-				if !ok {
-					tokenModelLimit = map[string]bool{}
-				}
-				matchName := ratio_setting.FormatMatchingModelName(modelRequest.Model) // match gpts & thinking-*
-				if _, ok := tokenModelLimit[matchName]; !ok {
-					abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorTokenModelForbidden, map[string]any{"Model": modelRequest.Model}))
+				if !allowedGroup {
+					abortWithOpenAiMessage(c, http.StatusForbidden, "specific channel is outside the API key group", types.ErrorCodeAccessDenied)
 					return
 				}
 			}
+
+		} else {
 
 			if shouldSelectChannel {
 				if modelRequest.Model == "" {

@@ -212,6 +212,14 @@ func HandleOAuth(c *gin.Context) {
 		return
 	}
 
+	if e := model.SyncProductAuthVersions(c.Request.Context(), user.Id); e != nil {
+		productIdentityError(c, e)
+		return
+	}
+	if e := model.ReconcileProductIdentity(c.Request.Context(), user); e != nil {
+		productIdentityError(c, e)
+		return
+	}
 	// 8. Check user status
 	if user.Status != common.UserStatusEnabled {
 		common.ApiErrorI18n(c, i18n.MsgOAuthUserBanned)

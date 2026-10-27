@@ -1,7 +1,9 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -140,7 +142,11 @@ func SubscriptionRequestBalancePay(c *gin.Context) {
 		return
 	}
 
-	if err := model.PurchaseSubscriptionWithBalance(userId, req.PlanId); err != nil {
+	if err := model.PurchaseSubscriptionWithBalance(userId, req.PlanId, c.GetHeader("Idempotency-Key")); err != nil {
+		if errors.Is(err, model.ErrProductFundingPending) {
+			c.JSON(http.StatusOK, gin.H{"success": false, "code": "PRODUCT_PAYMENT_PENDING", "message": "Payment is pending reconciliation"})
+			return
+		}
 		common.ApiError(c, err)
 		return
 	}

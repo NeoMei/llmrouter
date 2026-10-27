@@ -139,7 +139,6 @@ const HEALTH_CONFIG: Record<
 export function SummaryCards() {
   const { t } = useTranslation()
   const user = useAuthStore((state) => state.auth.user)
-  const projected = user?.identity_source === 'unihub'
   const { status, loading } = useStatus()
 
   const summaryTimeRange = useMemo(() => computeTimeRange(1), [])
@@ -250,45 +249,6 @@ export function SummaryCards() {
     }
   })
 
-  if (projected) {
-    const data = usageTrendQuery.data?.data ?? []
-    const calls = data.reduce(
-      (total, item) => total + (Number(item.count) || 0),
-      0
-    )
-    const tokens = data.reduce(
-      (total, item) => total + (Number(item.token_used) || 0),
-      0
-    )
-    return (
-      <div className='bg-card rounded-2xl border p-4 shadow-xs sm:p-5'>
-        <h3 className='font-semibold'>{t('Usage at a glance')}</h3>
-        <div className='mt-3 grid gap-3 sm:grid-cols-2'>
-          <StatCard
-            title={t('Requests')}
-            description={t('Last 24h usage')}
-            icon={Flame}
-            value={formatNumber(calls)}
-            loading={usageTrendQuery.isLoading}
-          />
-          <StatCard
-            title={t('Tokens')}
-            description={t('Last 24h usage')}
-            icon={ShieldCheck}
-            value={formatNumber(tokens)}
-            loading={usageTrendQuery.isLoading}
-          />
-        </div>
-        <Button
-          className='mt-3'
-          variant='outline'
-          render={<Link to='/unihub' />}
-        >
-          {t('UniHub account')}
-        </Button>
-      </div>
-    )
-  }
   return (
     <div className='bg-card overflow-hidden rounded-2xl border shadow-xs'>
       <div className='grid xl:grid-cols-[minmax(0,1fr)_19rem]'>

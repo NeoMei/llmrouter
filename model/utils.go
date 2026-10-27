@@ -23,6 +23,10 @@ const (
 var batchUpdateStores []map[int]int
 var batchUpdateLocks []sync.Mutex
 
+// Import takes this fence before reading a frozen SQL balance. A batch already
+// detached from the in-memory queue must finish before that snapshot is taken.
+var batchUpdateRunMu sync.Mutex
+
 func init() {
 	for i := 0; i < BatchUpdateTypeCount; i++ {
 		batchUpdateStores = append(batchUpdateStores, make(map[int]int))
@@ -50,6 +54,8 @@ func addNewRecord(type_ int, id int, value int) {
 }
 
 func batchUpdate() {
+	batchUpdateRunMu.Lock()
+	defer batchUpdateRunMu.Unlock()
 	// check if there's any data to update
 	hasData := false
 	for i := 0; i < BatchUpdateTypeCount; i++ {

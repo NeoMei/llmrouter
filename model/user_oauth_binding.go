@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"github.com/QuantumNous/new-api/internal/platformaccount"
 	"time"
 
 	"gorm.io/gorm"
@@ -78,6 +79,9 @@ func CreateUserOAuthBinding(binding *UserOAuthBinding) error {
 	}
 
 	binding.CreatedAt = time.Now()
+	if platformaccount.RuntimeEnabled() {
+		return ApplyManagedCredentialChange(binding.UserId, func(tx *gorm.DB) error { return tx.Create(binding).Error })
+	}
 	return DB.Create(binding).Error
 }
 
@@ -126,11 +130,19 @@ func UpdateUserOAuthBinding(userId, providerId int, newProviderUserId string) er
 	}
 
 	// Update existing binding
+	if platformaccount.RuntimeEnabled() {
+		return ApplyManagedCredentialChange(userId, func(tx *gorm.DB) error { return tx.Model(&binding).Update("provider_user_id", newProviderUserId).Error })
+	}
 	return DB.Model(&binding).Update("provider_user_id", newProviderUserId).Error
 }
 
 // DeleteUserOAuthBinding deletes an OAuth binding
 func DeleteUserOAuthBinding(userId, providerId int) error {
+	if platformaccount.RuntimeEnabled() {
+		return ApplyManagedCredentialChange(userId, func(tx *gorm.DB) error {
+			return tx.Where("user_id = ? AND provider_id = ?", userId, providerId).Delete(&UserOAuthBinding{}).Error
+		})
+	}
 	return DB.Where("user_id = ? AND provider_id = ?", userId, providerId).Delete(&UserOAuthBinding{}).Error
 }
 

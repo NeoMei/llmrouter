@@ -15,7 +15,7 @@ func registerPlatformTaskReads(engine gin.IRoutes, a *platformbilling.Adapter) {
 			path = "/ocr/jobs/:callID"
 		}
 		authorize := func(c *gin.Context) {
-			if len(c.Request.Header.Values("Authorization")) != 1 || !strings.HasPrefix(c.GetHeader("Authorization"), "Bearer uh_model_") || len(c.Request.Header.Values("X-UniHub-Task-ID")) != 1 {
+			if len(c.Request.Header.Values("Authorization")) != 1 || !strings.HasPrefix(c.GetHeader("Authorization"), "Bearer ") || !platformbilling.IsModelCredential(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")) || len(c.Request.Header.Values("X-UniHub-Task-ID")) != 1 {
 				c.AbortWithStatus(401)
 				return
 			}

@@ -19,6 +19,8 @@ For commercial licensing, please contact support@quantumnous.com
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
+import { UnifiedKeys } from '@/features/unihub/keys-page'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { ApiKeysDialogs } from './components/api-keys-dialogs'
 import { ApiKeysPrimaryButtons } from './components/api-keys-primary-buttons'
@@ -27,6 +29,10 @@ import { ApiKeysTable } from './components/api-keys-table'
 
 export function ApiKeys() {
   const { t } = useTranslation()
+  const projected = useAuthStore(
+    (state) => state.auth.user?.identity_source === 'unihub'
+  )
+  if (projected) return <UnifiedKeys />
   return (
     <ApiKeysProvider>
       <SectionPageLayout fixedContent>

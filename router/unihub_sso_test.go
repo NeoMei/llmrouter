@@ -181,6 +181,26 @@ func TestUniHubSSORetriesDiscoveryAfterOutage(t *testing.T) {
 	assert.Contains(t, strings.Join(complete.Header().Values("Set-Cookie"), "\n"), service.RefreshCookieName+"=")
 }
 
+func TestUniHubSSOReturnsToKeysWithNativeAccessDisabledOrEnabled(t *testing.T) {
+	for _, native := range []string{"false", "true"} {
+		t.Run(native, func(t *testing.T) {
+			enableUniHubBoundary(t)
+			t.Setenv("NATIVE_PUBLIC_ACCESS", native)
+			f := newUniHubSSOFixture(t, nil)
+			login := httptest.NewRecorder()
+			f.router.ServeHTTP(login, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:58119/api/unihub/login?return_to=/keys", nil))
+			require.Equal(t, http.StatusSeeOther, login.Code)
+			complete := f.callback(t, login)
+			require.Equal(t, http.StatusSeeOther, complete.Code)
+			require.Equal(t, "/keys", complete.Header().Get("Location"))
+			require.Contains(t, strings.Join(complete.Header().Values("Set-Cookie"), "\n"), service.RefreshCookieName+"=")
+			invalid := httptest.NewRecorder()
+			f.router.ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:58119/api/unihub/login?return_to=/keys/secrets", nil))
+			require.Equal(t, http.StatusBadRequest, invalid.Code)
+		})
+	}
+}
+
 func TestUniHubSSOConcurrentInitializationPreservesCallbacks(t *testing.T) {
 	f := newUniHubSSOFixture(t, nil)
 	start := make(chan struct{})

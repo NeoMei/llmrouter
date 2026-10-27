@@ -440,6 +440,14 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 			c.Abort()
 			return
 		}
+		if err := validateProjectionCredential(userCache); err != nil {
+			writeDashboardAuthError(c, err)
+			return
+		}
+		if userCache.IdentitySource == model.UniHubIdentitySource {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "UNIHUB_NATIVE_PATH_FORBIDDEN", "message": "native operation is not available for UniHub users"})
+			return
+		}
 		if userCache.Status != common.UserStatusEnabled {
 			c.JSON(http.StatusForbidden, gin.H{
 				"success": false,
@@ -583,6 +591,14 @@ func tokenAuth(ownedJobRead bool) func(c *gin.Context) {
 			common.SysLog(fmt.Sprintf("TokenAuth GetUserCache error for user %d: %v", token.UserId, err))
 			abortWithOpenAiMessage(c, http.StatusInternalServerError,
 				common.TranslateMessage(c, i18n.MsgDatabaseError))
+			return
+		}
+		if err := validateProjectionCredential(userCache); err != nil {
+			writeDashboardAuthError(c, err)
+			return
+		}
+		if userCache.IdentitySource == model.UniHubIdentitySource {
+			abortWithOpenAiMessage(c, http.StatusForbidden, "native operation is not available for UniHub users", types.ErrorCodeAccessDenied)
 			return
 		}
 		userEnabled := userCache.Status == common.UserStatusEnabled

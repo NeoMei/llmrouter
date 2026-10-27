@@ -37,7 +37,7 @@ export function safeProductReturn(value: string | null | undefined): string {
     const parsed = new URL(value, 'https://product.invalid')
     if (parsed.origin !== 'https://product.invalid') return '/dashboard'
     const known =
-      /^(?:\/(?:unihub|wallet|profile|403|pricing)|\/dashboard(?:\/(?:overview|models|flow|users))?|\/channels|\/usage-logs(?:\/(?:common|drawing|task))?|\/models(?:\/metadata)?|\/client-model-routes|\/system-settings(?:\/models(?:\/(?:global|routing-reliability))?)?)\/?$/
+      /^(?:\/(?:unihub|keys|wallet|profile|403|pricing)|\/dashboard(?:\/(?:overview|models|flow|users))?|\/channels|\/usage-logs(?:\/(?:common|drawing|task))?|\/models(?:\/metadata)?|\/client-model-routes|\/system-settings(?:\/models(?:\/(?:global|routing-reliability))?)?)\/?$/
     if (!known.test(parsed.pathname)) return '/dashboard'
     return parsed.pathname + parsed.search + parsed.hash
   } catch {

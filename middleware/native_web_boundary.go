@@ -47,7 +47,7 @@ func NativeWebBoundary() gin.HandlerFunc {
 func IsProductApplicationPath(path string) bool {
 	switch path {
 	case "/", "/unihub", "/dashboard", "/dashboard/", "/dashboard/overview", "/dashboard/models", "/dashboard/flow", "/dashboard/users",
-		"/channels", "/channels/", "/wallet", "/profile", "/403", "/pricing",
+		"/channels", "/channels/", "/wallet", "/keys", "/profile", "/403", "/pricing",
 		"/usage-logs", "/usage-logs/", "/usage-logs/common", "/usage-logs/drawing", "/usage-logs/task",
 		"/models", "/models/", "/models/metadata", "/client-model-routes", "/client-model-routes/",
 		"/system-settings", "/system-settings/models", "/system-settings/models/global", "/system-settings/models/routing-reliability":

@@ -595,7 +595,15 @@ func (s *NativeBillingStore) ProjectAuditLogs(ctx context.Context, logDB *gorm.D
 	if limit < 1 || limit > 100 {
 		return ErrOCRConflict
 	}
-	query := s.ledger.db.WithContext(ctx).Where("projected_at = ?", 0).Where("job_id IN (?)", s.ledger.db.Model(&NativeBilling{}).Select("id"))
+	query := s.ledger.db.WithContext(ctx).Where("job_id IN (?)", s.ledger.db.Model(&NativeBilling{}).Select("id"))
+	if common.DataExportEnabled {
+		query = query.Where("projected_at = ? OR (kind = ? AND id NOT IN (?))", 0, "success", s.ledger.db.Model(&NativeUsageReceipt{}).Select("event_id"))
+	} else {
+		query = query.Where("projected_at = ?", 0)
+	}
+	if !ocrConsumeLoggingEnabled() {
+		query = query.Where("kind <> ?", "success")
+	}
 	return s.ledger.projectAudit(ctx, query, limit, func(ctx context.Context, event OCRAuditEvent) error {
 		return s.ledger.DeliverAuditLog(ctx, logDB, event)
 	})

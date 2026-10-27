@@ -6,6 +6,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/metering"
+	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"time"
 )
@@ -54,11 +55,18 @@ func RecordNativeUsageForRelay(ctx context.Context, info *relaycommon.RelayInfo,
 		return errors.New("native billing contract unavailable")
 	}
 	n := info.NativeBilling
+	previouslyConfirmed := n.Usage != nil && n.Usage.State == "confirmed"
 	if info.PlatformMode || n.Platform {
 		if !info.PlatformMode || !n.Platform || n.Observe == nil {
 			return errors.New("platform native evidence observer unavailable")
 		}
-		return n.Record(ctx, u)
+		if err := n.Record(ctx, u); err != nil {
+			return err
+		}
+		if u.State == "confirmed" {
+			recordPlatformRelayTelemetryInfo(ctx, info)
+		}
+		return nil
 	}
 	if err := RecordNativeUsage(ctx, n.CallID, u); err != nil {
 		return err
@@ -68,6 +76,9 @@ func RecordNativeUsageForRelay(ctx context.Context, info *relaycommon.RelayInfo,
 	}
 	if u.State == "confirmed" {
 		_, err := FinishNativeBilling(ctx, n.CallID, "measured")
+		if err == nil && !previouslyConfirmed {
+			perfmetrics.RecordRelaySampleAsync(info, true, nativeOutputTokens(&u))
+		}
 		return err
 	}
 	return nil

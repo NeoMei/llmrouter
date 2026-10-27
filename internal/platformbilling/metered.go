@@ -8,10 +8,8 @@ import (
 	"math/big"
 	"net/http"
 	"reflect"
-	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/metering"
@@ -21,7 +19,7 @@ import (
 )
 
 func (a *Adapter) AdmitOperation(ctx context.Context, credential, task, id, operation, contentType string, body []byte) (*Session, error) {
-	if !a.Enabled() || !stableID.MatchString(id) || !stableID.MatchString(task) || !strings.HasPrefix(credential, "uh_model_") || len(credential) > 1024 || int64(len(body)) > a.OperationBodyLimit(operation) {
+	if !a.Enabled() || !stableID.MatchString(id) || !stableID.MatchString(task) || !IsModelCredential(credential) || int64(len(body)) > a.OperationBodyLimit(operation) {
 		return nil, ErrInvalid
 	}
 	req, err := parseOperation(a.config, operation, contentType, body)
@@ -29,10 +27,10 @@ func (a *Adapter) AdmitOperation(ctx context.Context, credential, task, id, oper
 		return nil, err
 	}
 	var grant Claims
-	if err = a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": req.Model}, &grant); err != nil {
+	if err = a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": req.Model, "instance_id": a.config.InstanceID}, &grant); err != nil {
 		return nil, err
 	}
-	if grant.ID == "" || grant.Audience != "llmrouter" || grant.ActorID == "" || grant.AccountID == "" || grant.OriginProductID == "" || grant.TaskID != task || !grant.ExpiresAt.After(time.Now()) || !slices.Contains(grant.Models, req.Model) {
+	if a.validateModelCredential(credential, task, req.Model, grant) != nil {
 		return nil, ErrInvalid
 	}
 	asset, mode, err := normalizeFunding(grant.Asset, grant.FundingMode)
@@ -46,6 +44,7 @@ func (a *Adapter) AdmitOperation(ctx context.Context, credential, task, id, oper
 	}{"platform-metered-v2", operation, task, grant.ActorID, grant.AccountID, grant.OriginProductID, asset, mode, grant.BillingProfileVersion, string(req.Canonical)})
 	sum := sha256.Sum256(digestData)
 	row := Call{CallID: id, Operation: operation, ActorID: grant.ActorID, AccountID: grant.AccountID, OriginProductID: grant.OriginProductID, CredentialID: grant.ID, TaskID: task, Model: req.Model, Digest: hex.EncodeToString(sum[:]), Asset: asset, FundingMode: mode, FundingProductID: "llmrouter", BillingProfileVersion: grant.BillingProfileVersion, Status: "RESERVING"}
+	row.InstanceID = a.config.InstanceID
 	var old Call
 	if err = a.db.WithContext(ctx).First(&old, "call_id = ?", id).Error; err == nil {
 		return nil, compareCall(old, row)
@@ -134,8 +133,8 @@ func (a *Adapter) AdmitOperation(ctx context.Context, credential, task, id, oper
 		return nil, compareCall(old, row)
 	}
 	var remote RemoteCall
-	err = a.client.do(ctx, http.MethodPost, "/internal/v1/calls/reserve", id, map[string]string{"credential": credential, "task_id": task, "call_id": id, "request_digest": row.Digest, "rate_id": row.RateID, "amount": amount}, &remote)
-	if err != nil || !remote.matches(row) || remote.Status != "RESERVED" {
+	err = a.client.do(ctx, http.MethodPost, "/internal/v1/calls/reserve", id, map[string]string{"credential": credential, "task_id": task, "call_id": id, "request_digest": row.Digest, "rate_id": row.RateID, "amount": amount, "instance_id": a.config.InstanceID}, &remote)
+	if err != nil || !remote.matches(row) || remote.Status != "RESERVED" || (strings.HasPrefix(credential, "uh_key_") && (remote.InstanceID != a.config.InstanceID || remote.CredentialID != grant.ID)) {
 		_ = a.db.WithContext(ctx).Model(&Call{}).Where("call_id = ?", id).Update("status", "RESERVE_UNKNOWN").Error
 		if err != nil {
 			return nil, err

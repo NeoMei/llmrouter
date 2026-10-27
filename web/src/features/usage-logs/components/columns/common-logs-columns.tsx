@@ -710,6 +710,27 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         const other = parseLogOther(log.other)
         const isSubscription = other?.billing_source === 'subscription'
 
+        if (other?.funding_owner === 'unihub') {
+          return (
+            <div className='flex flex-col gap-0.5 text-xs'>
+              <a href='/unihub' className='underline'>
+                {t('UniHub billing')}
+              </a>
+              <span className='text-muted-foreground'>
+                {other.central_status ?? t('Pending settlement')}
+              </span>
+            </div>
+          )
+        }
+
+        if (other?.financial_details === false) {
+          return (
+            <span className='text-muted-foreground text-xs'>
+              {t('Finance access required')}
+            </span>
+          )
+        }
+
         if (isSubscription) {
           return (
             <TooltipProvider>

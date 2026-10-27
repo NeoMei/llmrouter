@@ -7,13 +7,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// NativePublicBoundary protects legacy identity and billing endpoints. Public
-// callers receive a stable migration response; private management requests
-// may retain compatibility access when explicitly configured.
+// NativePublicBoundary protects legacy identity and billing endpoints. Explicit
+// native compatibility can coexist with UniHub; downstream authentication still
+// enforces the native account, API key, role and billing checks.
 func NativePublicBoundary() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		policy, err := unihubaccess.FromEnv()
-		if err == nil && ((!policy.PublicEnabled && !policy.PlatformEnabled && policy.NativePublicEnabled) || policy.IsPrivateManagementRequest(c.Request)) {
+		if err == nil && (policy.NativePublicEnabled || policy.IsPrivateManagementRequest(c.Request)) {
 			c.Next()
 			return
 		}

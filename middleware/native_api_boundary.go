@@ -11,8 +11,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// NativeAPIBoundary keeps the native control plane private. Only informational
-// endpoints, signed callbacks, and proven UniHub browser sessions remain public.
+// NativeAPIBoundary keeps native-only deployments private unless compatibility
+// is explicitly enabled. UniHub sessions retain their product permission gates
+// even when existing native accounts can use their own authenticated routes.
 func NativeAPIBoundary() gin.HandlerFunc {
 	native := NativePublicBoundary()
 	return func(c *gin.Context) {
@@ -28,7 +29,7 @@ func NativeAPIBoundary() gin.HandlerFunc {
 			return
 		}
 		policy, err := unihubaccess.FromEnv()
-		if err == nil && (policy.IsPrivateManagementRequest(c.Request) || (!policy.PublicEnabled && !policy.PlatformEnabled && policy.NativePublicEnabled)) {
+		if err == nil && (policy.IsPrivateManagementRequest(c.Request) || policy.NativePublicEnabled) {
 			c.Next()
 			return
 		}

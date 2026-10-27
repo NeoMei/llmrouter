@@ -17,7 +17,7 @@ import (
 func nativeFixture(t *testing.T) (*NativeBillingStore, *OCRBillingStore, NativeAdmission, OCRAdmission) {
 	t.Helper()
 	s, a := ocrFixture(t)
-	require.NoError(t, s.db.AutoMigrate(&NativeBilling{}))
+	require.NoError(t, s.db.AutoMigrate(&NativeBilling{}, &NativeUsageReceipt{}, &QuotaData{}))
 	p := metering.Price{Version: "metered_v2", Operation: "speech", Policy: "provider_reported_v1", Terms: []metering.Term{{Key: "characters", Unit: "character", Price: metering.Rational{Numerator: "1", Denominator: "1000"}}}}
 	n := NativeAdmission{CallID: a.IdempotencyKey, UserID: a.UserID, TokenID: a.TokenID, ChannelID: a.ChannelID, Model: a.Model, Group: a.Group, Preference: a.Preference, Price: p, GroupRatio: "1", QuotaPerUnit: "100", Reservation: nativeUsage("1000")}
 	return NewNativeBillingStore(s.db, nil), s, n, a

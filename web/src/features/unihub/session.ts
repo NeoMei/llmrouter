@@ -28,6 +28,7 @@ export interface ProductConfig {
   client_id: string
   redirect_uri: string
   product_id: string
+  instance_id?: string
   models: string[]
 }
 export function exactAmount(value: string, asset: string): string {

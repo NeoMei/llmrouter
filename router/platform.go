@@ -37,7 +37,7 @@ func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 		c.Next()
 	})
 	platform.GET("/calls/:callID", func(c *gin.Context) {
-		if len(c.Request.Header.Values("Authorization")) != 1 || !strings.HasPrefix(c.GetHeader("Authorization"), "Bearer uh_model_") || len(c.Request.Header.Values("X-UniHub-Task-ID")) != 1 {
+		if len(c.Request.Header.Values("Authorization")) != 1 || !strings.HasPrefix(c.GetHeader("Authorization"), "Bearer ") || !platformbilling.IsModelCredential(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")) || len(c.Request.Header.Values("X-UniHub-Task-ID")) != 1 {
 			c.AbortWithStatus(401)
 			return
 		}
@@ -58,7 +58,7 @@ func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 	registerPlatformOperation(platform, adapter, "/images/generations", "image_generation", "/v1/images/generations", types.RelayFormatOpenAIImage)
 	registerPlatformOperation(platform, adapter, "/images/edits", "image_edit", "/v1/images/edits", types.RelayFormatOpenAIImage)
 	platform.POST("/chat/completions", func(c *gin.Context) {
-		if len(c.Request.Header.Values("Authorization")) != 1 || !strings.HasPrefix(c.GetHeader("Authorization"), "Bearer uh_model_") {
+		if len(c.Request.Header.Values("Authorization")) != 1 || !strings.HasPrefix(c.GetHeader("Authorization"), "Bearer ") || !platformbilling.IsModelCredential(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")) {
 			c.AbortWithStatusJSON(401, gin.H{"error": gin.H{"code": "invalid_model_credential"}})
 			return
 		}
@@ -66,6 +66,13 @@ func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 		if err != nil || int64(len(body)) > adapter.BodyLimit() {
 			c.AbortWithStatusJSON(413, gin.H{"error": gin.H{"code": "request_too_large"}})
 			return
+		}
+		if strings.HasPrefix(c.GetHeader("Authorization"), "Bearer uh_key_") {
+			body, err = adapter.ManagedRequestBody("chat", body)
+			if err != nil {
+				c.AbortWithStatusJSON(400, gin.H{"error": gin.H{"code": "invalid_model_request"}})
+				return
+			}
 		}
 		if len(c.Request.Header.Values("Idempotency-Key")) != 1 || len(c.Request.Header.Values("X-UniHub-Task-ID")) != 1 {
 			c.AbortWithStatusJSON(400, gin.H{"error": gin.H{"code": "stable_call_and_task_required"}})
@@ -80,6 +87,9 @@ func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 			}
 			if errors.Is(err, platformbilling.ErrConflict) {
 				code = "logical_call_conflict"
+			}
+			if strings.HasPrefix(c.GetHeader("Authorization"), "Bearer uh_key_") && status != http.StatusConflict {
+				code = unifiedAdmissionCode(status)
 			}
 			c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"code": code}})
 			return
@@ -107,7 +117,7 @@ func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 			}
 		}()
 		c.Next()
-	}, middleware.Distribute(), func(c *gin.Context) { controller.Relay(c, types.RelayFormatOpenAI) })
+	}, middleware.DistributedRateLimit(), middleware.ModelRequestRateLimit(), middleware.Distribute(), func(c *gin.Context) { controller.Relay(c, types.RelayFormatOpenAI) })
 }
 
 // registerPlatformOperation exposes only operations with a matching metered
@@ -116,7 +126,7 @@ func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 // falling back to local wallet billing.
 func registerPlatformOperation(engine gin.IRoutes, adapter *platformbilling.Adapter, path, operation, target string, format types.RelayFormat) {
 	engine.POST(path, middleware.RouteTag("relay"), func(c *gin.Context) {
-		if len(c.Request.Header.Values("Authorization")) != 1 || !strings.HasPrefix(c.GetHeader("Authorization"), "Bearer uh_model_") || len(c.Request.Header.Values("Idempotency-Key")) != 1 || len(c.Request.Header.Values("X-UniHub-Task-ID")) != 1 {
+		if len(c.Request.Header.Values("Authorization")) != 1 || !strings.HasPrefix(c.GetHeader("Authorization"), "Bearer ") || !platformbilling.IsModelCredential(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")) || len(c.Request.Header.Values("Idempotency-Key")) != 1 || len(c.Request.Header.Values("X-UniHub-Task-ID")) != 1 {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": gin.H{"code": "invalid_platform_scope"}})
 			return
 		}
@@ -131,9 +141,20 @@ func registerPlatformOperation(engine gin.IRoutes, adapter *platformbilling.Adap
 			c.AbortWithStatus(http.StatusUnsupportedMediaType)
 			return
 		}
+		if strings.HasPrefix(c.GetHeader("Authorization"), "Bearer uh_key_") {
+			body, err = adapter.ManagedRequestBody(operation, body)
+			if err != nil {
+				c.AbortWithStatusJSON(400, gin.H{"error": gin.H{"code": "invalid_model_request"}})
+				return
+			}
+		}
 		session, err := adapter.AdmitOperation(c.Request.Context(), strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "), c.GetHeader("X-UniHub-Task-ID"), c.GetHeader("Idempotency-Key"), operation, ct, body)
 		if err != nil {
-			c.AbortWithStatusJSON(platformbilling.HTTPStatus(err), gin.H{"error": gin.H{"code": "platform_admission_rejected"}})
+			status, code := platformbilling.HTTPStatus(err), "platform_admission_rejected"
+			if strings.HasPrefix(c.GetHeader("Authorization"), "Bearer uh_key_") {
+				code = unifiedAdmissionCode(status)
+			}
+			c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"code": code}})
 			return
 		}
 		id, group := adapter.Principal()
@@ -157,7 +178,7 @@ func registerPlatformOperation(engine gin.IRoutes, adapter *platformbilling.Adap
 			}
 		}()
 		c.Next()
-	}, func(c *gin.Context) {
+	}, middleware.DistributedRateLimit(), middleware.ModelRequestRateLimit(), func(c *gin.Context) {
 		if operation == "ocr" {
 			c.Next()
 			return

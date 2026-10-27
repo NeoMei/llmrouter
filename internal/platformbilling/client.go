@@ -28,6 +28,8 @@ var (
 )
 
 type Claims struct {
+	CredentialKind        string    `json:"credential_kind"`
+	InstanceID            string    `json:"instance_id"`
 	ID                    string    `json:"id"`
 	Audience              string    `json:"audience"`
 	ActorID               string    `json:"actor_id"`
@@ -77,6 +79,7 @@ type Allocation struct {
 	Amount  string `json:"amount"`
 }
 type RemoteCall struct {
+	InstanceID            string       `json:"instance_id"`
 	Held                  string       `json:"held"`
 	CashHoldAddress       string       `json:"cash_hold_address,omitempty"`
 	Allocations           []Allocation `json:"allocations"`
@@ -99,6 +102,7 @@ type Config struct {
 	OperationRateIDs                map[string]map[string]map[string]string
 	Enabled                         bool
 	Origin, ServiceToken, Group     string
+	InstanceID                      string
 	PrincipalID                     int
 	MaxBodyBytes                    int64
 	MaxInputTokens, MaxOutputTokens int
@@ -243,6 +247,16 @@ func HTTPStatus(err error) int {
 }
 
 func (remote RemoteCall) matches(row Call) bool {
+	localInstance, remoteInstance := row.InstanceID, remote.InstanceID
+	if localInstance == "" {
+		localInstance = "default"
+	}
+	if remoteInstance == "" {
+		remoteInstance = "default"
+	}
+	if localInstance != remoteInstance {
+		return false
+	}
 	if row.Operation != "" {
 		var frozen Rate
 		if common.Unmarshal([]byte(row.RateSnapshot), &frozen) != nil || !reflect.DeepEqual(frozen, remote.Rate) || remote.Held != row.Amount || remote.CredentialID != row.CredentialID {

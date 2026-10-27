@@ -23,7 +23,7 @@ func enableUniHubBoundary(t *testing.T) {
 	t.Helper()
 	t.Setenv("UNIHUB_PRODUCT_ENABLED", "true")
 	t.Setenv("UNIHUB_PLATFORM_ENABLED", "true")
-	t.Setenv("NATIVE_PUBLIC_ACCESS", "true") // cannot override UniHub authority
+	t.Setenv("NATIVE_PUBLIC_ACCESS", "false")
 	t.Setenv("NATIVE_ADMIN_LISTEN_ADDRESS", "127.0.0.1:3001")
 }
 

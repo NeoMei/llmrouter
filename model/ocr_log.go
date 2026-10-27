@@ -69,6 +69,7 @@ func (s *OCRBillingStore) DeliverAuditLog(ctx context.Context, logDB *gorm.DB, e
 		return errors.New("OCR audit payload invalid; authoritative audit retained")
 	}
 	log := Log{CreatedAt: event.CreatedAt, Type: LogTypeError, Content: "OCR " + event.Kind, RequestId: "ocr-audit-" + event.ID}
+	nativeSuccess := false
 	other := map[string]any{"operation": "ocr.jobs.create", "outcome": event.Kind, "billing_unit": "request"}
 	if event.Kind == "admission_rejected" {
 		log.UserId, log.TokenId, log.ModelName = payload.UserID, payload.TokenID, payload.Model
@@ -144,6 +145,8 @@ func (s *OCRBillingStore) DeliverAuditLog(ctx context.Context, logDB *gorm.DB, e
 			delete(other, "model_price")
 			other["operation"], other["billing_unit"] = contract.Price.Operation, contract.Price.Terms[0].Unit
 			other["native_price"], other["native_measurements"] = contract.Price, usage.Measurements
+			log.PromptTokens, log.CompletionTokens = nativeUsageTokens(usage)
+			nativeSuccess = event.Kind == "success"
 			other["reserved_quota"], other["final_quota"] = native.ReservedQuota, native.FinalQuota
 			other["group_ratio"], other["quota_per_unit"] = contract.GroupRatio, contract.QuotaPerUnit
 			other["admin_info"] = map[string]any{"source": usage.Source, "provider_request_id": usage.ProviderRequestID, "action_id": native.AdminActionID, "actor": native.AdminActor, "reason": native.AdminReason}
@@ -171,7 +174,7 @@ func (s *OCRBillingStore) DeliverAuditLog(ctx context.Context, logDB *gorm.DB, e
 		return err
 	}
 	log.Other = string(raw)
-	return logDB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = logDB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		receipt := OCRLogReceipt{EventID: event.ID}
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&receipt).Error; err != nil {
 			return err
@@ -181,6 +184,9 @@ func (s *OCRBillingStore) DeliverAuditLog(ctx context.Context, logDB *gorm.DB, e
 			return err
 		}
 		if receipt.LogID != 0 {
+			if nativeSuccess {
+				return tx.Model(&Log{}).Where("id = ?", receipt.LogID).Updates(map[string]any{"prompt_tokens": log.PromptTokens, "completion_tokens": log.CompletionTokens}).Error
+			}
 			return nil
 		}
 		if err := tx.Create(&log).Error; err != nil {
@@ -188,6 +194,13 @@ func (s *OCRBillingStore) DeliverAuditLog(ctx context.Context, logDB *gorm.DB, e
 		}
 		return tx.Model(&OCRLogReceipt{}).Where("event_id = ?", event.ID).Update("log_id", log.Id).Error
 	})
+	if err != nil {
+		return err
+	}
+	if nativeSuccess {
+		return s.projectNativeUsage(ctx, event, log)
+	}
+	return nil
 }
 
 // ProjectAuditLogs is a bounded repeatable outbox drain. Consumption disabled

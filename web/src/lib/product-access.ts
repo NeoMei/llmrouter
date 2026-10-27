@@ -36,6 +36,7 @@ export function canOpenProductPage(
   pathname: string
 ): boolean {
   if (['/unihub', '/403'].includes(pathname)) return true
+  if (pathname === '/keys') return canUseProductFeature(user, 'product', 'use')
   if (/^\/dashboard(?:\/(?:overview|models|flow))?\/?$/.test(pathname)) {
     return canUseProductFeature(user, 'product', 'use')
   }

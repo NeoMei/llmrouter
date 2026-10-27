@@ -30,6 +30,9 @@ func parseFlowQuotaTimeRange(c *gin.Context) (int64, int64, bool) {
 }
 
 func GetAllQuotaDates(c *gin.Context) {
+	if serveProductQuotaTelemetry(c, true, "dates") {
+		return
+	}
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
 	username := c.Query("username")
@@ -47,6 +50,9 @@ func GetAllQuotaDates(c *gin.Context) {
 }
 
 func GetQuotaDatesByUser(c *gin.Context) {
+	if serveProductQuotaTelemetry(c, true, "users") {
+		return
+	}
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
 	dates, err := model.GetQuotaDataGroupByUser(startTimestamp, endTimestamp)
@@ -62,6 +68,9 @@ func GetQuotaDatesByUser(c *gin.Context) {
 }
 
 func GetUserQuotaDates(c *gin.Context) {
+	if serveProductQuotaTelemetry(c, false, "dates") {
+		return
+	}
 	userId := c.GetInt("id")
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
@@ -87,6 +96,9 @@ func GetUserQuotaDates(c *gin.Context) {
 }
 
 func GetAllFlowQuotaDates(c *gin.Context) {
+	if serveProductQuotaTelemetry(c, true, "flow") {
+		return
+	}
 	startTimestamp, endTimestamp, ok := parseFlowQuotaTimeRange(c)
 	if !ok {
 		return
@@ -110,6 +122,9 @@ func GetAllFlowQuotaDates(c *gin.Context) {
 }
 
 func GetUserFlowQuotaDates(c *gin.Context) {
+	if serveProductQuotaTelemetry(c, false, "flow") {
+		return
+	}
 	userId := c.GetInt("id")
 	startTimestamp, endTimestamp, ok := parseFlowQuotaTimeRange(c)
 	if !ok {

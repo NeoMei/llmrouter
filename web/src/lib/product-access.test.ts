@@ -39,11 +39,11 @@ test('product members access product pages, while identities and financial setti
     '/usage-logs/common',
     '/usage-logs/task',
     '/pricing',
+    '/keys',
   ]) {
     assert.equal(canOpenProductPage(member, path), true, path)
   }
   for (const path of [
-    '/keys',
     '/profile',
     '/wallet',
     '/users',

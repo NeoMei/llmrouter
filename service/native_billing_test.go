@@ -83,11 +83,16 @@ func TestNativeLocalTokenFlowUsesFrozenReservationAndReceiptOnly(t *testing.T) {
 	assert.Equal(t, "settled", journal.State)
 	// A new process must recover confirmed evidence and project its receipt
 	// before StartNativeBillingRecovery returns, without waiting for a timer.
-	require.NoError(t, db.AutoMigrate(&model.Log{}, &model.OCRLogReceipt{}))
+	require.NoError(t, db.AutoMigrate(&model.Log{}, &model.OCRLogReceipt{}, &model.NativeUsageReceipt{}, &model.QuotaData{}))
 	oldLog, oldConsume := model.LOG_DB, common.LogConsumeEnabled
+	oldExport := common.DataExportEnabled
 	model.LOG_DB = db
 	common.LogConsumeEnabled = true
-	t.Cleanup(func() { model.LOG_DB = oldLog; common.LogConsumeEnabled = oldConsume })
+	common.DataExportEnabled = true
+	t.Cleanup(func() {
+		model.LOG_DB = oldLog
+		common.LogConsumeEnabled, common.DataExportEnabled = oldConsume, oldExport
+	})
 	a.CallID = "startup-recovery"
 	pending, err := BeginNativeBilling(ctx, a)
 	require.NoError(t, err)
@@ -100,5 +105,16 @@ func TestNativeLocalTokenFlowUsesFrozenReservationAndReceiptOnly(t *testing.T) {
 	var receipts int64
 	require.NoError(t, db.Model(&model.OCRLogReceipt{}).Count(&receipts).Error)
 	assert.EqualValues(t, 2, receipts)
+	data, err := model.GetQuotaDataByUserId(u.Id, 0, 1<<62)
+	require.NoError(t, err)
+	require.Len(t, data, 1)
+	assert.Equal(t, 2, data[0].Count)
+	assert.Equal(t, 12, data[0].TokenUsed)
+	assert.Equal(t, 12, data[0].Quota)
+	var logs []model.Log
+	require.NoError(t, db.Order("id").Find(&logs).Error)
+	require.Len(t, logs, 2)
+	assert.Equal(t, 4, logs[0].PromptTokens)
+	assert.Equal(t, 2, logs[0].CompletionTokens)
 
 }

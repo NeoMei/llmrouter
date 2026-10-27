@@ -27,7 +27,7 @@ func SetUniHubRouter(r *gin.Engine, c platformaccount.Config) {
 	r.GET("/api/unihub/config", func(ctx *gin.Context) {
 		ctx.Header("Cache-Control", "no-store")
 		policy, err := unihubaccess.FromEnv()
-		nativeAccess := err == nil && (policy.IsPrivateManagementRequest(ctx.Request) || (!policy.PublicEnabled && !policy.PlatformEnabled && policy.NativePublicEnabled))
+		nativeAccess := err == nil && (policy.IsPrivateManagementRequest(ctx.Request) || policy.NativePublicEnabled)
 		ctx.JSON(http.StatusOK, struct {
 			platformaccount.Config
 			NativeAccess bool `json:"native_access"`

@@ -106,7 +106,7 @@ async function productFixture(
             home: true,
             console: true,
             pricing: { enabled: true, requireAuth: true },
-            rankings: { enabled: false },
+            rankings: { enabled: true },
             docs: true,
             about: true,
           }),
@@ -191,6 +191,7 @@ test('unified member gets real LLMRouter overview and self analytics instead of 
     page.getByRole('heading', { name: 'Overview', exact: true })
   ).toBeVisible()
   await expect(page.locator('[data-slot="sidebar"]')).toBeVisible()
+  await expect(page.locator('a[href="/rankings"]')).toHaveCount(0)
   await expect(
     page.getByRole('heading', { name: 'LLMRouter · UniHub' })
   ).toHaveCount(0)

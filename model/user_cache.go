@@ -11,7 +11,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const userCacheSchemaVersion = 2
+// Schema 3 includes the identity metadata required to validate UniHub sessions.
+// Older hashes must hydrate from the database before they can authorize access.
+const userCacheSchemaVersion = 3
 
 type UserBase struct {
 	Id             int    `json:"id"`

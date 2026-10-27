@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { NativeBillingPanel } from '@/features/native-metering/billing-panel'
+
 import { ChannelAffinitySection } from '../general/channel-affinity'
 import { IoNetDeploymentSettingsSection } from '../integrations/ionet-deployment-settings-section'
 import type { ModelSettings } from '../types'
@@ -24,6 +26,7 @@ import { ClaudeSettingsCard } from './claude-settings-card'
 import { GeminiSettingsCard } from './gemini-settings-card'
 import { GlobalSettingsCard } from './global-settings-card'
 import { GrokSettingsCard } from './grok-settings-card'
+import { NativePricingEditor } from './native-pricing-editor'
 import { RoutingReliabilitySection } from './routing-reliability-section'
 
 function formatJsonForEditor(value: string, fallback: string) {
@@ -62,6 +65,21 @@ const MODELS_SECTIONS = [
               settings['general_setting.ping_interval_seconds'],
           },
         }}
+      />
+    ),
+  },
+  {
+    id: 'native-reconciliation',
+    titleKey: 'Native billing reconciliation',
+    build: () => <NativeBillingPanel admin />,
+  },
+  {
+    id: 'native-pricing',
+    titleKey: 'Native metering prices',
+    build: (settings: ModelSettings) => (
+      <NativePricingEditor
+        value={settings.ModelNativePricing}
+        reservationLimits={settings.ModelNativeReservationLimits}
       />
     ),
   },

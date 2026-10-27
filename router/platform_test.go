@@ -230,6 +230,13 @@ func TestPlatformChatUsesFixedPayerAndNeverDebitsLegacy(t *testing.T) {
 			oldRedis := common.RedisEnabled
 			common.RedisEnabled = false
 			model.DB = db
+			oldMainType, oldLogType := common.MainDatabaseType(), common.LogDatabaseType()
+			common.SetMainDatabaseType(common.DatabaseTypeSQLite)
+			t.Setenv("LOG_SQL_DSN", "")
+			// InitLogDB initializes dialect quoting used by legacy token lookup;
+			// opening a test GORM DB alone does not initialize model columns.
+			require.NoError(t, model.InitLogDB())
+			defer func() { common.SetMainDatabaseType(oldMainType); common.SetLogDatabaseType(oldLogType) }()
 			model.LOG_DB = db
 			common.MemoryCacheEnabled = true
 			common.RetryTimes = 1

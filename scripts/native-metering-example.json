@@ -1,0 +1,11 @@
+{
+  "legacy": { "synthetic-tts": "2", "synthetic-stt": "1" },
+  "proposals": {
+    "synthetic-tts": { "speech": { "version": "metered_v2", "operation": "speech", "policy": "unicode_scalar_v1", "terms": [{ "key": "characters", "unit": "character", "price": { "numerator": "1", "denominator": "1000" } }] } },
+    "synthetic-stt": { "transcription": { "version": "metered_v2", "operation": "transcription", "policy": "provider_reported_v1", "terms": [{ "key": "audio", "unit": "audio_second", "price": { "numerator": "2", "denominator": "1" } }] } }
+  },
+  "examples": [
+    { "model": "synthetic-tts", "operation": "speech", "quantities": { "characters": { "value": "1500", "scale": 0 } } },
+    { "model": "synthetic-stt", "operation": "transcription", "quantities": { "audio": { "value": "1001", "scale": 3 } } }
+  ]
+}

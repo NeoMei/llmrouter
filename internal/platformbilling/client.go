@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/pkg/metering"
 	"io"
 	"math/big"
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -42,76 +44,59 @@ type Rational struct {
 	Numerator   string `json:"numerator"`
 	Denominator string `json:"denominator"`
 }
-type RequestTariff struct {
-	Version   string        `json:"version"`
-	Operation string        `json:"operation"`
-	Policy    string        `json:"policy"`
-	Terms     []RequestTerm `json:"terms"`
-}
-type RequestTerm struct {
-	Key   string   `json:"key"`
-	Unit  string   `json:"unit"`
-	Price Rational `json:"price"`
-	Step  *struct {
-		Value string `json:"value"`
-		Scale int    `json:"scale"`
-	} `json:"step,omitempty"`
-	Minimum *struct {
-		Value string `json:"value"`
-		Scale int    `json:"scale"`
-	} `json:"minimum,omitempty"`
-}
-type RequestUsage struct {
-	Version      string               `json:"version"`
-	Operation    string               `json:"operation"`
-	State        string               `json:"state"`
-	Source       string               `json:"source"`
-	Measurements []RequestMeasurement `json:"measurements"`
-}
-type RequestMeasurement struct {
-	Key      string `json:"key"`
-	Unit     string `json:"unit"`
-	Quantity struct {
-		Value string `json:"value"`
-		Scale int    `json:"scale"`
-	} `json:"quantity"`
-}
+
+// Request tariff aliases share the native metering wire contract while the
+// chat admission path applies its narrower request-only validation.
+type RequestTariff = metering.Price
+type RequestTerm = metering.Term
+type RequestUsage = metering.Usage
+type RequestMeasurement = metering.Measurement
 type Rate struct {
-	Metered    *RequestTariff `json:"metered,omitempty"`
-	ID         string         `json:"id"`
-	Model      string         `json:"model"`
-	Asset      string         `json:"asset"`
-	Status     string         `json:"status"`
-	Semantics  string         `json:"semantics"`
-	Input      Rational       `json:"input,omitempty"`
-	Output     Rational       `json:"output,omitempty"`
-	CacheRead  Rational       `json:"cache_read,omitempty"`
-	CacheWrite Rational       `json:"cache_write,omitempty"`
-	Reasoning  Rational       `json:"reasoning,omitempty"`
+	Metered    *metering.Price `json:"metered,omitempty"`
+	ID         string          `json:"id"`
+	Model      string          `json:"model"`
+	Asset      string          `json:"asset"`
+	Status     string          `json:"status"`
+	Semantics  string          `json:"semantics"`
+	Input      Rational        `json:"input"`
+	Output     Rational        `json:"output"`
+	CacheRead  Rational        `json:"cache_read"`
+	CacheWrite Rational        `json:"cache_write"`
+	Reasoning  Rational        `json:"reasoning"`
 }
 type Usage struct {
-	Metered    *RequestUsage `json:"metered,omitempty"`
-	Input      string        `json:"input,omitempty"`
-	Output     string        `json:"output,omitempty"`
-	CacheRead  string        `json:"cache_read,omitempty"`
-	CacheWrite string        `json:"cache_write,omitempty"`
-	Reasoning  string        `json:"reasoning,omitempty"`
+	Metered    *metering.Usage `json:"metered,omitempty"`
+	Input      string          `json:"input,omitempty"`
+	Output     string          `json:"output,omitempty"`
+	CacheRead  string          `json:"cache_read,omitempty"`
+	CacheWrite string          `json:"cache_write,omitempty"`
+	Reasoning  string          `json:"reasoning,omitempty"`
+}
+type Allocation struct {
+	BatchID string `json:"batch_id"`
+	Amount  string `json:"amount"`
 }
 type RemoteCall struct {
-	ActorID               string `json:"actor_id"`
-	AccountID             string `json:"account_id"`
-	OriginProductID       string `json:"origin_product_id"`
-	RequestDigest         string `json:"request_digest"`
-	Rate                  Rate   `json:"rate"`
-	CallID                string `json:"call_id"`
-	Status                string `json:"status"`
-	Charged               string `json:"charged,omitempty"`
-	ChargeAsset           string `json:"charge_asset"`
-	FundingMode           string `json:"funding_mode"`
-	FundingProductID      string `json:"funding_product_id"`
-	BillingProfileVersion int    `json:"billing_profile_version"`
+	Held                  string       `json:"held"`
+	CashHoldAddress       string       `json:"cash_hold_address,omitempty"`
+	Allocations           []Allocation `json:"allocations"`
+	CredentialID          string       `json:"credential_id,omitempty"`
+	ActorID               string       `json:"actor_id"`
+	AccountID             string       `json:"account_id"`
+	OriginProductID       string       `json:"origin_product_id"`
+	RequestDigest         string       `json:"request_digest"`
+	Rate                  Rate         `json:"rate"`
+	CallID                string       `json:"call_id"`
+	Status                string       `json:"status"`
+	Charged               string       `json:"charged,omitempty"`
+	ChargeAsset           string       `json:"charge_asset"`
+	FundingMode           string       `json:"funding_mode"`
+	FundingProductID      string       `json:"funding_product_id"`
+	BillingProfileVersion int          `json:"billing_profile_version"`
 }
 type Config struct {
+	OperationLimits                 map[string]map[string]OperationLimits
+	OperationRateIDs                map[string]map[string]map[string]string
 	Enabled                         bool
 	Origin, ServiceToken, Group     string
 	PrincipalID                     int
@@ -258,6 +243,15 @@ func HTTPStatus(err error) int {
 }
 
 func (remote RemoteCall) matches(row Call) bool {
+	if row.Operation != "" {
+		var frozen Rate
+		if common.Unmarshal([]byte(row.RateSnapshot), &frozen) != nil || !reflect.DeepEqual(frozen, remote.Rate) || remote.Held != row.Amount || remote.CredentialID != row.CredentialID {
+			return false
+		}
+		if row.FundingSnapshot != "" && row.FundingSnapshot != remote.fundingSnapshot() {
+			return false
+		}
+	}
 	asset, mode, err := normalizeFunding(row.Asset, row.FundingMode)
 	if err != nil || row.BillingProfileVersion < 0 {
 		return false
@@ -314,7 +308,7 @@ func requestBound(r Rate) (string, error) {
 		return "", ErrInvalid
 	}
 	t := p.Terms[0]
-	if t.Key != "requests" || t.Unit != "request" || t.Step != nil || t.Minimum != nil || !canonicalCount.MatchString(t.Price.Numerator) || !canonicalCount.MatchString(t.Price.Denominator) || len(t.Price.Numerator) > 38 || len(t.Price.Denominator) > 38 {
+	if t.Key != "requests" || t.Unit != "request" || t.ProviderUnit != "" || t.Step != nil || t.Minimum != nil || !canonicalCount.MatchString(t.Price.Numerator) || !canonicalCount.MatchString(t.Price.Denominator) || len(t.Price.Numerator) > 38 || len(t.Price.Denominator) > 38 {
 		return "", ErrInvalid
 	}
 	n, _ := new(big.Int).SetString(t.Price.Numerator, 10)
@@ -334,4 +328,12 @@ func requestBound(r Rate) (string, error) {
 		return "", ErrInvalid
 	}
 	return q.String(), nil
+}
+
+func (r RemoteCall) fundingSnapshot() string {
+	b, _ := common.Marshal(struct {
+		CashHoldAddress string
+		Allocations     []Allocation
+	}{r.CashHoldAddress, r.Allocations})
+	return string(b)
 }

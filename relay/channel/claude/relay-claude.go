@@ -184,6 +184,8 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 }
 
 func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *types.NewAPIError) {
+	nativeEvidence, finishNativeEvidence := service.NativeTokenObserver(c.Request.Context(), info, dto.BillingUsageSourceClaudeMessages)
+	defer finishNativeEvidence()
 	claudeInfo := &ClaudeResponseInfo{
 		ResponseId:   helper.GetResponseID(c),
 		Created:      common.GetTimestamp(),
@@ -198,6 +200,7 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		return err == nil
 	}
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		nativeEvidence.Observe([]byte(data), true)
 		emitted, validateErr := validator.Accept(common.StringToByteSlice(data))
 		if validateErr != nil {
 			err = toolpolicy.NewResponseValidationError(validateErr)
@@ -290,6 +293,8 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 }
 
 func ClaudeHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *types.NewAPIError) {
+	nativeEvidence, finishNativeEvidence := service.NativeTokenObserver(c.Request.Context(), info, dto.BillingUsageSourceClaudeMessages)
+	defer finishNativeEvidence()
 	defer service.CloseResponseBodyGracefully(resp)
 
 	claudeInfo := &ClaudeResponseInfo{
@@ -300,6 +305,7 @@ func ClaudeHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayI
 		Usage:        &dto.Usage{},
 	}
 	responseBody, err := io.ReadAll(resp.Body)
+	nativeEvidence.Observe(responseBody, false)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}

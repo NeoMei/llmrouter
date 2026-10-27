@@ -21,7 +21,7 @@ For commercial licensing, please contact support@quantumnous.com
  */
 
 // System Configuration Defaults
-export const DEFAULT_SYSTEM_NAME = 'LLMRouter'
+export const DEFAULT_SYSTEM_NAME = '万流 · LLMRouter'
 export const DEFAULT_LOGO = '/brand/llmrouter-confluence.svg'
 
 // LocalStorage Keys

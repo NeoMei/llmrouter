@@ -76,7 +76,10 @@ func transcriptionResponse(c *gin.Context, resp *http.Response, info *relaycommo
 	usage.PromptTokensDetails.TextTokens = *u.Details.Text
 	usage.CompletionTokenDetails.TextTokens = *u.Completion
 	info.ActualUsageValidated = true
-	info.ActualAudioSeconds = u.Seconds
+	if info.NativeBilling == nil || info.NativeBilling.Price.Policy == "provider_reported_v1" {
+		info.ActualAudioSeconds = u.Seconds
+		info.AudioDurationSource = "provider_reported"
+	}
 	transcript := *result.Choices[0].Message.Content
 	var output []byte
 	contentType := "text/plain; charset=utf-8"

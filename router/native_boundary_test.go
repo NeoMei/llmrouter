@@ -31,6 +31,7 @@ func TestNativeBoundaryRealRoutes(t *testing.T) {
 	SetRelayRouter(r)
 	SetVideoRouter(r)
 	routes := []struct{ method, path string }{
+		{"GET", "/api/native-billing/self"}, {"GET", "/api/native-billing/"}, {"GET", "/api/native-billing/test"}, {"POST", "/api/native-billing/test/resolve"},
 		{"GET", "/api/oauth/github"}, {"GET", "/api/oauth/telegram/login"}, {"POST", "/api/oauth/state"}, {"GET", "/api/verification"}, {"GET", "/api/reset_password"}, {"POST", "/api/user/reset"},
 		{"POST", "/api/user/checkin"}, {"POST", "/api/user/aff_transfer"}, {"POST", "/api/user/chat-credential"}, {"GET", "/api/token/"}, {"POST", "/api/token/"}, {"GET", "/api/usage/token/"}, {"POST", "/api/subscription/admin/bind"},
 		{"POST", "/v1/chat/completions"}, {"POST", "/v1/responses"}, {"GET", "/v1/models"}, {"POST", "/pg/chat/completions"}, {"POST", "/compatible-mode/v1/chat/completions"}, {"POST", "/compatible-mode/v1/embeddings"},

@@ -14,6 +14,22 @@ def read_repo_file(path: str) -> str:
 
 
 class ReleaseCIContractTest(unittest.TestCase):
+    def test_upstream_docker_publish_jobs_require_the_upstream_repository(self) -> None:
+        for path in (
+            ".github/workflows/docker-build.yml",
+            ".github/workflows/docker-image-branch.yml",
+        ):
+            workflow = read_repo_file(path)
+            jobs = workflow.split("\njobs:\n", 1)[1]
+            for job in re.split(r"(?=\n  [a-z_]+:\n)", "\n" + jobs):
+                if "calciumion/new-api" not in job:
+                    continue
+                with self.subTest(workflow=path, job=job.splitlines()[1]):
+                    self.assertRegex(
+                        job,
+                        r"(?m)^    if: github\.repository == 'QuantumNous/new-api'(?: && .*)?$",
+                    )
+
     def test_setup_go_uses_one_resolvable_pinned_revision(self) -> None:
         pins: list[tuple[str, str]] = []
         for workflow in sorted((ROOT / ".github/workflows").glob("*.yml")):

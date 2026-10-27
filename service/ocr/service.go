@@ -260,12 +260,23 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (JobStatus, err
 			}
 			return JobStatus{}, err
 		}
+		if req.Admission.PlatformCallID != "" {
+			if req.Admission.Dispatch == nil || req.Admission.BindTask == nil {
+				return JobStatus{}, errors.New("platform OCR dispatch binding missing")
+			}
+			if err := req.Admission.Dispatch(ctx); err != nil {
+				return JobStatus{}, err
+			}
+		}
 		// Claim is the last durable gate. No automatic retry can cross an unknown send.
 		id, response, sendErr := s.supplier.Submit(ctx, execution.JobsURL, key, wire)
 		persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		healthErr := s.observe(persistCtx, selection, j.Model, response, sendErr)
 		if sendErr == nil {
 			err = s.billing.RecordSubmission(persistCtx, claim, id, false)
+			if err == nil && req.Admission.PlatformCallID != "" {
+				err = req.Admission.BindTask(persistCtx, id)
+			}
 			cancel()
 			if err != nil {
 				return JobStatus{}, err
@@ -281,6 +292,9 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (JobStatus, err
 		}
 		if response.Refused() {
 			retry := !req.DisableRetry && !response.RetryVeto() && ctx.Err() == nil && healthErr == nil && j.SubmitAttempts+1 < j.MaxAttempts
+			if req.Admission.PlatformCallID != "" {
+				retry = false
+			}
 			err = s.billing.RecordOCRRefusal(persistCtx, claim, response.Status, retry)
 			if err == nil && !retry {
 				_, err = s.billing.Finish(persistCtx, j.ID, "failure")

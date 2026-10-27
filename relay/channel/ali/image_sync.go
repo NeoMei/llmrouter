@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/accountpool"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -79,10 +80,10 @@ func qwenImageHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	request := expected.(helper.DomesticImageRequest)
 	n := *result.Usage.ImageCount
 	w, h := *result.Usage.Width, *result.Usage.Height
-	if n < 1 || n > 6 || n != int(request.Parameters.N) || w <= 0 || h <= 0 || w > 4194304 || h > 4194304 || w*h < 262144 || w*h > 4194304 {
+	if n < 0 || n > 6 || (info.NativeBilling == nil && n != int(request.Parameters.N)) || w <= 0 || h <= 0 || w > 4194304 || h > 4194304 || w*h < 262144 || w*h > 4194304 {
 		return syncImageError(), nil
 	}
-	if request.Parameters.Size != "" {
+	if info.NativeBilling == nil && request.Parameters.Size != "" {
 		width, height, _ := strings.Cut(request.Parameters.Size, "*")
 		ew, _ := strconv.ParseInt(width, 10, 64)
 		eh, _ := strconv.ParseInt(height, 10, 64)
@@ -118,6 +119,15 @@ func qwenImageHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	written, err := c.Writer.Write(encoded)
 	if err != nil || written != len(encoded) || c.Request.Context().Err() != nil {
 		return syncImageError(), nil
+	}
+	if info.NativeBilling != nil {
+		outs := []service.NativeImageOutput{}
+		for _, o := range response.Data {
+			outs = append(outs, service.NativeImageOutput{ID: o.Url, Width: int(w), Height: int(h)})
+		}
+		if err := service.RecordNativeUsageForRelay(c.Request.Context(), info, service.NativeImageUsage(info.NativeBilling.Price, outs, true)); err != nil {
+			return syncImageError(), nil
+		}
 	}
 	info.NativeUsageImages = &n
 	info.ActualUsageValidated = true

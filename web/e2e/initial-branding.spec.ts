@@ -18,14 +18,14 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { expect, test } from '@playwright/test'
 
-test('serves LLMRouter branding before application scripts run', async ({
+test('serves Wanliu and LLMRouter branding before application scripts run', async ({
   page,
 }) => {
   await page.route('**/*.js', (route) => route.abort())
 
   await page.goto('/', { waitUntil: 'domcontentloaded' })
 
-  await expect(page).toHaveTitle('LLMRouter')
+  await expect(page).toHaveTitle('万流 · LLMRouter')
   await expect(
     page.locator('link[rel="icon"][type="image/svg+xml"]')
   ).toHaveAttribute('href', '/brand/llmrouter-confluence.svg')
@@ -34,6 +34,6 @@ test('serves LLMRouter branding before application scripts run', async ({
   expect(icon.headers()['content-type']).toContain('image/svg+xml')
   await expect(page.locator('meta[name="title"]')).toHaveAttribute(
     'content',
-    'LLMRouter'
+    '万流 · LLMRouter'
   )
 })

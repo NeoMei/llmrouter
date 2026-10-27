@@ -2,6 +2,7 @@ package ali
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -87,9 +88,9 @@ type AliVideoOutput struct {
 
 // AliUsage 使用统计
 type AliUsage struct {
-	Duration   dto.IntValue `json:"duration,omitempty"`
-	VideoCount dto.IntValue `json:"video_count,omitempty"`
-	SR         dto.IntValue `json:"SR,omitempty"`
+	Duration   json.RawMessage `json:"duration,omitempty"`
+	VideoCount dto.IntValue    `json:"video_count,omitempty"`
+	SR         dto.IntValue    `json:"SR,omitempty"`
 }
 
 type AliMetadata struct {

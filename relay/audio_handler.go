@@ -8,7 +8,9 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/pkg/metering"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/accountpool"
@@ -19,6 +21,11 @@ import (
 
 func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
+	if info.PlatformMode && info.NativeBilling != nil && info.NativeBilling.Price.Policy == "server_audio_measurement_v1" {
+		if err := helper.ValidateNativeAudioAdmission(c, info); err != nil {
+			return types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+	}
 	accountpool.ResetNativeOutcome(c)
 	if !c.Writer.Written() {
 		c.Set("binary_stream_content_type", "")
@@ -51,6 +58,14 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
 
+	if info.PlatformMode {
+		if info.PlatformBilling == nil || info.NativeBilling == nil || info.NativeBilling.Observe == nil {
+			return types.NewError(fmt.Errorf("platform metering context required"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		if err := info.PlatformBilling.Dispatch(c.Request.Context(), info.ChannelId); err != nil {
+			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+		}
+	}
 	resp, err := adaptor.DoRequest(c, info, ioReader)
 	if err != nil {
 		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
@@ -73,6 +88,35 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		// reset status code 重置状态码
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 		return newAPIError
+	}
+	if info.NativeBilling != nil {
+		var nativeUsage metering.Usage
+		terminal := newAPIError == nil && c.Request.Context().Err() == nil
+		if info.IsStream && (info.StreamStatus == nil || info.StreamStatus.HasErrors() || !info.StreamStatus.IsNormalEnd()) {
+			terminal = false
+		}
+		if info.RelayMode == relayconstant.RelayModeAudioSpeech {
+			text := ""
+			if info.NativeSpeechText != nil {
+				text = *info.NativeSpeechText
+			} else {
+				terminal = false
+			}
+			nativeUsage = service.NativeSpeechUsage(info.NativeBilling.Price, text, info.NativeUsageCharacters, terminal)
+		} else {
+			expectedSource := "provider_reported"
+			if info.NativeBilling.Price.Policy == "server_audio_measurement_v1" {
+				expectedSource = "server_measurement"
+			}
+			if info.AudioDurationSource != expectedSource {
+				terminal = false
+			}
+			nativeUsage = service.NativeAudioUsage(info.NativeBilling.Price, info.ActualAudioSeconds, terminal)
+		}
+		if err := service.RecordNativeUsageForRelay(c.Request.Context(), info, nativeUsage); err != nil {
+			return types.NewError(err, types.ErrorCodeBadResponseBody)
+		}
+		return nil
 	}
 	if info.ActualUsageValidated || usage.(*dto.Usage).CompletionTokenDetails.AudioTokens > 0 || usage.(*dto.Usage).PromptTokensDetails.AudioTokens > 0 {
 		service.PostAudioConsumeQuota(c, info, usage.(*dto.Usage), "")

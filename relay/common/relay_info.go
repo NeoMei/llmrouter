@@ -65,8 +65,10 @@ type ResponsesUsageInfo struct {
 type ChannelMeta struct {
 	// ActualUsageValidated is set only by a pre-output actual-usage gate.
 	NativeUsageCharacters *int64
+	NativeSpeechText      *string
 	NativeUsageImages     *int
 	ActualAudioSeconds    *float64
+	AudioDurationSource   string
 
 	ActualUsageValidated bool
 	ChannelType          int
@@ -112,6 +114,8 @@ type RouteCandidate struct {
 type RelayInfo struct {
 	PlatformMode    bool
 	PlatformBilling *platformbilling.Session
+	// NativeBilling is an immutable metering snapshot and evidence observer.
+	NativeBilling *NativeBillingContext
 
 	TokenId           int
 	TokenKey          string

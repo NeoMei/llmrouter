@@ -184,3 +184,43 @@ func TestPlatformAdmissionRejectsWithoutNativeSideEffects(t *testing.T) {
 		})
 	}
 }
+
+func TestPlatformOperationsAndTaskReadsRespectDisabledPolicy(t *testing.T) {
+	enableUniHubBoundary(t)
+	t.Setenv("UNIHUB_PLATFORM_ENABLED", "false")
+	var remoteCalls atomic.Int64
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		remoteCalls.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer hub.Close()
+	db, err := gorm.Open(sqlite.Open("file:"+t.TempDir()+"/db"), &gorm.Config{})
+	require.NoError(t, err)
+	a, err := platformbilling.New(db, platformbilling.Config{Enabled: true, Origin: hub.URL, ServiceToken: "service-service-service-service-token", PrincipalID: 1, Group: "platform", MaxInputTokens: 1000, MaxOutputTokens: 100, MaxBodyBytes: 8192})
+	require.NoError(t, err)
+	r := gin.New()
+	SetPlatformRouter(r, a)
+	for _, route := range []struct{ method, path string }{
+		{"POST", "/chat/completions"}, {"POST", "/responses"}, {"POST", "/embeddings"},
+		{"POST", "/audio/speech"}, {"POST", "/audio/transcriptions"},
+		{"POST", "/images/generations"}, {"POST", "/images/edits"},
+		{"POST", "/videos"}, {"POST", "/ocr/jobs"}, {"GET", "/calls/call"},
+		{"GET", "/videos/call"}, {"GET", "/videos/call/result"}, {"POST", "/videos/call/cancel"},
+		{"GET", "/ocr/jobs/call"}, {"GET", "/ocr/jobs/call/result"}, {"POST", "/ocr/jobs/call/cancel"},
+	} {
+		t.Run(route.method+route.path, func(t *testing.T) {
+			req := httptest.NewRequest(route.method, "/platform/v1"+route.path, strings.NewReader(`{}`))
+			req.Header.Set("Authorization", "Bearer uh_model_grant")
+			req.Header.Set("X-UniHub-Task-ID", "task")
+			req.Header.Set("Idempotency-Key", "call")
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+			assert.Contains(t, w.Body.String(), "platform_billing_unavailable")
+		})
+	}
+	assert.Zero(t, remoteCalls.Load(), "policy rejection must precede remote authorization")
+	var calls int64
+	require.NoError(t, db.Model(&platformbilling.Call{}).Count(&calls).Error)
+	assert.Zero(t, calls, "disabled policy cannot create reservations")
+}

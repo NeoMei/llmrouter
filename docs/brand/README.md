@@ -1,4 +1,7 @@
-# LLMRouter visual identity
+# LLMRouter / 万流 visual identity
+
+The Chinese product name is **万流**. Use **万流 · LLMRouter** when both names
+are shown together on product-facing surfaces.
 
 After reviewing the functional graphic concepts on 2026-10-25, the user selected A — Confluence. The selected mark is **Confluence**: three model/account lanes converge into one unified outlet. Its flat geometry, warm terracotta and dark brown typography relate to the user-supplied Quukk identity while explaining LLMRouter's core job without a letter monogram.
 

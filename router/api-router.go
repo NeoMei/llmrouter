@@ -159,6 +159,8 @@ func SetApiRouter(router *gin.Engine) {
 			}
 		}
 
+		registerNativeBillingRoutes(apiRouter)
+
 		// Subscription billing (plans, purchase, admin management)
 		subscriptionRoute := apiRouter.Group("/subscription")
 		subscriptionRoute.Use(middleware.NativePublicBoundary(), middleware.UserAuth())
@@ -399,4 +401,13 @@ func SetApiRouter(router *gin.Engine) {
 			deploymentsRoute.DELETE("/:id", controller.DeleteDeployment)
 		}
 	}
+}
+
+func registerNativeBillingRoutes(api *gin.RouterGroup) {
+	api.GET("/native-billing/self", middleware.NativePublicBoundary(), middleware.UserAuth(), controller.ListOwnNativeBilling)
+	routes := api.Group("/native-billing", middleware.NativePublicBoundary())
+	routes.Use(middleware.AdminAuth())
+	routes.GET("/", controller.ListNativeBilling)
+	routes.GET("/:id", controller.GetNativeBilling)
+	routes.POST("/:id/resolve", controller.ResolveNativeBilling)
 }

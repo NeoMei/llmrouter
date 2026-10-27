@@ -248,7 +248,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		httpResp = resp.(*http.Response)
 		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		if httpResp.StatusCode != http.StatusOK {
-			if info.PlatformMode {
+			if info.PlatformMode && info.NativeBilling == nil {
 				info.PlatformBilling.Rejected()
 			}
 			newApiErr := service.RelayErrorHandler(c.Request.Context(), httpResp, false)

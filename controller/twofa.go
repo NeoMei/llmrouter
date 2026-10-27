@@ -451,6 +451,14 @@ func Verify2FALogin(c *gin.Context) {
 		})
 		return
 	}
+	if e := model.SyncProductAuthVersions(c.Request.Context(), user.Id); e != nil {
+		productIdentityError(c, e)
+		return
+	}
+	if e := model.ReconcileProductIdentity(c.Request.Context(), user); e != nil {
+		productIdentityError(c, e)
+		return
+	}
 	if user.Status != common.UserStatusEnabled {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -560,6 +568,9 @@ func AdminDisable2FA(c *gin.Context) {
 	}
 
 	myRole := c.GetInt("role")
+	if !refreshManagedTarget(c, targetUser) {
+		return
+	}
 	if !canManageTargetRole(myRole, targetUser.Role) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -568,6 +579,9 @@ func AdminDisable2FA(c *gin.Context) {
 		return
 	}
 
+	if !authorizeProductIdentityWrite(c, userId, "mfa") {
+		return
+	}
 	// 禁用2FA
 	if err := model.DisableTwoFAWithAuthVersion(userId); err != nil {
 		if errors.Is(err, model.ErrTwoFANotEnabled) {

@@ -13,7 +13,6 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 
@@ -300,7 +299,7 @@ func GetAllMidjourney(c *gin.Context) {
 		}
 	}
 	pageInfo.SetTotal(int(total))
-	if _, projected := authz.ProductPrincipal(c); projected {
+	if legacyProductView(c) {
 		for _, item := range items {
 			item.Description = ""
 			item.State = ""
@@ -337,7 +336,7 @@ func GetUserMidjourney(c *gin.Context) {
 		}
 	}
 	pageInfo.SetTotal(int(total))
-	if _, projected := authz.ProductPrincipal(c); projected {
+	if legacyProductView(c) {
 		for _, item := range items {
 			item.Description = ""
 			item.State = ""

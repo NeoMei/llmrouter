@@ -47,7 +47,9 @@ const (
 const TaskRefundLegacyCutoff int64 = 1740182400 // 2025-02-22 00:00:00 UTC
 
 type Task struct {
-	PlatformCallID string `json:"-" gorm:"size:128;index"`
+	ProductCallID         string `json:"-" gorm:"size:128;index"`
+	ProductBillingVersion int64  `json:"-" gorm:"default:0"`
+	PlatformCallID        string `json:"-" gorm:"size:128;index"`
 	// NativePending is an indexed durable settlement outbox, written with terminal status.
 	NativePending          bool                  `json:"-" gorm:"index"`
 	NativeEvidence         string                `json:"-" gorm:"type:text"`
@@ -231,6 +233,10 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 		Platform:    platform,
 		Properties:  properties,
 		PrivateData: privateData,
+	}
+	if relayInfo.BillingSource == "unihub" {
+		t.ProductCallID = relayInfo.RequestId
+		t.FundingOwner = "unihub"
 	}
 	if relayInfo.NativeBilling != nil {
 		n := relayInfo.NativeBilling
@@ -495,6 +501,9 @@ func (t *Task) Snapshot() taskSnapshot {
 }
 
 func (Task *Task) Update() error {
+	if Task.ProductCallID != "" && Task.FundingOwner != "native" && Task.FundingOwner != "platform" {
+		return DB.Model(Task).Select("*").Omit("quota", "product_billing_version", "product_call_id").Updates(Task).Error
+	}
 	var err error
 	err = DB.Save(Task).Error
 	return err
@@ -548,11 +557,14 @@ func RestoreQuotaAfterFailedRefund(id int64, quota int) (bool, error) {
 // zero rows, which silently bypasses the CAS guard.
 func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
 	update := *t
-	result := DB.Model(&Task{}).
+	query := DB.Model(&Task{}).
 		Where("id = ? AND status = ?", update.ID, fromStatus).
 		Select("*").
-		Omit("id").
-		Updates(&update)
+		Omit("id")
+	if update.ProductCallID != "" && update.FundingOwner != "native" && update.FundingOwner != "platform" {
+		query = query.Omit("id", "quota", "product_billing_version", "product_call_id")
+	}
+	result := query.Updates(&update)
 	if result.Error != nil {
 		return false, result.Error
 	}

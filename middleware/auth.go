@@ -54,47 +54,68 @@ func authHelper(c *gin.Context, minRole int) {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "AUTH_USER_DISABLED", "message": common.TranslateMessage(c, i18n.MsgAuthUserBanned)})
 		return
 	}
-	permissions, management := uniHubManagementPermission(c)
-	productRuntimeSettings := management && minRole == common.RoleRootUser && len(permissions) == 1 && permissions[0].Resource == "settings"
-	projected := user.IdentitySource == model.UniHubIdentitySource
-	if projected {
-		if useAccessToken || !loadUniHubAuthority(c, identity) {
-			return
-		}
-		if management {
-			if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead && c.Request.Method != http.MethodOptions {
-				config, err := platformaccount.Current()
-				callback, parseError := url.Parse(config.RedirectURI)
-				if err != nil || parseError != nil || len(c.Request.Header.Values("Origin")) != 1 || c.GetHeader("Origin") != callback.Scheme+"://"+callback.Host {
-					c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "UNIHUB_ORIGIN_FORBIDDEN"})
-					return
-				}
-			}
-			permitted := false
-			for _, permission := range permissions {
-				permitted = permitted || authz.CanRequest(c, permission)
-			}
-			if (minRole > common.RoleAdminUser && !productRuntimeSettings) || !permitted {
-				c.AbortWithStatusJSON(403, gin.H{"success": false, "code": "UNIHUB_PERMISSION_DENIED"})
+	managed := platformaccount.RuntimeEnabled() || user.IdentitySource == model.UniHubIdentitySource
+	if managed {
+		if platformaccount.RuntimeEnabled() {
+			if !LoadRuntimeAuthority(c, user.Id, user.AuthVersion) {
 				return
 			}
-		} else if !allowedUniHubPath(c) {
-			c.AbortWithStatusJSON(403, gin.H{"success": false, "code": "UNIHUB_NATIVE_PATH_FORBIDDEN"})
+		} else {
+			if useAccessToken {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "UNIHUB_RUNTIME_AUTHORITY_REQUIRED"})
+				return
+			}
+			if !loadUniHubAuthority(c, identity) {
+				return
+			}
+		}
+		p, _ := authz.ProductPrincipal(c)
+		user.Role = RoleFromAccess(p.Access)
+	}
+	permissions, management := uniHubManagementPermission(c)
+	if managed && minRole >= common.RoleAdminUser && !management {
+		permissions, management = fallbackManagementPermission(c)
+		if !management {
+			c.AbortWithStatusJSON(403, gin.H{"success": false, "code": "UNIHUB_UNDECLARED_MANAGEMENT_ROUTE"})
 			return
 		}
 	}
-	if user.Role < minRole && !(projected && management && (minRole <= common.RoleAdminUser || productRuntimeSettings)) {
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "AUTH_INSUFFICIENT_PRIVILEGE", "message": common.TranslateMessage(c, i18n.MsgAuthInsufficientPrivilege)})
+	runtimeSettings := managed && management && minRole == common.RoleRootUser && len(permissions) == 1 && permissions[0].Resource == "settings"
+	if managed && management {
+		permitted := false
+		for _, permission := range permissions {
+			permitted = permitted || authz.CanRequest(c, permission)
+		}
+		if !permitted {
+			c.AbortWithStatusJSON(403, gin.H{"success": false, "code": "UNIHUB_PERMISSION_DENIED"})
+			return
+		}
+	}
+	if managed && management && c.Request.Method != "GET" && c.Request.Method != "HEAD" && c.Request.Method != "OPTIONS" {
+		validOrigin := false
+		if len(c.Request.Header.Values("Origin")) == 1 {
+			if platformaccount.RuntimeEnabled() {
+				validOrigin = isAllowedSessionOrigin(c.Request, c.GetHeader("Origin"))
+			} else {
+				cfg, e := platformaccount.Current()
+				origin, _ := url.Parse(cfg.RedirectURI)
+				validOrigin = e == nil && c.GetHeader("Origin") == origin.Scheme+"://"+origin.Host
+			}
+		}
+		if !validOrigin {
+			c.AbortWithStatusJSON(403, gin.H{"success": false, "code": "UNIHUB_ORIGIN_FORBIDDEN"})
+			return
+		}
+	}
+	if user.Role < minRole && !runtimeSettings {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "AUTH_INSUFFICIENT_PRIVILEGE"})
 		return
 	}
 	if !validUserInfo(user.Username, user.Role) {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "AUTH_USER_INVALID", "message": common.TranslateMessage(c, i18n.MsgAuthUserInfoInvalid)})
 		return
 	}
-	if user.IdentitySource == model.UniHubIdentitySource && !allowedUniHubPath(c) && !management {
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "UNIHUB_NATIVE_PATH_FORBIDDEN", "message": "native operation is not available for UniHub users"})
-		return
-	}
+
 	setDashboardAuthContext(c, user, identity, useAccessToken)
 
 	// 管理/root 写操作审计兜底：内聚在鉴权链路里，保证任何经过 AdminAuth/RootAuth
@@ -110,25 +131,7 @@ func authHelper(c *gin.Context, minRole int) {
 	finishAdminAudit(c, auditWriter)
 }
 
-func allowedUniHubPath(c *gin.Context) bool {
-	if c.FullPath() == "/api/unihub/bff/*path" {
-		return true
-	}
-	if c.Request.Method == http.MethodGet {
-		switch c.Request.URL.Path {
-		case "/api/unihub/access",
-			"/api/models", "/api/capabilities", "/api/user/self", "/api/user/self/groups", "/api/user/models", "/api/user/sessions":
-			return true
-		}
-	}
-	if c.Request.Method == http.MethodDelete && c.FullPath() == "/api/user/sessions/:sid" {
-		return true
-	}
-	if c.Request.Method == http.MethodPost && c.FullPath() == "/api/user/sessions/revoke-others" {
-		return true
-	}
-	return false
-}
+func allowedUniHubPath(c *gin.Context) bool { return true }
 
 func TryUserAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
@@ -138,15 +141,18 @@ func TryUserAuth() func(c *gin.Context) {
 			return
 		}
 		if credentialKind != dashboardCredentialUnmatched {
-			if user.IdentitySource == model.UniHubIdentitySource {
-				_, management := uniHubManagementPermission(c)
-				if !allowedUniHubPath(c) && !management {
-					c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "UNIHUB_NATIVE_PATH_FORBIDDEN", "message": "native operation is not available for UniHub users"})
+			if platformaccount.RuntimeEnabled() {
+				if !LoadRuntimeAuthority(c, user.Id, user.AuthVersion) {
 					return
 				}
+				p, _ := authz.ProductPrincipal(c)
+				user.Role = RoleFromAccess(p.Access)
+			} else if user.IdentitySource == model.UniHubIdentitySource {
 				if !loadUniHubAuthority(c, identity) {
 					return
 				}
+				p, _ := authz.ProductPrincipal(c)
+				user.Role = RoleFromAccess(p.Access)
 			}
 			setDashboardAuthContext(c, user, identity, credentialKind == dashboardCredentialPAT)
 		}
@@ -366,9 +372,18 @@ func TokenOrUserAuth() func(c *gin.Context) {
 				writeDashboardAuthError(c, err)
 				return
 			}
-			if user.IdentitySource == model.UniHubIdentitySource {
-				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "UNIHUB_NATIVE_PATH_FORBIDDEN", "message": "native operation is not available for UniHub users"})
-				return
+			if platformaccount.RuntimeEnabled() {
+				if !LoadRuntimeAuthority(c, user.Id, user.AuthVersion) {
+					return
+				}
+				p, _ := authz.ProductPrincipal(c)
+				user.Role = RoleFromAccess(p.Access)
+			} else if user.IdentitySource == model.UniHubIdentitySource {
+				if !loadUniHubAuthority(c, identity) {
+					return
+				}
+				p, _ := authz.ProductPrincipal(c)
+				user.Role = RoleFromAccess(p.Access)
 			}
 			setDashboardAuthContext(c, user, identity, false)
 			c.Next()
@@ -444,9 +459,10 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 			writeDashboardAuthError(c, err)
 			return
 		}
-		if userCache.IdentitySource == model.UniHubIdentitySource {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "UNIHUB_NATIVE_PATH_FORBIDDEN", "message": "native operation is not available for UniHub users"})
-			return
+		if platformaccount.RuntimeEnabled() || userCache.IdentitySource == model.UniHubIdentitySource {
+			if !LoadRuntimeAuthority(c, userCache.Id, userCache.AuthVersion) {
+				return
+			}
 		}
 		if userCache.Status != common.UserStatusEnabled {
 			c.JSON(http.StatusForbidden, gin.H{
@@ -597,9 +613,10 @@ func tokenAuth(ownedJobRead bool) func(c *gin.Context) {
 			writeDashboardAuthError(c, err)
 			return
 		}
-		if userCache.IdentitySource == model.UniHubIdentitySource {
-			abortWithOpenAiMessage(c, http.StatusForbidden, "native operation is not available for UniHub users", types.ErrorCodeAccessDenied)
-			return
+		if platformaccount.RuntimeEnabled() || userCache.IdentitySource == model.UniHubIdentitySource {
+			if !LoadRuntimeAuthority(c, userCache.Id, userCache.AuthVersion) {
+				return
+			}
 		}
 		userEnabled := userCache.Status == common.UserStatusEnabled
 		if !userEnabled {
@@ -657,7 +674,13 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 	common.SetContextKey(c, constant.ContextKeyTokenGroup, token.Group)
 	common.SetContextKey(c, constant.ContextKeyTokenCrossGroupRetry, token.CrossGroupRetry)
 	if len(parts) > 1 {
-		if model.IsAdmin(token.UserId) {
+		allowed := false
+		if p, managed := authz.ProductPrincipal(c); managed {
+			allowed = RoleFromAccess(p.Access) >= common.RoleAdminUser && p.HasPermission("channel:operate")
+		} else if !platformaccount.RuntimeEnabled() {
+			allowed = model.IsAdmin(token.UserId)
+		}
+		if allowed {
 			c.Set("specific_channel_id", parts[1])
 		} else {
 			c.Header("specific_channel_version", "701e3ae1dc3f7975556d354e0675168d004891c8")

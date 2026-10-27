@@ -6,7 +6,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service/authz"
 
 	"github.com/gin-gonic/gin"
 )
@@ -32,7 +31,7 @@ func GetAllLogs(c *gin.Context) {
 		return
 	}
 	pageInfo.SetTotal(int(total))
-	if _, projected := authz.ProductPrincipal(c); projected {
+	if legacyProductView(c) {
 		// Free-form provider errors and opaque metadata can contain credentials;
 		// product log readers receive only structured operational fields.
 		for _, log := range logs {
@@ -67,7 +66,7 @@ func GetUserLogs(c *gin.Context) {
 		return
 	}
 	pageInfo.SetTotal(int(total))
-	if _, projected := authz.ProductPrincipal(c); projected {
+	if legacyProductView(c) {
 		// Free-form provider errors and opaque metadata can contain credentials;
 		// product log readers receive only structured operational fields.
 		for _, log := range logs {

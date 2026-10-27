@@ -45,8 +45,6 @@ import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { parseHttpStatusCodeRules } from '@/lib/http-status-code-rules'
-import { canUseProductFeature } from '@/lib/product-access'
-import { useAuthStore } from '@/stores/auth-store'
 
 import {
   SettingsForm,
@@ -229,8 +227,6 @@ export function RoutingReliabilitySection({
 }: RoutingReliabilitySectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
-  const user = useAuthStore((state) => state.auth.user)
-  const projected = user?.identity_source === 'unihub'
   const baselineRef = useRef<NormalizedRoutingReliabilityValues>(
     normalizeDefaults(defaultValues)
   )
@@ -264,15 +260,10 @@ export function RoutingReliabilitySection({
   )
 
   const onSubmit = async (values: RoutingReliabilityFormValues) => {
-    if (!canUseProductFeature(user, 'settings', 'write')) return
     const normalized = normalizeFormValues(values)
     const updates = (
       Object.keys(normalized) as Array<keyof NormalizedRoutingReliabilityValues>
-    ).filter(
-      (key) =>
-        (!projected || !key.startsWith('monitor_setting.')) &&
-        normalized[key] !== baselineRef.current[key]
-    )
+    ).filter((key) => normalized[key] !== baselineRef.current[key])
 
     if (updates.length === 0) {
       toast.info(t('No changes to save'))
@@ -367,106 +358,100 @@ export function RoutingReliabilitySection({
               </h4>
             </div>
             <div className='grid min-w-0 gap-6 lg:grid-cols-3'>
-              {!projected && (
-                <FormField
-                  control={form.control}
-                  name='monitor_setting.auto_test_channel_enabled'
-                  render={({ field }) => (
-                    <SettingsSwitchItem>
-                      <SettingsSwitchContent>
-                        <FormLabel>{t('Scheduled channel tests')}</FormLabel>
-                        <FormDescription>
-                          {t(
-                            'Automatically probe all channels in the background'
-                          )}
-                        </FormDescription>
-                      </SettingsSwitchContent>
-                      <FormControl>
-                        <Switch
-                          checked={field.value}
-                          onCheckedChange={field.onChange}
-                        />
-                      </FormControl>
-                    </SettingsSwitchItem>
-                  )}
-                />
-              )}
-
-              {!projected && (
-                <FormField
-                  control={form.control}
-                  name='monitor_setting.channel_test_mode'
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t('Channel test mode')}</FormLabel>
-                      <Select
-                        items={[
-                          {
-                            value: 'scheduled_all',
-                            label: t('Scheduled full test'),
-                          },
-                          {
-                            value: 'passive_recovery',
-                            label: t('Passive recovery only'),
-                          },
-                        ]}
-                        value={field.value}
-                        onValueChange={field.onChange}
-                      >
-                        <FormControl>
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent alignItemWithTrigger={false}>
-                          <SelectGroup>
-                            <SelectItem value='scheduled_all'>
-                              {t('Scheduled full test')}
-                            </SelectItem>
-                            <SelectItem value='passive_recovery'>
-                              {t('Passive recovery only')}
-                            </SelectItem>
-                          </SelectGroup>
-                        </SelectContent>
-                      </Select>
+              <FormField
+                control={form.control}
+                name='monitor_setting.auto_test_channel_enabled'
+                render={({ field }) => (
+                  <SettingsSwitchItem>
+                    <SettingsSwitchContent>
+                      <FormLabel>{t('Scheduled channel tests')}</FormLabel>
                       <FormDescription>
                         {t(
-                          'Scheduled full test probes non-manually-disabled channels; passive recovery only checks auto-disabled channels after real request failures.'
+                          'Automatically probe all channels in the background'
                         )}
                       </FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              )}
+                    </SettingsSwitchContent>
+                    <FormControl>
+                      <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                      />
+                    </FormControl>
+                  </SettingsSwitchItem>
+                )}
+              />
 
-              {!projected && (
-                <FormField
-                  control={form.control}
-                  name='monitor_setting.auto_test_channel_minutes'
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t('Test interval (minutes)')}</FormLabel>
+              <FormField
+                control={form.control}
+                name='monitor_setting.channel_test_mode'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Channel test mode')}</FormLabel>
+                    <Select
+                      items={[
+                        {
+                          value: 'scheduled_all',
+                          label: t('Scheduled full test'),
+                        },
+                        {
+                          value: 'passive_recovery',
+                          label: t('Passive recovery only'),
+                        },
+                      ]}
+                      value={field.value}
+                      onValueChange={field.onChange}
+                    >
                       <FormControl>
-                        <Input
-                          type='number'
-                          min={1}
-                          step={1}
-                          {...safeNumberFieldProps(field)}
-                        />
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
                       </FormControl>
-                      <FormDescription>
-                        {channelTestMode === 'passive_recovery'
-                          ? t(
-                              'How frequently the system checks auto-disabled channels for recovery'
-                            )
-                          : t('How frequently the system tests all channels')}
-                      </FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              )}
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          <SelectItem value='scheduled_all'>
+                            {t('Scheduled full test')}
+                          </SelectItem>
+                          <SelectItem value='passive_recovery'>
+                            {t('Passive recovery only')}
+                          </SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <FormDescription>
+                      {t(
+                        'Scheduled full test probes non-manually-disabled channels; passive recovery only checks auto-disabled channels after real request failures.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='monitor_setting.auto_test_channel_minutes'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Test interval (minutes)')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={1}
+                        step={1}
+                        {...safeNumberFieldProps(field)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {channelTestMode === 'passive_recovery'
+                        ? t(
+                            'How frequently the system checks auto-disabled channels for recovery'
+                          )
+                        : t('How frequently the system tests all channels')}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
               <FormField
                 control={form.control}

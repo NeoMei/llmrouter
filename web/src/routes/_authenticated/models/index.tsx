@@ -26,13 +26,7 @@ export const Route = createFileRoute('/_authenticated/models/')({
   beforeLoad: () => {
     const { auth } = useAuthStore.getState()
 
-    if (
-      !(
-        canUseProductFeature(auth.user, 'catalog') ||
-        (auth.user?.identity_source === 'unihub' &&
-          canUseProductFeature(auth.user, 'channel'))
-      )
-    ) {
+    if (!canUseProductFeature(auth.user, 'catalog')) {
       throw redirect({
         to: '/403',
       })

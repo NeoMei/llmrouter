@@ -46,7 +46,6 @@ import { OAuthProviders } from '@/features/auth/components/oauth-providers'
 import { loginFormSchema } from '@/features/auth/constants'
 import { useAuthRedirect } from '@/features/auth/hooks/use-auth-redirect'
 import { useTurnstile } from '@/features/auth/hooks/use-turnstile'
-import { sanitizeAuthRedirect } from '@/features/auth/lib/auth-redirect'
 import { beginPasskeyLogin, finishPasskeyLogin } from '@/features/auth/passkey'
 import type { AuthFormProps } from '@/features/auth/types'
 import { useStatus } from '@/hooks/use-status'
@@ -349,17 +348,6 @@ export function UserAuthForm({
         className={cn('grid gap-4', className)}
         {...props}
       >
-        <Link
-          to='/unihub'
-          search={{
-            redirect:
-              sanitizeAuthRedirect(redirectTo, window.location.origin) ??
-              undefined,
-          }}
-          className='text-primary underline'
-        >
-          {t('UniHub account and billing')}
-        </Link>
         {hasAlternativeLogin && alternativeLoginMethods}
 
         {passwordLoginEnabled && (

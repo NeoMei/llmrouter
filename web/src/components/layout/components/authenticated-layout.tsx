@@ -23,10 +23,9 @@ import { SkipToMain } from '@/components/skip-to-main'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { LayoutProvider } from '@/context/layout-provider'
 import { SearchProvider } from '@/context/search-provider'
-import { refreshProductAccess } from '@/features/unihub/session'
 import { getCookie } from '@/lib/cookies'
+import { refreshProductUser } from '@/lib/product-user'
 import { cn } from '@/lib/utils'
-import { useAuthStore } from '@/stores/auth-store'
 
 import { AppHeader } from './app-header'
 import { AppSidebar } from './app-sidebar'
@@ -36,13 +35,9 @@ type AuthenticatedLayoutProps = {
 }
 
 export function AuthenticatedLayout(props: AuthenticatedLayoutProps) {
-  const projected = useAuthStore(
-    (state) => state.auth.user?.identity_source === 'unihub'
-  )
   useEffect(() => {
-    if (!projected) return
     const refresh = () => {
-      void refreshProductAccess().catch(() => {})
+      void refreshProductUser().catch(() => {})
     }
     window.addEventListener('focus', refresh)
     const timer = window.setInterval(refresh, 60000)
@@ -50,7 +45,7 @@ export function AuthenticatedLayout(props: AuthenticatedLayoutProps) {
       window.removeEventListener('focus', refresh)
       window.clearInterval(timer)
     }
-  }, [projected])
+  }, [])
   const defaultOpen = getCookie('sidebar_state') !== 'false'
 
   return (

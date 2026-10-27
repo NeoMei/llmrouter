@@ -43,8 +43,11 @@ func validateURL(raw string, origin bool) error {
 }
 func FromEnv() (Config, error) {
 	c := Config{Enabled: os.Getenv("UNIHUB_PRODUCT_ENABLED") == "true", ProductID: "llmrouter", Models: []string{}}
-	if !c.Enabled {
+	if !c.Enabled && !RuntimeEnabled() {
 		return c, nil
+	}
+	if product := os.Getenv("UNIHUB_PRODUCT_ID"); product != "" {
+		c.ProductID = product
 	}
 	c.InstanceID = os.Getenv("UNIHUB_PRODUCT_INSTANCE_ID")
 	if c.InstanceID == "" {
@@ -54,6 +57,14 @@ func FromEnv() (Config, error) {
 	c.ClientSecret = os.Getenv("UNIHUB_PRODUCT_CLIENT_SECRET")
 	c.PublicOrigin = strings.TrimRight(os.Getenv("UNIHUB_PRODUCT_PUBLIC_ORIGIN"), "/")
 	c.APIOrigin = strings.TrimRight(os.Getenv("UNIHUB_PRODUCT_API_ORIGIN"), "/")
+	if RuntimeEnabled() {
+		if c.PublicOrigin == "" {
+			c.PublicOrigin = strings.TrimRight(os.Getenv("UNIHUB_ORIGIN"), "/")
+		}
+		if c.APIOrigin == "" {
+			c.APIOrigin = strings.TrimRight(os.Getenv("UNIHUB_ORIGIN"), "/")
+		}
+	}
 	c.ClientID = os.Getenv("UNIHUB_PRODUCT_CLIENT_ID")
 	c.RedirectURI = os.Getenv("UNIHUB_PRODUCT_REDIRECT_URI")
 	for _, v := range []string{c.PublicOrigin, c.APIOrigin} {
@@ -63,6 +74,9 @@ func FromEnv() (Config, error) {
 	}
 	if e := validateURL(c.RedirectURI, false); e != nil {
 		return c, e
+	}
+	if RuntimeEnabled() && !BrowserConfigReady(c) {
+		return c, errors.New("product runtime browser SSO requires UNIHUB_PRODUCT_CLIENT_ID and a registered UNIHUB_PRODUCT_REDIRECT_URI at /api/unihub/callback")
 	}
 	if c.OIDCIssuer != "" {
 		if e := validateURL(c.OIDCIssuer, false); e != nil {
@@ -163,4 +177,21 @@ func (c Config) Prove(ctx context.Context, token string) (Identity, error) {
 		return result, errors.New("invalid account proof")
 	}
 	return result, nil
+}
+
+// BrowserConfigReady describes the independently configured browser broker;
+// existing products keep their native authenticators when legacy OIDC is off.
+func BrowserConfigReady(c Config) bool {
+	if strings.TrimSpace(c.ClientID) == "" || validateURL(c.PublicOrigin, true) != nil || validateURL(c.RedirectURI, false) != nil {
+		return false
+	}
+	callback, e := url.Parse(c.RedirectURI)
+	return e == nil && callback.Path == "/api/unihub/callback"
+}
+func BrowserHandoffEnabled() bool {
+	if !RuntimeEnabled() {
+		return false
+	}
+	c, e := FromEnv()
+	return e == nil && BrowserConfigReady(c)
 }

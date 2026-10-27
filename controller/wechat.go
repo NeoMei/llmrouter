@@ -110,6 +110,14 @@ func WeChatAuth(c *gin.Context) {
 		}
 	}
 
+	if e := model.SyncProductAuthVersions(c.Request.Context(), user.Id); e != nil {
+		productIdentityError(c, e)
+		return
+	}
+	if e := model.ReconcileProductIdentity(c.Request.Context(), &user); e != nil {
+		productIdentityError(c, e)
+		return
+	}
 	if user.Status != common.UserStatusEnabled {
 		c.JSON(http.StatusOK, gin.H{
 			"message": "用户已被封禁",

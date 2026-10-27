@@ -69,6 +69,7 @@ export interface LoginSession {
 }
 
 export interface AuthBundle {
+  central_session_handoff?: boolean
   access_token: string
   token_type: 'Bearer' | string
   access_expires_at: number

@@ -9,7 +9,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/console_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -78,7 +77,7 @@ func buildCompletionRatioMetaValue(optionValues map[string]string) string {
 }
 
 func GetOptions(c *gin.Context) {
-	_, projected := authz.ProductPrincipal(c)
+	projected := legacyProductView(c)
 	var options []*model.Option
 	optionValues := make(map[string]string)
 	common.OptionMapRWMutex.Lock()
@@ -138,7 +137,7 @@ func UpdateOption(c *gin.Context) {
 		})
 		return
 	}
-	if _, projected := authz.ProductPrincipal(c); projected && !ProductRuntimeOption(option.Key) {
+	if projected := legacyProductView(c); projected && !ProductRuntimeOption(option.Key) {
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "UNIHUB_RUNTIME_OPTION_FORBIDDEN"})
 		return
 	}
@@ -152,7 +151,7 @@ func UpdateOption(c *gin.Context) {
 	default:
 		option.Value = fmt.Sprintf("%v", option.Value)
 	}
-	if _, projected := authz.ProductPrincipal(c); projected {
+	if legacyProductView(c) {
 		if err := validateProductRuntimeOption(option.Key, option.Value.(string)); err != nil {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"success": false, "code": "UNIHUB_RUNTIME_OPTION_INVALID"})
 			return

@@ -37,6 +37,13 @@ func registerUniHubProductApplicationRoutes() {
 	middleware.RegisterUniHubManagementRoute(http.MethodPost, "/api/client_model_routes/", routingWrite)
 	middleware.RegisterUniHubManagementRoute(http.MethodPut, "/api/client_model_routes/", routingWrite)
 	middleware.RegisterUniHubManagementRoute(http.MethodDelete, "/api/client_model_routes/:id", routingWrite)
+	for _, path := range []string{"/api/user/", "/api/user/search", "/api/user/:id", "/api/user/:id/oauth/bindings", "/api/user/2fa/stats"} {
+		middleware.RegisterUniHubManagementRoute(http.MethodGet, path, authz.Permission{Resource: "user", Action: "read"})
+	}
+	for _, entry := range []struct{ method, path string }{{"POST", "/api/user/"}, {"POST", "/api/user/manage"}, {"PUT", "/api/user/"}, {"DELETE", "/api/user/:id"}, {"DELETE", "/api/user/:id/oauth/bindings/:provider_id"}, {"DELETE", "/api/user/:id/bindings/:binding_type"}, {"DELETE", "/api/user/:id/reset_passkey"}, {"DELETE", "/api/user/:id/2fa"}} {
+		middleware.RegisterUniHubManagementRoute(entry.method, entry.path, authz.Permission{Resource: "user", Action: "write"})
+	}
+
 	middleware.RegisterUniHubManagementRoute(http.MethodGet, "/api/option/", authz.Permission{Resource: "settings", Action: "read"})
 	middleware.RegisterUniHubManagementRoute(http.MethodPut, "/api/option/", authz.Permission{Resource: "settings", Action: "write"})
 }

@@ -116,9 +116,7 @@ type SettingsPageFormActionsProps = {
 
 export function SettingsPageFormActions(props: SettingsPageFormActionsProps) {
   const user = useAuthStore((state) => state.auth.user)
-  const readOnly =
-    user?.identity_source === 'unihub' &&
-    !canUseProductFeature(user, 'settings', 'write')
+  const readOnly = !canUseProductFeature(user, 'settings', 'write')
   const { t } = useTranslation()
   const saveLabel = props.isSaving
     ? (props.savingLabel ?? 'Saving...')

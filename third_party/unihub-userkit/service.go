@@ -18,16 +18,18 @@ type User struct {
 	Email string `json:"email"`
 }
 type Access struct {
-	Issuer      string   `json:"issuer"`
-	Subject     string   `json:"subject"`
-	ProductID   string   `json:"product_id"`
-	InstanceID  string   `json:"instance_id"`
-	User        User     `json:"user"`
-	Roles       []string `json:"roles"`
-	Permissions []string `json:"permissions"`
-	Version     int64    `json:"version"`
-	Active      bool     `json:"active"`
-	ExpiresAt   int64    `json:"expires_at"`
+	ProductRole         int                        `json:"product_role"`
+	PermissionOverrides map[string]map[string]bool `json:"permission_overrides,omitempty"`
+	Issuer              string                     `json:"issuer"`
+	Subject             string                     `json:"subject"`
+	ProductID           string                     `json:"product_id"`
+	InstanceID          string                     `json:"instance_id"`
+	User                User                       `json:"user"`
+	Roles               []string                   `json:"roles"`
+	Permissions         []string                   `json:"permissions"`
+	Version             int64                      `json:"version"`
+	Active              bool                       `json:"active"`
+	ExpiresAt           int64                      `json:"expires_at"`
 }
 type Provider interface {
 	Resolve(context.Context, string) (Access, error)

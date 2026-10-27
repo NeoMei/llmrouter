@@ -94,6 +94,9 @@ func relaySelectedChannel(c *gin.Context, relayInfo *relaycommon.RelayInfo, chan
 		return types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry()), false
 	}
 	c.Request.Body = io.NopCloser(bodyStorage)
+	if err := service.MarkProductFundingDispatched(c.Request.Context(), relayInfo); err != nil {
+		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry()), false
+	}
 	if relayInfo.NativeBilling != nil && !relayInfo.PlatformMode {
 		if err := service.MarkNativeBillingDispatched(c.Request.Context(), relayInfo); err != nil {
 			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry()), false

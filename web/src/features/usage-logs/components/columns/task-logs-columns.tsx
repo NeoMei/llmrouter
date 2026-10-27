@@ -27,7 +27,6 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
 import { formatTimestampToDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { useAuthStore } from '@/stores/auth-store'
 
 import { TASK_ACTIONS, TASK_STATUS } from '../../constants'
 import { taskActionMapper, taskStatusMapper } from '../../lib/mappers'
@@ -92,9 +91,6 @@ function AudioPreviewCell({ log }: { log: TaskLog }) {
 }
 
 export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
-  const projected = useAuthStore(
-    (state) => state.auth.user?.identity_source === 'unihub'
-  )
   const { t } = useTranslation()
   const columns: ColumnDef<TaskLog>[] = [
     {
@@ -138,7 +134,6 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
           <button
             type='button'
             className='flex items-center gap-1.5 text-left'
-            disabled={projected}
             onClick={(e) => {
               e.stopPropagation()
               setSelectedUserId(log.user_id)

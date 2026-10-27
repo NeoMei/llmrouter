@@ -21,7 +21,6 @@ import { useTranslation } from 'react-i18next'
 
 import { useStatus } from '@/hooks/use-status'
 import { parseHeaderNavModulesFromStatus } from '@/lib/nav-modules'
-import { canOpenProductPage } from '@/lib/product-access'
 import { useAuthStore } from '@/stores/auth-store'
 
 export type TopNavLink = {
@@ -101,13 +100,5 @@ export function useTopNavLinks(): TopNavLink[] {
     links.push({ title: t('About'), href: '/about' })
   }
 
-  if (auth.user?.identity_source === 'unihub') {
-    return links.filter(
-      (link) =>
-        link.external ||
-        ['/', '/docs', '/about'].includes(link.href) ||
-        canOpenProductPage(auth.user, link.href)
-    )
-  }
   return links
 }

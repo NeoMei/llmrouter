@@ -114,9 +114,7 @@ export function SettingsPage<
 }: SettingsPageProps<TSettings, TSectionId, TExtraArgs>) {
   const { t } = useTranslation()
   const user = useAuthStore((state) => state.auth.user)
-  const readOnly =
-    user?.identity_source === 'unihub' &&
-    !canUseProductFeature(user, 'settings', 'write')
+  const readOnly = !canUseProductFeature(user, 'settings', 'write')
   const { data, isLoading } = useSystemOptions()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const params = useParams({ from: routePath as any })

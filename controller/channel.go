@@ -1116,7 +1116,7 @@ func UpdateChannel(c *gin.Context) {
 	channel.Key = ""
 	clearChannelInfo(&channel.Channel)
 	responseChannel := any(channel)
-	if _, product := authz.ProductPrincipal(c); product {
+	if legacyProductView(c) {
 		responseChannel = productChannelView(c, &channel.Channel)
 	}
 	c.JSON(http.StatusOK, gin.H{

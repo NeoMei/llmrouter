@@ -136,3 +136,24 @@ func TestConfigRejectsNonArrayOrInvalidModelIdentifiers(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"allowed-model"}, config.Models)
 }
+
+func TestRuntimeBrowserConfigurationDoesNotRequireReplacingNativeAuthenticator(t *testing.T) {
+	t.Setenv("UNIHUB_PRODUCT_ENABLED", "false")
+	t.Setenv("UNIHUB_PRODUCT_RUNTIME_ENABLED", "true")
+	t.Setenv("UNIHUB_ORIGIN", "https://hub.test")
+	t.Setenv("UNIHUB_PRODUCT_RUNTIME_TOKEN", strings.Repeat("s", 32))
+	t.Setenv("UNIHUB_PRODUCT_CLIENT_ID", "native-router")
+	t.Setenv("UNIHUB_PRODUCT_REDIRECT_URI", "https://router.test/api/unihub/callback")
+	t.Setenv("UNIHUB_PRODUCT_OIDC_ISSUER", "")
+	c, e := FromEnv()
+	require.NoError(t, e)
+	require.False(t, c.Enabled)
+	require.Equal(t, "native-router", c.ClientID)
+	require.Equal(t, "https://hub.test", c.PublicOrigin)
+	require.True(t, BrowserConfigReady(c))
+	require.True(t, BrowserHandoffEnabled())
+	t.Setenv("UNIHUB_PRODUCT_REDIRECT_URI", "")
+	_, e = FromEnv()
+	require.Error(t, e)
+	require.False(t, BrowserHandoffEnabled())
+}

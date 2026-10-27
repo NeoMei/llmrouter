@@ -42,7 +42,8 @@ func CheckUniHubProjection(userID int) (bool, error) {
 	if errors.Is(err, gorm.ErrRecordNotFound) && user.IdentitySource == "" {
 		return false, nil
 	}
-	if err != nil || len(mapping.IdentityKey) < 12 || user.DeletedAt.Valid || user.IdentitySource != UniHubIdentitySource || user.UniHubUserID != mapping.Subject || user.Status != common.UserStatusEnabled || user.Role != common.RoleCommonUser || user.Quota != 0 || user.UsedQuota != 0 || user.RequestCount != 0 || user.Password != "" || user.AccessToken != nil || user.AffCode != "unihub_"+mapping.IdentityKey[:12] || user.AffCount != 0 || user.AffQuota != 0 || user.AffHistoryQuota != 0 || user.InviterId != 0 || user.StripeCustomer != "" {
+	sum := sha256.Sum256([]byte(mapping.Issuer + "\x00" + mapping.Subject))
+	if err != nil || mapping.IdentityKey != hex.EncodeToString(sum[:]) || user.DeletedAt.Valid || user.IdentitySource != UniHubIdentitySource || user.UniHubUserID != mapping.Subject {
 		return true, ErrUniHubProjectionInvalid
 	}
 	return true, nil
@@ -68,7 +69,7 @@ func ResolveUniHubProjection(identity platformaccount.Identity) (*User, error) {
 				if err = tx.First(&user, mapping.UserID).Error; err != nil {
 					return err
 				}
-				if mapping.Issuer != issuer || mapping.Subject != subject || user.IdentitySource != UniHubIdentitySource || user.UniHubUserID != subject || user.DeletedAt.Valid || user.Role != common.RoleCommonUser || user.Quota != 0 || user.UsedQuota != 0 || user.RequestCount != 0 || user.Password != "" || user.AccessToken != nil || user.AffCode != "unihub_"+identityKey[:12] || user.AffCount != 0 || user.AffQuota != 0 || user.AffHistoryQuota != 0 || user.InviterId != 0 || user.StripeCustomer != "" || user.Status != common.UserStatusEnabled {
+				if mapping.Issuer != issuer || mapping.Subject != subject || user.IdentitySource != UniHubIdentitySource || user.UniHubUserID != subject || user.DeletedAt.Valid || (!platformaccount.RuntimeEnabled() && user.Status != common.UserStatusEnabled) {
 					return errors.New("UniHub identity projection mismatch")
 				}
 				return nil
@@ -78,7 +79,14 @@ func ResolveUniHubProjection(identity platformaccount.Identity) (*User, error) {
 			}
 			username := "unihub_" + identityKey[:12]
 			user = User{Username: username, DisplayName: identity.User.Name, Email: identity.User.Email, Password: "", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", Quota: 0, AuthVersion: 1, AffCode: username, IdentitySource: UniHubIdentitySource, UniHubUserID: subject}
-			if err = tx.Create(&user).Error; err != nil {
+			if platformaccount.RuntimeEnabled() {
+				user.ProductRegistrationPending = true
+				user.ProductJITPending = true
+				err = user.InsertWithTx(tx, 0)
+			} else {
+				err = tx.Create(&user).Error
+			}
+			if err != nil {
 				return err
 			}
 			return tx.Create(&UniHubIdentityMapping{Issuer: issuer, Subject: subject, IdentityKey: identityKey, UserID: user.Id}).Error
@@ -93,4 +101,70 @@ func ResolveUniHubProjection(identity platformaccount.Identity) (*User, error) {
 		}
 	}
 	return nil, fmt.Errorf("UniHub identity mapping contention")
+}
+
+// BindUniHubIdentity consumes a server-verified central binding. The caller must
+// prove the local subject; profile/email similarity is never evidence of a link.
+func BindUniHubIdentity(identity platformaccount.Identity, localID int) (*User, error) {
+	issuer, subject := strings.TrimSpace(identity.Issuer), strings.TrimSpace(identity.User.ID)
+	if localID <= 0 || issuer == "" || subject == "" || len(issuer) > 255 || len(subject) > 128 {
+		return nil, ErrUniHubProjectionInvalid
+	}
+	sum := sha256.Sum256([]byte(issuer + "\x00" + subject))
+	key := hex.EncodeToString(sum[:])
+	var user User
+	e := DB.Transaction(func(tx *gorm.DB) error {
+		if e := tx.First(&user, localID).Error; e != nil {
+			return e
+		}
+		if user.DeletedAt.Valid {
+			return ErrUniHubProjectionInvalid
+		}
+		var byIdentity UniHubIdentityMapping
+		e := tx.Where("identity_key = ?", key).First(&byIdentity).Error
+		if e == nil && byIdentity.UserID != localID {
+			return ErrUniHubProjectionInvalid
+		}
+		if e != nil && !errors.Is(e, gorm.ErrRecordNotFound) {
+			return e
+		}
+		var byLocal UniHubIdentityMapping
+		e = tx.Where("user_id = ?", localID).First(&byLocal).Error
+		if e == nil && (byLocal.IdentityKey != key || byLocal.Issuer != issuer || byLocal.Subject != subject) {
+			return ErrUniHubProjectionInvalid
+		}
+		if e != nil && !errors.Is(e, gorm.ErrRecordNotFound) {
+			return e
+		}
+		if user.IdentitySource != "" && user.IdentitySource != ProductIdentityPending && (user.IdentitySource != UniHubIdentitySource || user.UniHubUserID != subject) {
+			return ErrUniHubProjectionInvalid
+		}
+		if errors.Is(e, gorm.ErrRecordNotFound) {
+			if e = tx.Create(&UniHubIdentityMapping{Issuer: issuer, Subject: subject, IdentityKey: key, UserID: localID}).Error; e != nil {
+				return e
+			}
+		}
+		if e = tx.Model(&user).Updates(map[string]any{"identity_source": UniHubIdentitySource, "unihub_user_id": subject}).Error; e != nil {
+			return e
+		}
+		user.IdentitySource = UniHubIdentitySource
+		user.UniHubUserID = subject
+		return nil
+	})
+	if e != nil {
+		return nil, e
+	}
+	_ = populateUserCache(user)
+	return &user, nil
+}
+
+func VerifyUniHubIdentityBinding(localID int, issuer, subject string) error {
+	var mapping UniHubIdentityMapping
+	if e := DB.Where("user_id = ?", localID).First(&mapping).Error; e != nil {
+		return e
+	}
+	if mapping.Issuer != issuer || mapping.Subject != subject {
+		return ErrUniHubProjectionInvalid
+	}
+	return nil
 }

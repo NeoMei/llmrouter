@@ -10,9 +10,11 @@ import (
 	"sync"
 	"time"
 
+	userkit "github.com/NeoMei/UniHub/packages/userkit-go"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/internal/platformaccount"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
@@ -57,6 +59,19 @@ func Login(c *gin.Context) {
 	user := model.User{
 		Username: username,
 		Password: password,
+	}
+	if platformaccount.RuntimeEnabled() {
+		var prior model.User
+		if e := model.DB.Where("username = ? OR email = ?", username, username).First(&prior).Error; e == nil {
+			if e = model.SyncProductAuthVersions(c.Request.Context(), prior.Id); e != nil {
+				productIdentityError(c, e)
+				return
+			}
+			if e = model.ReconcileProductIdentity(c.Request.Context(), &prior); e != nil {
+				productIdentityError(c, e)
+				return
+			}
+		}
 	}
 	err = user.ValidateAndFill()
 	if err != nil {
@@ -156,6 +171,16 @@ func setupLogin(user *model.User, c *gin.Context) {
 }
 
 func setupLoginAtAuthVersion(user *model.User, expectedAuthVersion int64, c *gin.Context) {
+	if user != nil {
+		if e := model.SyncProductAuthVersions(c.Request.Context(), user.Id); e != nil {
+			productIdentityError(c, e)
+			return
+		}
+		if e := model.ReconcileProductIdentity(c.Request.Context(), user); e != nil {
+			productIdentityError(c, e)
+			return
+		}
+	}
 	if user == nil || user.Id <= 0 || user.Status != common.UserStatusEnabled {
 		common.ApiErrorI18n(c, i18n.MsgAuthUserBanned)
 		return
@@ -163,6 +188,16 @@ func setupLoginAtAuthVersion(user *model.User, expectedAuthVersion int64, c *gin
 	currentUser, err := model.GetUserById(user.Id, false)
 	if err != nil {
 		common.ApiError(c, err)
+		return
+	}
+	if platformaccount.RuntimeEnabled() {
+		if err = applyCurrentProductIdentity(c, currentUser, true); err != nil {
+			productIdentityError(c, err)
+			return
+		}
+	}
+	if err = model.RefreshProductBalance(c.Request.Context(), currentUser); err != nil {
+		productIdentityError(c, err)
 		return
 	}
 	var bundle *service.AuthBundle
@@ -194,11 +229,12 @@ func setupLoginAtAuthVersion(user *model.User, expectedAuthVersion int64, c *gin
 		"message": "",
 		"success": true,
 		"data": gin.H{
-			"access_token":      bundle.AccessToken,
-			"token_type":        bundle.TokenType,
-			"access_expires_at": bundle.AccessExpiresAt,
-			"session":           bundle.Session,
-			"user":              buildSelfUserData(currentUser),
+			"central_session_handoff": platformaccount.BrowserHandoffEnabled(),
+			"access_token":            bundle.AccessToken,
+			"token_type":              bundle.TokenType,
+			"access_expires_at":       bundle.AccessExpiresAt,
+			"session":                 bundle.Session,
+			"user":                    productSelfData(c, currentUser),
 		},
 	})
 }
@@ -287,6 +323,10 @@ func Register(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserRegisterFailed)
 		return
 	}
+	if err := completePendingProductIdentity(c, &insertedUser); err != nil {
+		productIdentityError(c, err)
+		return
+	}
 	// 生成默认令牌
 	if constant.GenerateDefaultToken {
 		key, err := common.GenerateKey()
@@ -332,6 +372,12 @@ func GetAllUsers(c *gin.Context) {
 		return
 	}
 
+	for _, user := range users {
+		if e := refreshProductUserForRead(c, user); e != nil {
+			productIdentityError(c, e)
+			return
+		}
+	}
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(users)
 
@@ -362,6 +408,12 @@ func SearchUsers(c *gin.Context) {
 		return
 	}
 
+	for _, user := range users {
+		if e := refreshProductUserForRead(c, user); e != nil {
+			productIdentityError(c, e)
+			return
+		}
+	}
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(users)
 	common.ApiSuccess(c, pageInfo)
@@ -384,11 +436,36 @@ func GetUser(c *gin.Context) {
 		return
 	}
 	myRole := c.GetInt("role")
+	if !refreshManagedTarget(c, user) {
+		return
+	}
 	if !canManageTargetRole(myRole, user.Role) {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionSameLevel)
 		return
 	}
+	if e := model.RefreshProductBalance(c.Request.Context(), user); e != nil {
+		productIdentityError(c, e)
+		return
+	}
 	user.AdminPermissions = authz.Capabilities(user.Id, user.Role)
+	if platformaccount.RuntimeEnabled() {
+		snapshot, e := platformaccount.IdentityForLocal(c.Request.Context(), strconv.Itoa(user.Id))
+		if e != nil {
+			productIdentityError(c, e)
+			return
+		}
+		user.Role = middleware.RoleFromAccess(snapshot.Access)
+		user.AdminPermissions = map[string]map[string]bool{}
+		for _, permission := range snapshot.Access.Permissions {
+			resource, action, valid := strings.Cut(permission, ":")
+			if valid {
+				if user.AdminPermissions[resource] == nil {
+					user.AdminPermissions[resource] = map[string]bool{}
+				}
+				user.AdminPermissions[resource][action] = true
+			}
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -486,13 +563,22 @@ func GetSelf(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	responseData := buildSelfUserData(user)
+	if err := completePendingProductIdentity(c, user); err != nil {
+		productIdentityError(c, err)
+		return
+	}
+	if err := model.RefreshProductBalance(c.Request.Context(), user); err != nil {
+		productIdentityError(c, err)
+		return
+	}
+	responseData := productSelfData(c, user)
 	// The authenticated role is loaded from GetUserCache. It should equal the
 	// row role, but use it for capabilities so GetSelf and login/refresh remain
 	// consistent with the authorization decision made for this request.
 	permissions := calculateUserPermissions(userRole)
 	permissions["admin_permissions"] = authz.RequestCapabilities(c)
 	responseData["permissions"] = permissions
+	responseData["role"] = userRole
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -506,13 +592,7 @@ func GetSelf(c *gin.Context) {
 // login and refresh. It intentionally excludes password, management PAT and
 // administrator-only remarks.
 func buildSelfUserData(user *model.User) map[string]interface{} {
-	if user.IdentitySource == model.UniHubIdentitySource {
-		return map[string]interface{}{
-			"id": user.Id, "username": user.Username, "display_name": user.DisplayName,
-			"email": user.Email, "role": user.Role, "status": user.Status,
-			"identity_source": user.IdentitySource, "unihub_user_id": user.UniHubUserID,
-		}
-	}
+
 	affCode := user.AffCode
 	userSetting := user.GetSetting()
 	permissions := calculateUserPermissions(user.Role)
@@ -699,6 +779,9 @@ func UpdateUser(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if !refreshManagedTarget(c, originUser) {
+		return
+	}
 	if updatedUser.Role != common.RoleGuestUser && updatedUser.Role != originUser.Role {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
@@ -713,6 +796,19 @@ func UpdateUser(c *gin.Context) {
 		updatedUser.Password = "" // rollback to what it should be
 	}
 	updatePassword := updatedUser.Password != ""
+	if platformaccount.RuntimeEnabled() {
+		if _, e := mutateProductIdentity(c, originUser.Id, userkit.ProductIdentityMutation{Event: "profile"}); e != nil {
+			productIdentityError(c, e)
+			return
+		}
+	}
+	if platformaccount.RuntimeEnabled() && updatedUser.AdminPermissions != nil {
+		if _, e := mutateProductIdentity(c, originUser.Id, userkit.ProductIdentityMutation{Event: "authorization", PermissionOverrides: updatedUser.AdminPermissions}); e != nil {
+			productIdentityError(c, e)
+			return
+		}
+		updatedUser.AdminPermissions = nil
+	}
 	authzTouched := false
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
 		if err := updatedUser.EditWithTx(tx, updatePassword); err != nil {
@@ -730,6 +826,10 @@ func UpdateUser(c *gin.Context) {
 			common.ApiError(c, err)
 			return
 		}
+	}
+	if err := model.SyncProductAuthVersions(c.Request.Context(), updatedUser.Id); err != nil {
+		productIdentityError(c, err)
+		return
 	}
 	if updatedUser.AuthVersion > originUser.AuthVersion {
 		if _, err := model.RevokeAllUserSessions(updatedUser.Id, "admin_user_update"); err != nil {
@@ -772,11 +872,17 @@ func AdminClearUserBinding(c *gin.Context) {
 	}
 
 	myRole := c.GetInt("role")
+	if !refreshManagedTarget(c, user) {
+		return
+	}
 	if !canManageTargetRole(myRole, user.Role) {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionSameLevel)
 		return
 	}
 
+	if !authorizeProductIdentityWrite(c, id, "oauth") {
+		return
+	}
 	if err := user.ClearBinding(bindingType); err != nil {
 		common.ApiError(c, err)
 		return
@@ -976,6 +1082,10 @@ func DeleteUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
 		return
 	}
+	if platformaccount.RuntimeEnabled() {
+		handleCentralUserManagement(c, originUser, "delete")
+		return
+	}
 	err = model.HardDeleteUserById(id)
 	if err != nil {
 		common.ApiError(c, err)
@@ -995,6 +1105,10 @@ func DeleteUser(c *gin.Context) {
 func DeleteSelf(c *gin.Context) {
 	id := c.GetInt("id")
 	user, _ := model.GetUserById(id, false)
+	if platformaccount.RuntimeEnabled() {
+		handleCentralUserManagement(c, user, "delete")
+		return
+	}
 
 	if user.Role == common.RoleRootUser {
 		common.ApiErrorI18n(c, i18n.MsgUserCannotDeleteRootUser)
@@ -1059,6 +1173,20 @@ func CreateUser(c *gin.Context) {
 		}
 	}
 	cleanUser.FinishInsert(0)
+	if platformaccount.RuntimeEnabled() {
+		desiredRole := cleanUser.Role
+		overrides := user.AdminPermissions
+		if e := completePendingProductIdentity(c, &cleanUser); e != nil {
+			productIdentityError(c, e)
+			return
+		}
+		if desiredRole > common.RoleCommonUser || overrides != nil {
+			if _, e := mutateProductIdentity(c, cleanUser.Id, userkit.ProductIdentityMutation{Event: "authorization", ProductRole: &desiredRole, PermissionOverrides: overrides}); e != nil {
+				productIdentityError(c, e)
+				return
+			}
+		}
+	}
 
 	recordManageAuditFor(c, cleanUser.Id, "user.create", map[string]interface{}{
 		"username": cleanUser.Username,
@@ -1072,6 +1200,9 @@ func CreateUser(c *gin.Context) {
 }
 
 func updateAdminPermissionsForUserInTx(c *gin.Context, tx *gorm.DB, userID int, userRole int, permissions map[string]map[string]bool) (bool, error) {
+	if platformaccount.RuntimeEnabled() {
+		return false, nil
+	}
 	if permissions == nil {
 		if userRole < common.RoleAdminUser && c.GetInt("role") == common.RoleRootUser {
 			return true, authz.ClearUserAuthorizationInTx(tx, userID)
@@ -1113,8 +1244,15 @@ func ManageUser(c *gin.Context) {
 		return
 	}
 	myRole := c.GetInt("role")
+	if !refreshManagedTarget(c, &user) {
+		return
+	}
 	if !canManageTargetRole(myRole, user.Role) {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
+		return
+	}
+	if platformaccount.RuntimeEnabled() && req.Action != "add_quota" {
+		handleCentralUserManagement(c, &user, req.Action)
 		return
 	}
 	switch req.Action {
@@ -1174,6 +1312,9 @@ func ManageUser(c *gin.Context) {
 		}
 		user.Role = common.RoleCommonUser
 	case "add_quota":
+		if handleProductQuotaAdjustment(c, &user, req.Mode, req.Value) {
+			return
+		}
 		switch req.Mode {
 		case "add":
 			if req.Value <= 0 {

@@ -30,8 +30,9 @@ func SetUniHubRouter(r *gin.Engine, c platformaccount.Config) {
 		nativeAccess := err == nil && (policy.IsPrivateManagementRequest(ctx.Request) || policy.NativePublicEnabled)
 		ctx.JSON(http.StatusOK, struct {
 			platformaccount.Config
-			NativeAccess bool `json:"native_access"`
-		}{Config: c, NativeAccess: nativeAccess})
+			NativeAccess      bool `json:"native_access"`
+			BrowserSSOEnabled bool `json:"browser_sso_enabled"`
+		}{Config: c, NativeAccess: nativeAccess, BrowserSSOEnabled: platformaccount.RuntimeEnabled() && platformaccount.BrowserConfigReady(c)})
 	})
 	r.POST("/api/unihub/identity", func(ctx *gin.Context) {
 		ctx.Header("Cache-Control", "no-store")
@@ -81,6 +82,7 @@ func SetUniHubRouter(r *gin.Engine, c platformaccount.Config) {
 			ctx.Status(401)
 			return
 		}
+		local.Role = middleware.RoleFromAccess(access)
 		user := controller.BuildSelfUserData(local)
 		user["permissions"] = gin.H{"admin_permissions": permissionsForAccess(access)}
 

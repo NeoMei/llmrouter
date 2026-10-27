@@ -39,7 +39,6 @@ import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { formatLogQuota, formatTimestampToDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { useAuthStore } from '@/stores/auth-store'
 
 import { LOG_TYPE_ALL_VALUE } from '../../constants'
 import type { UsageLog } from '../../data/schema'
@@ -291,9 +290,6 @@ function buildTypeDetailSegments(
 
 export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
   const { t } = useTranslation()
-  const projected = useAuthStore(
-    (state) => state.auth.user?.identity_source === 'unihub'
-  )
   const columns: ColumnDef<UsageLog>[] = [
     {
       accessorKey: 'created_at',
@@ -421,7 +417,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                         </PopoverContent>
                       </Popover>
                     )}
-                    {affinity && !projected && (
+                    {affinity && (
                       <button
                         type='button'
                         className='absolute -top-1 -right-1 leading-none text-amber-500'
@@ -502,7 +498,6 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
             <button
               type='button'
               className='flex items-center gap-1.5 text-left'
-              disabled={projected}
               onClick={(e) => {
                 e.stopPropagation()
                 setSelectedUserId(log.user_id)
@@ -709,19 +704,6 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         const quota = row.getValue('quota') as number
         const other = parseLogOther(log.other)
         const isSubscription = other?.billing_source === 'subscription'
-
-        if (other?.funding_owner === 'unihub') {
-          return (
-            <div className='flex flex-col gap-0.5 text-xs'>
-              <a href='/unihub' className='underline'>
-                {t('UniHub billing')}
-              </a>
-              <span className='text-muted-foreground'>
-                {other.central_status ?? t('Pending settlement')}
-              </span>
-            </div>
-          )
-        }
 
         if (other?.financial_details === false) {
           return (

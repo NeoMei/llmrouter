@@ -46,7 +46,6 @@ export function ProfileDropdown() {
   const [open, setOpen] = useDialogState()
   const user = useAuthStore((state) => state.auth.user)
   const { displayName, roleLabel } = useUserDisplay(user)
-  const projected = user?.identity_source === 'unihub'
   const isSuperAdmin = user?.role === ROLE.SUPER_ADMIN
   const isWalletVisible = useIsSidebarModuleVisible('/wallet')
   const avatarName = user?.username || displayName
@@ -103,14 +102,12 @@ export function ProfileDropdown() {
 
           <DropdownMenuSeparator />
 
-          <DropdownMenuItem
-            onClick={() => navigate({ to: projected ? '/unihub' : '/profile' })}
-          >
+          <DropdownMenuItem onClick={() => navigate({ to: '/profile' })}>
             <User className='size-4' />
-            {t(projected ? 'UniHub account' : 'Profile')}
+            {t('Profile')}
           </DropdownMenuItem>
 
-          {!projected && isWalletVisible && (
+          {isWalletVisible && (
             <DropdownMenuItem onClick={() => navigate({ to: '/wallet' })}>
               <Wallet className='size-4' />
               {t('Wallet')}

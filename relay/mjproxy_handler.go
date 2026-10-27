@@ -228,11 +228,18 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 	requestURL := getMjRequestPath(c.Request.URL.String())
 	baseURL := c.GetString("base_url")
 	fullRequestURL := fmt.Sprintf("%s%s", baseURL, requestURL)
+	info.PriceData = priceData
+	if err = service.PrepareMidjourneyAdmission(c.Request.Context(), info, priceData.Quota, true); err != nil {
+		return service.MidjourneyErrorWrapper(constant.MjRequestError, "funding_admission_failed")
+	}
 	mjResp, _, err := service.DoMidjourneyHttpRequest(c, time.Second*60, fullRequestURL)
 	if err != nil {
 		return &mjResp.Response
 	}
 	midjResponse := &mjResp.Response
+	if err = service.FinishMidjourneyAdmission(c.Request.Context(), info, mjResp.StatusCode == http.StatusOK && midjResponse.Code == 1); err != nil {
+		return service.MidjourneyErrorWrapper(constant.MjRequestError, "funding_release_pending")
+	}
 	midjourneyTask := &model.Midjourney{
 		UserId:      info.UserId,
 		Code:        midjResponse.Code,
@@ -283,7 +290,9 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 			Group:     info.UsingGroup,
 			Other:     other,
 		})
-		model.UpdateUserUsedQuotaAndRequestCount(info.UserId, midjourneyTask.Quota)
+		if info.BillingSource != "unihub" {
+			model.UpdateUserUsedQuotaAndRequestCount(info.UserId, midjourneyTask.Quota)
+		}
 		model.UpdateChannelUsedQuota(billingChannelId, midjourneyTask.Quota)
 	}
 	c.Writer.WriteHeader(mjResp.StatusCode)
@@ -539,6 +548,10 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 		}
 	}
 
+	relayInfo.PriceData = priceData
+	if err = service.PrepareMidjourneyAdmission(c.Request.Context(), relayInfo, priceData.Quota, consumeQuota); err != nil {
+		return service.MidjourneyErrorWrapper(constant.MjRequestError, "funding_admission_failed")
+	}
 	midjResponseWithStatus, responseBody, err := service.DoMidjourneyHttpRequest(c, time.Second*60, fullRequestURL)
 	if err != nil {
 		return &midjResponseWithStatus.Response
@@ -584,6 +597,9 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 		//非1-提交成功,21-任务已存在和22-排队中，则记录错误原因
 		midjourneyTask.FailReason = midjResponse.Description
 		consumeQuota = false
+	}
+	if err = service.FinishMidjourneyAdmission(c.Request.Context(), relayInfo, consumeQuota && midjResponseWithStatus.StatusCode == http.StatusOK); err != nil {
+		return service.MidjourneyErrorWrapper(constant.MjRequestError, "funding_release_pending")
 	}
 
 	if midjResponse.Code == 21 { //21-任务已存在（处理中或者有结果了）
@@ -648,7 +664,9 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 			Group:     relayInfo.UsingGroup,
 			Other:     other,
 		})
-		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, midjourneyTask.Quota)
+		if relayInfo.BillingSource != "unihub" {
+			model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, midjourneyTask.Quota)
+		}
 		model.UpdateChannelUsedQuota(billingChannelId, midjourneyTask.Quota)
 	}
 

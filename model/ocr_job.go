@@ -47,31 +47,32 @@ type OCRJob struct {
 	ResultURL        string `gorm:"type:text" json:"-"`
 	ResultResourceID string `gorm:"size:36"`
 
-	ID              string `gorm:"primaryKey;size:36"`
-	UserID          int    `gorm:"uniqueIndex:idx_ocr_owner_key,priority:1"`
-	IdempotencyKey  string `gorm:"size:128;uniqueIndex:idx_ocr_owner_key,priority:2"`
-	TokenID         int
-	ChannelID       int
-	Contract        string `gorm:"type:text" json:"-"`
-	Model           string `gorm:"size:128"`
-	BillingGroup    string `gorm:"size:128"`
-	Preference      string `gorm:"size:32"`
-	Quota           int
-	Redis           bool
-	Funding         string `gorm:"size:32"`
-	PlatformCallID  string `gorm:"size:128;index"`
-	PlatformPrice   string `gorm:"type:text"`
-	BillingState    string `gorm:"size:32;index"`
-	SubmissionState string `gorm:"size:32"`
-	MemberID        string `gorm:"size:128"`
-	AccountBinding  string `gorm:"type:text" json:"-"`
-	ClaimID         string `gorm:"size:36" json:"-"`
-	ProviderJobID   string `gorm:"size:256" json:"-"`
-	Decision        string `gorm:"size:32"`
-	Reason          string `gorm:"size:64"`
-	Version         int64
-	CreatedAt       int64
-	UpdatedAt       int64
+	ID               string `gorm:"primaryKey;size:36"`
+	UserID           int    `gorm:"uniqueIndex:idx_ocr_owner_key,priority:1"`
+	IdempotencyKey   string `gorm:"size:128;uniqueIndex:idx_ocr_owner_key,priority:2"`
+	TokenID          int
+	ChannelID        int
+	Contract         string `gorm:"type:text" json:"-"`
+	Model            string `gorm:"size:128"`
+	BillingGroup     string `gorm:"size:128"`
+	Preference       string `gorm:"size:32"`
+	Quota            int
+	Redis            bool
+	Funding          string `gorm:"size:32"`
+	CentralAccountID string `gorm:"size:128"`
+	PlatformCallID   string `gorm:"size:128;index"`
+	PlatformPrice    string `gorm:"type:text"`
+	BillingState     string `gorm:"size:32;index"`
+	SubmissionState  string `gorm:"size:32"`
+	MemberID         string `gorm:"size:128"`
+	AccountBinding   string `gorm:"type:text" json:"-"`
+	ClaimID          string `gorm:"size:36" json:"-"`
+	ProviderJobID    string `gorm:"size:256" json:"-"`
+	Decision         string `gorm:"size:32"`
+	Reason           string `gorm:"size:64"`
+	Version          int64
+	CreatedAt        int64
+	UpdatedAt        int64
 }
 
 // An applied operation is the receipt for its SQL delta. CacheAttempt is never
@@ -192,6 +193,11 @@ func (s *OCRBillingStore) CreateIntent(ctx context.Context, a OCRAdmission) (OCR
 	}
 	job := OCRJob{ID: uuid.NewString(), UserID: a.UserID, TokenID: a.TokenID, ChannelID: a.ChannelID, IdempotencyKey: a.IdempotencyKey, Contract: string(raw), Model: a.Model, BillingGroup: a.Group, Preference: a.Preference, Quota: quota, PlatformCallID: platformCall, PlatformPrice: platformPrice, Funding: funding, Redis: s.cache != nil, BillingState: "pending", SubmissionState: "unclaimed", CreatedAt: time.Now().Unix(), UpdatedAt: time.Now().Unix()}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if job.Funding != "platform" {
+			if err := lockProductFundingAdmission(tx, job.UserID); err != nil {
+				return err
+			}
+		}
 		result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&job)
 		if result.Error != nil {
 			return result.Error
@@ -256,6 +262,9 @@ func ocrLockJobForFunding(tx *gorm.DB, id string) (*OCRJob, []UserSubscription, 
 	j, err := ocrLockJob(tx, id)
 	if err != nil {
 		return j, nil, err
+	}
+	if j.Funding == "unihub" {
+		return j, nil, lockOCRFundingOwner(tx, j.UserID)
 	}
 	var subs []UserSubscription
 	if j.Decision != "" {
@@ -448,6 +457,15 @@ func (s *OCRBillingStore) Reserve(ctx context.Context, id string) (OCRJob, error
 	snapshot, err := s.Inspect(ctx, id)
 	if err != nil {
 		return OCRJob{}, err
+	}
+	if snapshot.Job.Funding != "platform" {
+		_, managed, e := ProductFundingStoreForUser(ctx, snapshot.Job.UserID)
+		if e != nil {
+			return snapshot.Job, e
+		}
+		if managed {
+			return s.reserveManagedProductFunding(ctx, snapshot.Job)
+		}
 	}
 	if snapshot.Job.Funding == "platform" {
 		err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -751,6 +769,9 @@ func (s *OCRBillingStore) Finish(ctx context.Context, id, outcome string) (OCRJo
 	if err != nil {
 		return OCRJob{}, err
 	}
+	if mode.Job.Funding == "unihub" {
+		return s.finishProductOCR(ctx, mode.Job, outcome)
+	}
 	if mode.Job.Funding == "platform" {
 		err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			j, err := ocrLockJob(tx, id)
@@ -784,7 +805,7 @@ func (s *OCRBillingStore) Finish(ctx context.Context, id, outcome string) (OCRJo
 		}
 		return out.Job, readErr
 	}
-	if mode.Job.Redis != (s.cache != nil) {
+	if mode.Job.CentralAccountID == "" && mode.Job.Redis != (s.cache != nil) {
 		return mode.Job, ErrOCRReconciliation
 	}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {

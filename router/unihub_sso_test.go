@@ -169,7 +169,7 @@ func TestUniHubSSORetriesDiscoveryAfterOutage(t *testing.T) {
 	f.unavailable.Store(true)
 	failed := f.login(context.Background())
 	assert.Equal(t, http.StatusSeeOther, failed.Code)
-	assert.Equal(t, "/unihub?sso_error=1", failed.Header().Get("Location"))
+	assert.Equal(t, "/sign-in?redirect=%2Fchannels&unihub_silent=done", failed.Header().Get("Location"))
 	assert.Empty(t, failed.Result().Cookies())
 	assert.EqualValues(t, 1, f.discoveryCalls.Load())
 	f.unavailable.Store(false)
@@ -195,7 +195,7 @@ func TestUniHubSSOReturnsToKeysWithNativeAccessDisabledOrEnabled(t *testing.T) {
 			require.Equal(t, "/keys", complete.Header().Get("Location"))
 			require.Contains(t, strings.Join(complete.Header().Values("Set-Cookie"), "\n"), service.RefreshCookieName+"=")
 			invalid := httptest.NewRecorder()
-			f.router.ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:58119/api/unihub/login?return_to=/keys/secrets", nil))
+			f.router.ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:58119/api/unihub/login?return_to=/api/token/secrets", nil))
 			require.Equal(t, http.StatusBadRequest, invalid.Code)
 		})
 	}
@@ -236,7 +236,7 @@ func TestUniHubSSOConcurrentInitializationPreservesCallbacks(t *testing.T) {
 	assert.EqualValues(t, 1, mappings)
 	assert.EqualValues(t, 5, sessions)
 	replayed := f.callback(t, logins[0])
-	assert.Equal(t, "/unihub?sso_error=1", replayed.Header().Get("Location"))
+	assert.Equal(t, "/sign-in?redirect=%2Fdashboard&unihub_silent=done", replayed.Header().Get("Location"))
 	assert.EqualValues(t, 5, f.tokenCalls.Load())
 }
 
@@ -259,14 +259,14 @@ func TestUniHubSSODiscoveryWaiterCanCancel(t *testing.T) {
 	go func() { waiter <- f.login(ctx) }()
 	select {
 	case failed := <-waiter:
-		assert.Equal(t, "/unihub?sso_error=1", failed.Header().Get("Location"))
+		assert.Equal(t, "/sign-in?redirect=%2Fchannels&unihub_silent=done", failed.Header().Get("Location"))
 		assert.Empty(t, failed.Result().Cookies())
 	case <-time.After(5 * time.Second):
 		t.Error("canceled login waited for the in-flight discovery")
 	}
 	assert.EqualValues(t, 1, f.discoveryCalls.Load())
 	release.Do(func() { close(gate) })
-	assert.Equal(t, "/unihub?sso_error=1", (<-first).Header().Get("Location"))
+	assert.Equal(t, "/sign-in?redirect=%2Fchannels&unihub_silent=done", (<-first).Header().Get("Location"))
 	// The canceled waiter did not start a second discovery; the next login can.
 	f.unavailable.Store(false)
 	recovered := f.login(context.Background())

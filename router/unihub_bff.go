@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/internal/platformaccount"
 	"github.com/QuantumNous/new-api/middleware"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/gin-gonic/gin"
@@ -50,12 +52,24 @@ func registerUniHubBFF(r *gin.Engine, config platformaccount.Config) {
 	r.GET("/api/unihub/access", middleware.UserAuth(), func(c *gin.Context) {
 		p, ok := authz.ProductPrincipal(c)
 		identity, session := middleware.GetSessionAuthIdentity(c)
-		if !config.Enabled || !ok || !session {
+		if (!config.Enabled && !platformaccount.RuntimeEnabled()) || !ok || !session {
 			c.Status(401)
 			return
 		}
 		c.Header("Cache-Control", "no-store")
-		c.JSON(200, gin.H{"access": p.Access, "permissions": gin.H{"admin_permissions": authz.RequestCapabilities(c)}, "csrf_token": uniHubCSRF(identity.SessionID)})
+		user, e := model.GetUserById(identity.UserID, false)
+		if e != nil {
+			c.Status(503)
+			return
+		}
+		user.Role = middleware.RoleFromAccess(p.Access)
+		if e = model.RefreshProductBalance(c.Request.Context(), user); e != nil {
+			c.Status(503)
+			return
+		}
+		userData := controller.CurrentProductUserData(c, user)
+		userData["permissions"] = gin.H{"admin_permissions": authz.RequestCapabilities(c)}
+		c.JSON(200, gin.H{"user": userData, "access": p.Access, "permissions": gin.H{"admin_permissions": authz.RequestCapabilities(c)}, "csrf_token": uniHubCSRF(identity.SessionID)})
 	})
 	r.Any("/api/unihub/bff/*path", middleware.UserAuth(), func(c *gin.Context) {
 		c.Header("Cache-Control", "no-store")

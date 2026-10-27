@@ -302,6 +302,7 @@ export interface TopupRecord {
   complete_time?: number
   /** Payment status */
   status: TopupStatus
+  credit_status?: 'pending' | 'applied'
   /** Payment provider identifier for provider-native orders */
   payment_provider?: string
   /** Settlement currency for provider-native orders */

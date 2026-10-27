@@ -37,7 +37,7 @@ export function safeProductReturn(value: string | null | undefined): string {
     const parsed = new URL(value, 'https://product.invalid')
     if (parsed.origin !== 'https://product.invalid') return '/dashboard'
     const known =
-      /^(?:\/(?:unihub|keys|wallet|profile|403|pricing)|\/dashboard(?:\/(?:overview|models|flow|users))?|\/channels|\/usage-logs(?:\/(?:common|drawing|task))?|\/models(?:\/metadata)?|\/client-model-routes|\/system-settings(?:\/models(?:\/(?:global|routing-reliability))?)?)\/?$/
+      /^\/(?:unihub|keys|wallet|profile|403|pricing|rankings|playground|chat|dashboard|channels|usage-logs|models|client-model-routes|system-settings|system-info|users|redemption-codes|subscriptions)(?:\/[a-zA-Z0-9_-]+)*\/?$/
     if (!known.test(parsed.pathname)) return '/dashboard'
     return parsed.pathname + parsed.search + parsed.hash
   } catch {
@@ -46,6 +46,22 @@ export function safeProductReturn(value: string | null | undefined): string {
 }
 export function productLoginURL(returnTo: string): string {
   return `/api/unihub/login?return_to=${encodeURIComponent(safeProductReturn(returnTo))}`
+}
+
+export function silentProductLoginURL(
+  enabled: boolean,
+  search: string,
+  returnTo: string,
+  storage: Pick<Storage, 'getItem' | 'setItem'>
+): string | null {
+  if (!enabled || storage.getItem('unihub:signed-out') === '1') return null
+  if (new URLSearchParams(search).get('unihub_silent') === 'done') {
+    storage.setItem('unihub:silent-attempted', '1')
+    return null
+  }
+  if (storage.getItem('unihub:silent-attempted') === '1') return null
+  storage.setItem('unihub:silent-attempted', '1')
+  return `/api/unihub/login?prompt=none&return_to=${encodeURIComponent(safeProductReturn(returnTo))}`
 }
 
 export function markProductSignedOut(): void {

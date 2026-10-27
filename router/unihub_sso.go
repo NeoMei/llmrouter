@@ -2,6 +2,9 @@ package router
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"errors"
 	userkit "github.com/NeoMei/UniHub/packages/userkit-go"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/internal/platformaccount"
@@ -18,18 +21,44 @@ import (
 )
 
 func registerUniHubSSO(r *gin.Engine, config platformaccount.Config) {
+	broker := newProductBrowserBridge(r, config)
 	var initialization singleflight.Group
 	var browserMu sync.RWMutex
 	var browser *userkit.Browser
+	type loginReturn struct {
+		binding     [32]byte
+		destination string
+		silent      bool
+		expires     time.Time
+	}
+	var returnsMu sync.Mutex
+	returns := map[string]loginReturn{}
+	fallback := func(c *gin.Context, record loginReturn) {
+		q := url.Values{"unihub_silent": {"done"}}
+		if userkit.SafeReturn(record.destination) {
+			q.Set("redirect", record.destination)
+		}
+		c.Redirect(303, "/sign-in?"+q.Encode())
+	}
+
 	r.GET("/api/unihub/login", func(c *gin.Context) {
 		c.Header("Cache-Control", "no-store")
-		if !config.Enabled || config.OIDCIssuer == "" {
-			c.Redirect(303, "/unihub?sso_error=1")
-			return
-		}
 		destination := c.Query("return_to")
 		if destination == "" {
 			destination = "/dashboard"
+		}
+		silent := c.Query("prompt") == "none"
+		record := loginReturn{destination: destination, silent: silent}
+		if c.Query("prompt") != "" && !silent {
+			c.Status(400)
+			return
+		}
+		if broker.begin(c, destination) {
+			return
+		}
+		if !config.Enabled || config.OIDCIssuer == "" {
+			fallback(c, record)
+			return
 		}
 		returnURL, returnError := url.Parse(destination)
 		if !userkit.SafeReturn(destination) || returnError != nil || !middleware.IsProductApplicationPath(returnURL.Path) {
@@ -62,12 +91,12 @@ func registerUniHubSSO(r *gin.Engine, config platformaccount.Config) {
 			select {
 			case initialized := <-result:
 				if initialized.Err != nil {
-					c.Redirect(303, "/unihub?sso_error=1")
+					fallback(c, record)
 					return
 				}
 				activeBrowser = initialized.Val.(*userkit.Browser)
 			case <-c.Request.Context().Done():
-				c.Redirect(303, "/unihub?sso_error=1")
+				fallback(c, record)
 				return
 			}
 		}
@@ -81,41 +110,86 @@ func registerUniHubSSO(r *gin.Engine, config platformaccount.Config) {
 			c.Status(400)
 			return
 		}
+		authorizationURL, parseError := url.Parse(authorize)
+		if parseError != nil {
+			c.Status(503)
+			return
+		}
+		state := authorizationURL.Query().Get("state")
+		if state == "" {
+			c.Status(503)
+			return
+		}
+		record.binding = sha256.Sum256([]byte(binding))
+		record.expires = time.Now().Add(5 * time.Minute)
+		returnsMu.Lock()
+		for key, value := range returns {
+			if time.Now().After(value.expires) {
+				delete(returns, key)
+			}
+		}
+		if len(returns) >= 4096 {
+			returnsMu.Unlock()
+			c.Status(429)
+			return
+		}
+		returns[state] = record
+		returnsMu.Unlock()
+		if silent {
+			q := authorizationURL.Query()
+			q.Set("prompt", "none")
+			authorizationURL.RawQuery = q.Encode()
+			authorize = authorizationURL.String()
+		}
 		callback, _ := url.Parse(config.RedirectURI)
 		http.SetCookie(c.Writer, &http.Cookie{Name: "unihub_oidc_binding", Value: binding, Path: callback.Path, MaxAge: 300, HttpOnly: true, Secure: callback.Scheme == "https", SameSite: http.SameSiteLaxMode})
 		c.Redirect(303, authorize)
 	})
 	r.GET("/api/unihub/callback", func(c *gin.Context) {
+		if broker.callback(c) {
+			return
+		}
 		c.Header("Cache-Control", "no-store")
 		c.Header("Referrer-Policy", "no-referrer")
+		record := loginReturn{destination: "/dashboard", silent: true}
+		observedBinding, _ := c.Cookie("unihub_oidc_binding")
+		observedHash := sha256.Sum256([]byte(observedBinding))
+		returnsMu.Lock()
+		stored, exists := returns[c.Query("state")]
+		if exists && time.Now().Before(stored.expires) && subtle.ConstantTimeCompare(stored.binding[:], observedHash[:]) == 1 {
+			record = stored
+			delete(returns, c.Query("state"))
+		}
+		returnsMu.Unlock()
+
 		browserMu.RLock()
 		activeBrowser := browser
 		browserMu.RUnlock()
 		if activeBrowser == nil || !config.Enabled {
-			c.Redirect(303, "/unihub?sso_error=1")
+			fallback(c, record)
 			return
 		}
 		binding, e := c.Cookie("unihub_oidc_binding")
 		if e != nil {
-			c.Redirect(303, "/unihub?sso_error=1")
+			fallback(c, record)
 			return
 		}
 		callback, _ := url.Parse(config.RedirectURI)
 		http.SetCookie(c.Writer, &http.Cookie{Name: "unihub_oidc_binding", Path: callback.Path, MaxAge: -1, HttpOnly: true, Secure: callback.Scheme == "https", SameSite: http.SameSiteLaxMode})
 		// The configured origin is trusted; the observed callback path/query must match.
 		if c.Request.Host != callback.Host {
-			c.Redirect(303, "/unihub?sso_error=1")
+			fallback(c, record)
 			return
 		}
 		absolute := callback.Scheme + "://" + callback.Host + c.Request.URL.RequestURI()
 		proof, e := activeBrowser.Complete(c.Request.Context(), binding, absolute)
 		if e != nil {
-			c.Redirect(303, "/unihub?sso_error=1")
+			fallback(c, record)
 			return
 		}
 		access, e := config.Resolve(c.Request.Context(), proof.AccessToken)
 		if e != nil {
-			c.Redirect(303, "/unihub?sso_error=1")
+			fallback(c, record)
 			return
 		}
 		if proof.ExpiresAt < access.ExpiresAt {
@@ -123,7 +197,7 @@ func registerUniHubSSO(r *gin.Engine, config platformaccount.Config) {
 		}
 		bundle, e := createUniHubSession(c, access, proof.AccessToken)
 		if e != nil {
-			c.Redirect(303, "/unihub?sso_error=1")
+			fallback(c, record)
 			return
 		}
 		service.WriteRefreshCookie(c, bundle.RefreshToken)
@@ -138,6 +212,21 @@ func createUniHubSession(c *gin.Context, a userkit.Access, bearer string) (*serv
 	userID, e := strconv.Atoi(local.ID)
 	if e != nil {
 		return nil, e
+	}
+	if platformaccount.RuntimeEnabled() {
+		client, err := platformaccount.RuntimeClient()
+		if err != nil {
+			return nil, err
+		}
+		if _, err = client.Bind(c.Request.Context(), bearer, userkit.BindRequest{LocalUserID: local.ID, BindingKey: "oidc:" + local.ID}); err != nil {
+			return nil, err
+		}
+		if err = reconcileSSOUser(c, userID); err != nil {
+			return nil, err
+		}
+		if err = model.EnsureProductFunding(c.Request.Context(), userID); err != nil && !errors.Is(err, model.ErrProductFundingMigration) {
+			return nil, err
+		}
 	}
 	bundle, e := service.CreateUniHubLoginSession(userID, a.ExpiresAt, c.ClientIP(), c.Request.UserAgent())
 	if e != nil {

@@ -6,7 +6,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service/authz"
 
 	"github.com/gin-gonic/gin"
 )
@@ -105,7 +104,7 @@ func GetAllFlowQuotaDates(c *gin.Context) {
 	}
 	username := c.Query("username")
 	role := c.GetInt("role")
-	if _, projected := authz.ProductPrincipal(c); projected {
+	if legacyProductView(c) {
 		role = common.RoleAdminUser
 	}
 	dates, err := model.GetFlowQuotaData(startTimestamp, endTimestamp, username, 0, role)

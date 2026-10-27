@@ -52,7 +52,7 @@ import type { ApiKey } from '@/features/keys/types'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { getUserModels } from '@/lib/api'
 import { MOTION_TRANSITION } from '@/lib/motion'
-import { canOpenProductPage, canUseProductFeature } from '@/lib/product-access'
+import { ROLE } from '@/lib/roles'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -458,7 +458,6 @@ function CompactQuickAction(props: { action: QuickAction }) {
 export function OverviewDashboard() {
   const { t } = useTranslation()
   const user = useAuthStore((state) => state.auth.user)
-  const projected = user?.identity_source === 'unihub'
   const { items: apiInfoItems } = useApiInfo()
   const {
     apiInfo: showApiInfoPanel,
@@ -473,11 +472,10 @@ export function OverviewDashboard() {
   const requestCount = Number(user?.request_count ?? 0)
   const remainQuota = Number(user?.quota ?? 0)
   const usedQuota = Number(user?.used_quota ?? 0)
-  const isAdmin = canUseProductFeature(user, 'log')
+  const isAdmin = Boolean(user?.role && user.role >= ROLE.ADMIN)
 
   const apiKeysQuery = useQuery({
     queryKey: ['dashboard', 'overview', 'api-keys'],
-    enabled: !projected,
     queryFn: async () => {
       const result = await getApiKeys({ p: 1, size: 10 })
       return result.success ? (result.data?.items ?? []) : []
@@ -558,16 +556,8 @@ export function OverviewDashboard() {
   )
 
   const visibleQuickActions = useMemo(
-    () =>
-      quickActions.filter((action) =>
-        projected
-          ? canOpenProductPage(
-              user,
-              action.to === '/usage-logs' ? '/usage-logs/common' : action.to
-            )
-          : !action.adminOnly || isAdmin
-      ),
-    [isAdmin, quickActions, projected, user]
+    () => quickActions.filter((action) => !action.adminOnly || isAdmin),
+    [isAdmin, quickActions]
   )
 
   const heroSignals = useMemo<HeroSignal[]>(
@@ -629,21 +619,7 @@ export function OverviewDashboard() {
 
   return (
     <div className='flex flex-col gap-4'>
-      {projected ? (
-        <CardStaggerContainer>
-          <CardStaggerItem className='bg-card rounded-2xl border p-4 shadow-xs sm:p-5'>
-            <h3 className='font-semibold'>{t('Recommended actions')}</h3>
-            <div className='mt-3 flex flex-wrap gap-2'>
-              {visibleQuickActions.map((action) => (
-                <CompactQuickAction key={action.title} action={action} />
-              ))}
-              <Button variant='outline' render={<Link to='/unihub' />}>
-                {t('UniHub account')}
-              </Button>
-            </div>
-          </CardStaggerItem>
-        </CardStaggerContainer>
-      ) : setupGuideExpanded ? (
+      {setupGuideExpanded ? (
         <CardStaggerContainer className='grid items-stretch gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]'>
           <CardStaggerItem className='bg-card h-full overflow-hidden rounded-2xl border shadow-xs'>
             <div className='relative h-full overflow-hidden p-4 sm:p-5'>

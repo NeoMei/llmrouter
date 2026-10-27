@@ -21,7 +21,11 @@ import { describe, test } from 'node:test'
 
 import type { AuthUser } from '@/stores/auth-store'
 
-import { getSavedLanguage, sanitizeAuthRedirect } from './auth-redirect'
+import {
+  getSavedLanguage,
+  sanitizeAuthRedirect,
+  getProductLoginDestination,
+} from './auth-redirect'
 
 const origin = 'https://dashboard.example.com'
 
@@ -93,6 +97,26 @@ describe('saved authentication language', () => {
     assert.equal(
       getSavedLanguage({ ...user, setting: { language: 123 } }),
       undefined
+    )
+  })
+})
+
+describe('central browser session handoff after original authentication', () => {
+  test('uses a same-origin handoff only for an explicit completed-login flag', () => {
+    assert.equal(
+      getProductLoginDestination(true, '/users?page=2', origin),
+      '/api/user/auth/unihub-handoff?return_to=%2Fusers%3Fpage%3D2'
+    )
+    assert.equal(getProductLoginDestination(false, '/users', origin), '/users')
+    assert.equal(
+      getProductLoginDestination(undefined, '/users', origin),
+      '/users'
+    )
+  })
+  test('does not put a foreign or ambiguous return URL into the handoff', () => {
+    assert.equal(
+      getProductLoginDestination(true, 'https://attacker.test/', origin),
+      '/api/user/auth/unihub-handoff?return_to=%2Fdashboard'
     )
   })
 })

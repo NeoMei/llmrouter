@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { clearAuthentication, getFreshAuthHeaders } from '@/lib/auth-session'
-import { useAuthStore } from '@/stores/auth-store'
+import { useAuthStore, type AuthUser } from '@/stores/auth-store'
 
 import { UniHubClient, UniHubError, type User, type Account } from './sdk'
 
@@ -205,6 +205,7 @@ export interface ProductAccessSnapshot {
   permissions: NonNullable<
     ReturnType<typeof useAuthStore.getState>['auth']['user']
   >['permissions']
+  user?: AuthUser
   csrf_token: string
 }
 export async function refreshProductAccess(): Promise<ProductAccessSnapshot> {
@@ -238,9 +239,21 @@ export async function refreshProductAccess(): Promise<ProductAccessSnapshot> {
   ) {
     throw new Error('UniHub session or payer changed')
   }
+  if (
+    data.user &&
+    (data.user.id !== auth.user.id ||
+      data.user.identity_source !== 'unihub' ||
+      data.user.unihub_user_id !== auth.user.unihub_user_id)
+  ) {
+    clearAuthentication()
+    throw new Error('Product identity proof rejected')
+  }
   useAuthStore
     .getState()
-    .auth.setUser({ ...auth.user, permissions: data.permissions })
+    .auth.setUser({
+      ...(data.user ?? auth.user),
+      permissions: data.permissions,
+    })
   return data
 }
 // Hydrate through the session-authenticated BFF. A restored identity cannot

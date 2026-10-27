@@ -20,53 +20,22 @@ import type { AuthUser } from '@/stores/auth-store'
 
 import { ROLE } from './roles'
 
-// Product capabilities are live central grants. The native role stays unchanged.
+// Effective product roles and capabilities have the same meaning for every
+// authentication provider. The backend resolves their authoritative source.
 export function canUseProductFeature(
   user: AuthUser | null | undefined,
   resource: string,
   action = 'read'
 ): boolean {
-  return user?.identity_source === 'unihub'
-    ? user.permissions?.admin_permissions?.[resource]?.[action] === true
-    : (user?.role ?? 0) >= ROLE.ADMIN
-}
-
-export function canOpenProductPage(
-  user: AuthUser | null | undefined,
-  pathname: string
-): boolean {
-  if (['/unihub', '/403'].includes(pathname)) return true
-  if (pathname === '/keys') return canUseProductFeature(user, 'product', 'use')
-  if (/^\/dashboard(?:\/(?:overview|models|flow))?\/?$/.test(pathname)) {
-    return canUseProductFeature(user, 'product', 'use')
-  }
-  if (pathname === '/dashboard/users') {
-    return canUseProductFeature(user, 'log', 'read')
-  }
-  if (/^\/usage-logs(?:\/(?:common|drawing|task))?\/?$/.test(pathname)) {
-    return canUseProductFeature(user, 'product', 'use')
-  }
-  if (pathname === '/pricing') {
-    return canUseProductFeature(user, 'product', 'use')
-  }
-  if (/^\/channels\/?$/.test(pathname)) {
-    return canUseProductFeature(user, 'channel', 'read')
-  }
-  if (/^\/models(?:\/metadata)?\/?$/.test(pathname)) {
+  if (!user) return false
+  if (resource === 'product' && action === 'use') {
     return (
-      canUseProductFeature(user, 'catalog', 'read') ||
-      canUseProductFeature(user, 'channel', 'read')
+      user.role >= ROLE.USER &&
+      user.permissions?.admin_permissions?.product?.use !== false
     )
   }
-  if (pathname === '/client-model-routes') {
-    return canUseProductFeature(user, 'routing', 'read')
-  }
-  if (
-    /^\/system-settings\/models\/(?:global|routing-reliability)\/?$/.test(
-      pathname
-    )
-  ) {
-    return canUseProductFeature(user, 'settings', 'read')
-  }
-  return false
+  if (user.role === ROLE.SUPER_ADMIN) return true
+  const permissions = user.permissions?.admin_permissions
+  if (permissions) return permissions[resource]?.[action] === true
+  return user.role >= ROLE.ADMIN
 }

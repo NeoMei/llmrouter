@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -499,6 +500,17 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 			Count(&count).Error; err != nil {
 			return nil, err
 		}
+		if tx.Migrator().HasTable(&ProductSubscriptionPurchase{}) {
+			var pending int64
+			q := tx.Session(&gorm.Session{NewDB: true}).Model(&ProductSubscriptionPurchase{}).Where("user_id = ? AND plan_id = ? AND state = ?", userId, plan.Id, "pending")
+			if current := tx.Statement.Context.Value(productSubscriptionPurchaseContext{}); current != nil {
+				q = q.Where("id <> ?", current)
+			}
+			if err := q.Count(&pending).Error; err != nil {
+				return nil, err
+			}
+			count += pending
+		}
 		if count >= int64(plan.MaxPurchasePerUser) {
 			return nil, errors.New("已达到该套餐购买上限")
 		}
@@ -754,7 +766,20 @@ func calcSubscriptionBalanceQuota(priceAmount float64) (int, error) {
 }
 
 // PurchaseSubscriptionWithBalance creates a subscription by deducting the user's wallet quota.
-func PurchaseSubscriptionWithBalance(userId int, planId int) error {
+func PurchaseSubscriptionWithBalance(userId int, planId int, requestKeys ...string) error {
+	if len(requestKeys) > 1 {
+		return ErrProductFundingConflict
+	}
+	if store, managed, err := ProductFundingStoreForUser(context.Background(), userId); err != nil {
+		return err
+	} else if managed {
+		key := ""
+		if len(requestKeys) == 1 {
+			key = requestKeys[0]
+		}
+		return purchaseProductSubscription(context.Background(), userId, planId, key, store)
+	}
+
 	if userId <= 0 || planId <= 0 {
 		return errors.New("invalid userId or planId")
 	}

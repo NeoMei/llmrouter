@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"path"
 	"strings"
 
 	"github.com/QuantumNous/new-api/internal/unihubaccess"
@@ -45,13 +46,15 @@ func NativeWebBoundary() gin.HandlerFunc {
 // IsProductApplicationPath is shared with OIDC return validation. It identifies
 // product pages, never API namespaces or a prefix-wide static fallback.
 func IsProductApplicationPath(path string) bool {
-	switch path {
-	case "/", "/unihub", "/dashboard", "/dashboard/", "/dashboard/overview", "/dashboard/models", "/dashboard/flow", "/dashboard/users",
-		"/channels", "/channels/", "/wallet", "/keys", "/profile", "/403", "/pricing",
-		"/usage-logs", "/usage-logs/", "/usage-logs/common", "/usage-logs/drawing", "/usage-logs/task",
-		"/models", "/models/", "/models/metadata", "/client-model-routes", "/client-model-routes/",
-		"/system-settings", "/system-settings/models", "/system-settings/models/global", "/system-settings/models/routing-reliability":
-		return true
+	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") || strings.ContainsAny(path, "\\\r\n%?#") || strings.Contains(path, "/../") || strings.Contains(path, "/./") {
+		return false
 	}
-	return false
+	clean := pathpkgClean(path)
+	for _, prefix := range []string{"/dashboard", "/channels", "/wallet", "/keys", "/profile", "/users", "/playground", "/models", "/client-model-routes", "/system-settings", "/usage-logs", "/deployments", "/docs"} {
+		if clean == prefix || strings.HasPrefix(clean, prefix+"/") {
+			return true
+		}
+	}
+	return clean == "/" || clean == "/unihub" || clean == "/403" || clean == "/pricing" || clean == "/about" || clean == "/privacy-policy" || clean == "/user-agreement"
 }
+func pathpkgClean(raw string) string { return path.Clean(raw) }

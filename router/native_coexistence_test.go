@@ -1,10 +1,12 @@
 package router
 
 import (
+	"github.com/bytedance/gopkg/util/gopool"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -85,25 +87,32 @@ func TestNativeCoexistencePreservesLoginWalletKeysAndManagement(t *testing.T) {
 	assert.Contains(t, config.Body.String(), `"native_access":true`)
 }
 
-func TestNativeCoexistenceKeepsProjectionNativeResourcesForbidden(t *testing.T) {
+func TestNativeCoexistenceKeepsOriginalProductResourcesAndPermissionGates(t *testing.T) {
 	f := newUniHubRegressionFixture(t)
 	t.Setenv("NATIVE_PUBLIC_ACCESS", "true")
 	require.NoError(t, f.db.AutoMigrate(&model.Channel{}, &model.Ability{}))
 	bundle, _ := decodeUniHubBundle(t, f.request(http.MethodPost, "/api/unihub/session", "product-admin", nil))
 	allowed := f.request(http.MethodGet, "/api/channel/", bundle.Data.AccessToken, nil)
 	require.Equal(t, http.StatusOK, allowed.Code, allowed.Body.String())
-	for _, tc := range []struct{ method, path string }{
-		{http.MethodGet, "/api/user/topup/self"}, {http.MethodPost, "/api/user/topup"},
-		{http.MethodGet, "/api/native-billing/self"}, {http.MethodGet, "/api/user/token"},
-		{http.MethodGet, "/api/token/"}, {http.MethodPost, "/api/token/"},
-		{http.MethodGet, "/api/user/"}, {http.MethodPost, "/api/channel/1/key"},
-		{http.MethodPost, "/v1/chat/completions"},
-	} {
-		t.Run(tc.method+tc.path, func(t *testing.T) {
-			got := f.request(tc.method, tc.path, bundle.Data.AccessToken, nil)
-			require.Equal(t, http.StatusForbidden, got.Code, got.Body.String())
-		})
+	require.NoError(t, f.db.AutoMigrate(&model.Token{}, &model.TopUp{}, &model.NativeBilling{}, &model.Log{}))
+	oldLog := model.LOG_DB
+	model.LOG_DB = f.db
+	t.Cleanup(func() {
+		require.Eventually(t, func() bool { return gopool.WorkerCount() == 0 }, 5*time.Second, 10*time.Millisecond)
+		model.LOG_DB = oldLog
+	})
+	for _, tc := range []struct {
+		method, path string
+		want         int
+	}{{"GET", "/api/user/topup/self", 200}, {"GET", "/api/native-billing/self", 200}, {"GET", "/api/token/", 200}, {"GET", "/api/user/", 403}, {"POST", "/api/channel/1/key", 403}, {"POST", "/v1/chat/completions", 204}} {
+		got := f.request(tc.method, tc.path, bundle.Data.AccessToken, nil)
+		require.Equal(t, tc.want, got.Code, got.Body.String())
 	}
+	f.revoked.Store(true)
+	for _, path := range []string{"/api/token/", "/api/user/topup/self", "/api/native-billing/self"} {
+		require.Equal(t, 401, f.request("GET", path, bundle.Data.AccessToken, nil).Code)
+	}
+
 	var projected model.User
 	require.NoError(t, f.db.First(&projected, bundle.Data.User.Id).Error)
 	assert.Equal(t, common.RoleCommonUser, projected.Role)

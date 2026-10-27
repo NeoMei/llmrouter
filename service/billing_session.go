@@ -1,8 +1,11 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	userkit "github.com/NeoMei/UniHub/packages/userkit-go"
+	"github.com/QuantumNous/new-api/internal/platformaccount"
 	"net/http"
 	"strings"
 	"sync"
@@ -24,6 +27,7 @@ import (
 // BillingSession 封装单次请求的预扣费/结算/退款生命周期。
 // 实现 relaycommon.BillingSettler 接口。
 type BillingSession struct {
+	legacyLeaseID    string
 	relayInfo        *relaycommon.RelayInfo
 	funding          FundingSource
 	preConsumedQuota int  // 实际预扣额度（信任用户可能为 0）
@@ -51,7 +55,7 @@ func (s *BillingSession) Settle(actualQuota int) error {
 	delta := actualQuota - s.preConsumedQuota
 	if delta == 0 {
 		s.settled = true
-		return nil
+		return s.finishLegacyLease("settled")
 	}
 	// 1) 调整资金来源（仅在尚未提交时执行，防止重复调用）
 	if !s.fundingSettled {
@@ -79,6 +83,9 @@ func (s *BillingSession) Settle(actualQuota int) error {
 		s.relayInfo.SubscriptionPostDelta += int64(delta)
 	}
 	s.settled = true
+	if tokenErr == nil {
+		return s.finishLegacyLease("settled")
+	}
 	return tokenErr
 }
 
@@ -88,8 +95,18 @@ func (s *BillingSession) Refund(c *gin.Context) {
 		return
 	}
 	s.mu.Lock()
-	if s.settled || s.refunded || !s.needsRefundLocked() {
+	if s.settled || s.refunded || s.fundingSettled {
 		s.mu.Unlock()
+		return
+	}
+	if !s.needsRefundLocked() {
+		// A zero/trusted pre-consume owns a migration lease but no money.
+		// Close its failed admission without manufacturing a wallet credit.
+		s.refunded = true
+		s.mu.Unlock()
+		if err := s.finishLegacyLease("refunded"); err != nil {
+			common.SysError("legacy empty admission receipt pending")
+		}
 		return
 	}
 	s.refunded = true
@@ -109,11 +126,13 @@ func (s *BillingSession) Refund(c *gin.Context) {
 	extraReserved := s.extraReserved
 	subscriptionId := s.relayInfo.SubscriptionId
 	funding := s.funding
+	leaseID := s.legacyLeaseID
 
 	gopool.Go(func() {
 		// 1) 退还资金来源
 		if err := funding.Refund(); err != nil {
 			common.SysLog("error refunding billing source: " + err.Error())
+			return
 		}
 		if extraReserved > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
 			if err := model.PostConsumeUserSubscriptionDelta(subscriptionId, -int64(extraReserved)); err != nil {
@@ -124,6 +143,12 @@ func (s *BillingSession) Refund(c *gin.Context) {
 		if tokenConsumed > 0 && !isPlayground {
 			if err := model.IncreaseTokenQuota(tokenId, tokenKey, tokenConsumed); err != nil {
 				common.SysLog("error refunding token quota: " + err.Error())
+				return
+			}
+		}
+		if leaseID != "" {
+			if err := model.FinishProductLegacyFundingLease(context.Background(), leaseID, "refunded"); err != nil {
+				common.SysError("legacy funding refund receipt pending")
 			}
 		}
 	})
@@ -194,6 +219,16 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 // preConsume 执行预扣费：信任检查 -> 令牌预扣 -> 资金来源预扣。
 // 任一步骤失败时原子回滚已完成的步骤。
 func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIError {
+	if platformaccount.RuntimeEnabled() && s.funding.Source() == BillingSourceWallet && s.legacyLeaseID == "" {
+		id := s.relayInfo.RequestId
+		if id == "" {
+			id = common.GetUUID()
+		}
+		if err := model.BeginProductLegacyFundingLease(context.Background(), id, s.relayInfo.UserId); err != nil {
+			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+		}
+		s.legacyLeaseID = id
+	}
 	effectiveQuota := quota
 
 	// ---- 信任额度旁路 ----
@@ -208,6 +243,11 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 	// ---- 1) 预扣令牌额度 ----
 	if effectiveQuota > 0 {
 		if err := PreConsumeTokenQuota(s.relayInfo, effectiveQuota); err != nil {
+			if errors.Is(err, ErrInsufficientTokenQuota) {
+				if receiptErr := s.finishLegacyLease("refunded"); receiptErr != nil {
+					return types.NewError(receiptErr, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+				}
+			}
 			return types.NewErrorWithStatusCode(err, types.ErrorCodePreConsumeTokenQuotaFailed, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 		}
 		s.tokenConsumed = effectiveQuota
@@ -220,11 +260,17 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 			if rollbackErr := model.IncreaseTokenQuota(s.relayInfo.TokenId, s.relayInfo.TokenKey, s.tokenConsumed); rollbackErr != nil {
 				common.SysLog(fmt.Sprintf("error rolling back token quota (userId=%d, tokenId=%d, amount=%d, fundingErr=%s): %s",
 					s.relayInfo.UserId, s.relayInfo.TokenId, s.tokenConsumed, err.Error(), rollbackErr.Error()))
+				// Keep the migration fence and the unresolved debit. In particular,
+				// wallet_first must not start another funding path after this error.
+				return types.NewError(fmt.Errorf("token rollback pending after funding failure: %v: %w", err, rollbackErr), types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 			}
 			s.tokenConsumed = 0
 		}
 		// TODO: model 层应定义哨兵错误（如 ErrNoActiveSubscription），用 errors.Is 替代字符串匹配
 		if errors.Is(err, ErrInsufficientWalletQuota) {
+			if receiptErr := s.finishLegacyLease("refunded"); receiptErr != nil {
+				return types.NewError(receiptErr, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+			}
 			return insufficientWalletQuotaError(s.relayInfo.UserId)
 		}
 		errMsg := err.Error()
@@ -370,7 +416,7 @@ func (s *BillingSession) syncRelayInfo() {
 // ---------------------------------------------------------------------------
 
 // NewBillingSession 根据用户计费偏好创建 BillingSession，处理 subscription_first / wallet_first 的回退。
-func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preConsumedQuota int) (*BillingSession, *types.NewAPIError) {
+func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preConsumedQuota int) (relaycommon.BillingSettler, *types.NewAPIError) {
 	if relayInfo == nil || relayInfo.PlatformMode {
 		return nil, types.NewError(fmt.Errorf("relayInfo is nil"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
@@ -378,7 +424,23 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	pref := common.NormalizeBillingPreference(relayInfo.UserSetting.BillingPreference)
 
 	// 钱包路径需要先检查用户额度
-	tryWallet := func() (*BillingSession, *types.NewAPIError) {
+	tryWallet := func() (relaycommon.BillingSettler, *types.NewAPIError) {
+		ctx := context.Background()
+		if c != nil && c.Request != nil {
+			ctx = c.Request.Context()
+		}
+		central, managed, e := newProductFundingSession(ctx, relayInfo, preConsumedQuota)
+		if e != nil {
+			var failure *userkit.RuntimeError
+			if errors.As(e, &failure) && failure.Status == 402 {
+				return nil, types.NewErrorWithStatusCode(e, types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry())
+			}
+			return nil, types.NewError(e, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+		}
+		if managed {
+			return central, nil
+		}
+
 		userQuota, err := model.GetUserQuota(relayInfo.UserId, false)
 		if err != nil {
 			return nil, types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
@@ -407,7 +469,7 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		return session, nil
 	}
 
-	trySubscription := func() (*BillingSession, *types.NewAPIError) {
+	trySubscription := func() (relaycommon.BillingSettler, *types.NewAPIError) {
 		subConsume := int64(preConsumedQuota)
 		if subConsume <= 0 {
 			subConsume = 1
@@ -470,4 +532,11 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		}
 		return session, nil
 	}
+}
+
+func (s *BillingSession) finishLegacyLease(state string) error {
+	if s.legacyLeaseID == "" {
+		return nil
+	}
+	return model.FinishProductLegacyFundingLease(context.Background(), s.legacyLeaseID, state)
 }

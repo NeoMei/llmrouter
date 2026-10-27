@@ -2,11 +2,11 @@
 package unihubaccess
 
 import (
-	"crypto/subtle"
 	"errors"
+	"net"
 	"net/http"
-	"net/url"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -14,9 +14,7 @@ type Policy struct {
 	PublicEnabled       bool
 	NativePublicEnabled bool
 	PlatformEnabled     bool
-	privateOrigins      []string
-	managementToken     string
-	trustedProxy        string
+	privateListener     string
 }
 
 func strictBool(name string, required bool) (bool, error) {
@@ -37,14 +35,6 @@ func strictBool(name string, required bool) (bool, error) {
 	}
 }
 
-func normalizeOrigin(raw string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || u.Scheme == "" || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
-		return "", errors.New("invalid private management origin")
-	}
-	return strings.ToLower(u.Scheme + "://" + u.Host), nil
-}
-
 // FromEnv parses the deployment boundary. Boolean values are intentionally
 // strict and unknown values fail closed instead of silently changing exposure.
 func FromEnv() (Policy, error) {
@@ -52,65 +42,43 @@ func FromEnv() (Policy, error) {
 	if err != nil {
 		return Policy{}, err
 	}
-	platform, err := strictBool("UNIHUB_PLATFORM_ENABLED", product)
+	platform, err := strictBool("UNIHUB_PLATFORM_ENABLED", true)
 	if err != nil {
 		return Policy{}, err
 	}
-	native, err := strictBool("NATIVE_PUBLIC_ACCESS", product)
+	native, err := strictBool("NATIVE_PUBLIC_ACCESS", true)
 	if err != nil {
 		return Policy{}, err
 	}
 	p := Policy{PublicEnabled: product, NativePublicEnabled: native, PlatformEnabled: platform}
-	rawOrigins := os.Getenv("NATIVE_ADMIN_ORIGIN")
-	if strings.TrimSpace(rawOrigins) != "" {
-		for _, raw := range strings.Split(rawOrigins, ",") {
-			origin, e := normalizeOrigin(raw)
-			if e != nil {
-				return Policy{}, e
-			}
-			p.privateOrigins = append(p.privateOrigins, origin)
+	// Only the transport's local socket address can designate the private entry.
+	// Forwarded headers and browser origins are never authorization evidence.
+	p.privateListener = strings.TrimSpace(os.Getenv("NATIVE_ADMIN_LISTEN_ADDRESS"))
+	if p.privateListener != "" {
+		host, port, err := net.SplitHostPort(p.privateListener)
+		ip := net.ParseIP(host)
+		n, portErr := strconv.Atoi(port)
+		if err != nil || ip == nil || !ip.IsLoopback() || portErr != nil || n < 1 || n > 65535 {
+			return Policy{}, errors.New("private management listener must be a loopback IP and explicit port")
 		}
+		p.privateListener = net.JoinHostPort(ip.String(), strconv.Itoa(n))
 	}
-	p.managementToken = strings.TrimSpace(os.Getenv("MANAGEMENT_TOKEN"))
-	p.trustedProxy = strings.TrimSpace(os.Getenv("NATIVE_ADMIN_PROXY"))
-	if p.PublicEnabled && len(p.privateOrigins) == 0 && p.managementToken == "" {
-		// A public deployment must retain an explicit private escape hatch.
-		return Policy{}, errors.New("private management policy is not configured")
+	if (product || platform) && p.privateListener == "" {
+		return Policy{}, errors.New("UniHub authority requires a private management listener")
 	}
 	return p, nil
 }
 
+// IsPrivateManagementRequest trusts only net/http's server-populated local
+// socket address. The private listener must never be a public proxy upstream.
+// This grants boundary access only; native login/session checks still apply.
 func (p Policy) IsPrivateManagementRequest(r *http.Request) bool {
-	if r == nil {
+	if r == nil || p.privateListener == "" {
 		return false
 	}
-	if p.managementToken != "" {
-		parts := strings.Fields(r.Header.Get("Authorization"))
-		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") && subtle.ConstantTimeCompare([]byte(parts[1]), []byte(p.managementToken)) == 1 {
-			return true
-		}
-	}
-	if len(p.privateOrigins) == 0 {
-		return false
-	}
-	origin := strings.TrimSpace(r.Header.Get("Origin"))
-	if origin == "" {
-		if ref := strings.TrimSpace(r.Header.Get("Referer")); ref != "" {
-			if u, err := url.Parse(ref); err == nil {
-				origin = u.Scheme + "://" + u.Host
-			}
-		}
-	}
-	normalized, err := normalizeOrigin(origin)
-	if err != nil {
-		return false
-	}
-	for _, trusted := range p.privateOrigins {
-		if subtle.ConstantTimeCompare([]byte(normalized), []byte(trusted)) == 1 {
-			if p.trustedProxy == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Forwarded-Host")), []byte(p.trustedProxy)) == 1 {
-				return true
-			}
-		}
-	}
-	return false
+	addr, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
+	return ok && addr.Network() == "tcp" && addr.String() == p.privateListener
 }
+
+// PrivateListenAddress is validated and normalized for startup binding.
+func (p Policy) PrivateListenAddress() string { return p.privateListener }

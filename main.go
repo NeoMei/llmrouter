@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -245,6 +246,25 @@ func main() {
 		return
 	}
 
+	privateServer, err := newPrivateHTTPServer(srv)
+	if err != nil {
+		common.FatalLog("invalid private HTTP server configuration: " + err.Error())
+		return
+	}
+	if privateServer != nil {
+		listener, listenErr := net.Listen("tcp", privateServer.Addr)
+		if listenErr != nil {
+			common.FatalLog("failed to bind private HTTP server: " + listenErr.Error())
+			return
+		}
+		defer privateServer.Close()
+		go func() {
+			if err := privateServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				common.FatalLog("private HTTP server failed: " + err.Error())
+			}
+		}()
+	}
+
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			common.FatalLog("failed to start HTTP server: " + err.Error())
@@ -264,6 +284,11 @@ func main() {
 	shutdownTimeout := time.Duration(common.GetEnvOrDefault("SHUTDOWN_TIMEOUT_SECONDS", 120)) * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
+	if privateServer != nil {
+		if err := privateServer.Shutdown(ctx); err != nil {
+			common.SysError("private HTTP server shutdown: " + err.Error())
+		}
+	}
 	if err := srv.Shutdown(ctx); err != nil {
 		common.SysError(fmt.Sprintf("server forced to shutdown: %v", err))
 	}

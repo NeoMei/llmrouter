@@ -1,64 +1,39 @@
 package middleware
 
 import (
-	"encoding/json"
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/gin-gonic/gin"
 )
 
-func setBoundaryEnv(t *testing.T) {
-	t.Helper()
-	t.Setenv("UNIHUB_PRODUCT_ENABLED", "true")
-	t.Setenv("UNIHUB_PLATFORM_ENABLED", "true")
-	t.Setenv("NATIVE_PUBLIC_ACCESS", "false")
-	t.Setenv("NATIVE_ADMIN_ORIGIN", "https://admin.example")
-	t.Setenv("MANAGEMENT_TOKEN", "secret")
-}
-
-func TestNativePublicBoundaryMigrationResponse(t *testing.T) {
-	setBoundaryEnv(t)
-	r := gin.New()
-	r.POST("/api/user/login", NativePublicBoundary(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
-	req := httptest.NewRequest(http.MethodPost, "/api/user/login", nil)
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload["success"] != false || payload["code"] != "NATIVE_ACCESS_DISABLED" || payload["message"] != "native identity and billing are managed by UniHub" {
-		t.Fatalf("unexpected payload: %#v", payload)
-	}
-}
-
-func TestNativePublicBoundaryMissingProductFailsClosed(t *testing.T) {
-	setBoundaryEnv(t)
-	t.Setenv("UNIHUB_PRODUCT_ENABLED", "")
-	r := gin.New()
-	r.POST("/api/user/login", NativePublicBoundary(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
-	req := httptest.NewRequest(http.MethodPost, "/api/user/login", nil)
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestNativePublicBoundaryPrivateToken(t *testing.T) {
-	setBoundaryEnv(t)
-	r := gin.New()
-	r.POST("/api/user/login", NativePublicBoundary(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
-	req := httptest.NewRequest(http.MethodPost, "/api/user/login", nil)
-	req.Header.Set("Authorization", "Bearer secret")
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+func TestNativePublicBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name, product, platform, native string
+		status                          int
+	}{
+		{"unihub disabled native", "true", "true", "false", 403},
+		{"unihub compatibility cannot reopen public", "true", "true", "true", 403},
+		{"platform authority", "false", "true", "true", 403},
+		{"missing product", "", "true", "false", 403},
+		{"explicit standalone", "false", "false", "true", 204},
+		{"standalone without opt in", "false", "false", "false", 403},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("UNIHUB_PRODUCT_ENABLED", tc.product)
+			t.Setenv("UNIHUB_PLATFORM_ENABLED", tc.platform)
+			t.Setenv("NATIVE_PUBLIC_ACCESS", tc.native)
+			t.Setenv("NATIVE_ADMIN_LISTEN_ADDRESS", "127.0.0.1:3001")
+			r := gin.New()
+			r.POST("/login", NativePublicBoundary(), func(c *gin.Context) { c.Status(204) })
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/login", nil))
+			require.Equal(t, tc.status, w.Code)
+			if tc.status == 403 {
+				assert.JSONEq(t, `{"success":false,"code":"NATIVE_ACCESS_DISABLED","message":"native identity and billing are managed by UniHub"}`, w.Body.String())
+			}
+		})
 	}
 }

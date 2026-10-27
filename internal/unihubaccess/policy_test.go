@@ -1,82 +1,73 @@
 package unihubaccess
 
 import (
+	"context"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"net"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 )
 
-func TestFromEnvPublicUniHubNativeDisabled(t *testing.T) {
+func TestPolicyConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name, product, platform, native, listener string
+		valid                                     bool
+	}{
+		{"unihub", "true", "true", "false", "127.0.0.1:3001", true},
+		{"standalone", "false", "false", "true", "", true},
+		{"private", "true", "true", "true", "127.0.0.1:3001", true},
+		{"missing product", "", "true", "false", "", false},
+		{"missing platform", "true", "", "false", "", false},
+		{"missing native", "false", "false", "", "", false},
+		{"invalid boolean", "yes", "true", "false", "", false},
+		{"wildcard listener", "true", "true", "false", "0.0.0.0:3001", false},
+		{"hostname listener", "true", "true", "false", "localhost:3001", false},
+		{"invalid port", "true", "true", "false", "127.0.0.1:0", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("UNIHUB_PRODUCT_ENABLED", tc.product)
+			t.Setenv("UNIHUB_PLATFORM_ENABLED", tc.platform)
+			t.Setenv("NATIVE_PUBLIC_ACCESS", tc.native)
+			t.Setenv("NATIVE_ADMIN_LISTEN_ADDRESS", tc.listener)
+			p, err := FromEnv()
+			if !tc.valid {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.product == "true", p.PublicEnabled)
+			assert.Equal(t, tc.platform == "true", p.PlatformEnabled)
+			assert.Equal(t, tc.native == "true", p.NativePublicEnabled)
+		})
+	}
+}
+
+func TestPrivateManagementUsesTransportNotHeaders(t *testing.T) {
 	t.Setenv("UNIHUB_PRODUCT_ENABLED", "true")
 	t.Setenv("UNIHUB_PLATFORM_ENABLED", "true")
-	t.Setenv("NATIVE_PUBLIC_ACCESS", "false")
+	t.Setenv("NATIVE_PUBLIC_ACCESS", "true")
+	t.Setenv("NATIVE_ADMIN_LISTEN_ADDRESS", "127.0.0.1:3001")
 	t.Setenv("NATIVE_ADMIN_ORIGIN", "https://admin.example")
+	t.Setenv("NATIVE_ADMIN_PROXY", "admin.example")
 	t.Setenv("MANAGEMENT_TOKEN", "secret")
 	p, err := FromEnv()
-	if err != nil {
-		t.Fatal(err)
+	require.NoError(t, err)
+	for _, auth := range [][]string{nil, {"Bearer secret"}, {"Bearer secret", "Bearer attacker"}, {"Bearer secret, Bearer attacker"}, {"Bearer"}} {
+		r := httptest.NewRequest("POST", "http://router/api/user/login?native=true", nil)
+		r.RemoteAddr = "203.0.113.20:12345"
+		r.Header.Set("Origin", "https://admin.example")
+		r.Header.Set("Referer", "https://admin.example/")
+		r.Header.Set("X-Forwarded-Host", "admin.example")
+		r.Header.Set("X-Forwarded-For", "127.0.0.1")
+		r.Header["Authorization"] = auth
+		assert.False(t, p.IsPrivateManagementRequest(r))
+		r = r.WithContext(context.WithValue(r.Context(), http.LocalAddrContextKey, &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 3000}))
+		assert.False(t, p.IsPrivateManagementRequest(r))
 	}
-	if !p.PublicEnabled || !p.PlatformEnabled || p.NativePublicEnabled {
-		t.Fatalf("unexpected policy: %+v", p)
-	}
-}
-
-func TestFromEnvRequiresProductEnvironment(t *testing.T) {
-	t.Setenv("UNIHUB_PRODUCT_ENABLED", "")
-	t.Setenv("UNIHUB_PLATFORM_ENABLED", "true")
-	if _, err := FromEnv(); err == nil {
-		t.Fatal("expected missing product environment error")
-	}
-}
-
-func TestFromEnvRequiresPlatformWhenProductEnabled(t *testing.T) {
-	t.Setenv("UNIHUB_PRODUCT_ENABLED", "true")
-	t.Setenv("UNIHUB_PLATFORM_ENABLED", "")
-	t.Setenv("NATIVE_PUBLIC_ACCESS", "false")
-	if _, err := FromEnv(); err == nil {
-		t.Fatal("expected missing platform environment error")
-	}
-}
-
-func TestFromEnvRejectsInvalidBoolean(t *testing.T) {
-	t.Setenv("UNIHUB_PRODUCT_ENABLED", "yes")
-	if _, err := FromEnv(); err == nil {
-		t.Fatal("expected strict boolean error")
-	}
-}
-
-func TestPrivateManagementRequestRequiresTrustedOriginOrToken(t *testing.T) {
-	t.Setenv("UNIHUB_PRODUCT_ENABLED", "true")
-	t.Setenv("UNIHUB_PLATFORM_ENABLED", "true")
-	t.Setenv("NATIVE_PUBLIC_ACCESS", "false")
-	t.Setenv("NATIVE_ADMIN_ORIGIN", "https://admin.example")
-	t.Setenv("MANAGEMENT_TOKEN", "secret")
-	p, err := FromEnv()
-	if err != nil {
-		t.Fatal(err)
-	}
-	req := httptest.NewRequest("POST", "https://router.example/api/user/login", nil)
-	req.Header.Set("Origin", "https://evil.example")
-	if p.IsPrivateManagementRequest(req) {
-		t.Fatal("untrusted origin accepted")
-	}
-	req.Header.Set("Authorization", "Bearer secret")
-	if !p.IsPrivateManagementRequest(req) {
-		t.Fatal("management token rejected")
-	}
-
-	// Origin access is restricted by the configured forwarded host when set.
-	t.Setenv("NATIVE_ADMIN_PROXY", "router.internal")
-	p, err = FromEnv()
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Del("Authorization")
-	req.Header.Set("Origin", "https://admin.example")
-	if p.IsPrivateManagementRequest(req) {
-		t.Fatal("origin accepted without trusted proxy")
-	}
-	req.Header.Set("X-Forwarded-Host", "router.internal")
-	if !p.IsPrivateManagementRequest(req) {
-		t.Fatal("trusted origin and proxy rejected")
-	}
+	r := httptest.NewRequest("POST", "http://router/api/user/login", nil)
+	r = r.WithContext(context.WithValue(r.Context(), http.LocalAddrContextKey, &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 3001}))
+	assert.True(t, p.IsPrivateManagementRequest(r))
+	assert.False(t, p.IsPrivateManagementRequest(nil))
 }

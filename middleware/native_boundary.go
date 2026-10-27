@@ -13,7 +13,7 @@ import (
 func NativePublicBoundary() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		policy, err := unihubaccess.FromEnv()
-		if err == nil && (!policy.PublicEnabled || policy.NativePublicEnabled || policy.IsPrivateManagementRequest(c.Request)) {
+		if err == nil && ((!policy.PublicEnabled && !policy.PlatformEnabled && policy.NativePublicEnabled) || policy.IsPrivateManagementRequest(c.Request)) {
 			c.Next()
 			return
 		}

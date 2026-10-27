@@ -26,6 +26,7 @@ import (
 // This fixture crosses the real router, distributor, controller, OpenAI adaptor,
 // UniHub client and SQLite lifecycle. Local free pricing must not bypass credits.
 func TestPlatformChatUsesFixedPayerAndNeverDebitsLegacy(t *testing.T) {
+	enableUniHubBoundary(t)
 	gin.SetMode(gin.TestMode)
 	require.NoError(t, i18n.Init())
 	oldStreaming := constant.StreamingTimeout
@@ -329,7 +330,7 @@ func TestPlatformChatUsesFixedPayerAndNeverDebitsLegacy(t *testing.T) {
 				req.Header.Set("Content-Type", "application/json")
 				rejected := httptest.NewRecorder()
 				legacy.ServeHTTP(rejected, req)
-				assert.Equal(t, http.StatusUnauthorized, rejected.Code, rejected.Body.String())
+				assert.Equal(t, http.StatusForbidden, rejected.Code, rejected.Body.String())
 				assert.Zero(t, upstreamCalls, "a model grant must not fall back to local quota")
 				assert.Nil(t, reserved, "legacy authentication must not reserve platform funds")
 			}

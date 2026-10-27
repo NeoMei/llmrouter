@@ -35,6 +35,7 @@ type uniHubRegressionBundle struct {
 }
 
 func newUniHubRegressionFixture(t *testing.T) *uniHubRegressionFixture {
+	enableUniHubBoundary(t)
 	t.Helper()
 	oldDB, oldRedis, oldSecret := model.DB, common.RedisEnabled, common.SessionSecret
 	oldSecure, oldTrusted := common.SessionCookieSecure, common.SessionCookieTrustedURLs
@@ -285,4 +286,38 @@ func TestUniHubSessionNativeAuthRegressionMatrix(t *testing.T) {
 		}
 	}
 	require.Equal(t, 204, f.request("POST", "/v1/chat/completions", native.AccessToken, nil).Code)
+}
+
+func TestPublicProjectionRejectsNativeSessionsAndOmitsNativeWallet(t *testing.T) {
+	f := newUniHubRegressionFixture(t)
+	native := model.User{Username: "native-operator", Status: common.UserStatusEnabled, Role: common.RoleCommonUser, AuthVersion: 1, AffCode: "native-operator", Quota: 12345}
+	require.NoError(t, f.db.Create(&native).Error)
+	nativeBundle, err := service.CreateLoginSession(native.Id, "password", "", "")
+	require.NoError(t, err)
+	cookie := &http.Cookie{Name: service.RefreshCookieName, Value: nativeBundle.RefreshToken}
+	for _, request := range []struct {
+		method, path, token string
+		cookie              *http.Cookie
+	}{
+		{"GET", "/api/user/self", nativeBundle.AccessToken, nil},
+		{"POST", "/api/user/auth/refresh", "", cookie},
+		{"POST", "/api/user/auth/logout", nativeBundle.AccessToken, cookie},
+	} {
+		w := f.request(request.method, request.path, request.token, request.cookie)
+		require.Equal(t, 401, w.Code, w.Body.String())
+		require.NotContains(t, w.Body.String(), "12345")
+	}
+	var session model.UserSession
+	require.NoError(t, f.db.First(&session, "sid = ?", nativeBundle.Session.SID).Error)
+	require.Equal(t, model.UserSessionStatusActive, session.Status)
+	bundle, projectedCookie := decodeUniHubBundle(t, f.request("POST", "/api/unihub/session", "public-subject", nil))
+	for _, w := range []*httptest.ResponseRecorder{
+		f.request("GET", "/api/user/self", bundle.Data.AccessToken, nil),
+		f.request("POST", "/api/user/auth/refresh", "", projectedCookie),
+	} {
+		require.Equal(t, 200, w.Code, w.Body.String())
+		for _, field := range []string{"quota", "used_quota", "aff_quota", "stripe_customer", "github_id", "password"} {
+			require.NotContains(t, w.Body.String(), `"`+field+`":`)
+		}
+	}
 }

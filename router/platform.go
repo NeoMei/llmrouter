@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/internal/platformbilling"
+	"github.com/QuantumNous/new-api/internal/unihubaccess"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -23,7 +24,15 @@ func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 	if !adapter.Enabled() {
 		return
 	}
-	engine.GET("/platform/v1/calls/:callID", middleware.RouteTag("relay"), func(c *gin.Context) {
+	platform := engine.Group("/platform/v1", middleware.RouteTag("relay"), func(c *gin.Context) {
+		policy, err := unihubaccess.FromEnv()
+		if err != nil || !policy.PlatformEnabled {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"code": "platform_billing_unavailable"}})
+			return
+		}
+		c.Next()
+	})
+	platform.GET("/calls/:callID", func(c *gin.Context) {
 		if len(c.Request.Header.Values("Authorization")) != 1 || !strings.HasPrefix(c.GetHeader("Authorization"), "Bearer uh_model_") || len(c.Request.Header.Values("X-UniHub-Task-ID")) != 1 {
 			c.AbortWithStatus(401)
 			return
@@ -35,7 +44,7 @@ func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 		}
 		c.JSON(200, receipt)
 	})
-	engine.POST("/platform/v1/chat/completions", middleware.RouteTag("relay"), func(c *gin.Context) {
+	platform.POST("/chat/completions", func(c *gin.Context) {
 		if len(c.Request.Header.Values("Authorization")) != 1 || !strings.HasPrefix(c.GetHeader("Authorization"), "Bearer uh_model_") {
 			c.AbortWithStatusJSON(401, gin.H{"error": gin.H{"code": "invalid_model_credential"}})
 			return

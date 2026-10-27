@@ -104,3 +104,13 @@ func TestPrivateListenerProvidesTransportAuthority(t *testing.T) {
 	public.Handler.ServeHTTP(w, req)
 	assert.Equal(t, 403, w.Code)
 }
+
+func TestWhitespacePrivateListenerDoesNotBindDefaultAddress(t *testing.T) {
+	t.Setenv("UNIHUB_PRODUCT_ENABLED", "false")
+	t.Setenv("UNIHUB_PLATFORM_ENABLED", "false")
+	t.Setenv("NATIVE_PUBLIC_ACCESS", "true")
+	t.Setenv("NATIVE_ADMIN_LISTEN_ADDRESS", " \t ")
+	server, err := newPrivateHTTPServer(&http.Server{Addr: "127.0.0.1:3000"})
+	require.NoError(t, err)
+	assert.Nil(t, server)
+}

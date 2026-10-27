@@ -50,8 +50,8 @@ func newPprofHTTPServer() *http.Server {
 // newPrivateHTTPServer shares the application/session handler but binds a
 // separate loopback port. Never configure a public proxy to use this port.
 func newPrivateHTTPServer(public *http.Server) (*http.Server, error) {
-	if os.Getenv("NATIVE_ADMIN_LISTEN_ADDRESS") == "" {
-		if os.Getenv("UNIHUB_PRODUCT_ENABLED") == "true" || os.Getenv("UNIHUB_PLATFORM_ENABLED") == "true" {
+	if strings.TrimSpace(os.Getenv("NATIVE_ADMIN_LISTEN_ADDRESS")) == "" {
+		if strings.TrimSpace(os.Getenv("UNIHUB_PRODUCT_ENABLED")) == "true" || strings.TrimSpace(os.Getenv("UNIHUB_PLATFORM_ENABLED")) == "true" {
 			return nil, fmt.Errorf("UniHub authority requires NATIVE_ADMIN_LISTEN_ADDRESS")
 		}
 		return nil, nil

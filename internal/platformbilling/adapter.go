@@ -62,13 +62,14 @@ type Adapter struct {
 	client *client
 }
 type Session struct {
-	adapter     *Adapter
-	call        Call
-	attempt     Attempt
-	confirmed   *Usage
-	safeFailure bool
-	uncertain   bool
-	err         error
+	adapter       *Adapter
+	call          Call
+	attempt       Attempt
+	requestTariff bool
+	confirmed     *Usage
+	safeFailure   bool
+	uncertain     bool
+	err           error
 }
 
 var stableID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
@@ -197,7 +198,7 @@ func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body [
 	var chosen *Rate
 	for i := range rates {
 		r := &rates[i]
-		if r.Model != model {
+		if r.Model != model || r.Status != "published" {
 			continue
 		}
 		rateAsset, err := normalizeAsset(r.Asset)
@@ -260,7 +261,7 @@ func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body [
 		return nil, ErrPending
 	}
 	row.Status = "RESERVED"
-	return &Session{adapter: a, call: row, safeFailure: true}, nil
+	return &Session{adapter: a, call: row, safeFailure: true, requestTariff: chosen.Metered != nil}, nil
 }
 func compareCall(old, row Call) error {
 	oldAsset, oldMode, err := normalizeFunding(old.Asset, old.FundingMode)
@@ -472,7 +473,7 @@ func (a *Adapter) Receipt(ctx context.Context, credential, task, id string) (Rec
 		return Receipt{}, ErrInvalid
 	}
 	var grant Claims
-	if err := a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": row.Model}, &grant); err != nil {
+	if err := a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": row.Model, "purpose": "receipt"}, &grant); err != nil {
 		return Receipt{}, err
 	}
 	if row.CallID != id || grant.Audience != "llmrouter" || grant.ID == "" || grant.ActorID != row.ActorID || grant.AccountID != row.AccountID || grant.OriginProductID != row.OriginProductID || grant.TaskID != task || row.TaskID != task || !grant.ExpiresAt.After(time.Now()) || !slices.Contains(grant.Models, row.Model) {

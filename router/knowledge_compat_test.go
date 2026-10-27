@@ -28,6 +28,7 @@ import (
 // Exact fixed SuperWagie request shapes cross the production Gin router,
 // bearer authentication, catalog aliases, Ali HTTP conversion and settlement.
 func TestKnowledgeCompatibleHTTP(t *testing.T) {
+	enableNativeCompatibility(t)
 	for _, scenario := range []string{"native", "native-nil", "native-true", "native-top-one", "standard-nil", "standard", "embedding", "chat", "missing-token", "bad-token", "token-model", "token-group", "channel-group", "bad-input", "null-input", "bad-documents", "bad-top-n", "zero-top-n", "over-top-n", "bad-return-documents", "passthrough", "invalid-index", "duplicate-index", "invalid-score", "missing-index", "null-score", "negative-usage", "missing-usage", "global-passthrough", "chat-passthrough", "native-override", "canonical-missing-index", "canonical-null-index", "canonical-duplicate-index", "canonical-invalid-index", "canonical-missing-score", "canonical-null-score", "canonical-invalid-score", "canonical-missing-usage", "canonical-null-usage", "canonical-null-total-tokens", "canonical-negative-usage", "canonical-cardinality", "canonical-oversized"} {
 		t.Run(scenario, func(t *testing.T) {
 			gin.SetMode(gin.TestMode)

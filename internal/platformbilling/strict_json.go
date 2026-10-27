@@ -156,6 +156,29 @@ func (s *Session) ObserveRawEnvelope(body []byte, stream bool) {
 		s.invalidateUsage()
 		return
 	}
+
+	if s.requestTariff {
+		if _, exists := envelope["error"]; exists {
+			s.invalidateUsage()
+			return
+		}
+		choices, ok := envelope["choices"].([]any)
+		if !ok || len(choices) != 1 {
+			return
+		}
+		choice, ok := choices[0].(map[string]any)
+		if !ok {
+			return
+		}
+		reason, _ := choice["finish_reason"].(string)
+		switch reason {
+		case "stop", "length", "tool_calls", "function_call", "content_filter":
+			m := RequestMeasurement{Key: "requests", Unit: "request"}
+			m.Quantity.Value = "1"
+			s.confirmed = &Usage{Metered: &RequestUsage{Version: "metered_v2", Operation: "chat", State: "confirmed", Source: "provider", Measurements: []RequestMeasurement{m}}}
+		}
+		return
+	}
 	for key := range envelope {
 		if key != "usage" && strings.EqualFold(key, "usage") {
 			s.invalidateUsage()

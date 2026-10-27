@@ -3,6 +3,7 @@ package router
 import (
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/internal/platformaccount"
+	"github.com/QuantumNous/new-api/internal/unihubaccess"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
@@ -12,7 +13,15 @@ import (
 )
 
 func SetUniHubRouter(r *gin.Engine, c platformaccount.Config) {
-	r.GET("/api/unihub/config", func(ctx *gin.Context) { ctx.Header("Cache-Control", "no-store"); ctx.JSON(http.StatusOK, c) })
+	r.GET("/api/unihub/config", func(ctx *gin.Context) {
+		ctx.Header("Cache-Control", "no-store")
+		policy, err := unihubaccess.FromEnv()
+		nativeAccess := err == nil && (policy.IsPrivateManagementRequest(ctx.Request) || (!policy.PublicEnabled && !policy.PlatformEnabled && policy.NativePublicEnabled))
+		ctx.JSON(http.StatusOK, struct {
+			platformaccount.Config
+			NativeAccess bool `json:"native_access"`
+		}{Config: c, NativeAccess: nativeAccess})
+	})
 	r.POST("/api/unihub/identity", func(ctx *gin.Context) {
 		ctx.Header("Cache-Control", "no-store")
 		if !c.Enabled {

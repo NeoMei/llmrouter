@@ -42,24 +42,60 @@ type Rational struct {
 	Numerator   string `json:"numerator"`
 	Denominator string `json:"denominator"`
 }
+type RequestTariff struct {
+	Version   string        `json:"version"`
+	Operation string        `json:"operation"`
+	Policy    string        `json:"policy"`
+	Terms     []RequestTerm `json:"terms"`
+}
+type RequestTerm struct {
+	Key   string   `json:"key"`
+	Unit  string   `json:"unit"`
+	Price Rational `json:"price"`
+	Step  *struct {
+		Value string `json:"value"`
+		Scale int    `json:"scale"`
+	} `json:"step,omitempty"`
+	Minimum *struct {
+		Value string `json:"value"`
+		Scale int    `json:"scale"`
+	} `json:"minimum,omitempty"`
+}
+type RequestUsage struct {
+	Version      string               `json:"version"`
+	Operation    string               `json:"operation"`
+	State        string               `json:"state"`
+	Source       string               `json:"source"`
+	Measurements []RequestMeasurement `json:"measurements"`
+}
+type RequestMeasurement struct {
+	Key      string `json:"key"`
+	Unit     string `json:"unit"`
+	Quantity struct {
+		Value string `json:"value"`
+		Scale int    `json:"scale"`
+	} `json:"quantity"`
+}
 type Rate struct {
-	ID         string   `json:"id"`
-	Model      string   `json:"model"`
-	Asset      string   `json:"asset"`
-	Status     string   `json:"status"`
-	Semantics  string   `json:"semantics"`
-	Input      Rational `json:"input"`
-	Output     Rational `json:"output"`
-	CacheRead  Rational `json:"cache_read"`
-	CacheWrite Rational `json:"cache_write"`
-	Reasoning  Rational `json:"reasoning"`
+	Metered    *RequestTariff `json:"metered,omitempty"`
+	ID         string         `json:"id"`
+	Model      string         `json:"model"`
+	Asset      string         `json:"asset"`
+	Status     string         `json:"status"`
+	Semantics  string         `json:"semantics"`
+	Input      Rational       `json:"input,omitempty"`
+	Output     Rational       `json:"output,omitempty"`
+	CacheRead  Rational       `json:"cache_read,omitempty"`
+	CacheWrite Rational       `json:"cache_write,omitempty"`
+	Reasoning  Rational       `json:"reasoning,omitempty"`
 }
 type Usage struct {
-	Input      string `json:"input"`
-	Output     string `json:"output"`
-	CacheRead  string `json:"cache_read"`
-	CacheWrite string `json:"cache_write"`
-	Reasoning  string `json:"reasoning"`
+	Metered    *RequestUsage `json:"metered,omitempty"`
+	Input      string        `json:"input,omitempty"`
+	Output     string        `json:"output,omitempty"`
+	CacheRead  string        `json:"cache_read,omitempty"`
+	CacheWrite string        `json:"cache_write,omitempty"`
+	Reasoning  string        `json:"reasoning,omitempty"`
 }
 type RemoteCall struct {
 	ActorID               string `json:"actor_id"`
@@ -153,10 +189,16 @@ func NormalizeUsage(u *dto.Usage) (Usage, error) {
 	if p < 0 || c < 0 || cr < 0 || cw < 0 || r < 0 || u.TotalTokens < 0 || u.InputTokens < 0 || u.OutputTokens < 0 || u.PromptCacheHitTokens < 0 || u.ClaudeCacheCreation5mTokens != 0 || u.ClaudeCacheCreation1hTokens != 0 || u.PromptTokensDetails.TextTokens < 0 || u.CompletionTokenDetails.TextTokens < 0 || cr > p || cw > p-cr || r > c || u.PromptTokensDetails.CachedCreationTokens != 0 || u.PromptTokensDetails.AudioTokens != 0 || u.PromptTokensDetails.ImageTokens != 0 || u.CompletionTokenDetails.AudioTokens != 0 || u.CompletionTokenDetails.ImageTokens != 0 {
 		return Usage{}, ErrInvalid
 	}
-	return Usage{strconv.Itoa(p - cr - cw), strconv.Itoa(c - r), strconv.Itoa(cr), strconv.Itoa(cw), strconv.Itoa(r)}, nil
+	return Usage{Input: strconv.Itoa(p - cr - cw), Output: strconv.Itoa(c - r), CacheRead: strconv.Itoa(cr), CacheWrite: strconv.Itoa(cw), Reasoning: strconv.Itoa(r)}, nil
 }
 func reserveBound(rate Rate, input, output int) (string, error) {
-	if rate.Status != "published" || rate.Semantics != "exclusive_v1" {
+	if rate.Status != "published" {
+		return "", ErrInvalid
+	}
+	if rate.Semantics == "metered_v2" {
+		return requestBound(rate)
+	}
+	if rate.Metered != nil || rate.Semantics != "exclusive_v1" {
 		return "", ErrInvalid
 	}
 	vals := []Rational{rate.Input, rate.CacheRead, rate.CacheWrite, rate.Output, rate.Reasoning}
@@ -262,4 +304,34 @@ func normalizeFunding(asset, mode string) (string, string, error) {
 		return "", "", ErrInvalid
 	}
 	return asset, mode, nil
+}
+
+// requestBound intentionally accepts only one flat chat request term, with no
+// step/minimum or token price. The selected tariff is immutable for the call.
+func requestBound(r Rate) (string, error) {
+	p := r.Metered
+	if p == nil || p.Version != "metered_v2" || p.Operation != "chat" || p.Policy != "sum" || len(p.Terms) != 1 || r.Input != (Rational{}) || r.Output != (Rational{}) || r.CacheRead != (Rational{}) || r.CacheWrite != (Rational{}) || r.Reasoning != (Rational{}) {
+		return "", ErrInvalid
+	}
+	t := p.Terms[0]
+	if t.Key != "requests" || t.Unit != "request" || t.Step != nil || t.Minimum != nil || !canonicalCount.MatchString(t.Price.Numerator) || !canonicalCount.MatchString(t.Price.Denominator) || len(t.Price.Numerator) > 38 || len(t.Price.Denominator) > 38 {
+		return "", ErrInvalid
+	}
+	n, _ := new(big.Int).SetString(t.Price.Numerator, 10)
+	d, _ := new(big.Int).SetString(t.Price.Denominator, 10)
+	if d.Sign() <= 0 {
+		return "", ErrInvalid
+	}
+	q, rem := new(big.Int), new(big.Int)
+	q.QuoRem(n, d, rem)
+	if rem.Sign() > 0 {
+		q.Add(q, big.NewInt(1))
+	}
+	if q.Sign() == 0 {
+		q.SetInt64(1)
+	}
+	if q.BitLen() > 63 {
+		return "", ErrInvalid
+	}
+	return q.String(), nil
 }

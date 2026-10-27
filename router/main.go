@@ -79,6 +79,7 @@ func SetRouter(router *gin.Engine, assets WebAssets) {
 	if frontendBaseUrl == "" {
 		SetWebRouter(router, assets)
 	} else {
+		router.Use(middleware.NativeWebBoundary())
 		frontendBaseUrl = strings.TrimSuffix(frontendBaseUrl, "/")
 		router.NoRoute(func(c *gin.Context) {
 			c.Set(middleware.RouteTagKey, "web")

@@ -61,6 +61,7 @@ type knowledgeRequestEvidence struct {
 // Opt-in only: the script builds the unmodified pinned consumer in an isolated
 // module. Ordinary go test neither downloads nor builds that external module.
 func TestKnowledgePinnedConsumerIntegration(t *testing.T) {
+	enableNativeCompatibility(t)
 	binary := os.Getenv("LLMROUTER_KNOWLEDGE_CONSUMER_BINARY")
 	if binary == "" {
 		t.Skip("set LLMROUTER_KNOWLEDGE_CONSUMER_BINARY via scripts/certify-knowledge-consumer.sh")

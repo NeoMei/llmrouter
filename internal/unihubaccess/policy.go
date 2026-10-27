@@ -13,6 +13,7 @@ import (
 type Policy struct {
 	PublicEnabled       bool
 	NativePublicEnabled bool
+	PlatformEnabled     bool
 	privateOrigins      []string
 	managementToken     string
 	trustedProxy        string
@@ -47,7 +48,7 @@ func normalizeOrigin(raw string) (string, error) {
 // FromEnv parses the deployment boundary. Boolean values are intentionally
 // strict and unknown values fail closed instead of silently changing exposure.
 func FromEnv() (Policy, error) {
-	product, err := strictBool("UNIHUB_PRODUCT_ENABLED", false)
+	product, err := strictBool("UNIHUB_PRODUCT_ENABLED", true)
 	if err != nil {
 		return Policy{}, err
 	}
@@ -59,8 +60,7 @@ func FromEnv() (Policy, error) {
 	if err != nil {
 		return Policy{}, err
 	}
-	p := Policy{PublicEnabled: product, NativePublicEnabled: native}
-	_ = platform // parsed strictly because platform enablement is part of the deployment contract
+	p := Policy{PublicEnabled: product, NativePublicEnabled: native, PlatformEnabled: platform}
 	rawOrigins := os.Getenv("NATIVE_ADMIN_ORIGIN")
 	if strings.TrimSpace(rawOrigins) != "" {
 		for _, raw := range strings.Split(rawOrigins, ",") {

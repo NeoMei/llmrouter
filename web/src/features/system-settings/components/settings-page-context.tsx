@@ -28,6 +28,8 @@ import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import { canUseProductFeature } from '@/lib/product-access'
+import { useAuthStore } from '@/stores/auth-store'
 
 type SettingsPageContextValue = {
   actionsContainer: HTMLDivElement | null
@@ -113,6 +115,10 @@ type SettingsPageFormActionsProps = {
 }
 
 export function SettingsPageFormActions(props: SettingsPageFormActionsProps) {
+  const user = useAuthStore((state) => state.auth.user)
+  const readOnly =
+    user?.identity_source === 'unihub' &&
+    !canUseProductFeature(user, 'settings', 'write')
   const { t } = useTranslation()
   const saveLabel = props.isSaving
     ? (props.savingLabel ?? 'Saving...')
@@ -126,7 +132,7 @@ export function SettingsPageFormActions(props: SettingsPageFormActionsProps) {
           size='sm'
           variant={props.resetVariant ?? 'outline'}
           onClick={props.onReset}
-          disabled={props.isResetDisabled || props.isSaving}
+          disabled={readOnly || props.isResetDisabled || props.isSaving}
         >
           <RotateCcw data-icon='inline-start' />
           <span>{t(props.resetLabel ?? 'Reset')}</span>
@@ -137,7 +143,7 @@ export function SettingsPageFormActions(props: SettingsPageFormActionsProps) {
         type='button'
         size='sm'
         onClick={props.onSave}
-        disabled={props.isSaving || props.isSaveDisabled}
+        disabled={readOnly || props.isSaving || props.isSaveDisabled}
       >
         <Save data-icon='inline-start' />
         <span>{t(saveLabel)}</span>

@@ -34,6 +34,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { canUseProductFeature } from '@/lib/product-access'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   handleDeleteModel,
@@ -66,6 +68,9 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   }
 
   const toggleLabel = isEnabled ? t('Disable') : t('Enable')
+
+  const user = useAuthStore((state) => state.auth.user)
+  if (!canUseProductFeature(user, 'catalog', 'write')) return null
 
   return (
     <div className='-ml-1.5 flex items-center gap-1'>

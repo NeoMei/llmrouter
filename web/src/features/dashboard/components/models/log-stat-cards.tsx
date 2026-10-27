@@ -34,6 +34,7 @@ import type {
 } from '@/features/dashboard/types'
 import { toIntlLocale } from '@/i18n/languages'
 import { formatCompactNumber, formatNumber, formatQuota } from '@/lib/format'
+import { canUseProductFeature } from '@/lib/product-access'
 import { computeTimeRange } from '@/lib/time'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
@@ -62,7 +63,7 @@ export function LogStatCards(props: LogStatCardsProps) {
   const { i18n } = useTranslation()
   const statCardsConfig = useModelStatCardsConfig()
   const user = useAuthStore((state) => state.auth.user)
-  const isAdmin = !!(user?.role && user.role >= 10)
+  const isAdmin = canUseProductFeature(user, 'log')
   const [stats, setStats] = useState<{
     totalQuota: number
     totalCount: number

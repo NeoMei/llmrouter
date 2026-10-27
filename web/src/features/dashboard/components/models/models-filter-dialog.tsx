@@ -46,6 +46,7 @@ import type {
   DashboardChartPreferences,
   DashboardFilters,
 } from '@/features/dashboard/types'
+import { canUseProductFeature } from '@/lib/product-access'
 import { getRollingDateRange, type TimeGranularity } from '@/lib/time'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
@@ -100,7 +101,7 @@ export function ModelsFilter(props: ModelsFilterProps) {
   const { t } = useTranslation()
   // 使用已缓存的用户数据，避免重复调用 API
   const user = useAuthStore((state) => state.auth.user)
-  const isAdmin = user?.role && user.role >= 10
+  const isAdmin = canUseProductFeature(user, 'log')
 
   const [open, setOpen] = useState(false)
   const [filters, setFilters] = useState<DashboardFilters>(

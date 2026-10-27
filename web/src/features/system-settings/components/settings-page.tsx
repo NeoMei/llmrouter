@@ -21,6 +21,8 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
+import { canUseProductFeature } from '@/lib/product-access'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { useSystemOptions, getOptionValue } from '../hooks/use-system-options'
 import type { SystemOption } from '../types'
@@ -111,6 +113,10 @@ export function SettingsPage<
   resolveSettings,
 }: SettingsPageProps<TSettings, TSectionId, TExtraArgs>) {
   const { t } = useTranslation()
+  const user = useAuthStore((state) => state.auth.user)
+  const readOnly =
+    user?.identity_source === 'unihub' &&
+    !canUseProductFeature(user, 'settings', 'write')
   const { data, isLoading } = useSystemOptions()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const params = useParams({ from: routePath as any })
@@ -145,7 +151,9 @@ export function SettingsPage<
 
   return (
     <SettingsPageFrame title={t(sectionMeta.titleKey)}>
-      {sectionContent}
+      <fieldset disabled={readOnly} className='contents'>
+        {sectionContent}
+      </fieldset>
     </SettingsPageFrame>
   )
 }

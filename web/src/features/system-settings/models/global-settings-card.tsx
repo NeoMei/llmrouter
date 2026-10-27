@@ -39,6 +39,8 @@ import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { canUseProductFeature } from '@/lib/product-access'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   SettingsForm,
@@ -141,6 +143,7 @@ type GlobalSettingsCardProps = {
 export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const user = useAuthStore((state) => state.auth.user)
 
   const form = useForm<
     GlobalModelSettingsFormInput,
@@ -173,6 +176,7 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
   }
 
   const onSubmit = async (values: GlobalModelSettingsFormValues) => {
+    if (!canUseProductFeature(user, 'settings', 'write')) return
     const flattenedDefaults = flattenGlobalValues(defaultValues)
     const flattenedValues = flattenGlobalValues(values)
     const updates = Object.entries(flattenedValues).filter(

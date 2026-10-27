@@ -85,6 +85,7 @@ import type {
   FlowRole,
 } from '@/features/dashboard/types'
 import { formatQuota } from '@/lib/format'
+import { canUseProductFeature } from '@/lib/product-access'
 import { ROLE } from '@/lib/roles'
 import { computeTimeRange } from '@/lib/time'
 import { useChartTheme } from '@/lib/use-chart-theme'
@@ -258,7 +259,7 @@ export function FlowCharts(props: FlowChartsProps) {
   const chartInstanceRef = useRef<IVChart | null>(null)
   const user = useAuthStore((state) => state.auth.user)
   const isRoot = Boolean(user?.role && user.role >= ROLE.SUPER_ADMIN)
-  const isAdmin = Boolean(user?.role && user.role >= ROLE.ADMIN)
+  const isAdmin = canUseProductFeature(user, 'log')
   let flowRole: FlowRole = 'user'
   if (isRoot) {
     flowRole = 'root'

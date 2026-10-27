@@ -24,7 +24,7 @@ import {
   MODELS_SECTION_IDS,
   MODELS_DEFAULT_SECTION,
 } from '@/features/models/section-registry'
-import { ROLE } from '@/lib/roles'
+import { canUseProductFeature } from '@/lib/product-access'
 import { useAuthStore } from '@/stores/auth-store'
 
 const modelsSearchSchema = z.object({
@@ -44,12 +44,24 @@ export const Route = createFileRoute('/_authenticated/models/$section')({
   beforeLoad: ({ params }) => {
     const { auth } = useAuthStore.getState()
 
-    if (!auth.user || auth.user.role < ROLE.ADMIN) {
+    if (
+      !(
+        canUseProductFeature(auth.user, 'catalog') ||
+        (auth.user?.identity_source === 'unihub' &&
+          canUseProductFeature(auth.user, 'channel'))
+      )
+    ) {
       throw redirect({
         to: '/403',
       })
     }
 
+    if (
+      auth.user?.identity_source === 'unihub' &&
+      params.section !== 'metadata'
+    ) {
+      throw redirect({ to: '/403' })
+    }
     const validSections = MODELS_SECTION_IDS as unknown as string[]
     if (!validSections.includes(params.section)) {
       throw redirect({

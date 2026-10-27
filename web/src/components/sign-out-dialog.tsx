@@ -24,7 +24,9 @@ import { toast } from 'sonner'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { logout } from '@/features/auth/api'
+import { markProductSignedOut } from '@/features/unihub/sso'
 import { clearAuthenticatedClientState } from '@/lib/auth-session'
+import { useAuthStore } from '@/stores/auth-store'
 
 interface SignOutDialogProps {
   open: boolean
@@ -46,9 +48,12 @@ export function SignOutDialog({ open, onOpenChange }: SignOutDialogProps) {
         return
       }
 
+      const projected =
+        useAuthStore.getState().auth.user?.identity_source === 'unihub'
+      if (projected) markProductSignedOut()
       clearAuthenticatedClientState(queryClient)
       toast.success(t('Signed out'))
-      void navigate({ to: '/sign-in', replace: true })
+      void navigate({ to: projected ? '/unihub' : '/sign-in', replace: true })
     } catch (error: unknown) {
       toast.error(
         error instanceof Error ? error.message : t('Failed to sign out session')

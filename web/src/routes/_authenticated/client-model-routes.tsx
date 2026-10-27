@@ -19,13 +19,13 @@ For commercial licensing, please contact support@quantumnous.com
 import { createFileRoute, redirect } from '@tanstack/react-router'
 
 import { ClientModelRoutesPage } from '@/features/client-model-routes/client-model-routes-page'
-import { ROLE } from '@/lib/roles'
+import { canUseProductFeature } from '@/lib/product-access'
 import { useAuthStore } from '@/stores/auth-store'
 
 export const Route = createFileRoute('/_authenticated/client-model-routes')({
   beforeLoad: () => {
     const { auth } = useAuthStore.getState()
-    if (!auth.user || auth.user.role < ROLE.ADMIN) {
+    if (!canUseProductFeature(auth.user, 'routing')) {
       throw redirect({ to: '/403' })
     }
   },

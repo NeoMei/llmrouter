@@ -25,6 +25,8 @@ import { useTranslation } from 'react-i18next'
 import { SectionPageLayout } from '@/components/layout'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { canUseProductFeature } from '@/lib/product-access'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { listDeployments } from './api'
 import { DeploymentAccessGuard } from './components/deployment-access-guard'
@@ -54,6 +56,9 @@ const SECTION_META: Record<ModelsSectionId, { titleKey: string }> = {
 }
 
 function ModelsContent() {
+  const user = useAuthStore((state) => state.auth.user)
+  const projected = user?.identity_source === 'unihub'
+  const canWrite = canUseProductFeature(user, 'catalog', 'write')
   const { t } = useTranslation()
   const navigate = useNavigate()
   const { tabCategory, setTabCategory } = useModels()
@@ -89,7 +94,9 @@ function ModelsContent() {
         <SectionPageLayout.Title>{t(meta.titleKey)}</SectionPageLayout.Title>
         <SectionPageLayout.Actions>
           {activeSection === 'metadata' ? (
-            <ModelsPrimaryButtons />
+            canWrite ? (
+              <ModelsPrimaryButtons />
+            ) : null
           ) : (
             <Button onClick={() => setCreateDeploymentOpen(true)} size='sm'>
               <Plus className='h-4 w-4' />
@@ -101,7 +108,9 @@ function ModelsContent() {
           <div className='flex h-full min-h-0 flex-col gap-4'>
             <Tabs value={activeSection} onValueChange={handleSectionChange}>
               <TabsList className='max-w-full flex-wrap justify-start group-data-horizontal/tabs:h-auto'>
-                {MODELS_SECTION_IDS.map((section) => (
+                {MODELS_SECTION_IDS.filter(
+                  (section) => !projected || section === 'metadata'
+                ).map((section) => (
                   <TabsTrigger key={section} value={section}>
                     {t(SECTION_META[section].titleKey)}
                   </TabsTrigger>
@@ -119,11 +128,13 @@ function ModelsContent() {
         </SectionPageLayout.Content>
       </SectionPageLayout>
 
-      <ModelsDialogs />
-      <CreateDeploymentDrawer
-        open={createDeploymentOpen}
-        onOpenChange={setCreateDeploymentOpen}
-      />
+      {canWrite && <ModelsDialogs />}
+      {!projected && (
+        <CreateDeploymentDrawer
+          open={createDeploymentOpen}
+          onOpenChange={setCreateDeploymentOpen}
+        />
+      )}
     </>
   )
 }

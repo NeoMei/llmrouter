@@ -44,6 +44,7 @@ import {
 } from '@/lib/auth-session'
 import { subscribeAuthSessionEvents } from '@/lib/auth-session-sync'
 import { resolveLegacyRoute } from '@/lib/legacy-route'
+import { canOpenProductPage, canUseProductFeature } from '@/lib/product-access'
 import { useAuthStore } from '@/stores/auth-store'
 
 function RootComponent() {
@@ -204,9 +205,21 @@ export const Route = createRootRouteWithContext<{
             throw redirect({ href: '/unihub?sso_error=1', replace: true })
           }
           if (
-            !['/dashboard', '/wallet', '/channels', '/403'].some(
-              (route) => pathname === route || pathname.startsWith(`${route}/`)
-            )
+            ['/system-settings', '/system-settings/models'].includes(
+              pathname
+            ) &&
+            canUseProductFeature(useAuthStore.getState().auth.user, 'settings')
+          ) {
+            throw redirect({
+              href: '/system-settings/models/global',
+              replace: true,
+            })
+          }
+          if (['/wallet', '/profile', '/keys'].includes(pathname)) {
+            throw redirect({ href: '/unihub', replace: true })
+          }
+          if (
+            !canOpenProductPage(useAuthStore.getState().auth.user, pathname)
           ) {
             throw redirect({ to: '/403', replace: true })
           }

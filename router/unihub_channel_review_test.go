@@ -57,6 +57,7 @@ func TestUniHubChannelReadSuppressesConfigurationAndPreservesUpdates(t *testing.
 	// The normal routing editor submits only visible routing/name fields.
 	body := fmt.Sprintf(`{"id":%d,"type":1,"name":"renamed","models":"model-a,model-b","group":"default"}`, ch.Id)
 	req := httptest.NewRequest("PUT", "https://dashboard.test/api/channel/", strings.NewReader(body))
+	req.Header.Set("Origin", "https://dashboard.test")
 	req.Header.Set("Authorization", "Bearer "+b.Data.AccessToken)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -79,6 +80,7 @@ func TestUniHubChannelReadSuppressesConfigurationAndPreservesUpdates(t *testing.
 	sensitive, _ := decodeUniHubBundle(t, f.request("POST", "/api/unihub/session", "sensitive", nil))
 	patch := fmt.Sprintf(`{"id":%d,"setting":"{\"force_format\":true}","settings":"{\"disable_store\":true}"}`, ch.Id)
 	req = httptest.NewRequest("PUT", "https://dashboard.test/api/channel/", strings.NewReader(patch))
+	req.Header.Set("Origin", "https://dashboard.test")
 	req.Header.Set("Authorization", "Bearer "+sensitive.Data.AccessToken)
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()

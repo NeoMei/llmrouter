@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay"
+	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -32,7 +33,15 @@ func GetAllTask(c *gin.Context) {
 	items := model.TaskGetAllTasks(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
 	total := model.TaskCountAllTasks(queryParams)
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(tasksToDto(items, true))
+	views := tasksToDto(items, true)
+	if _, projected := authz.ProductPrincipal(c); projected {
+		for _, item := range views {
+			item.Data = nil
+			item.FailReason = ""
+			item.ResultURL = ""
+		}
+	}
+	pageInfo.SetItems(views)
 	common.ApiSuccess(c, pageInfo)
 }
 
@@ -56,7 +65,15 @@ func GetUserTask(c *gin.Context) {
 	items := model.TaskGetAllUserTask(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
 	total := model.TaskCountAllUserTask(userId, queryParams)
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(tasksToDto(items, false))
+	views := tasksToDto(items, false)
+	if _, projected := authz.ProductPrincipal(c); projected {
+		for _, item := range views {
+			item.Data = nil
+			item.FailReason = ""
+			item.ResultURL = ""
+		}
+	}
+	pageInfo.SetItems(views)
 	common.ApiSuccess(c, pageInfo)
 }
 

@@ -93,6 +93,7 @@ func TestUniHubChannelWriteUsesCurrentPrincipalAndAuditIdentity(t *testing.T) {
 	require.NoError(t, f.db.Create(&channel).Error)
 	send := func(token string, payload string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("PUT", "https://dashboard.test/api/channel/", strings.NewReader(payload))
+		req.Header.Set("Origin", "https://dashboard.test")
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()

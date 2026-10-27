@@ -118,12 +118,28 @@ endpoint and standalone native behavior remain available. Channel secrets still 
 and secure verification and are never opened to projected users. Actual local
 user ID/username and stored common role remain in audit records.
 
-Read-only supporting authz/group/prefill/model/vendor routes require channel:read.
-Explicit technical log GET routes require log:read and client model routing GET
-routes require routing:read; no write route in those namespaces is granted.
-The product sidebar currently exposes account and permission-filtered channels;
-other native menus remain closed. Native user mutations, local wallets/topups,
-opaque tokens, relay and root settings are excluded. Unknown routes fail closed.
+The unified identity uses the standard LLMRouter application layout, sidebar and
+route outlet. `/dashboard/overview`, model/flow analytics and self-scoped usage
+logs render actual product components; `/unihub` is the separate account entry
+with a return to the console. Identity, account/team and wallet/billing screens
+stay in UniHub; product navigation does not substitute local passwords, opaque
+PATs, local quota or native billing for those central services.
+
+Member reads require a live product session and current `product:use`. Self data,
+flow and logs remain scoped to the authenticated local projection; query fields
+cannot select another user's records. Technical global logs and aggregate views
+require `log:read`, metadata administration uses `catalog:read/write`, and client
+model routing uses `routing:read/write`. Existing channel-only assignments retain
+their prior channel behavior. Runtime settings use `settings:read/write` with an
+explicit server field allowlist; identity, payment, secret and deployment options
+are excluded rather than returned as editable default values.
+
+UniHub's identity manifest version 2 adds explicitly assigned privileged
+`product_viewer` and `product_admin` role presets. The default remains `member`;
+no existing user automatically receives either product role. Permissions resolve
+online for each request, without changing stored native roles or quota. Native
+identity/PAT/finance mutations, secret-key views, platform/relay credentials and
+external provisioning are excluded. Unknown API paths never become the SPA.
 
 Standalone native mode requires both UniHub flags false and explicit
 NATIVE_PUBLIC_ACCESS=true. Existing native role policies and the private operator

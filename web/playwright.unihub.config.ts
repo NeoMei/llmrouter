@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test'
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: /unihub.spec.ts/,
+  testMatch: /unihub(?:-application)?\.spec\.ts/,
   workers: 1,
   reporter: 'line',
   use: {

@@ -88,7 +88,7 @@ func TestPublicNativePagesAndPlatformFallback(t *testing.T) {
 	// Registration order is the production order: web then platform/UniHub.
 	SetPlatformRouter(r, nil)
 	SetUniHubRouter(r, platformaccount.Config{})
-	for _, path := range []string{"/sign-up", "/oauth/github", "/forgot-password", "/user/reset", "/keys", "/subscriptions", "/playground", "/profile", "/index.html", "/pricing"} {
+	for _, path := range []string{"/sign-up", "/oauth/github", "/forgot-password", "/user/reset", "/keys", "/subscriptions", "/playground", "/index.html"} {
 		req := httptest.NewRequest("GET", path, nil)
 		req.Header.Set("Origin", "https://admin.example")
 		req.Header.Set("X-Forwarded-For", "127.0.0.1")
@@ -107,7 +107,7 @@ func TestPublicNativePagesAndPlatformFallback(t *testing.T) {
 		assert.Equal(t, 404, w.Code)
 		assert.NotContains(t, w.Body.String(), "dashboard SPA")
 	}
-	for _, path := range []string{"/unihub", "/api/unihub/config", "/install/", "/assets/application.js", "/static/js/application.js", "/static/css/application.css", "/brand/llmrouter-confluence.svg"} {
+	for _, path := range []string{"/unihub", "/profile", "/pricing", "/api/unihub/config", "/install/", "/assets/application.js", "/static/js/application.js", "/static/css/application.css", "/brand/llmrouter-confluence.svg"} {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
 		assert.Equal(t, 200, w.Code, path)

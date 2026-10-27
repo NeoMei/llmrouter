@@ -35,6 +35,15 @@ export type RefreshOutcome =
   | { kind: 'transient_error'; error: unknown }
   | { kind: 'out_of_sync'; code?: string }
 
+// Transient restoration failures must not be interpreted as a signed-out identity.
+// Keep the error fixed and credential-free for route error boundaries.
+export class AuthRefreshUnavailableError extends Error {
+  constructor() {
+    super('Session restoration is temporarily unavailable')
+    this.name = 'AuthRefreshUnavailableError'
+  }
+}
+
 export interface AuthRefreshHTTPResponse {
   status: number
   data?: unknown

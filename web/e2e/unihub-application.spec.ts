@@ -362,3 +362,64 @@ test('product writers get working administration controls while readers cannot m
     page.getByText('Scheduled channel tests', { exact: true })
   ).toHaveCount(0)
 })
+
+for (const path of ['/unihub', '/dashboard/models']) {
+  for (const failure of ['429', '503', 'network']) {
+    test(`temporary refresh ${failure} at ${path} waits for manual recovery without SSO`, async ({
+      page,
+    }) => {
+      const fixture = await productFixture(page)
+      let recovered = false
+      let refreshes = 0
+      let logouts = 0
+      page.on('request', (request) => {
+        if (new URL(request.url()).pathname === '/api/user/auth/logout') {
+          logouts++
+        }
+      })
+      await page.route('**/api/user/auth/refresh', async (route) => {
+        refreshes++
+        if (recovered) return route.fallback()
+        if (failure === 'network') return route.abort('failed')
+        return route.fulfill({
+          status: Number(failure),
+          headers: { 'Retry-After': '1' },
+          json: { success: false, code: 'AUTH_TEMPORARY_FAILURE' },
+        })
+      })
+      await page.goto(path)
+      const retry = page.getByRole('button', { name: 'Retry', exact: true })
+      await expect(retry).toBeVisible()
+      await expect(page).toHaveURL(
+        new RegExp(`${path.replaceAll('/', '\\/')}$`)
+      )
+      expect(fixture.loginReturns).toEqual([])
+      const before = refreshes
+      // A stable retry view must not rotate cookies or initiate background SSO.
+      await page.waitForTimeout(300)
+      expect(refreshes).toBe(before)
+      expect(logouts).toBe(0)
+      // Retrying while still unavailable stays on the same stable error view.
+      await retry.click()
+      await expect(retry).toBeEnabled()
+      expect(fixture.loginReturns).toEqual([])
+      recovered = true
+      await retry.click()
+      if (path === '/unihub') {
+        await expect(
+          page.getByRole('heading', { name: 'LLMRouter · UniHub', exact: true })
+        ).toBeVisible()
+      } else {
+        await expect(
+          page.getByRole('heading', {
+            name: 'Model Call Analytics',
+            exact: true,
+          })
+        ).toBeVisible()
+      }
+      await expect(retry).toHaveCount(0)
+      expect(fixture.loginReturns).toEqual([])
+      expect(logouts).toBe(0)
+    })
+  }
+}

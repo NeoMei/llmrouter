@@ -18,7 +18,7 @@ import (
 func TestNativeBoundaryRealRoutes(t *testing.T) {
 	t.Setenv("UNIHUB_PRODUCT_ENABLED", "true")
 	t.Setenv("UNIHUB_PLATFORM_ENABLED", "true")
-	t.Setenv("NATIVE_PUBLIC_ACCESS", "true")
+	t.Setenv("NATIVE_PUBLIC_ACCESS", "false")
 	t.Setenv("NATIVE_ADMIN_LISTEN_ADDRESS", "127.0.0.1:3001")
 	previous := common.GlobalApiRateLimitEnable
 	common.GlobalApiRateLimitEnable = false
@@ -88,7 +88,7 @@ func TestPublicNativePagesAndPlatformFallback(t *testing.T) {
 	// Registration order is the production order: web then platform/UniHub.
 	SetPlatformRouter(r, nil)
 	SetUniHubRouter(r, platformaccount.Config{})
-	for _, path := range []string{"/sign-up", "/oauth/github", "/forgot-password", "/user/reset", "/keys", "/subscriptions", "/playground", "/index.html"} {
+	for _, path := range []string{"/sign-up", "/oauth/github", "/forgot-password", "/user/reset", "/subscriptions", "/playground", "/index.html"} {
 		req := httptest.NewRequest("GET", path, nil)
 		req.Header.Set("Origin", "https://admin.example")
 		req.Header.Set("X-Forwarded-For", "127.0.0.1")
@@ -107,7 +107,7 @@ func TestPublicNativePagesAndPlatformFallback(t *testing.T) {
 		assert.Equal(t, 404, w.Code)
 		assert.NotContains(t, w.Body.String(), "dashboard SPA")
 	}
-	for _, path := range []string{"/unihub", "/profile", "/pricing", "/api/unihub/config", "/install/", "/assets/application.js", "/static/js/application.js", "/static/css/application.css", "/brand/llmrouter-confluence.svg"} {
+	for _, path := range []string{"/unihub", "/keys", "/profile", "/pricing", "/api/unihub/config", "/install/", "/assets/application.js", "/static/js/application.js", "/static/css/application.css", "/brand/llmrouter-confluence.svg"} {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
 		assert.Equal(t, 200, w.Code, path)
@@ -119,19 +119,23 @@ func TestProductShellDirectRoutesRemainRenderOnly(t *testing.T) {
 	r := gin.New()
 	r.Use(middleware.NativeWebBoundary())
 	r.NoRoute(func(c *gin.Context) { c.Header("Content-Type", "text/html"); c.String(200, "product shell") })
-	for _, path := range []string{"/sign-in", "/dashboard", "/channels", "/channels/", "/wallet", "/403"} {
-		w := httptest.NewRecorder()
-		r.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
-		require.Equal(t, 200, w.Code, path)
-		require.Contains(t, w.Body.String(), "product shell", path)
+	for _, path := range []string{"/sign-in", "/dashboard", "/channels", "/channels/", "/wallet", "/keys", "/403"} {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(method, path, nil))
+			require.Equal(t, 200, w.Code, "%s %s", method, path)
+			require.Contains(t, w.Body.String(), "product shell", "%s %s", method, path)
+		}
 	}
-	for _, path := range []string{"/api/channel/", "/api/user/topup", "/v1/chat/completions", "/unknown", "/channels/secrets", "/keys", "/sign-up"} {
+	for _, path := range []string{"/api/channel/", "/api/user/topup", "/api/token/", "/v1/chat/completions", "/unknown", "/channels/secrets", "/keys/secrets", "/keys/", "/sign-up"} {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
 		require.Equal(t, 403, w.Code, path)
 		require.NotContains(t, w.Body.String(), "product shell", path)
 	}
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest("POST", "/channels", nil))
-	require.Equal(t, 403, w.Code)
+	for _, path := range []string{"/channels", "/keys"} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest("POST", path, nil))
+		require.Equal(t, 403, w.Code, path)
+	}
 }

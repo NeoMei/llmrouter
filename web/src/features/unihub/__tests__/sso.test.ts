@@ -126,6 +126,7 @@ test('SSO retains only known product interface destinations', () => {
     '/client-model-routes',
     '/system-settings/models/global',
     '/unihub',
+    '/keys',
   ]) {
     assert.equal(safeProductReturn(value), value)
   }

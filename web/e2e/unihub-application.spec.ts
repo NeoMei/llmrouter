@@ -212,8 +212,234 @@ test('unified member gets real LLMRouter overview and self analytics instead of 
     )
   ).toEqual([])
   await expect(
-    page.locator('a[href="/keys"],a[href="/wallet"],a[href="/profile"]')
+    page.locator('a[href="/wallet"],a[href="/profile"]')
   ).toHaveCount(0)
+  await expect(page.locator('a[href="/keys"]')).toBeVisible()
+})
+
+test('unified keys keep payer scope, one-time secrets and a separate finance budget', async ({
+  page,
+}) => {
+  await productFixture(page)
+  const writes: { path: string; body: Record<string, unknown> }[] = []
+  let revoked = false
+  await page.route('**/api/unihub/bff/**', async (route) => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    if (path.endsWith('/accounts')) {
+      return route.fulfill({
+        json: [
+          { id: 'personal', name: 'Personal', kind: 'personal', role: 'owner' },
+          { id: 'team', name: 'Team', kind: 'team', role: 'member' },
+        ],
+      })
+    }
+    if (path.endsWith('/billing-profile')) {
+      return route.fulfill({
+        json: {
+          usage: {
+            enabled: true,
+            funding_modes: ['prepaid_cash', 'credits'],
+            default_funding_mode: 'prepaid_cash',
+          },
+        },
+      })
+    }
+    if (path.endsWith('/resources')) {
+      return route.fulfill({
+        json: path.includes('/team/')
+          ? {}
+          : {
+              wallets: [
+                { product_id: 'llmrouter', asset: 'CNY/6', amount: '80000000' },
+              ],
+              credits: { spendable: '0' },
+            },
+      })
+    }
+    if (path.endsWith('/usage-budget')) {
+      if (request.method() === 'PUT') {
+        writes.push({ path, body: request.postDataJSON() })
+      }
+      return route.fulfill({
+        json: {
+          version: 1,
+          asset: 'CNY/6',
+          funding_mode: 'prepaid_cash',
+          max_total: '10000000',
+          max_per_call: '',
+          held: '0',
+          used: '1000000',
+        },
+      })
+    }
+    if (path.endsWith('/api-keys/key-1')) {
+      revoked = true
+      return route.fulfill({ status: 204 })
+    }
+    if (path.endsWith('/api-keys')) {
+      if (request.method() === 'POST') {
+        const body = request.postDataJSON()
+        writes.push({ path, body })
+        return route.fulfill({
+          status: 201,
+          json: { id: 'key-1', token: 'uh_key_fixture_secret_once' },
+        })
+      }
+      return route.fulfill({
+        json: path.includes('/team/')
+          ? []
+          : [
+              {
+                id: 'key-1',
+                credential_kind: 'api_key',
+                name: 'Personal key',
+                models: ['fixture-model'],
+                asset: 'CNY/6',
+                held: '0',
+                used: '1000000',
+                max_total: '5000000',
+                max_per_call: '',
+                expires_at: null,
+                revoked_at: revoked ? new Date().toISOString() : null,
+              },
+            ],
+      })
+    }
+    return route.fallback()
+  })
+  await page.goto('/keys')
+  await expect(page.getByText('Personal key', { exact: true })).toBeVisible()
+  await expect(
+    page.getByText('Available funds: 80.000000 CNY', { exact: true })
+  ).toBeVisible()
+  await page.getByLabel('Funding mode', { exact: true }).selectOption('credits')
+  await expect(
+    page.getByText('Available funds: 0.000000 CREDIT', { exact: true })
+  ).toBeVisible()
+  await page
+    .getByLabel('Funding mode', { exact: true })
+    .selectOption('prepaid_cash')
+  await page.getByLabel('Key name', { exact: true }).fill('SDK key')
+  await page.getByLabel('Key lifetime limit', { exact: true }).fill('5.25')
+  await page.getByLabel('fixture-model', { exact: true }).check()
+  await page
+    .getByRole('button', { name: 'Create API key', exact: true })
+    .click()
+  await expect(
+    page.getByText('uh_key_fixture_secret_once', { exact: true })
+  ).toBeVisible()
+  expect(writes[0]).toEqual({
+    path: '/api/unihub/bff/v1/accounts/personal/api-keys',
+    body: {
+      name: 'SDK key',
+      models: ['fixture-model'],
+      funding_mode: 'prepaid_cash',
+      max_total: '5250000',
+      max_per_call: '',
+      origin_product_id: 'llmrouter',
+      instance_id: 'default',
+    },
+  })
+  await page.getByLabel('Explicit payer account').selectOption('team')
+  await expect(
+    page.getByText(
+      'Account balance is unavailable with your current permissions.',
+      { exact: true }
+    )
+  ).toBeVisible()
+  await expect(
+    page.getByText('Available funds: 0.000000 CNY', { exact: true })
+  ).toHaveCount(0)
+  await expect(page.getByText('Personal key', { exact: true })).toHaveCount(0)
+  await expect(
+    page.getByText('uh_key_fixture_secret_once', { exact: true })
+  ).toHaveCount(0)
+  await expect(
+    page.getByRole('button', { name: 'Save account budget', exact: true })
+  ).toHaveCount(0)
+  await page.getByLabel('Explicit payer account').selectOption('personal')
+  await expect(page.getByText('Personal key', { exact: true })).toBeVisible()
+  await expect(
+    page.getByLabel('Account lifetime budget', { exact: true })
+  ).toHaveValue('10.000000')
+  await page.getByLabel('Account lifetime budget', { exact: true }).fill('12')
+  await page
+    .getByRole('button', { name: 'Save account budget', exact: true })
+    .click()
+  await expect.poll(() => writes.length).toBe(2)
+  expect(writes[1].body).toEqual({
+    version: 1,
+    max_total: '12000000',
+    max_per_call: '',
+  })
+  await page.getByRole('button', { name: 'Revoke', exact: true }).click()
+  await expect(
+    page.getByRole('button', { name: 'Revoke', exact: true })
+  ).toHaveCount(0)
+  expect(
+    await page.evaluate(() =>
+      JSON.stringify({ ...localStorage, ...sessionStorage })
+    )
+  ).not.toContain('uh_key_fixture_secret_once')
+})
+
+test('unified usage cost points to central settlement instead of showing a zero native charge', async ({
+  page,
+}) => {
+  await productFixture(page)
+  await page.route('**/api/log/self?*', (route) =>
+    route.fulfill({
+      json: {
+        success: true,
+        data: {
+          page: 1,
+          page_size: 10,
+          total: 2,
+          items: [
+            {
+              id: 1,
+              created_at: Math.floor(Date.now() / 1000),
+              type: 2,
+              model_name: 'fixture-model',
+              token_name: 'unihub:key-1',
+              prompt_tokens: 10,
+              completion_tokens: 5,
+              quota: 0,
+              use_time: 1,
+              request_id: 'call-1',
+              other: JSON.stringify({
+                funding_owner: 'unihub',
+                central_status: 'SETTLED',
+                central_asset: 'CNY/6',
+              }),
+            },
+            {
+              id: 2,
+              created_at: Math.floor(Date.now() / 1000),
+              type: 2,
+              model_name: 'legacy-model',
+              token_name: 'legacy-key',
+              prompt_tokens: 25,
+              completion_tokens: 15,
+              quota: 0,
+              use_time: 1,
+              request_id: 'native-consumption',
+              other: JSON.stringify({ financial_details: false }),
+            },
+          ],
+        },
+      },
+    })
+  )
+  await page.goto('/usage-logs/common')
+  await expect(
+    page.getByRole('link', { name: 'UniHub billing', exact: true })
+  ).toBeVisible()
+  await expect(page.getByText('SETTLED', { exact: true })).toBeVisible()
+  await expect(
+    page.getByText('Finance access required', { exact: true })
+  ).toBeVisible()
 })
 
 test('unified member usage logs stay self scoped and omit native billing', async ({

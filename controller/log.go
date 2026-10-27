@@ -12,6 +12,9 @@ import (
 )
 
 func GetAllLogs(c *gin.Context) {
+	if serveProductTelemetryLogs(c, true) {
+		return
+	}
 	pageInfo := common.GetPageQuery(c)
 	logType, _ := strconv.Atoi(c.Query("type"))
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
@@ -45,6 +48,9 @@ func GetAllLogs(c *gin.Context) {
 }
 
 func GetUserLogs(c *gin.Context) {
+	if serveProductTelemetryLogs(c, false) {
+		return
+	}
 	pageInfo := common.GetPageQuery(c)
 	userId := c.GetInt("id")
 	logType, _ := strconv.Atoi(c.Query("type"))
@@ -117,6 +123,12 @@ func GetLogByKey(c *gin.Context) {
 }
 
 func GetLogsStat(c *gin.Context) {
+	if telemetry, projected, ok := productTelemetry(c, true); projected {
+		if ok {
+			common.ApiSuccess(c, telemetry.Stat)
+		}
+		return
+	}
 	logType, _ := strconv.Atoi(c.Query("type"))
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
@@ -144,6 +156,12 @@ func GetLogsStat(c *gin.Context) {
 }
 
 func GetLogsSelfStat(c *gin.Context) {
+	if telemetry, projected, ok := productTelemetry(c, false); projected {
+		if ok {
+			common.ApiSuccess(c, telemetry.Stat)
+		}
+		return
+	}
 	username := c.GetString("username")
 	logType, _ := strconv.Atoi(c.Query("type"))
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)

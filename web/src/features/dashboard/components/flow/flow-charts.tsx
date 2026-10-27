@@ -266,7 +266,9 @@ export function FlowCharts(props: FlowChartsProps) {
   } else if (isAdmin) {
     flowRole = 'admin'
   }
-  const [metric, setMetric] = useState<FlowMetric>('quota')
+  const [metric, setMetric] = useState<FlowMetric>(() =>
+    user?.identity_source === 'unihub' ? 'requests' : 'quota'
+  )
   const [topNodeLimit, setTopNodeLimit] = useState(DEFAULT_FLOW_TOP_NODE_LIMIT)
   const [overflowMode, setOverflowMode] =
     useState<FlowOverflowMode>('aggregate')
@@ -565,7 +567,11 @@ export function FlowCharts(props: FlowChartsProps) {
               className='shrink-0'
             >
               <TabsList aria-label={t('Flow width metric')}>
-                {FLOW_METRIC_OPTIONS.map((option) => {
+                {FLOW_METRIC_OPTIONS.filter(
+                  (option) =>
+                    user?.identity_source !== 'unihub' ||
+                    option.value !== 'quota'
+                ).map((option) => {
                   const Icon = option.icon
                   return (
                     <TabsTrigger

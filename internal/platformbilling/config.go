@@ -3,12 +3,17 @@ package platformbilling
 import (
 	"github.com/QuantumNous/new-api/common"
 	"strconv"
+	"strings"
 )
 
 // ConfigFromEnv takes an injected environment reader. No credentials or service
 // clients are process globals; enabling a deployment requires explicit limits.
 func ConfigFromEnv(get func(string) string) (Config, error) {
 	c := Config{Enabled: get("UNIHUB_PLATFORM_ENABLED") == "true"}
+	c.InstanceID = strings.TrimSpace(get("UNIHUB_PRODUCT_INSTANCE_ID"))
+	if c.InstanceID == "" {
+		c.InstanceID = "default"
+	}
 	if !c.Enabled {
 		return c, nil
 	}

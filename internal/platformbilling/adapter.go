@@ -13,7 +13,6 @@ import (
 	"gorm.io/gorm/clause"
 	"net/http"
 	"regexp"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +21,12 @@ import (
 // Call stores immutable verified payer scope and terminal command intent. Model
 // credentials are never persisted: recovery cannot authorize another dispatch.
 type Call struct {
+	InstanceID            string `gorm:"size:128;index"`
+	TelemetryGroup        string `gorm:"size:128"`
+	TelemetryLatencyMS    int64
+	TelemetryIsStream     bool
+	TelemetryCompletedAt  int64
+	TelemetryOutcome      string `gorm:"size:16"`
 	ReservationQuantity   int64
 	ReservationOutput     int64
 	Operation             string `gorm:"size:32"`
@@ -83,11 +88,15 @@ type Session struct {
 var stableID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
 
 func New(db *gorm.DB, c Config) (*Adapter, error) {
+	c.InstanceID = strings.TrimSpace(c.InstanceID)
+	if c.InstanceID == "" {
+		c.InstanceID = "default"
+	}
 	a := &Adapter{db: db, config: c}
 	if !c.Enabled {
 		return a, nil
 	}
-	if db == nil || c.Group == "" || c.Group == "auto" || c.MaxInputTokens < 1 || c.MaxInputTokens > 1<<20 || c.MaxOutputTokens < 1 || c.MaxOutputTokens > 32768 || c.MaxBodyBytes < 1 || c.MaxBodyBytes > 1<<20 {
+	if db == nil || !stableID.MatchString(c.InstanceID) || c.Group == "" || c.Group == "auto" || c.MaxInputTokens < 1 || c.MaxInputTokens > 1<<20 || c.MaxOutputTokens < 1 || c.MaxOutputTokens > 32768 || c.MaxBodyBytes < 1 || c.MaxBodyBytes > 1<<20 {
 		return nil, ErrInvalid
 	}
 	var err error
@@ -109,7 +118,7 @@ func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body [
 	if len(a.config.OperationRateIDs["chat"]) > 0 {
 		return a.AdmitOperation(ctx, credential, task, id, "chat", "application/json", body)
 	}
-	if !a.Enabled() || !stableID.MatchString(id) || !stableID.MatchString(task) || !strings.HasPrefix(credential, "uh_model_") || len(credential) > 1024 || int64(len(body)) > a.config.MaxBodyBytes || len(body) > a.config.MaxInputTokens/2 {
+	if !a.Enabled() || !stableID.MatchString(id) || !stableID.MatchString(task) || !IsModelCredential(credential) || int64(len(body)) > a.config.MaxBodyBytes || len(body) > a.config.MaxInputTokens/2 {
 		return nil, ErrInvalid
 	}
 	req, parseErr := strictChatRequest(body)
@@ -178,10 +187,10 @@ func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body [
 		}
 	}
 	var grant Claims
-	if err := a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": model}, &grant); err != nil {
+	if err := a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": model, "instance_id": a.config.InstanceID}, &grant); err != nil {
 		return nil, err
 	}
-	if grant.ID == "" || grant.Audience != "llmrouter" || grant.ActorID == "" || grant.AccountID == "" || grant.OriginProductID == "" || grant.TaskID != task || !grant.ExpiresAt.After(time.Now()) || !slices.Contains(grant.Models, model) {
+	if a.validateModelCredential(credential, task, model, grant) != nil {
 		return nil, ErrInvalid
 	}
 	asset, mode, err := normalizeFunding(grant.Asset, grant.FundingMode)
@@ -198,6 +207,7 @@ func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body [
 	sum := sha256.Sum256(digestBody)
 	digest := hex.EncodeToString(sum[:])
 	row := Call{CallID: id, ActorID: grant.ActorID, AccountID: grant.AccountID, OriginProductID: grant.OriginProductID, CredentialID: grant.ID, TaskID: task, Model: model, Digest: digest, Asset: asset, FundingMode: mode, FundingProductID: "llmrouter", BillingProfileVersion: grant.BillingProfileVersion, Status: "RESERVING"}
+	row.InstanceID = a.config.InstanceID
 	var old Call
 	if err := a.db.WithContext(ctx).First(&old, "call_id = ?", id).Error; err == nil {
 		return nil, compareCall(old, row)
@@ -252,7 +262,7 @@ func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body [
 		return nil, compareCall(old, row)
 	}
 	var remote RemoteCall
-	err = a.client.do(ctx, http.MethodPost, "/internal/v1/calls/reserve", id, map[string]string{"credential": credential, "task_id": task, "call_id": id, "request_digest": digest, "rate_id": chosen.ID, "amount": amount}, &remote)
+	err = a.client.do(ctx, http.MethodPost, "/internal/v1/calls/reserve", id, map[string]string{"credential": credential, "task_id": task, "call_id": id, "request_digest": digest, "rate_id": chosen.ID, "amount": amount, "instance_id": a.config.InstanceID}, &remote)
 	if err != nil {
 		status := "RESERVE_UNKNOWN"
 		var re *remoteError
@@ -262,7 +272,7 @@ func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body [
 		_ = a.db.Model(&Call{}).Where("call_id = ?", id).Update("status", status).Error
 		return nil, err
 	}
-	if !remote.matches(row) || remote.Status != "RESERVED" {
+	if !remote.matches(row) || remote.Status != "RESERVED" || (strings.HasPrefix(credential, "uh_key_") && (remote.InstanceID != a.config.InstanceID || remote.CredentialID != grant.ID)) {
 		_ = a.db.Model(&Call{}).Where("call_id = ?", id).Update("status", "RESERVE_UNKNOWN").Error
 		return nil, ErrPending
 	}
@@ -277,6 +287,13 @@ func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body [
 	return &Session{adapter: a, call: row, safeFailure: true, requestTariff: chosen.Metered != nil}, nil
 }
 func compareCall(old, row Call) error {
+	oldInstance := old.InstanceID
+	if oldInstance == "" {
+		oldInstance = "default"
+	}
+	if oldInstance != row.InstanceID {
+		return ErrConflict
+	}
 	oldAsset, oldMode, err := normalizeFunding(old.Asset, old.FundingMode)
 	if err != nil || oldAsset != row.Asset || oldMode != row.FundingMode || old.BillingProfileVersion != row.BillingProfileVersion || (old.FundingProductID != "" && old.FundingProductID != row.FundingProductID) || old.Operation != row.Operation || old.CallID != row.CallID || old.ActorID != row.ActorID || old.AccountID != row.AccountID || old.OriginProductID != row.OriginProductID || old.TaskID != row.TaskID || old.Model != row.Model || old.Digest != row.Digest {
 		return ErrConflict
@@ -484,7 +501,7 @@ type Receipt struct {
 }
 
 func (a *Adapter) Receipt(ctx context.Context, credential, task, id string) (Receipt, error) {
-	if !a.Enabled() || !stableID.MatchString(id) || !stableID.MatchString(task) || !strings.HasPrefix(credential, "uh_model_") || len(credential) > 1024 {
+	if !a.Enabled() || !stableID.MatchString(id) || !stableID.MatchString(task) || !IsModelCredential(credential) {
 		return Receipt{}, ErrInvalid
 	}
 	var row Call
@@ -492,10 +509,17 @@ func (a *Adapter) Receipt(ctx context.Context, credential, task, id string) (Rec
 		return Receipt{}, ErrInvalid
 	}
 	var grant Claims
-	if err := a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": row.Model, "purpose": "receipt"}, &grant); err != nil {
+	if err := a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": row.Model, "purpose": "receipt", "instance_id": a.config.InstanceID}, &grant); err != nil {
 		return Receipt{}, err
 	}
-	if row.CallID != id || grant.Audience != "llmrouter" || grant.ID == "" || grant.ActorID != row.ActorID || grant.AccountID != row.AccountID || grant.OriginProductID != row.OriginProductID || grant.TaskID != task || row.TaskID != task || !grant.ExpiresAt.After(time.Now()) || !slices.Contains(grant.Models, row.Model) {
+	instance := row.InstanceID
+	if instance == "" {
+		instance = "default"
+	}
+	if a.validateModelCredential(credential, task, row.Model, grant) != nil || instance != a.config.InstanceID || row.CallID != id || grant.ActorID != row.ActorID || grant.AccountID != row.AccountID || grant.OriginProductID != row.OriginProductID || row.TaskID != task {
+		return Receipt{}, ErrInvalid
+	}
+	if strings.HasPrefix(credential, "uh_key_") && grant.ID != row.CredentialID {
 		return Receipt{}, ErrInvalid
 	}
 	asset, _, err := normalizeFunding(row.Asset, row.FundingMode)

@@ -24,6 +24,11 @@ func TestUniHubBFFBoundaries(t *testing.T) {
 	require.NotEmpty(t, current.CSRF)
 	assert.NotContains(t, access.Body.String(), "Bearer")
 	assert.Equal(t, 200, f.request("GET", "/api/unihub/bff/v1/accounts", b.Data.AccessToken, nil).Code)
+	// A 404 from this controlled upstream proves the authorized request was
+	// forwarded; the pre-fix BFF rejected these product capabilities with 403.
+	for _, path := range []string{"/api/unihub/bff/v1/accounts/personal/api-keys", "/api/unihub/bff/v1/accounts/personal/usage-budget"} {
+		assert.Equal(t, 404, f.request("GET", path, b.Data.AccessToken, nil).Code, path)
+	}
 	send := func(path, origin, csrf, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("POST", "https://dashboard.test"+path, strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer "+b.Data.AccessToken)

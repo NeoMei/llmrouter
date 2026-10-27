@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/metering"
+	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay/channel/task/sora"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/objectstore"
@@ -159,6 +160,7 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 			common.MemoryCacheEnabled = true
 			common.RedisEnabled = false
 			defer func() {
+				perfmetrics.DrainRelaySamples()
 				model.DB = oldDB
 				model.LOG_DB = oldLog
 				common.MemoryCacheEnabled = oldCache

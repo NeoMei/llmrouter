@@ -15,8 +15,8 @@ func TestNativePublicBoundary(t *testing.T) {
 		status                          int
 	}{
 		{"unihub disabled native", "true", "true", "false", 403},
-		{"unihub compatibility cannot reopen public", "true", "true", "true", 403},
-		{"platform authority", "false", "true", "true", 403},
+		{"unihub coexistence", "true", "true", "true", 204},
+		{"platform coexistence", "false", "true", "true", 204},
 		{"missing product", "", "true", "false", 403},
 		{"explicit standalone", "false", "false", "true", 204},
 		{"standalone without opt in", "false", "false", "false", 403},

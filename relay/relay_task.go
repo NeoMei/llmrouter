@@ -206,7 +206,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 				ratio = special
 			}
 			admission := model.NativeAdmission{CallID: info.PublicTaskID, UserID: info.UserId, TokenID: info.TokenId, ChannelID: info.ChannelId, Model: modelName, Group: info.UsingGroup, Preference: info.UserSetting.BillingPreference, Price: price, GroupRatio: strconv.FormatFloat(ratio, 'f', -1, 64), QuotaPerUnit: strconv.FormatFloat(common.QuotaPerUnit, 'f', -1, 64), Reservation: reserve}
-			if err := service.BeginNativeBillingForRelay(c, info, admission); err != nil {
+			if err := service.BeginNativeBillingForRelay(c.Request.Context(), info, admission); err != nil {
 				return nil, service.TaskErrorWrapperLocal(err, "native_admission", 400)
 			}
 		}
@@ -258,11 +258,11 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		if info.PlatformBilling == nil {
 			return nil, service.TaskErrorWrapperLocal(errors.New("platform session missing"), "platform_session", 500)
 		}
-		if err := info.PlatformBilling.Dispatch(c, info.ChannelId); err != nil {
+		if err := info.PlatformBilling.Dispatch(c.Request.Context(), info.ChannelId); err != nil {
 			return nil, service.TaskErrorWrapperLocal(err, "platform_dispatch", 409)
 		}
 	} else if info.NativeBilling != nil {
-		if err := service.MarkNativeBillingDispatched(c, info); err != nil {
+		if err := service.MarkNativeBillingDispatched(c.Request.Context(), info); err != nil {
 			return nil, service.TaskErrorWrapperLocal(err, "native_dispatch", 409)
 		}
 	}

@@ -287,6 +287,7 @@ func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData)
 
 func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent string) {
 	if relayInfo != nil && relayInfo.PlatformMode {
+		recordPlatformRelayTelemetry(ctx, relayInfo)
 		return
 	}
 

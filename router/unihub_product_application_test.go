@@ -81,7 +81,7 @@ func TestUniHubProductApplicationSPARoutes(t *testing.T) {
 	r := gin.New()
 	r.Use(middleware.NativeWebBoundary())
 	r.NoRoute(func(c *gin.Context) { c.String(200, "application shell") })
-	for _, path := range []string{"/dashboard/overview", "/dashboard/models", "/dashboard/flow", "/usage-logs/common", "/usage-logs/task", "/models/metadata", "/client-model-routes", "/system-settings/models/global", "/system-settings/models/routing-reliability", "/pricing"} {
+	for _, path := range []string{"/dashboard/overview", "/dashboard/models", "/dashboard/flow", "/usage-logs/common", "/usage-logs/task", "/models/metadata", "/client-model-routes", "/system-settings/models/global", "/system-settings/models/routing-reliability", "/pricing", "/keys"} {
 		t.Run(path, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
@@ -89,7 +89,7 @@ func TestUniHubProductApplicationSPARoutes(t *testing.T) {
 			assert.Contains(t, w.Body.String(), "application shell")
 		})
 	}
-	for _, path := range []string{"/api/unsupported", "/platform/v1/unsupported", "/system-settings/models/unknown", "/system-settings/auth/oidc", "/keys"} {
+	for _, path := range []string{"/api/unsupported", "/platform/v1/unsupported", "/system-settings/models/unknown", "/system-settings/auth/oidc", "/keys/secrets"} {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
 		assert.GreaterOrEqual(t, w.Code, 400, path)

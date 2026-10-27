@@ -34,6 +34,7 @@ import { saveAffiliateCode } from '@/features/auth/lib/storage'
 import { GeneralError } from '@/features/errors/general-error'
 import { NotFoundError } from '@/features/errors/not-found-error'
 import { getSetupStatus } from '@/features/setup/api'
+import { shouldUseUnifiedEntry } from '@/features/unihub/entry-mode'
 import { refreshProductAccess } from '@/features/unihub/session'
 import { safeProductReturn } from '@/features/unihub/sso'
 import { useSystemConfig } from '@/hooks/use-system-config'
@@ -161,8 +162,8 @@ export const Route = createRootRouteWithContext<{
       }
       return
     }
-    // The server derives this flag from the listener's local socket. Never
-    // infer operator access from browser origin, stored credentials, or query.
+    // The server determines compatibility access. The native-entry query only
+    // selects a login screen; it never grants backend authority.
     const productConfig = await fetch('/api/unihub/config', {
       credentials: 'omit',
       cache: 'no-store',
@@ -176,7 +177,20 @@ export const Route = createRootRouteWithContext<{
           : null
       )
       .catch(() => null)
-    if (!productConfig?.native_access) {
+    if (productConfig?.enabled) {
+      const bootstrap = await bootstrapAuthentication()
+      if (bootstrap.kind === 'transient_error') {
+        throw new AuthRefreshUnavailableError()
+      }
+    }
+    if (
+      shouldUseUnifiedEntry(
+        productConfig,
+        pathname,
+        new URL(location.href, window.location.origin).search,
+        useAuthStore.getState().auth.user
+      )
+    ) {
       if (
         ['/about', '/docs', '/privacy-policy', '/user-agreement'].includes(
           pathname
@@ -222,7 +236,7 @@ export const Route = createRootRouteWithContext<{
               replace: true,
             })
           }
-          if (['/wallet', '/profile', '/keys'].includes(pathname)) {
+          if (['/wallet', '/profile'].includes(pathname)) {
             throw redirect({ href: '/unihub', replace: true })
           }
           if (

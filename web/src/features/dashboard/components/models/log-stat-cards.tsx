@@ -60,7 +60,7 @@ function formatStatNumber(value: number, locale: Intl.LocalesArgument) {
 }
 
 export function LogStatCards(props: LogStatCardsProps) {
-  const { i18n } = useTranslation()
+  const { i18n, t } = useTranslation()
   const statCardsConfig = useModelStatCardsConfig()
   const user = useAuthStore((state) => state.auth.user)
   const isAdmin = canUseProductFeature(user, 'log')
@@ -128,13 +128,22 @@ export function LogStatCards(props: LogStatCardsProps) {
     const formatted =
       config.key === 'quota'
         ? {
-            displayValue: formatQuota(rawValue),
-            fullValue: formatQuota(rawValue),
+            displayValue:
+              user?.identity_source === 'unihub'
+                ? t('UniHub billing')
+                : formatQuota(rawValue),
+            fullValue:
+              user?.identity_source === 'unihub'
+                ? t('View account charges in UniHub')
+                : formatQuota(rawValue),
           }
         : formatStatNumber(rawValue, locale)
 
     return {
-      title: config.title,
+      title:
+        config.key === 'quota' && user?.identity_source === 'unihub'
+          ? t('Billing')
+          : config.title,
       value: formatted.displayValue,
       fullValue: formatted.fullValue,
       desc: config.description,

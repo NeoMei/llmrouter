@@ -226,6 +226,7 @@ func main() {
 		defer stopPlatform()
 	}
 	// 设置路由
+	router.SetManagedKeyDispatch(server, platformAdapter)
 	router.SetRouter(server, router.WebAssets{
 		BuildFS:   buildFS,
 		IndexPage: indexPage,

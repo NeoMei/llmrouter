@@ -16,8 +16,14 @@ sibling replace in go.mod.
 
 Use `docs/integrations/unihub.env.example` and supply these backend-only values:
 
-- `UNIHUB_PRODUCT_ENABLED=true`, `UNIHUB_PLATFORM_ENABLED=true`,
-  `NATIVE_PUBLIC_ACCESS=false` for the public product service.
+- `UNIHUB_PRODUCT_ENABLED=true`, `UNIHUB_PLATFORM_ENABLED=true`.
+  On an existing installation that keeps native users and keys, explicitly set
+  `NATIVE_PUBLIC_ACCESS=true` to preserve their authenticated login, management,
+  relay protocols, balances and history alongside UniHub. For a new isolated
+  UniHub service, set `NATIVE_PUBLIC_ACCESS=false` and use private native
+  management when needed. The unified `/keys` page and SSO return work in both
+  modes; serving the page does not enable native token APIs. Native and unified
+  identities, keys and balances remain separate.
 - `UNIHUB_PRODUCT_PUBLIC_ORIGIN`: canonical UniHub business identity origin,
   used to verify Access.issuer. `UNIHUB_PRODUCT_API_ORIGIN`: fixed reachable
   central API origin; it may differ from the public origin.

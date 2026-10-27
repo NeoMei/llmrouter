@@ -31,6 +31,7 @@ import { clearAuthentication } from '@/lib/auth-session'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { TeamPanel } from './account-panel'
+import { ApiKeysPanel } from './api-keys-panel'
 import { AuthPanel } from './auth-panel'
 import { BillingPanel } from './billing-panel'
 import type { User, Account } from './sdk'
@@ -46,7 +47,7 @@ import { markProductSignedOut, startProductLogin } from './sso'
 import { TaskPanel } from './task-panel'
 import { UsagePanel } from './usage-panel'
 
-function ProductShell(props: { config: ProductConfig }) {
+export function ProductShell(props: { config: ProductConfig; page?: 'keys' }) {
   const { t } = useTranslation()
   const [session] = useState<ProductSession>(
     () => getActiveProductSession() ?? createProductSession(props.config)
@@ -204,29 +205,60 @@ function ProductShell(props: { config: ProductConfig }) {
             {t('Refresh accounts and roles')}
           </Button>
         </section>
+        {!props.page ? (
+          <section className='space-y-2 rounded-xl border p-4'>
+            <h2 className='font-semibold'>{t('Users and permissions')}</h2>
+            <p>
+              {t(
+                'UniHub manages registration and product roles. Account owner and billing administrator roles control the selected payer; they do not grant LLMRouter administrator access.'
+              )}
+            </p>
+            <div className='flex flex-wrap gap-4'>
+              <a
+                className='underline'
+                href={`${props.config.public_origin}/?view=user-management`}
+                target='_blank'
+                rel='noreferrer'
+              >
+                {t('Open UniHub user management')}
+              </a>
+              <Link to='/keys'>{t('API Keys and usage budget')}</Link>
+            </div>
+          </section>
+        ) : null}
         {account ? (
           <div key={`${account.id}:${account.role}`} className='space-y-5'>
-            <TeamPanel
-              session={session}
-              account={account}
-              config={props.config}
-              refresh={refresh}
-            />
-            <BillingPanel
-              session={session}
-              account={account}
-              config={props.config}
-            />
-            <TaskPanel
-              session={session}
-              account={account}
-              config={props.config}
-            />
-            <UsagePanel
-              session={session}
-              account={account}
-              config={props.config}
-            />
+            {props.page === 'keys' ? (
+              <ApiKeysPanel
+                session={session}
+                account={account}
+                config={props.config}
+              />
+            ) : (
+              <>
+                <TeamPanel
+                  session={session}
+                  account={account}
+                  config={props.config}
+                  refresh={refresh}
+                />
+                <BillingPanel
+                  session={session}
+                  account={account}
+                  config={props.config}
+                />
+                <TaskPanel
+                  session={session}
+                  account={account}
+                  config={props.config}
+                />
+                <UsagePanel
+                  session={session}
+                  account={account}
+                  config={props.config}
+                />
+              </>
+            )}
           </div>
         ) : (
           <p>
@@ -260,7 +292,7 @@ export function UniHub() {
       </nav>
     )
   } else if (config.data?.native_access) {
-    navigation = <Link to='/sign-in'>{t('Local operator sign in')}</Link>
+    navigation = <a href='/sign-in?native=1'>{t('Local operator sign in')}</a>
   }
   return (
     <main className='mx-auto max-w-6xl space-y-5 p-4 md:p-8'>

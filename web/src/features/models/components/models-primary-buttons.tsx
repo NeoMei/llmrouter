@@ -35,10 +35,14 @@ import {
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { useModels } from './models-provider'
 
 export function ModelsPrimaryButtons() {
+  const projected = useAuthStore(
+    (state) => state.auth.user?.identity_source === 'unihub'
+  )
   const { t } = useTranslation()
   const { setOpen, setCurrentRow } = useModels()
 
@@ -77,19 +81,23 @@ export function ModelsPrimaryButtons() {
           <MoreHorizontal className='h-4 w-4' />
         </DropdownMenuTrigger>
         <DropdownMenuContent align='end' className='w-56'>
-          <DropdownMenuItem onClick={handleMissingModels}>
-            {t('Missing Models')}
-            <DropdownMenuShortcut>
-              <AlertCircle className='h-4 w-4' />
-            </DropdownMenuShortcut>
-          </DropdownMenuItem>
+          {!projected && (
+            <DropdownMenuItem onClick={handleMissingModels}>
+              {t('Missing Models')}
+              <DropdownMenuShortcut>
+                <AlertCircle className='h-4 w-4' />
+              </DropdownMenuShortcut>
+            </DropdownMenuItem>
+          )}
 
-          <DropdownMenuItem onClick={handleSync}>
-            {t('Sync Upstream')}
-            <DropdownMenuShortcut>
-              <RefreshCw className='h-4 w-4' />
-            </DropdownMenuShortcut>
-          </DropdownMenuItem>
+          {!projected && (
+            <DropdownMenuItem onClick={handleSync}>
+              {t('Sync Upstream')}
+              <DropdownMenuShortcut>
+                <RefreshCw className='h-4 w-4' />
+              </DropdownMenuShortcut>
+            </DropdownMenuItem>
+          )}
 
           <DropdownMenuSeparator />
 

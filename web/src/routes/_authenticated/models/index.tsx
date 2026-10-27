@@ -19,14 +19,20 @@ For commercial licensing, please contact support@quantumnous.com
 import { createFileRoute, redirect } from '@tanstack/react-router'
 
 import { MODELS_DEFAULT_SECTION } from '@/features/models/section-registry'
-import { ROLE } from '@/lib/roles'
+import { canUseProductFeature } from '@/lib/product-access'
 import { useAuthStore } from '@/stores/auth-store'
 
 export const Route = createFileRoute('/_authenticated/models/')({
   beforeLoad: () => {
     const { auth } = useAuthStore.getState()
 
-    if (!auth.user || auth.user.role < ROLE.ADMIN) {
+    if (
+      !(
+        canUseProductFeature(auth.user, 'catalog') ||
+        (auth.user?.identity_source === 'unihub' &&
+          canUseProductFeature(auth.user, 'channel'))
+      )
+    ) {
       throw redirect({
         to: '/403',
       })

@@ -32,6 +32,8 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { copyToClipboard } from '@/lib/copy-to-clipboard'
+import { canUseProductFeature } from '@/lib/product-access'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   handleBatchEnableModels,
@@ -92,6 +94,9 @@ export function DataTableBulkActions<TData>({
       toast.error(t('Failed to copy model names'))
     }
   }
+
+  const user = useAuthStore((state) => state.auth.user)
+  if (!canUseProductFeature(user, 'catalog', 'write')) return null
 
   return (
     <>

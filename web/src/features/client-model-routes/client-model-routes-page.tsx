@@ -23,6 +23,8 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { SectionPageLayout } from '@/components/layout'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { canUseProductFeature } from '@/lib/product-access'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   createClientModelRoute,
@@ -67,6 +69,8 @@ const emptyRoute = (): ClientModelRouteInput => ({
 })
 
 export function ClientModelRoutesPage() {
+  const user = useAuthStore((state) => state.auth.user)
+  const canWrite = canUseProductFeature(user, 'routing', 'write')
   const { t } = useTranslation()
   const [routes, setRoutes] = useState<ClientModelRoute[]>([])
   const [channels, setChannels] = useState<ClientModelRouteChannelOption[]>([])
@@ -118,6 +122,7 @@ export function ClientModelRoutesPage() {
   }, [reload])
 
   const submit = async () => {
+    if (!canWrite) return
     setError('')
     const aliases = form.aliases.map((alias) => alias.trim()).filter(Boolean)
     if (!validateAliases(aliases)) {
@@ -178,6 +183,7 @@ export function ClientModelRoutesPage() {
   }
 
   const edit = (route: ClientModelRoute) => {
+    if (!canWrite) return
     setError('')
     setForm({
       id: route.id,
@@ -192,7 +198,7 @@ export function ClientModelRoutesPage() {
   }
 
   const remove = async () => {
-    if (!deletingRoute) return
+    if (!deletingRoute || !canWrite) return
     setDeleting(true)
     setError('')
     try {
@@ -218,19 +224,27 @@ export function ClientModelRoutesPage() {
         <SectionPageLayout.Title>
           {t('Client Model Routes')}
         </SectionPageLayout.Title>
-        <SectionPageLayout.Actions>
-          <Button
-            onClick={() => {
-              setError('')
-              setForm(emptyRoute())
-            }}
-            variant='outline'
-          >
-            {t('New route')}
-          </Button>
-        </SectionPageLayout.Actions>
+        {canWrite && (
+          <SectionPageLayout.Actions>
+            <Button
+              onClick={() => {
+                setError('')
+                setForm(emptyRoute())
+              }}
+              variant='outline'
+            >
+              {t('New route')}
+            </Button>
+          </SectionPageLayout.Actions>
+        )}
         <SectionPageLayout.Content>
-          <div className='grid min-h-0 gap-4 overflow-auto lg:grid-cols-[minmax(0,1fr)_minmax(360px,520px)]'>
+          <div
+            className={
+              canWrite
+                ? 'grid min-h-0 gap-4 overflow-auto lg:grid-cols-[minmax(0,1fr)_minmax(360px,520px)]'
+                : 'min-h-0 overflow-auto'
+            }
+          >
             <div className='rounded-md border'>
               {loading && (
                 <p className='text-muted-foreground p-4 text-sm'>
@@ -271,283 +285,291 @@ export function ClientModelRoutesPage() {
                             .join(', ')}
                         </p>
                       </div>
-                      <div className='flex shrink-0 gap-2'>
-                        <Button
-                          size='sm'
-                          variant='outline'
-                          onClick={() => edit(route)}
-                        >
-                          {t('Edit')}
-                        </Button>
-                        <Button
-                          size='sm'
-                          variant='destructive'
-                          onClick={() => setDeletingRoute(route)}
-                        >
-                          {t('Delete')}
-                        </Button>
-                      </div>
+                      {canWrite && (
+                        <div className='flex shrink-0 gap-2'>
+                          <Button
+                            size='sm'
+                            variant='outline'
+                            onClick={() => edit(route)}
+                          >
+                            {t('Edit')}
+                          </Button>
+                          <Button
+                            size='sm'
+                            variant='destructive'
+                            onClick={() => setDeletingRoute(route)}
+                          >
+                            {t('Delete')}
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
               )}
             </div>
 
-            <div className='space-y-3 rounded-md border p-4'>
-              <h3 className='font-semibold'>
-                {form.id ? t('Edit route') : t('New route')}
-              </h3>
-              <TextField
-                label={t('Public ID')}
-                value={form.public_id}
-                onChange={(value) => setForm({ ...form, public_id: value })}
-                required
-              />
-              <TextField
-                label={t('Display name')}
-                value={form.display_name}
-                onChange={(value) => setForm({ ...form, display_name: value })}
-              />
-              <label className='block text-sm'>
-                {t('Client scope')}
-                <select
-                  className='mt-1 w-full rounded border p-2'
-                  value={form.client}
-                  onChange={(event) =>
-                    setForm({ ...form, client: event.target.value })
+            {canWrite && (
+              <div className='space-y-3 rounded-md border p-4'>
+                <h3 className='font-semibold'>
+                  {form.id ? t('Edit route') : t('New route')}
+                </h3>
+                <TextField
+                  label={t('Public ID')}
+                  value={form.public_id}
+                  onChange={(value) => setForm({ ...form, public_id: value })}
+                  required
+                />
+                <TextField
+                  label={t('Display name')}
+                  value={form.display_name}
+                  onChange={(value) =>
+                    setForm({ ...form, display_name: value })
                   }
-                >
-                  <option value='all'>{t('All clients')}</option>
-                  <option value='codex'>Codex</option>
-                  <option value='claude'>Claude Code</option>
-                  <option value='gemini'>Gemini</option>
-                </select>
-              </label>
-              <TextField
-                label={t('Aliases (comma separated)')}
-                value={form.aliases.join(', ')}
-                onChange={(value) =>
-                  setForm({
-                    ...form,
-                    aliases: value
-                      .split(',')
-                      .map((alias) => alias.trim())
-                      .filter(Boolean),
-                  })
-                }
-              />
-              <MetadataEditor
-                value={form.metadata || ''}
-                onChange={(metadata) => setForm({ ...form, metadata })}
-                lockedSpace={hasFixedSpace(
-                  routes.find((route) => route.id === form.id)?.metadata
-                )}
-              />
-
-              {form.targets.map((target, index) => {
-                const channel = channelsByID.get(target.channel_id)
-                const selectedWires = parsePreferredWires(
-                  target.preferred_wires
-                )
-                return (
-                  <div
-                    className='space-y-3 rounded border p-3'
-                    key={target.id ?? index}
+                />
+                <label className='block text-sm'>
+                  {t('Client scope')}
+                  <select
+                    className='mt-1 w-full rounded border p-2'
+                    value={form.client}
+                    onChange={(event) =>
+                      setForm({ ...form, client: event.target.value })
+                    }
                   >
-                    <div className='flex items-center justify-between'>
-                      <span className='text-sm font-medium'>
-                        {t('Target {{number}}', { number: index + 1 })}
-                      </span>
-                      <Button
-                        size='sm'
-                        variant='ghost'
-                        disabled={form.targets.length === 1}
-                        onClick={() =>
-                          setForm({
-                            ...form,
-                            targets: form.targets.filter(
-                              (_, targetIndex) => targetIndex !== index
-                            ),
-                          })
-                        }
-                      >
-                        {t('Remove')}
-                      </Button>
-                    </div>
-                    <label className='block text-sm'>
-                      {t('Channel')}
-                      <select
-                        className='mt-1 w-full rounded border p-2'
-                        value={target.channel_id || ''}
-                        onChange={(event) => {
-                          const nextChannel = channelsByID.get(
-                            Number(event.target.value)
-                          )
-                          setTarget(form, setForm, index, {
-                            channel_id: nextChannel?.id ?? 0,
-                            upstream_model: nextChannel?.models[0] ?? '',
-                            preferred_wires: serializePreferredWires(
-                              nextChannel?.wires ?? []
-                            ),
-                          })
-                        }}
-                      >
-                        <option value=''>{t('Select a channel')}</option>
-                        {channels.map((option) => (
-                          <option key={option.id} value={option.id}>
-                            {option.name} (#{option.id})
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <div className='grid grid-cols-2 gap-2'>
-                      <label className='text-sm'>
-                        {t('Upstream model')}
-                        <select
-                          className='mt-1 w-full rounded border p-2'
-                          disabled={!channel}
-                          value={target.upstream_model}
-                          onChange={(event) =>
-                            setTarget(form, setForm, index, {
-                              upstream_model: event.target.value,
+                    <option value='all'>{t('All clients')}</option>
+                    <option value='codex'>Codex</option>
+                    <option value='claude'>Claude Code</option>
+                    <option value='gemini'>Gemini</option>
+                  </select>
+                </label>
+                <TextField
+                  label={t('Aliases (comma separated)')}
+                  value={form.aliases.join(', ')}
+                  onChange={(value) =>
+                    setForm({
+                      ...form,
+                      aliases: value
+                        .split(',')
+                        .map((alias) => alias.trim())
+                        .filter(Boolean),
+                    })
+                  }
+                />
+                <MetadataEditor
+                  value={form.metadata || ''}
+                  onChange={(metadata) => setForm({ ...form, metadata })}
+                  lockedSpace={hasFixedSpace(
+                    routes.find((route) => route.id === form.id)?.metadata
+                  )}
+                />
+
+                {form.targets.map((target, index) => {
+                  const channel = channelsByID.get(target.channel_id)
+                  const selectedWires = parsePreferredWires(
+                    target.preferred_wires
+                  )
+                  return (
+                    <div
+                      className='space-y-3 rounded border p-3'
+                      key={target.id ?? index}
+                    >
+                      <div className='flex items-center justify-between'>
+                        <span className='text-sm font-medium'>
+                          {t('Target {{number}}', { number: index + 1 })}
+                        </span>
+                        <Button
+                          size='sm'
+                          variant='ghost'
+                          disabled={form.targets.length === 1}
+                          onClick={() =>
+                            setForm({
+                              ...form,
+                              targets: form.targets.filter(
+                                (_, targetIndex) => targetIndex !== index
+                              ),
                             })
                           }
                         >
-                          {!channel && <option value='' />}
-                          {channel &&
-                            uniqueOptions(
-                              channel.models,
-                              target.upstream_model
+                          {t('Remove')}
+                        </Button>
+                      </div>
+                      <label className='block text-sm'>
+                        {t('Channel')}
+                        <select
+                          className='mt-1 w-full rounded border p-2'
+                          value={target.channel_id || ''}
+                          onChange={(event) => {
+                            const nextChannel = channelsByID.get(
+                              Number(event.target.value)
+                            )
+                            setTarget(form, setForm, index, {
+                              channel_id: nextChannel?.id ?? 0,
+                              upstream_model: nextChannel?.models[0] ?? '',
+                              preferred_wires: serializePreferredWires(
+                                nextChannel?.wires ?? []
+                              ),
+                            })
+                          }}
+                        >
+                          <option value=''>{t('Select a channel')}</option>
+                          {channels.map((option) => (
+                            <option key={option.id} value={option.id}>
+                              {option.name} (#{option.id})
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <div className='grid grid-cols-2 gap-2'>
+                        <label className='text-sm'>
+                          {t('Upstream model')}
+                          <select
+                            className='mt-1 w-full rounded border p-2'
+                            disabled={!channel}
+                            value={target.upstream_model}
+                            onChange={(event) =>
+                              setTarget(form, setForm, index, {
+                                upstream_model: event.target.value,
+                              })
+                            }
+                          >
+                            {!channel && <option value='' />}
+                            {channel &&
+                              uniqueOptions(
+                                channel.models,
+                                target.upstream_model
+                              ).map((modelName) => (
+                                <option key={modelName} value={modelName}>
+                                  {modelName}
+                                </option>
+                              ))}
+                          </select>
+                        </label>
+                        <label className='text-sm'>
+                          {t('Billing model')}
+                          <select
+                            className='mt-1 w-full rounded border p-2'
+                            value={target.billing_model}
+                            onChange={(event) =>
+                              setTarget(form, setForm, index, {
+                                billing_model: event.target.value,
+                              })
+                            }
+                          >
+                            <option value=''>
+                              {t('Select billing model')}
+                            </option>
+                            {uniqueOptions(
+                              billingModels,
+                              target.billing_model
                             ).map((modelName) => (
                               <option key={modelName} value={modelName}>
                                 {modelName}
                               </option>
                             ))}
-                        </select>
-                      </label>
-                      <label className='text-sm'>
-                        {t('Billing model')}
-                        <select
-                          className='mt-1 w-full rounded border p-2'
-                          value={target.billing_model}
-                          onChange={(event) =>
+                          </select>
+                        </label>
+                        <NumberField
+                          label={t('Priority')}
+                          value={target.priority}
+                          onChange={(value) =>
+                            setTarget(form, setForm, index, { priority: value })
+                          }
+                        />
+                        <NumberField
+                          label={t('Weight')}
+                          value={target.weight}
+                          min={1}
+                          onChange={(value) =>
+                            setTarget(form, setForm, index, { weight: value })
+                          }
+                        />
+                      </div>
+                      <fieldset>
+                        <legend className='text-sm'>
+                          {t('Preferred protocols')}
+                        </legend>
+                        <div className='mt-2 flex flex-wrap gap-4'>
+                          {WIRE_PROTOCOLS.map((wire) => (
+                            <label
+                              className='flex items-center gap-2 text-sm'
+                              key={wire}
+                            >
+                              <Checkbox
+                                checked={selectedWires.includes(wire)}
+                                disabled={
+                                  !!channel && !channel.wires.includes(wire)
+                                }
+                                onCheckedChange={(checked) => {
+                                  const nextWires = checked
+                                    ? [...selectedWires, wire]
+                                    : selectedWires.filter(
+                                        (selected) => selected !== wire
+                                      )
+                                  setTarget(form, setForm, index, {
+                                    preferred_wires:
+                                      serializePreferredWires(nextWires),
+                                  })
+                                }}
+                              />
+                              {t(wireLabelKey(wire))}
+                            </label>
+                          ))}
+                        </div>
+                      </fieldset>
+                      <MetadataEditor
+                        target
+                        value={target.metadata || ''}
+                        onChange={(metadata) =>
+                          setTarget(form, setForm, index, { metadata })
+                        }
+                      />
+                      <label className='flex items-center gap-2 text-sm'>
+                        <Checkbox
+                          checked={target.enabled}
+                          onCheckedChange={(checked) =>
                             setTarget(form, setForm, index, {
-                              billing_model: event.target.value,
+                              enabled: checked === true,
                             })
                           }
-                        >
-                          <option value=''>{t('Select billing model')}</option>
-                          {uniqueOptions(
-                            billingModels,
-                            target.billing_model
-                          ).map((modelName) => (
-                            <option key={modelName} value={modelName}>
-                              {modelName}
-                            </option>
-                          ))}
-                        </select>
+                        />
+                        {t('Target enabled')}
                       </label>
-                      <NumberField
-                        label={t('Priority')}
-                        value={target.priority}
-                        onChange={(value) =>
-                          setTarget(form, setForm, index, { priority: value })
-                        }
-                      />
-                      <NumberField
-                        label={t('Weight')}
-                        value={target.weight}
-                        min={1}
-                        onChange={(value) =>
-                          setTarget(form, setForm, index, { weight: value })
-                        }
-                      />
                     </div>
-                    <fieldset>
-                      <legend className='text-sm'>
-                        {t('Preferred protocols')}
-                      </legend>
-                      <div className='mt-2 flex flex-wrap gap-4'>
-                        {WIRE_PROTOCOLS.map((wire) => (
-                          <label
-                            className='flex items-center gap-2 text-sm'
-                            key={wire}
-                          >
-                            <Checkbox
-                              checked={selectedWires.includes(wire)}
-                              disabled={
-                                !!channel && !channel.wires.includes(wire)
-                              }
-                              onCheckedChange={(checked) => {
-                                const nextWires = checked
-                                  ? [...selectedWires, wire]
-                                  : selectedWires.filter(
-                                      (selected) => selected !== wire
-                                    )
-                                setTarget(form, setForm, index, {
-                                  preferred_wires:
-                                    serializePreferredWires(nextWires),
-                                })
-                              }}
-                            />
-                            {t(wireLabelKey(wire))}
-                          </label>
-                        ))}
-                      </div>
-                    </fieldset>
-                    <MetadataEditor
-                      target
-                      value={target.metadata || ''}
-                      onChange={(metadata) =>
-                        setTarget(form, setForm, index, { metadata })
-                      }
-                    />
-                    <label className='flex items-center gap-2 text-sm'>
-                      <Checkbox
-                        checked={target.enabled}
-                        onCheckedChange={(checked) =>
-                          setTarget(form, setForm, index, {
-                            enabled: checked === true,
-                          })
-                        }
-                      />
-                      {t('Target enabled')}
-                    </label>
-                  </div>
-                )
-              })}
-              <Button
-                variant='outline'
-                onClick={() =>
-                  setForm({
-                    ...form,
-                    targets: [...form.targets, emptyTarget()],
-                  })
-                }
-              >
-                {t('Add target')}
-              </Button>
-              <label className='flex items-center gap-2 text-sm'>
-                <Checkbox
-                  checked={form.enabled}
-                  onCheckedChange={(checked) =>
-                    setForm({ ...form, enabled: checked === true })
+                  )
+                })}
+                <Button
+                  variant='outline'
+                  onClick={() =>
+                    setForm({
+                      ...form,
+                      targets: [...form.targets, emptyTarget()],
+                    })
                   }
-                />
-                {t('Route enabled')}
-              </label>
-              {error && (
-                <p role='alert' className='text-destructive text-sm'>
-                  {error}
-                </p>
-              )}
-              <Button
-                disabled={loading || saving}
-                onClick={() => void submit()}
-              >
-                {saving ? t('Saving...') : t('Save route')}
-              </Button>
-            </div>
+                >
+                  {t('Add target')}
+                </Button>
+                <label className='flex items-center gap-2 text-sm'>
+                  <Checkbox
+                    checked={form.enabled}
+                    onCheckedChange={(checked) =>
+                      setForm({ ...form, enabled: checked === true })
+                    }
+                  />
+                  {t('Route enabled')}
+                </label>
+                {error && (
+                  <p role='alert' className='text-destructive text-sm'>
+                    {error}
+                  </p>
+                )}
+                <Button
+                  disabled={loading || saving}
+                  onClick={() => void submit()}
+                >
+                  {saving ? t('Saving...') : t('Save route')}
+                </Button>
+              </div>
+            )}
           </div>
         </SectionPageLayout.Content>
       </SectionPageLayout>

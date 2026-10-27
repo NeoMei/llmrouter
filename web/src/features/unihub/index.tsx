@@ -253,15 +253,14 @@ export function UniHub() {
     retry: false,
   })
   let navigation = null
-  if (config.data?.native_access) {
+  if (projected) {
+    navigation = (
+      <nav aria-label={t('UniHub account')}>
+        <Link to='/dashboard'>{t('Console')}</Link>
+      </nav>
+    )
+  } else if (config.data?.native_access) {
     navigation = <Link to='/sign-in'>{t('Local operator sign in')}</Link>
-    if (projected) {
-      navigation = (
-        <nav aria-label={t('UniHub account')}>
-          <Link to='/dashboard'>{t('Console')}</Link>
-        </nav>
-      )
-    }
   }
   return (
     <main className='mx-auto max-w-6xl space-y-5 p-4 md:p-8'>

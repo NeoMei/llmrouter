@@ -39,6 +39,7 @@ import { useTranslation } from 'react-i18next'
 
 import type { SidebarData } from '@/components/layout/types'
 import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
 
 /**
  * Root navigation groups for the application sidebar.
@@ -48,6 +49,9 @@ import { ROLE } from '@/lib/roles'
  */
 export function useSidebarData(): SidebarData {
   const { t } = useTranslation()
+  const projected = useAuthStore(
+    (state) => state.auth.user?.identity_source === 'unihub'
+  )
 
   return {
     navGroups: [
@@ -105,8 +109,8 @@ export function useSidebarData(): SidebarData {
         title: t('Personal'),
         items: [
           {
-            title: t('Wallet'),
-            url: '/wallet',
+            title: t(projected ? 'UniHub account' : 'Wallet'),
+            url: projected ? '/unihub' : '/wallet',
             icon: Wallet,
           },
           {
@@ -158,7 +162,9 @@ export function useSidebarData(): SidebarData {
           },
           {
             title: t('System Settings'),
-            url: '/system-settings/site',
+            url: projected
+              ? '/system-settings/models/global'
+              : '/system-settings/site',
             activeUrls: ['/system-settings'],
             icon: Settings,
           },

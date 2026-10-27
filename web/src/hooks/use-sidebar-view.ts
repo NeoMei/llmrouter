@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next'
 
 import { resolveSidebarView } from '@/components/layout/lib/sidebar-view-registry'
 import type { NavGroup, ResolvedSidebarView } from '@/components/layout/types'
+import { canOpenProductPage } from '@/lib/product-access'
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -47,11 +48,22 @@ const ROOT_VIEW_KEY = '__root'
 export function useSidebarView(): ResolvedSidebarView {
   const { t } = useTranslation()
   const pathname = useLocation({ select: (l) => l.pathname })
-  const userRole = useAuthStore((s) => s.auth.user?.role)
+  const user = useAuthStore((s) => s.auth.user)
+  const userRole = user?.role
   const rootSidebarData = useSidebarData()
   const configFilteredRoot = useSidebarConfig(rootSidebarData.navGroups)
 
   const rootNavGroups = useMemo<NavGroup[]>(() => {
+    if (user?.identity_source === 'unihub') {
+      return configFilteredRoot
+        .map((group) => ({
+          ...group,
+          items: group.items.filter(
+            (item) => item.url && canOpenProductPage(user, item.url)
+          ),
+        }))
+        .filter((group) => group.items.length > 0)
+    }
     const role = userRole ?? ROLE.GUEST
     const isAdmin = role >= ROLE.ADMIN
     return configFilteredRoot
@@ -62,10 +74,28 @@ export function useSidebarView(): ResolvedSidebarView {
         )
         return items.length === group.items.length ? group : { ...group, items }
       })
-  }, [configFilteredRoot, userRole])
+  }, [configFilteredRoot, userRole, user])
 
   const view = resolveSidebarView(pathname)
 
+  if (view && user?.identity_source === 'unihub') {
+    const navGroups: NavGroup[] = view
+      .getNavGroups(t)
+      .map((group) => ({
+        ...group,
+        items: group.items.flatMap<NavGroup['items'][number]>((item) => {
+          if (item.items) {
+            const items = item.items.filter(
+              (child) => child.url && canOpenProductPage(user, child.url)
+            )
+            return items.length ? [{ ...item, items }] : []
+          }
+          return item.url && canOpenProductPage(user, item.url) ? [item] : []
+        }),
+      }))
+      .filter((group) => group.items.length > 0)
+    return { key: view.id, view, navGroups }
+  }
   if (view) {
     return {
       key: view.id,

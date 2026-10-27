@@ -117,3 +117,26 @@ test('server session restores personal payer and sends only native proof through
     useAuthStore.getState().auth.reset()
   }
 })
+
+test('SSO retains only known product interface destinations', () => {
+  for (const value of [
+    '/dashboard/models?filter=x',
+    '/usage-logs/common',
+    '/models/metadata',
+    '/client-model-routes',
+    '/system-settings/models/global',
+    '/unihub',
+  ]) {
+    assert.equal(safeProductReturn(value), value)
+  }
+  for (const value of [
+    '/api/user/self',
+    '/platform/v1/chat/completions',
+    '/not-a-product-page',
+    '/system-settings/auth/login',
+    '/models/deployments',
+    '/dashboard/%2e%2e/%2e%2e/api/user/self',
+  ]) {
+    assert.equal(safeProductReturn(value), '/dashboard')
+  }
+})

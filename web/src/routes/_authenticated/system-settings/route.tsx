@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { createFileRoute, redirect } from '@tanstack/react-router'
 
 import { SystemSettings } from '@/features/system-settings'
+import { canUseProductFeature } from '@/lib/product-access'
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -26,7 +27,11 @@ export const Route = createFileRoute('/_authenticated/system-settings')({
   beforeLoad: () => {
     const { auth } = useAuthStore.getState()
 
-    if (auth.user?.role !== ROLE.SUPER_ADMIN) {
+    if (
+      auth.user?.identity_source === 'unihub'
+        ? !canUseProductFeature(auth.user, 'settings')
+        : auth.user?.role !== ROLE.SUPER_ADMIN
+    ) {
       throw redirect({
         to: '/403',
       })

@@ -26,6 +26,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { NativeBillingPanel } from '@/features/native-metering/billing-panel'
 import { CacheStatsDialog } from '@/features/system-settings/general/channel-affinity/cache-stats-dialog'
 import { useSidebarConfig } from '@/hooks/use-sidebar-config'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { UserInfoDialog } from './components/dialogs/user-info-dialog'
 import {
@@ -57,6 +58,9 @@ const SECTION_META: Record<UsageLogsSectionId, { titleKey: string }> = {
 }
 
 function UsageLogsContent() {
+  const projected = useAuthStore(
+    (state) => state.auth.user?.identity_source === 'unihub'
+  )
   const { t } = useTranslation()
   const navigate = useNavigate()
   const params = route.useParams()
@@ -152,7 +156,7 @@ function UsageLogsContent() {
                 </TabsList>
               </Tabs>
             )}
-            <NativeBillingPanel />
+            {!projected && <NativeBillingPanel />}
             <div className='min-h-0 flex-1'>
               <UsageLogsTable logCategory={activeCategory} />
             </div>
@@ -160,29 +164,33 @@ function UsageLogsContent() {
         </SectionPageLayout.Content>
       </SectionPageLayout>
 
-      <UserInfoDialog
-        userId={selectedUserId}
-        open={userInfoDialogOpen}
-        onOpenChange={setUserInfoDialogOpen}
-      />
+      {!projected && (
+        <UserInfoDialog
+          userId={selectedUserId}
+          open={userInfoDialogOpen}
+          onOpenChange={setUserInfoDialogOpen}
+        />
+      )}
 
-      <CacheStatsDialog
-        open={affinityDialogOpen}
-        onOpenChange={setAffinityDialogOpen}
-        target={
-          affinityTarget
-            ? {
-                rule_name: affinityTarget.rule_name || '',
-                using_group:
-                  affinityTarget.using_group ||
-                  affinityTarget.selected_group ||
-                  '',
-                key_hint: affinityTarget.key_hint || '',
-                key_fp: affinityTarget.key_fp || '',
-              }
-            : null
-        }
-      />
+      {!projected && (
+        <CacheStatsDialog
+          open={affinityDialogOpen}
+          onOpenChange={setAffinityDialogOpen}
+          target={
+            affinityTarget
+              ? {
+                  rule_name: affinityTarget.rule_name || '',
+                  using_group:
+                    affinityTarget.using_group ||
+                    affinityTarget.selected_group ||
+                    '',
+                  key_hint: affinityTarget.key_hint || '',
+                  key_fp: affinityTarget.key_fp || '',
+                }
+              : null
+          }
+        />
+      )}
     </>
   )
 }

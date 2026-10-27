@@ -164,7 +164,13 @@ export const Route = createRootRouteWithContext<{
       })
       .catch(() => false)
     if (!nativeAccess) {
-      if (['/about', '/docs', '/privacy-policy', '/user-agreement'].includes(pathname)) return
+      if (
+        ['/about', '/docs', '/privacy-policy', '/user-agreement'].includes(
+          pathname
+        )
+      ) {
+        return
+      }
       throw redirect({ to: '/unihub', replace: true })
     }
     const needsSetupCheck =

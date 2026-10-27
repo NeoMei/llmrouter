@@ -21,13 +21,13 @@ import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 
-import { safeProductReturn, startProductLogin } from './sso'
 import {
   registrationDefinitivelyRejected,
   registrationThrottle,
 } from './registration'
 import type { Registration } from './sdk'
 import { message, type ProductSession } from './session'
+import { safeProductReturn, startProductLogin } from './sso'
 import { Panel, Field, Submit } from './ui'
 
 export function AuthPanel(props: { session: ProductSession }) {
@@ -89,11 +89,11 @@ export function AuthPanel(props: { session: ProductSession }) {
         setPending({ ...intent, unresolved: true })
         const result = await props.session.client.register(
           intent.body,
-          intent.key,
+          intent.key
         )
         if (result.status !== 'CREATED') {
           setNotice(
-            t('Registration status unknown. Retry the original registration.'),
+            t('Registration status unknown. Retry the original registration.')
           )
           return
         }
@@ -133,7 +133,7 @@ export function AuthPanel(props: { session: ProductSession }) {
     statusText = cooldown
       ? t(
           'Too many registration attempts. Please wait {{seconds}} seconds before trying again.',
-          { seconds: Math.ceil((retryAt - now) / 1000) },
+          { seconds: Math.ceil((retryAt - now) / 1000) }
         )
       : t('Too many registration attempts. You can now retry manually.')
     if (pending?.unresolved) {

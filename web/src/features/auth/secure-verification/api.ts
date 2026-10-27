@@ -18,8 +18,6 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import i18next from 'i18next'
 
-import { useAuthStore } from '@/stores/auth-store'
-
 import type { ApiResponse } from '@/features/auth/types'
 import { api, get2FAStatus } from '@/lib/api'
 import {
@@ -27,6 +25,7 @@ import {
   prepareCredentialRequestOptions,
   isPasskeySupported as detectPasskeySupport,
 } from '@/lib/passkey'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   beginPasskeyVerification,

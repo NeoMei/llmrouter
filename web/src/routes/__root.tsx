@@ -34,6 +34,8 @@ import { saveAffiliateCode } from '@/features/auth/lib/storage'
 import { GeneralError } from '@/features/errors/general-error'
 import { NotFoundError } from '@/features/errors/not-found-error'
 import { getSetupStatus } from '@/features/setup/api'
+import { refreshProductAccess } from '@/features/unihub/session'
+import { safeProductReturn } from '@/features/unihub/sso'
 import { useSystemConfig } from '@/hooks/use-system-config'
 import {
   bootstrapAuthentication,
@@ -42,8 +44,6 @@ import {
 } from '@/lib/auth-session'
 import { subscribeAuthSessionEvents } from '@/lib/auth-session-sync'
 import { resolveLegacyRoute } from '@/lib/legacy-route'
-import { safeProductReturn } from '@/features/unihub/sso'
-import { refreshProductAccess } from '@/features/unihub/session'
 import { useAuthStore } from '@/stores/auth-store'
 
 function RootComponent() {
@@ -69,7 +69,7 @@ function RootComponent() {
           queryClient.clear()
         }
       }),
-    [queryClient],
+    [queryClient]
   )
 
   useEffect(
@@ -91,7 +91,7 @@ function RootComponent() {
           void navigate({ to: '/sign-in', replace: true })
         }
       }),
-    [navigate, queryClient],
+    [navigate, queryClient]
   )
 
   return (
@@ -168,13 +168,13 @@ export const Route = createRootRouteWithContext<{
               native_access?: boolean
               enabled?: boolean
             })
-          : null,
+          : null
       )
       .catch(() => null)
     if (!productConfig?.native_access) {
       if (
         ['/about', '/docs', '/privacy-policy', '/user-agreement'].includes(
-          pathname,
+          pathname
         )
       ) {
         return
@@ -187,8 +187,8 @@ export const Route = createRootRouteWithContext<{
         else if (pathname === '/sign-in') {
           destination = safeProductReturn(
             new URL(location.href, window.location.origin).searchParams.get(
-              'redirect',
-            ),
+              'redirect'
+            )
           )
         }
         if (destination === '/') destination = '/dashboard'
@@ -205,7 +205,7 @@ export const Route = createRootRouteWithContext<{
           }
           if (
             !['/dashboard', '/wallet', '/channels', '/403'].some(
-              (route) => pathname === route || pathname.startsWith(`${route}/`),
+              (route) => pathname === route || pathname.startsWith(`${route}/`)
             )
           ) {
             throw redirect({ to: '/403', replace: true })

@@ -20,7 +20,7 @@ For commercial licensing, please contact support@quantumnous.com
 // object configuration is sent as a patch so server-owned hidden keys survive.
 export function productChannelUpdate<T extends Record<string, unknown>>(
   payload: T,
-  dirty: Record<string, unknown>,
+  dirty: Record<string, unknown>
 ): Partial<T> {
   const result: Record<string, unknown> = { ...payload }
   const hiddenFields = [

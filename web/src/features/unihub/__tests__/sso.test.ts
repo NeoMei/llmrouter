@@ -16,8 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { test } from 'node:test'
 
 import { useAuthStore } from '../../../stores/auth-store'
 import { createProductSession, restoreProductSession } from '../session'
@@ -26,7 +26,7 @@ import { safeProductReturn, productLoginURL } from '../sso'
 test('SSO keeps a safe management deep link and rejects foreign returns', () => {
   assert.equal(
     productLoginURL('/channels?filter=abc'),
-    '/api/unihub/login?return_to=%2Fchannels%3Ffilter%3Dabc',
+    '/api/unihub/login?return_to=%2Fchannels%3Ffilter%3Dabc'
   )
   for (const raw of [
     '//evil.test',
@@ -68,7 +68,7 @@ test('server session restores personal payer and sends only native proof through
     calls.push(path)
     assert.equal(
       new Headers(init?.headers).get('Authorization'),
-      'Bearer native-dashboard-proof',
+      'Bearer native-dashboard-proof'
     )
     assert.equal(path.startsWith('/api/unihub/'), true)
     if (path === '/api/unihub/access') {

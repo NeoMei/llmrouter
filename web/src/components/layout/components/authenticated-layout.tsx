@@ -16,8 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect } from 'react'
 import { Link, useLocation } from '@tanstack/react-router'
+import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { LanguageSwitcher } from '@/components/language-switcher'
@@ -26,8 +26,8 @@ import { SkipToMain } from '@/components/skip-to-main'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { LayoutProvider } from '@/context/layout-provider'
 import { SearchProvider } from '@/context/search-provider'
-import { refreshProductAccess } from '@/features/unihub/session'
 import { UniHub } from '@/features/unihub'
+import { refreshProductAccess } from '@/features/unihub/session'
 import { hasPermission } from '@/lib/admin-permissions'
 import { getCookie } from '@/lib/cookies'
 import { cn } from '@/lib/utils'
@@ -46,7 +46,7 @@ export function AuthenticatedLayout(props: AuthenticatedLayoutProps) {
   const pathname = useLocation({ select: (location) => location.pathname })
   const user = useAuthStore((state) => state.auth.user)
   const projected = useAuthStore(
-    (state) => state.auth.user?.identity_source === 'unihub',
+    (state) => state.auth.user?.identity_source === 'unihub'
   )
   useEffect(() => {
     if (!projected) return
@@ -106,7 +106,7 @@ export function AuthenticatedLayout(props: AuthenticatedLayoutProps) {
                 '@container/content',
                 'h-[calc(100svh-var(--app-header-height,0px))]',
                 'min-h-0 overflow-hidden',
-                'peer-data-[variant=inset]:h-[calc(100svh-var(--app-header-height,0px)-(var(--spacing)*4))]',
+                'peer-data-[variant=inset]:h-[calc(100svh-var(--app-header-height,0px)-(var(--spacing)*4))]'
               )}
             >
               {props.children ?? <AnimatedOutlet />}

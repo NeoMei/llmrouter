@@ -50,7 +50,7 @@ export class FinancialIntent {
   assertAccount(account: string): void {
     if (this.account !== account) {
       throw new Error(
-        'Original payer differs; select the original account to query or retry',
+        'Original payer differs; select the original account to query or retry'
       )
     }
   }
@@ -156,7 +156,7 @@ export function createProductSession(config: ProductConfig): ProductSession {
           credentials: 'same-origin',
           redirect: 'error',
           signal: session.signal,
-        },
+        }
       )
     } else {
       result = await fetch(input, { ...init, signal: session.signal })
@@ -174,7 +174,7 @@ export function createProductSession(config: ProductConfig): ProductSession {
       clientId: config.client_id,
       redirectUri: config.redirect_uri,
       fetch: send,
-    }),
+    })
   )
   activeProductSession = session
   return session
@@ -251,7 +251,7 @@ export function restoreProductSession(session: ProductSession): Promise<void> {
   return session.restorePromise
 }
 async function restoreProductSessionOnce(
-  session: ProductSession,
+  session: ProductSession
 ): Promise<void> {
   if (useAuthStore.getState().auth.user?.identity_source !== 'unihub') return
   const epoch = session.epoch

@@ -31,7 +31,6 @@ import { clearAuthentication } from '@/lib/auth-session'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { TeamPanel } from './account-panel'
-import { markProductSignedOut, startProductLogin } from './sso'
 import { AuthPanel } from './auth-panel'
 import { BillingPanel } from './billing-panel'
 import type { User, Account } from './sdk'
@@ -43,13 +42,14 @@ import {
   type ProductSession,
   message,
 } from './session'
+import { markProductSignedOut, startProductLogin } from './sso'
 import { TaskPanel } from './task-panel'
 import { UsagePanel } from './usage-panel'
 
 function ProductShell(props: { config: ProductConfig }) {
   const { t } = useTranslation()
   const [session] = useState<ProductSession>(
-    () => getActiveProductSession() ?? createProductSession(props.config),
+    () => getActiveProductSession() ?? createProductSession(props.config)
   )
   const [cache] = useState(
     () =>
@@ -58,7 +58,7 @@ function ProductShell(props: { config: ProductConfig }) {
           queries: { retry: false },
           mutations: { retry: false },
         },
-      }),
+      })
   )
   const navigate = useNavigate()
   const [user, setUser] = useState<User | null>(session.user)
@@ -241,7 +241,7 @@ function ProductShell(props: { config: ProductConfig }) {
 export function UniHub() {
   const { t } = useTranslation()
   const projected = useAuthStore(
-    (state) => state.auth.user?.identity_source === 'unihub',
+    (state) => state.auth.user?.identity_source === 'unihub'
   )
   const config = useQuery({
     queryKey: ['unihub-public-config'],

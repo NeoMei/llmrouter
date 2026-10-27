@@ -6,6 +6,7 @@ ARG GOPROXY=https://proxy.golang.org,direct
 ENV GOPROXY=${GOPROXY}
 WORKDIR /build
 ADD go.mod go.sum ./
+COPY third_party/unihub-userkit/go.mod third_party/unihub-userkit/go.sum ./third_party/unihub-userkit/
 RUN go mod download
 COPY . .
 RUN bash scripts/build-onboarding-artifacts.sh
@@ -34,6 +35,7 @@ ENV GOEXPERIMENT=greenteagc
 WORKDIR /build
 
 ADD go.mod go.sum ./
+COPY third_party/unihub-userkit/go.mod third_party/unihub-userkit/go.sum ./third_party/unihub-userkit/
 RUN go mod download
 
 COPY . .

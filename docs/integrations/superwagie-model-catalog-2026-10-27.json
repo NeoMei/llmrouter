@@ -10,7 +10,7 @@
       "llmrouter_native": true,
       "unihub_platform": true,
       "asset": "CNY/6",
-      "rate_id": "llmrouter-glm-5-3-cny-v1",
+      "rate_id": "llmrouter-glm-5-3-cny-v2",
       "semantics": "exclusive_v1"
     },
     {
@@ -18,15 +18,15 @@
       "llmrouter_native": true,
       "unihub_platform": true,
       "asset": "CNY/6",
-      "rate_id": "llmrouter-glm-5-3-flash-cny-v1",
-      "semantics": "exclusive_v1"
+      "rate_id": "llmrouter-glm-5-3-flash-cny-v2",
+      "semantics": "metered_v2"
     },
     {
       "id": "glm-5.2",
       "llmrouter_native": true,
       "unihub_platform": true,
       "asset": "CNY/6",
-      "rate_id": "llmrouter-glm-5-2-cny-v1",
+      "rate_id": "llmrouter-glm-5-2-cny-v2",
       "semantics": "exclusive_v1"
     },
     {
@@ -34,7 +34,7 @@
       "llmrouter_native": true,
       "unihub_platform": true,
       "asset": "CNY/6",
-      "rate_id": "llmrouter-glm-5-1-cny-v1",
+      "rate_id": "llmrouter-glm-5-1-cny-v2",
       "semantics": "exclusive_v1"
     },
     {
@@ -42,7 +42,7 @@
       "llmrouter_native": true,
       "unihub_platform": true,
       "asset": "CNY/6",
-      "rate_id": "llmrouter-glm-5-cny-v1",
+      "rate_id": "llmrouter-glm-5-cny-v2",
       "semantics": "exclusive_v1"
     },
     {
@@ -50,7 +50,7 @@
       "llmrouter_native": true,
       "unihub_platform": true,
       "asset": "CNY/6",
-      "rate_id": "llmrouter-glm-5-turbo-cny-v1",
+      "rate_id": "llmrouter-glm-5-turbo-cny-v2",
       "semantics": "exclusive_v1"
     },
     {
@@ -58,7 +58,7 @@
       "llmrouter_native": true,
       "unihub_platform": true,
       "asset": "CNY/6",
-      "rate_id": "llmrouter-glm-4-7-cny-v1",
+      "rate_id": "llmrouter-glm-4-7-cny-v2",
       "semantics": "exclusive_v1"
     },
     {
@@ -66,7 +66,7 @@
       "llmrouter_native": true,
       "unihub_platform": true,
       "asset": "CNY/6",
-      "rate_id": "llmrouter-glm-4-6-cny-v1",
+      "rate_id": "llmrouter-glm-4-6-cny-v2",
       "semantics": "exclusive_v1"
     },
     {
@@ -74,7 +74,7 @@
       "llmrouter_native": true,
       "unihub_platform": true,
       "asset": "CNY/6",
-      "rate_id": "llmrouter-glm-4-5-cny-v1",
+      "rate_id": "llmrouter-glm-4-5-cny-v2",
       "semantics": "exclusive_v1"
     },
     {
@@ -82,7 +82,7 @@
       "llmrouter_native": true,
       "unihub_platform": true,
       "asset": "CNY/6",
-      "rate_id": "llmrouter-glm-4-5-air-cny-v1",
+      "rate_id": "llmrouter-glm-4-5-air-cny-v2",
       "semantics": "exclusive_v1"
     },
     {
@@ -90,7 +90,7 @@
       "llmrouter_native": true,
       "unihub_platform": true,
       "asset": "CNY/6",
-      "rate_id": "llmrouter-deepseek-v4-pro-cny-v1",
+      "rate_id": "llmrouter-deepseek-v4-pro-cny-v2",
       "semantics": "exclusive_v1"
     },
     {
@@ -98,7 +98,7 @@
       "llmrouter_native": true,
       "unihub_platform": true,
       "asset": "CNY/6",
-      "rate_id": "llmrouter-deepseek-v4-flash-cny-v1",
+      "rate_id": "llmrouter-deepseek-v4-flash-cny-v2",
       "semantics": "exclusive_v1"
     },
     {
@@ -106,15 +106,15 @@
       "llmrouter_native": true,
       "unihub_platform": true,
       "asset": "CNY/6",
-      "rate_id": "llmrouter-deepseek-v4-flash-vision-exp-cny-v1",
-      "semantics": "exclusive_v1"
+      "rate_id": "llmrouter-deepseek-v4-flash-vision-exp-cny-v2",
+      "semantics": "metered_v2"
     },
     {
       "id": "DeepSeek-V4-Pro-A",
       "llmrouter_native": true,
       "unihub_platform": true,
       "asset": "CNY/6",
-      "rate_id": "llmrouter-deepseek-v4-pro-a-cny-v1",
+      "rate_id": "llmrouter-deepseek-v4-pro-a-cny-v2",
       "semantics": "exclusive_v1"
     },
     {
@@ -122,7 +122,7 @@
       "llmrouter_native": true,
       "unihub_platform": true,
       "asset": "CNY/6",
-      "rate_id": "llmrouter-deepseek-v4-flash-a-cny-v1",
+      "rate_id": "llmrouter-deepseek-v4-flash-a-cny-v2",
       "semantics": "exclusive_v1"
     },
     {
@@ -130,7 +130,7 @@
       "llmrouter_native": true,
       "unihub_platform": true,
       "asset": "CNY/6",
-      "rate_id": "llmrouter-doubao-seed-2-0-pro-a-cny-v1",
+      "rate_id": "llmrouter-doubao-seed-2-0-pro-a-cny-v2",
       "semantics": "exclusive_v1"
     },
     {
@@ -138,7 +138,7 @@
       "llmrouter_native": true,
       "unihub_platform": true,
       "asset": "CNY/6",
-      "rate_id": "llmrouter-minimax-m3-a-cny-v1",
+      "rate_id": "llmrouter-minimax-m3-a-cny-v2",
       "semantics": "exclusive_v1"
     },
     {
@@ -146,7 +146,7 @@
       "llmrouter_native": true,
       "unihub_platform": true,
       "asset": "CNY/6",
-      "rate_id": "llmrouter-qwen3-7-max-a-cny-v1",
+      "rate_id": "llmrouter-qwen3-7-max-a-cny-v2",
       "semantics": "exclusive_v1"
     },
     {
@@ -154,7 +154,7 @@
       "llmrouter_native": true,
       "unihub_platform": true,
       "asset": "CNY/6",
-      "rate_id": "llmrouter-kimi-k2-7-code-cny-v1",
+      "rate_id": "llmrouter-kimi-k2-7-code-cny-v2",
       "semantics": "exclusive_v1"
     },
     {
@@ -162,7 +162,7 @@
       "llmrouter_native": true,
       "unihub_platform": true,
       "asset": "CNY/6",
-      "rate_id": "llmrouter-kimi-k2-6-a-cny-v1",
+      "rate_id": "llmrouter-kimi-k2-6-a-cny-v2",
       "semantics": "exclusive_v1"
     },
     {
@@ -170,7 +170,7 @@
       "llmrouter_native": true,
       "unihub_platform": true,
       "asset": "CNY/6",
-      "rate_id": "llmrouter-k3-cny-v1",
+      "rate_id": "llmrouter-k3-cny-v2",
       "semantics": "exclusive_v1"
     },
     {
@@ -178,7 +178,7 @@
       "llmrouter_native": true,
       "unihub_platform": true,
       "asset": "CNY/6",
-      "rate_id": "llmrouter-glm-5-2-a-cny-v1",
+      "rate_id": "llmrouter-glm-5-2-a-cny-v2",
       "semantics": "exclusive_v1"
     }
   ],

@@ -5,6 +5,7 @@ import (
 	userkit "github.com/NeoMei/UniHub/packages/userkit-go"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/internal/platformaccount"
+	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -14,11 +15,47 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestBrowserUsesPublicOriginWithoutChangingPrivatePlatformAndRuntime(t *testing.T) {
+	old := model.DB
+	db, e := gorm.Open(sqlite.Open(t.TempDir()+"/split-origins.db"), &gorm.Config{})
+	require.NoError(t, e)
+	require.NoError(t, db.AutoMigrate(&model.AuthFlow{}))
+	model.DB = db
+	t.Cleanup(func() { model.DB = old })
+	for key, value := range map[string]string{
+		"UNIHUB_PRODUCT_RUNTIME_ENABLED": "true", "UNIHUB_PRODUCT_ENABLED": "true", "UNIHUB_PLATFORM_ENABLED": "true",
+		"UNIHUB_ORIGIN": "https://hub.test:18488", "UNIHUB_PRODUCT_API_ORIGIN": "https://hub.test:18488", "UNIHUB_PRODUCT_PUBLIC_ORIGIN": "https://hub.test",
+		"UNIHUB_PRODUCT_RUNTIME_TOKEN": strings.Repeat("s", 32), "UNIHUB_PRODUCT_ID": "llmrouter", "UNIHUB_PRODUCT_INSTANCE_ID": "default",
+		"UNIHUB_PRODUCT_CLIENT_ID": "router", "UNIHUB_PRODUCT_REDIRECT_URI": "https://router.test/api/unihub/callback",
+		"UNIHUB_MODEL_SERVICE_TOKEN": strings.Repeat("m", 32), "UNIHUB_ROUTING_GROUP": "default", "UNIHUB_ROUTING_PRINCIPAL_ID": "14",
+		"UNIHUB_MAX_INPUT_TOKENS": "1000", "UNIHUB_MAX_OUTPUT_TOKENS": "1000", "UNIHUB_MAX_BODY_BYTES": "1048576",
+	} {
+		t.Setenv(key, value)
+	}
+	config, e := platformaccount.FromEnv()
+	require.NoError(t, e)
+	r := gin.New()
+	registerUniHubSSO(r, config)
+	response := httptest.NewRecorder()
+	r.ServeHTTP(response, httptest.NewRequest("GET", "https://router.test/api/unihub/login?prompt=none&return_to=%2Fprofile", nil))
+	require.Equal(t, 303, response.Code)
+	target, e := url.Parse(response.Header().Get("Location"))
+	require.NoError(t, e)
+	require.Equal(t, "https://hub.test/auth/product/authorize", target.Scheme+"://"+target.Host+target.Path, "a browser must not follow the private model-service port")
+	runtime, e := platformaccount.RuntimeClient()
+	require.NoError(t, e)
+	require.Equal(t, "https://hub.test:18488", runtime.Scope().Origin)
+	legacy, e := platformbilling.ConfigFromEnv(os.Getenv)
+	require.NoError(t, e)
+	require.Equal(t, "https://hub.test:18488", legacy.Origin)
+}
 
 func TestNativeBrowserHandoffRequiresOwnCookieAndLiveSourceSession(t *testing.T) {
 	old, redis, secret := model.DB, common.RedisEnabled, common.SessionSecret

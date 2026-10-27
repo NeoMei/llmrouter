@@ -47,7 +47,10 @@ func safeProductBrowserReturn(raw string) (string, bool) {
 	return raw, e == nil && userkit.SafeReturn(raw) && middleware.IsProductApplicationPath(u.Path)
 }
 func (b *productBrowserBridge) origin() (string, error) {
-	raw := strings.TrimRight(os.Getenv("UNIHUB_ORIGIN"), "/")
+	raw := strings.TrimRight(b.config.PublicOrigin, "/")
+	if raw == "" {
+		raw = strings.TrimRight(os.Getenv("UNIHUB_ORIGIN"), "/")
+	}
 	u, e := url.Parse(raw)
 	if e != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" {
 		return "", userkit.ErrInvalid

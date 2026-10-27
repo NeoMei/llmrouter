@@ -19,6 +19,7 @@ const RuntimeUnitVersion = "lr-quota-v1"
 // Runtime amounts are exact native LR quota integers, not cash or CREDIT/6.
 type ServiceConfig struct {
 	BaseURL, ProductID, InstanceID, ServiceToken string
+	BrowserOrigin                                string
 	HTTPClient                                   *http.Client
 }
 
@@ -208,13 +209,14 @@ type RuntimeError struct {
 func (e *RuntimeError) Error() string { return "central product runtime: " + e.Code }
 
 func NewRuntimeClient(c ServiceConfig) (*RuntimeClient, error) {
-	if !validOrigin(c.BaseURL) || c.ProductID == "" || len(c.ServiceToken) < 32 || strings.ContainsAny(c.ServiceToken, "\r\n") {
+	if !validOrigin(c.BaseURL) || (c.BrowserOrigin != "" && !validOrigin(c.BrowserOrigin)) || c.ProductID == "" || len(c.ServiceToken) < 32 || strings.ContainsAny(c.ServiceToken, "\r\n") {
 		return nil, ErrInvalid
 	}
 	if c.InstanceID == "" {
 		c.InstanceID = "default"
 	}
 	c.BaseURL = strings.TrimSuffix(c.BaseURL, "/")
+	c.BrowserOrigin = strings.TrimSuffix(c.BrowserOrigin, "/")
 	h := http.Client{Timeout: 10 * time.Second}
 	if c.HTTPClient != nil {
 		h = *c.HTTPClient

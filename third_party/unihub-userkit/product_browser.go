@@ -38,7 +38,11 @@ func (c *RuntimeClient) ApproveProductBrowserHandoff(ctx context.Context, actor 
 	e = c.request(ctx, "POST", "/identity/browser/approve", actor, in, &out)
 	if e == nil {
 		u, err := url.Parse(out.FinishURL)
-		base, _ := url.Parse(c.config.BaseURL)
+		origin := c.config.BrowserOrigin
+		if origin == "" {
+			origin = c.config.BaseURL
+		}
+		base, _ := url.Parse(origin)
 		if err != nil || u.Scheme != base.Scheme || u.Host != base.Host || u.Path != "/auth/product/finish" || u.User != nil || u.Fragment != "" {
 			e = ErrInvalid
 		}

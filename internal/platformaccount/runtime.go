@@ -27,7 +27,11 @@ func RuntimeClient() (*userkit.RuntimeClient, error) {
 	if apiOrigin == "" {
 		apiOrigin = os.Getenv("UNIHUB_ORIGIN")
 	}
-	return userkit.NewRuntimeClient(userkit.ServiceConfig{BaseURL: strings.TrimSuffix(apiOrigin, "/"), ProductID: product, InstanceID: os.Getenv("UNIHUB_PRODUCT_INSTANCE_ID"), ServiceToken: os.Getenv("UNIHUB_PRODUCT_RUNTIME_TOKEN")})
+	browserOrigin := os.Getenv("UNIHUB_PRODUCT_PUBLIC_ORIGIN")
+	if browserOrigin == "" {
+		browserOrigin = os.Getenv("UNIHUB_ORIGIN")
+	}
+	return userkit.NewRuntimeClient(userkit.ServiceConfig{BaseURL: strings.TrimSuffix(apiOrigin, "/"), BrowserOrigin: browserOrigin, ProductID: product, InstanceID: os.Getenv("UNIHUB_PRODUCT_INSTANCE_ID"), ServiceToken: os.Getenv("UNIHUB_PRODUCT_RUNTIME_TOKEN")})
 }
 func IdentityForLocal(ctx context.Context, localID string) (userkit.ProductIdentity, error) {
 	c, e := RuntimeClient()

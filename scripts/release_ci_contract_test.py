@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import re
+import shlex
 import unittest
 from pathlib import Path
 
@@ -14,6 +15,42 @@ def read_repo_file(path: str) -> str:
 
 
 class ReleaseCIContractTest(unittest.TestCase):
+    def test_docker_dependency_layers_include_local_module_manifests(self) -> None:
+        local_modules = re.findall(
+            r"(?m)^replace\s+\S+(?:\s+\S+)?\s+=>\s+(\./\S+)\s*$",
+            read_repo_file("go.mod"),
+        )
+        self.assertTrue(local_modules, "no local module replacements found")
+
+        for dockerfile in ("Dockerfile", "Dockerfile.dev"):
+            for stage in re.split(r"(?m)^FROM ", read_repo_file(dockerfile))[1:]:
+                if "RUN go mod download" not in stage:
+                    continue
+                copied_files: set[str] = set()
+                dependency_layer = stage.split("RUN go mod download", 1)[0]
+                for instruction in re.findall(
+                    r"(?m)^(?:COPY|ADD) (.+)$", dependency_layer
+                ):
+                    arguments = shlex.split(instruction)
+                    if arguments[0].startswith("--"):
+                        continue
+                    destination = Path(arguments[-1])
+                    for pattern in arguments[:-1]:
+                        for source in ROOT.glob(pattern):
+                            if source.is_file():
+                                target = destination / source.name
+                                copied_files.add(target.as_posix())
+                            elif source.is_dir():
+                                for source_file in source.rglob("*"):
+                                    if source_file.is_file():
+                                        target = destination / source_file.relative_to(source)
+                                        copied_files.add(target.as_posix())
+
+                for module in local_modules:
+                    with self.subTest(dockerfile=dockerfile, stage=stage.splitlines()[0]):
+                        manifest = (Path(module) / "go.mod").as_posix()
+                        self.assertIn(manifest, copied_files)
+
     def test_upstream_docker_publish_jobs_require_the_upstream_repository(self) -> None:
         for path in (
             ".github/workflows/docker-build.yml",

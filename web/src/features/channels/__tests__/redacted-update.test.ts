@@ -35,7 +35,7 @@ test('a product routing edit omits hidden configuration defaults even for sensit
       other: '',
       remark: '',
     },
-    { name: true, models: true },
+    { name: true, models: true }
   )
   assert.deepEqual(updated, { id: 1, name: 'after', models: 'a,b' })
 })
@@ -48,7 +48,7 @@ test('explicit product credential edit sends changed config only, preserving unk
       setting: '{"proxy":"http://new-proxy","force_format":false}',
       settings: '{"allow_service_tier":false,"disable_store":false}',
     },
-    { header_override: true, proxy: true, allow_service_tier: true },
+    { header_override: true, proxy: true, allow_service_tier: true }
   )
   assert.deepEqual(updated, {
     id: 1,

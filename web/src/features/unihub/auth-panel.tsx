@@ -17,14 +17,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useNavigate } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import { sanitizeAuthRedirect } from '@/features/auth/lib/auth-redirect'
 
 import { authorizeProductSession } from './native-session'
-import { registrationDefinitivelyRejected } from './registration'
+import {
+  registrationDefinitivelyRejected,
+  registrationThrottle,
+} from './registration'
 import type { User, Account, Registration } from './sdk'
 import { message, type ProductSession } from './session'
 import { Panel, Field, Submit } from './ui'
@@ -38,12 +41,29 @@ export function AuthPanel(props: {
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [register, setRegister] = useState(false)
+  const sending = useRef(false)
+  const [retryAt, setRetryAt] = useState(0)
+  const [now, setNow] = useState(Date.now)
+  const [throttled, setThrottled] = useState(false)
+  useEffect(() => {
+    if (!retryAt) return
+    const timer = window.setInterval(() => {
+      const time = Date.now()
+      setNow(time)
+      if (time >= retryAt) setRetryAt(0)
+    }, 250)
+    return () => window.clearInterval(timer)
+  }, [retryAt])
   const [pending, setPending] = useState<{
     body: Registration
     key: string
+    unresolved: boolean
   } | null>(null)
   async function submit(form: HTMLFormElement) {
+    if (sending.current || (register && Date.now() < retryAt)) return
+    sending.current = true
     setBusy(true)
+    setThrottled(false)
     setNotice('')
     const data = new FormData(form)
     const body = {
@@ -51,10 +71,14 @@ export function AuthPanel(props: {
       password: String(data.get('password')),
       email: String(data.get('email') ?? ''),
     }
+    const intent = pending ?? {
+      body,
+      key: crypto.randomUUID(),
+      unresolved: false,
+    }
     try {
       if (register) {
-        const intent = pending ?? { body, key: crypto.randomUUID() }
-        setPending(intent)
+        setPending({ ...intent, unresolved: true })
         const result = await props.session.client.register(
           intent.body,
           intent.key
@@ -82,10 +106,38 @@ export function AuthPanel(props: {
       await navigate({ href: target, replace: true })
     } catch (error) {
       if (!register && !props.session.user) props.session.clear()
-      else if (registrationDefinitivelyRejected(error)) setPending(null)
-      setNotice(message(error))
+      const throttle = register ? registrationThrottle(error) : null
+      if (throttle) {
+        setPending({
+          ...intent,
+          unresolved: intent.unresolved || !throttle.notStarted,
+        })
+        const time = Date.now()
+        setNow(time)
+        setRetryAt(time + throttle.retryAfterMs)
+        setThrottled(true)
+      } else {
+        if (register && registrationDefinitivelyRejected(error)) {
+          setPending(null)
+        }
+        setNotice(message(error))
+      }
     } finally {
+      sending.current = false
       setBusy(false)
+    }
+  }
+  const cooldown = register && retryAt > now
+  let statusText = notice
+  if (throttled) {
+    statusText = cooldown
+      ? t(
+          'Too many registration attempts. Please wait {{seconds}} seconds before trying again.',
+          { seconds: Math.ceil((retryAt - now) / 1000) }
+        )
+      : t('Too many registration attempts. You can now retry manually.')
+    if (pending?.unresolved) {
+      statusText += ` ${t('Your original registration is still unresolved. Retry the same request.')}`
     }
   }
   let submitText = register ? 'Register' : 'Sign in'
@@ -99,29 +151,37 @@ export function AuthPanel(props: {
       </p>
       <form
         className='grid max-w-md gap-3'
+        onChange={() => {
+          if (pending && !pending.unresolved) setPending(null)
+        }}
         onSubmit={(e) => {
           e.preventDefault()
           void submit(e.currentTarget)
         }}
       >
-        <fieldset disabled={busy || pending !== null} className='grid gap-3'>
+        <fieldset
+          disabled={busy || pending?.unresolved === true}
+          className='grid gap-3'
+        >
           <Field name='username' label='Username' required />
           <Field name='password' type='password' label='Password' required />
           {register ? <Field name='email' type='email' label='Email' /> : null}
         </fieldset>
-        <Submit busy={busy} text={submitText} />
+        <Submit busy={busy || cooldown} text={submitText} />
       </form>
       <Button
         variant='outline'
-        disabled={busy || pending !== null}
+        disabled={busy || pending?.unresolved === true}
         onClick={() => {
           setRegister(!register)
+          setPending(null)
+          setThrottled(false)
           setNotice('')
         }}
       >
         {t(register ? 'Back to sign in' : 'Register UniHub account')}
       </Button>
-      {notice ? <p role='status'>{notice}</p> : null}
+      {statusText ? <p role='status'>{statusText}</p> : null}
     </Panel>
   )
 }

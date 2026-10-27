@@ -21,6 +21,7 @@ async function fixture(
       return route.fulfill({
         json: {
           enabled: true,
+          native_access: false,
           public_origin: 'http://127.0.0.1:58006',
           client_id: 'client',
           redirect_uri: 'http://127.0.0.1:58004/unihub',
@@ -892,7 +893,7 @@ test('late settled receipt after payer switch cannot populate or refetch the new
   expect(newPayerReads).toBe(1)
 })
 
-test('sign-in entry preserves safe wallet destination and unified navigation excludes native actions', async ({
+test('public sign-in and wallet routes remain in UniHub and exclude native actions', async ({
   page,
 }) => {
   await fixture(page)
@@ -907,17 +908,15 @@ test('sign-in entry preserves safe wallet destination and unified navigation exc
     }
   })
   await page.goto('/sign-in?redirect=%2Fwallet')
-  await page.getByRole('link', { name: /UniHub/ }).click()
-  await expect(page).toHaveURL(/\/unihub\?redirect=%2Fwallet/)
+  await expect(page).toHaveURL(/\/unihub$/)
+  await expect(
+    page.getByRole('link', { name: /Local operator sign in/ })
+  ).toHaveCount(0)
   await page.getByLabel('Username', { exact: true }).fill('product')
   await page.getByLabel('Password', { exact: true }).fill('private')
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
-  await expect(page).toHaveURL(/\/wallet$/)
-  await expect(
-    page
-      .getByRole('complementary')
-      .getByRole('link', { name: 'Wallet', exact: true })
-  ).toBeVisible()
+  await expect(page).toHaveURL(/\/unihub$/)
+  await expect(page.getByText('Product user · immutable-user')).toBeVisible()
   await expect(
     page.getByRole('link', { name: /API keys|Change password|Recharge/ })
   ).toHaveCount(0)
@@ -927,13 +926,18 @@ test('sign-in entry preserves safe wallet destination and unified navigation exc
   ).toBeVisible()
   expect(denied).toEqual([])
   await page.getByRole('button', { name: 'Sign out', exact: true }).click()
-  await expect(page).toHaveURL(/\/sign-in$/)
+  await expect(page).toHaveURL(/\/unihub$/)
   await page.reload()
   await page.goto('/dashboard')
-  await expect(page).toHaveURL(/\/sign-in/)
+  await expect(page).toHaveURL(/\/unihub$/)
+  await page.goto('/wallet')
+  await expect(page).toHaveURL(/\/unihub$/)
+  await expect(
+    page.getByRole('button', { name: 'Sign in', exact: true })
+  ).toBeVisible()
 })
 
-test('external redirect is rejected and product token survives dashboard to unified account navigation', async ({
+test('external redirect is rejected and public login retains the unified account session', async ({
   page,
 }) => {
   await fixture(page)
@@ -941,11 +945,7 @@ test('external redirect is rejected and product token survives dashboard to unif
   await page.getByLabel('Username', { exact: true }).fill('product')
   await page.getByLabel('Password', { exact: true }).fill('private')
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
-  await expect(page).toHaveURL(/\/dashboard\/overview$/)
-  await page
-    .getByRole('complementary')
-    .getByRole('link', { name: 'UniHub account' })
-    .click()
+  await expect(page).toHaveURL(/\/unihub$/)
   await expect(page.getByText('Product user · immutable-user')).toBeVisible()
   await expect(page.getByLabel('Password', { exact: true })).toHaveCount(0)
 })
@@ -965,7 +965,10 @@ test('immutable subject mismatch rejects native bundle and leaves product sign-i
   await expect(page.getByText('Product user · immutable-user')).toHaveCount(0)
   await page.reload()
   await page.goto('/dashboard')
-  await expect(page).toHaveURL(/\/sign-in/)
+  await expect(page).toHaveURL(/\/unihub$/)
+  await expect(
+    page.getByRole('button', { name: 'Sign in', exact: true })
+  ).toBeVisible()
 })
 
 test('closed model gate shows unavailable state and disables provider send', async ({
@@ -980,3 +983,91 @@ test('closed model gate shows unavailable state and disables provider send', asy
     page.getByRole('button', { name: 'Send new task' })
   ).toBeDisabled()
 })
+
+for (const scenario of [
+  'unchanged',
+  'edited',
+  'UNKNOWN',
+  'network',
+  'unproven',
+] as const) {
+  test(`registration throttle safely recovers ${scenario} with manual retry`, async ({
+    page,
+  }) => {
+    await fixture(page)
+    await page.clock.install()
+    const prior = scenario === 'UNKNOWN' || scenario === 'network'
+    const safe = !prior && scenario !== 'unproven'
+    const writes: { key: string; body: string }[] = []
+    await page.route('**/identity/registrations', (route) => {
+      if (route.request().method() === 'OPTIONS') return route.fallback()
+      writes.push({
+        key: route.request().headers()['idempotency-key'],
+        body: route.request().postData() ?? '',
+      })
+      if (scenario === 'network' && writes.length === 1) {
+        return route.abort('failed')
+      }
+      const unknown = scenario === 'UNKNOWN' && writes.length === 1
+      return route.fulfill({
+        headers: { 'Access-Control-Allow-Origin': 'http://127.0.0.1:58004' },
+        status: unknown ? 202 : 429,
+        json: unknown
+          ? { status: 'UNKNOWN', registration_id: 'original' }
+          : {
+              error: 'rate_limited',
+              retry_after: 10,
+              registration_not_started: scenario !== 'unproven',
+            },
+      })
+    })
+    await page.goto('/unihub')
+    await page.getByRole('button', { name: 'Register UniHub account' }).click()
+    await page.getByLabel('Username', { exact: true }).fill('throttled-user')
+    await page.getByLabel('Password', { exact: true }).fill('private')
+    await page.getByRole('button', { name: 'Register', exact: true }).click()
+    if (prior) {
+      await page
+        .getByRole('button', { name: 'Retry original registration' })
+        .click()
+    }
+    await expect(page.getByRole('status')).toContainText(
+      'Too many registration attempts'
+    )
+    await expect(page.getByLabel('Username', { exact: true })).toBeEnabled({
+      enabled: safe,
+    })
+    await expect(
+      page.getByRole('button', { name: 'Back to sign in' })
+    ).toBeEnabled({ enabled: safe })
+    if (scenario === 'edited') {
+      await page.getByLabel('Username', { exact: true }).fill('corrected-user')
+    }
+    const submit = page.locator('button[type="submit"]')
+    await expect(submit).toBeDisabled()
+    const count = writes.length
+    await page
+      .locator('form')
+      .evaluate((form: HTMLFormElement) =>
+        form.dispatchEvent(
+          new Event('submit', { bubbles: true, cancelable: true })
+        )
+      )
+    expect(writes).toHaveLength(count)
+    await page.clock.fastForward(11000)
+    await expect(submit).toBeEnabled()
+    expect(writes).toHaveLength(count)
+    await submit.click()
+    await expect.poll(() => writes.length).toBe(count + 1)
+    if (scenario === 'edited') {
+      expect(writes[count].key).not.toBe(writes[0].key)
+      expect(JSON.parse(writes[count].body).username).toBe('corrected-user')
+    } else expect(writes[count]).toEqual(writes[0])
+    if (safe) {
+      await page.getByRole('button', { name: 'Back to sign in' }).click()
+      await expect(
+        page.getByRole('button', { name: 'Sign in', exact: true })
+      ).toBeEnabled()
+    }
+  })
+}

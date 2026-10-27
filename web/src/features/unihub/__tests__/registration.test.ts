@@ -50,3 +50,58 @@ test('network pending idempotency or unrecognized service failure keeps original
     assert.equal(registrationDefinitivelyRejected(error), false, error.message)
   }
 })
+
+test('registration throttle reads server proof and prefers Retry-After seconds', async () => {
+  const { registrationThrottle } = await import('../registration')
+  assert.deepEqual(
+    registrationThrottle(
+      new UniHubError(
+        429,
+        'rate_limited',
+        { registration_not_started: true, retry_after: 60 },
+        new Headers({ 'Retry-After': '10' })
+      ),
+      0
+    ),
+    { notStarted: true, retryAfterMs: 10000 }
+  )
+})
+test('registration throttle supports HTTP dates and conservative body or missing-header fallback', async () => {
+  const { registrationThrottle } = await import('../registration')
+  const now = Date.UTC(2026, 9, 27)
+  const error = (header: string, body: unknown = {}) =>
+    new UniHubError(
+      429,
+      'rate_limited',
+      body,
+      new Headers({ 'Retry-After': header })
+    )
+  assert.equal(
+    registrationThrottle(error(new Date(now + 10000).toUTCString()), now)
+      ?.retryAfterMs,
+    10000
+  )
+  assert.equal(
+    registrationThrottle(error('-1', { retry_after: 7 }), now)?.retryAfterMs,
+    7000
+  )
+  assert.equal(
+    registrationThrottle(error('invalid', { retry_after: -1 }), now)
+      ?.retryAfterMs,
+    60000
+  )
+  assert.equal(registrationThrottle(error('0'), now)?.retryAfterMs, 1000)
+  assert.equal(
+    registrationThrottle(error('10', { registration_not_started: 'true' }), now)
+      ?.notStarted,
+    false
+  )
+  assert.equal(
+    registrationThrottle(new UniHubError(503, 'rate_limited', {}), now),
+    null
+  )
+  assert.equal(
+    registrationThrottle(new UniHubError(429, 'unknown_code', {}), now),
+    null
+  )
+})

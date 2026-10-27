@@ -248,12 +248,10 @@ export async function refreshProductAccess(): Promise<ProductAccessSnapshot> {
     clearAuthentication()
     throw new Error('Product identity proof rejected')
   }
-  useAuthStore
-    .getState()
-    .auth.setUser({
-      ...(data.user ?? auth.user),
-      permissions: data.permissions,
-    })
+  useAuthStore.getState().auth.setUser({
+    ...(data.user ?? auth.user),
+    permissions: data.permissions,
+  })
   return data
 }
 // Hydrate through the session-authenticated BFF. A restored identity cannot

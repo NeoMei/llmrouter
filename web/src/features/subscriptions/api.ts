@@ -18,8 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth-store'
-import { balancePurchaseRequests } from './balance-purchase-request'
 
+import { balancePurchaseRequests } from './balance-purchase-request'
 import type {
   ApiResponse,
   PlanRecord,
@@ -162,7 +162,9 @@ export async function paySubscriptionBalance(
 ): Promise<SubscriptionPayResponse> {
   const userId = useAuthStore.getState().auth.user?.id || 0
   const key = balancePurchaseRequests.key(userId, data.plan_id)
-  const res = await api.post('/api/subscription/balance/pay', data, { headers: { 'Idempotency-Key': key } })
+  const res = await api.post('/api/subscription/balance/pay', data, {
+    headers: { 'Idempotency-Key': key },
+  })
   balancePurchaseRequests.responded(userId, data.plan_id, key, res.data)
   return res.data
 }

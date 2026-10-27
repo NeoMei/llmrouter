@@ -169,10 +169,12 @@ async function fixture(
     if (path === '/api/subscription/self') {
       return route.fulfill({ json: { success: true, data: [] } })
     }
-    if (path === '/api/home_page_content')
-      {return route.fulfill({ json: { success: true, data: '' } })}
-    if (path === '/api/subscription/plans')
-      {return route.fulfill({ json: { success: true, data: [] } })}
+    if (path === '/api/home_page_content') {
+      return route.fulfill({ json: { success: true, data: '' } })
+    }
+    if (path === '/api/subscription/plans') {
+      return route.fulfill({ json: { success: true, data: [] } })
+    }
     if (path === '/api/notice') {
       return route.fulfill({ json: { success: true, data: '' } })
     }

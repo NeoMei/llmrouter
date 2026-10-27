@@ -34,7 +34,7 @@ export class BalancePurchaseRequests {
 
   constructor(
     private readonly storage: PurchaseStorage,
-    private readonly createKey: () => string,
+    private readonly createKey: () => string
   ) {}
 
   private scope(userId: number, planId: number): string {
@@ -44,25 +44,54 @@ export class BalancePurchaseRequests {
   key(userId: number, planId: number): string {
     const scope = this.scope(userId, planId)
     let current = this.memory.get(scope)
-    try { current = this.storage.getItem(scope) || current } catch { /* Storage may be disabled. */ }
+    try {
+      current = this.storage.getItem(scope) || current
+    } catch {
+      /* Storage may be disabled. */
+    }
     if (current) return current
     current = this.createKey()
     this.memory.set(scope, current)
-    try { this.storage.setItem(scope, current) } catch { /* In-memory retries remain stable. */ }
+    try {
+      this.storage.setItem(scope, current)
+    } catch {
+      /* In-memory retries remain stable. */
+    }
     return current
   }
 
-  responded(userId: number, planId: number, key: string, response: PurchaseResponse): void {
-    if (typeof response.success !== 'boolean' || response.code === 'PRODUCT_PAYMENT_PENDING') return
+  responded(
+    userId: number,
+    planId: number,
+    key: string,
+    response: PurchaseResponse
+  ): void {
+    if (
+      typeof response.success !== 'boolean' ||
+      response.code === 'PRODUCT_PAYMENT_PENDING'
+    ) {
+      return
+    }
     if (this.key(userId, planId) !== key) return
     const scope = this.scope(userId, planId)
     this.memory.delete(scope)
-    try { this.storage.removeItem(scope) } catch { /* In-memory state was cleared. */ }
+    try {
+      this.storage.removeItem(scope)
+    } catch {
+      /* In-memory state was cleared. */
+    }
   }
 }
 
-export const balancePurchaseRequests = new BalancePurchaseRequests({
-  getItem: (key) => sessionStorage.getItem(key),
-  setItem: (key, value) => { sessionStorage.setItem(key, value) },
-  removeItem: (key) => { sessionStorage.removeItem(key) },
-}, () => crypto.randomUUID())
+export const balancePurchaseRequests = new BalancePurchaseRequests(
+  {
+    getItem: (key) => sessionStorage.getItem(key),
+    setItem: (key, value) => {
+      sessionStorage.setItem(key, value)
+    },
+    removeItem: (key) => {
+      sessionStorage.removeItem(key)
+    },
+  },
+  () => crypto.randomUUID()
+)

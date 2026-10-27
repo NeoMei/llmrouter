@@ -21,7 +21,8 @@
     "e2e": "playwright test",
     "e2e:account-pools": "playwright test --config playwright.task9.config.ts",
     "e2e:native-metering": "playwright test --config playwright.native.config.ts",
-    "e2e:unihub": "playwright test --config playwright.unihub.config.ts"
+    "e2e:unihub": "playwright test --config playwright.unihub.config.ts",
+    "e2e:product-parity": "playwright test --config playwright.parity.config.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

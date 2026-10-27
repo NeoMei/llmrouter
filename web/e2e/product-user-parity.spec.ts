@@ -358,36 +358,90 @@ test('central product administrator retains the original user management page', 
 })
 
 for (const source of ['native', 'unihub'] as const) {
-  test(`${source} balance purchase retries preserve the original operation across reload`, async ({ page }) => {
+  test(`${source} balance purchase retries preserve the original operation across reload`, async ({
+    page,
+  }) => {
     await fixture(page, source)
-    await page.route('**/api/subscription/plans', (route) => route.fulfill({ json: {
-      success: true,
-      data: [{ plan: { id: 901, title: 'Original subscription', price_amount: 2, currency: 'USD', duration_unit: 'month', duration_value: 1, enabled: true, total_amount: 1000000, max_purchase_per_user: 0, allow_balance_pay: true } }],
-    } }))
-    await page.route('**/api/subscription/self', (route) => route.fulfill({ json: { success: true, data: { subscriptions: [], all_subscriptions: [], billing_preference: 'wallet_only' } } }))
+    await page.route('**/api/subscription/plans', (route) =>
+      route.fulfill({
+        json: {
+          success: true,
+          data: [
+            {
+              plan: {
+                id: 901,
+                title: 'Original subscription',
+                price_amount: 2,
+                currency: 'USD',
+                duration_unit: 'month',
+                duration_value: 1,
+                enabled: true,
+                total_amount: 1000000,
+                max_purchase_per_user: 0,
+                allow_balance_pay: true,
+              },
+            },
+          ],
+        },
+      })
+    )
+    await page.route('**/api/subscription/self', (route) =>
+      route.fulfill({
+        json: {
+          success: true,
+          data: {
+            subscriptions: [],
+            all_subscriptions: [],
+            billing_preference: 'wallet_only',
+          },
+        },
+      })
+    )
     const keys: string[] = []
     await page.route('**/api/subscription/balance/pay', async (route) => {
       expect(route.request().postDataJSON()).toEqual({ plan_id: 901 })
       keys.push(route.request().headers()['idempotency-key'] || '')
-      await route.fulfill({ json: keys.length === 1
-        ? { success: false, code: 'PRODUCT_PAYMENT_PENDING', message: 'Payment is pending reconciliation' }
-        : { success: true },
+      await route.fulfill({
+        json:
+          keys.length === 1
+            ? {
+                success: false,
+                code: 'PRODUCT_PAYMENT_PENDING',
+                message: 'Payment is pending reconciliation',
+              }
+            : { success: true },
       })
     })
     await page.goto('/wallet')
-    await page.getByRole('button', { name: 'Subscribe Now', exact: true }).click()
-    await page.getByRole('button', { name: 'Pay with Balance', exact: true }).click()
+    await page
+      .getByRole('button', { name: 'Subscribe Now', exact: true })
+      .click()
+    await page
+      .getByRole('button', { name: 'Pay with Balance', exact: true })
+      .click()
     await expect.poll(() => keys.length).toBe(1)
-    await expect(page.getByRole('button', { name: 'Pay with Balance', exact: true })).toBeEnabled()
+    await expect(
+      page.getByRole('button', { name: 'Pay with Balance', exact: true })
+    ).toBeEnabled()
     expect(keys[0]).not.toBe('')
     await page.reload()
-    await page.getByRole('button', { name: 'Subscribe Now', exact: true }).click()
-    await page.getByRole('button', { name: 'Pay with Balance', exact: true }).click()
+    await page
+      .getByRole('button', { name: 'Subscribe Now', exact: true })
+      .click()
+    await page
+      .getByRole('button', { name: 'Pay with Balance', exact: true })
+      .click()
     await expect.poll(() => keys.length).toBe(2)
     expect(keys[1]).toBe(keys[0])
-    await expect(page.getByRole('button', { name: 'Pay with Balance', exact: true })).toHaveCount(0)
-    await page.getByRole('button', { name: 'Subscribe Now', exact: true }).click()
-    await page.getByRole('button', { name: 'Pay with Balance', exact: true }).click()
+    await expect(
+      page.getByRole('button', { name: 'Pay with Balance', exact: true })
+    ).toHaveCount(0)
+    await page
+      .getByRole('button', { name: 'Subscribe Now', exact: true })
+      .click()
+    await page
+      .getByRole('button', { name: 'Pay with Balance', exact: true })
+      .click()
     await expect.poll(() => keys.length).toBe(3)
     expect(keys[2]).not.toBe(keys[1])
   })

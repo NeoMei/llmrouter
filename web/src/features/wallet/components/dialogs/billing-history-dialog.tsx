@@ -226,9 +226,11 @@ export function BillingHistoryDialog({
                         />
                       </div>
 
-
                       {record.credit_status === 'pending' && (
-                        <p role='status' className='mt-2 text-xs text-amber-700 dark:text-amber-400'>
+                        <p
+                          role='status'
+                          className='mt-2 text-xs text-amber-700 dark:text-amber-400'
+                        >
                           {t('支付已确认，额度正在入账，请勿重复支付')}
                         </p>
                       )}

@@ -25,8 +25,19 @@ import { refreshProductUser } from '../product-user'
 function login(source?: string, sid = 'current') {
   const expiry = Math.floor(Date.now() / 1000) + 3600
   useAuthStore.getState().auth.setBundle({
-    access_token: 'session-proof', token_type: 'Bearer', access_expires_at: expiry,
-    session: { sid, current: true, login_method: source ?? 'password', ip: '', user_agent: '', created_at: 1, last_active_at: 1, expires_at: expiry },
+    access_token: 'session-proof',
+    token_type: 'Bearer',
+    access_expires_at: expiry,
+    session: {
+      sid,
+      current: true,
+      login_method: source ?? 'password',
+      ip: '',
+      user_agent: '',
+      created_at: 1,
+      last_active_at: 1,
+      expires_at: expiry,
+    },
     user: { id: 7, username: 'user', role: 100, identity_source: source },
   })
 }
@@ -38,7 +49,18 @@ test('all login providers refresh effective roles and balance from the original 
       login(source)
       globalThis.fetch = async (url) => {
         assert.equal(url, '/api/user/self')
-        return Response.json({ success: true, data: { id: 7, username: 'user', role: 1, identity_source: source, quota: 120, used_quota: 30, request_count: 4 } })
+        return Response.json({
+          success: true,
+          data: {
+            id: 7,
+            username: 'user',
+            role: 1,
+            identity_source: source,
+            quota: 120,
+            used_quota: 30,
+            request_count: 4,
+          },
+        })
       }
       await refreshProductUser()
       assert.equal(useAuthStore.getState().auth.user?.role, 1)
@@ -55,13 +77,25 @@ test('a late previous-session self response cannot replace the current user', as
   login()
   let resolve!: (value: Response) => void
   let enter!: () => void
-  const entered = new Promise<void>(r => { enter = r })
-  globalThis.fetch = () => { enter(); return new Promise<Response>(r => { resolve = r }) }
+  const entered = new Promise<void>((r) => {
+    enter = r
+  })
+  globalThis.fetch = () => {
+    enter()
+    return new Promise<Response>((r) => {
+      resolve = r
+    })
+  }
   try {
     const request = refreshProductUser()
     await entered
     login('unihub', 'newer')
-    resolve(Response.json({ success: true, data: { id: 7, username: 'old', role: 1 } }))
+    resolve(
+      Response.json({
+        success: true,
+        data: { id: 7, username: 'old', role: 1 },
+      })
+    )
     await request
     assert.equal(useAuthStore.getState().auth.user?.role, 100)
     assert.equal(useAuthStore.getState().auth.session?.sid, 'newer')

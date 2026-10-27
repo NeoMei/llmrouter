@@ -18,7 +18,11 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useAuthStore, type AuthUser } from '@/stores/auth-store'
 
-import { clearAuthentication, getAuthEpoch, getFreshAuthHeaders } from './auth-session'
+import {
+  clearAuthentication,
+  getAuthEpoch,
+  getFreshAuthHeaders,
+} from './auth-session'
 
 // Product state always comes from the original self API. Authentication
 // providers may differ, but effective roles and business fields do not.
@@ -34,15 +38,31 @@ export async function refreshProductUser(): Promise<void> {
     redirect: 'error',
     signal: AbortSignal.timeout(10000),
   })
-  const payload = response.ok ? await response.json() as { success?: boolean; data?: AuthUser } : null
+  const payload = response.ok
+    ? ((await response.json()) as { success?: boolean; data?: AuthUser })
+    : null
   const current = useAuthStore.getState().auth
-  if (epoch !== getAuthEpoch() || current.session?.sid !== auth.session.sid || current.user?.id !== auth.user.id) return
+  if (
+    epoch !== getAuthEpoch() ||
+    current.session?.sid !== auth.session.sid ||
+    current.user?.id !== auth.user.id
+  ) {
+    return
+  }
   if (!response.ok) {
-    if (response.status === 401 || response.status === 403) clearAuthentication()
+    if (response.status === 401 || response.status === 403) {
+      clearAuthentication()
+    }
     throw new Error('Product user refresh unavailable')
   }
   const user = payload?.data
-  if (!payload?.success || !user || user.id !== auth.user.id || typeof user.username !== 'string' || !Number.isInteger(user.role)) {
+  if (
+    !payload?.success ||
+    !user ||
+    user.id !== auth.user.id ||
+    typeof user.username !== 'string' ||
+    !Number.isInteger(user.role)
+  ) {
     throw new Error('Product user response rejected')
   }
   current.setUser(user)

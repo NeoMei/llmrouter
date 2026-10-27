@@ -244,3 +244,52 @@ func TestRedisFailurePolicies(t *testing.T) {
 	assert.Empty(t, userResponse.Body.String())
 	assert.Equal(t, http.StatusNoContent, performRateLimitRequest(router, "/email", "192.0.2.62:12345").Code)
 }
+
+func TestAuthLifecycleRateLimitsRemainBoundedAndIndependent(t *testing.T) {
+	for _, backend := range []string{"redis", "memory"} {
+		t.Run(backend, func(t *testing.T) {
+			oldCritical, oldRedis := common.CriticalRateLimitEnable, common.RedisEnabled
+			common.CriticalRateLimitEnable = true
+			t.Cleanup(func() { common.CriticalRateLimitEnable, common.RedisEnabled = oldCritical, oldRedis })
+			var server *miniredis.Miniredis
+			if backend == "redis" {
+				server, _ = useRateLimitMiniRedis(t)
+			} else {
+				common.RedisEnabled = false
+			}
+			r := gin.New()
+			require.NoError(t, r.SetTrustedProxies(nil))
+			r.GET("/refresh", AuthRefreshRateLimit(), func(c *gin.Context) { c.Status(204) })
+			r.GET("/logout", AuthLogoutRateLimit(), func(c *gin.Context) { c.Status(204) })
+			const addr = "192.0.2.82:1234"
+			for _, endpoint := range []struct{ path, mark string }{{"/refresh", "AR"}, {"/logout", "AL"}} {
+				allowedRequests := 120
+				if backend == "memory" && endpoint.path == "/logout" {
+					allowedRequests = 119
+				}
+				if server != nil {
+					key := redisIPRateLimitKey(endpoint.mark, "192.0.2.82")
+					server.Set(key, "119")
+					server.SetTTL(key, 60*time.Second)
+					allowedRequests = 1
+				}
+				for range allowedRequests {
+					require.Equal(t, 204, performRateLimitRequest(r, endpoint.path, addr).Code)
+				}
+				limited := performRateLimitRequest(r, endpoint.path, addr)
+				assert.Equal(t, 429, limited.Code)
+				assert.Equal(t, "60", limited.Header().Get("Retry-After"))
+				if endpoint.path == "/refresh" {
+					assert.Equal(t, 204, performRateLimitRequest(r, "/logout", addr).Code)
+				}
+			}
+			common.CriticalRateLimitEnable = false
+			disabled := gin.New()
+			require.NoError(t, disabled.SetTrustedProxies(nil))
+			disabled.GET("/refresh", AuthRefreshRateLimit(), func(c *gin.Context) { c.Status(204) })
+			disabled.GET("/logout", AuthLogoutRateLimit(), func(c *gin.Context) { c.Status(204) })
+			assert.Equal(t, 204, performRateLimitRequest(disabled, "/refresh", addr).Code)
+			assert.Equal(t, 204, performRateLimitRequest(disabled, "/logout", addr).Code)
+		})
+	}
+}

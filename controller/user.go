@@ -506,10 +506,14 @@ func GetSelf(c *gin.Context) {
 // login and refresh. It intentionally excludes password, management PAT and
 // administrator-only remarks.
 func buildSelfUserData(user *model.User) map[string]interface{} {
-	affCode := user.AffCode
 	if user.IdentitySource == model.UniHubIdentitySource {
-		affCode = ""
+		return map[string]interface{}{
+			"id": user.Id, "username": user.Username, "display_name": user.DisplayName,
+			"email": user.Email, "role": user.Role, "status": user.Status,
+			"identity_source": user.IdentitySource, "unihub_user_id": user.UniHubUserID,
+		}
 	}
+	affCode := user.AffCode
 	userSetting := user.GetSetting()
 	permissions := calculateUserPermissions(user.Role)
 	permissions["admin_permissions"] = authz.Capabilities(user.Id, user.Role)

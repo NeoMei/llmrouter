@@ -21,6 +21,7 @@ import { useAuthStore } from '@/stores/auth-store'
 import { UniHubClient, UniHubError, type User, type Account } from './sdk'
 
 export interface ProductConfig {
+  native_access?: boolean
   enabled: boolean
   public_origin: string
   client_id: string

@@ -156,6 +156,29 @@ func (s *Session) ObserveRawEnvelope(body []byte, stream bool) {
 		s.invalidateUsage()
 		return
 	}
+
+	if s.requestTariff {
+		if _, exists := envelope["error"]; exists {
+			s.invalidateUsage()
+			return
+		}
+		choices, ok := envelope["choices"].([]any)
+		if !ok || len(choices) != 1 {
+			return
+		}
+		choice, ok := choices[0].(map[string]any)
+		if !ok {
+			return
+		}
+		reason, _ := choice["finish_reason"].(string)
+		switch reason {
+		case "stop", "length", "tool_calls", "function_call", "content_filter":
+			m := RequestMeasurement{Key: "requests", Unit: "request"}
+			m.Quantity.Value = "1"
+			s.confirmed = &Usage{Metered: &RequestUsage{Version: "metered_v2", Operation: "chat", State: "confirmed", Source: "provider", Measurements: []RequestMeasurement{m}}}
+		}
+		return
+	}
 	for key := range envelope {
 		if key != "usage" && strings.EqualFold(key, "usage") {
 			s.invalidateUsage()
@@ -174,7 +197,7 @@ func (s *Session) ObserveRawEnvelope(body []byte, stream bool) {
 	if !ok {
 		return
 	}
-	allowed := map[string]bool{"prompt_tokens": true, "completion_tokens": true, "total_tokens": true, "prompt_tokens_details": true, "completion_tokens_details": true}
+	allowed := map[string]bool{"prompt_tokens": true, "completion_tokens": true, "total_tokens": true, "prompt_tokens_details": true, "completion_tokens_details": true, "total_characters": true, "cached_tokens": true, "prompt_cache_hit_tokens": true, "prompt_cache_miss_tokens": true}
 	for key := range usage {
 		if !allowed[key] {
 			return
@@ -240,5 +263,35 @@ func (s *Session) ObserveRawEnvelope(body []byte, stream bool) {
 			}
 		}
 	}
+	// Supplier aliases are accepted only when they agree with the canonical
+	// exclusive counters; unknown dimensions still fail closed.
+	if value, ok := usage["total_characters"]; ok {
+		n, e := confirmedCount(value)
+		if e != nil || n != 0 {
+			return
+		}
+	}
+	cached := dtoUsage.PromptTokensDetails.CachedTokens
+	hasCached := false
+	if detail, ok := usage["prompt_tokens_details"].(map[string]any); ok {
+		_, hasCached = detail["cached_tokens"]
+	}
+	for _, key := range []string{"cached_tokens", "prompt_cache_hit_tokens"} {
+		if value, ok := usage[key]; ok {
+			n, e := confirmedCount(value)
+			if e != nil || n > p || (hasCached && cached != n) {
+				return
+			}
+			cached = n
+			hasCached = true
+		}
+	}
+	if value, ok := usage["prompt_cache_miss_tokens"]; ok {
+		n, e := confirmedCount(value)
+		if e != nil || !hasCached || n != p-cached {
+			return
+		}
+	}
+	dtoUsage.PromptTokensDetails.CachedTokens = cached
 	s.observe(&dtoUsage)
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/QuantumNous/new-api/internal/unihubaccess"
 	"net"
 	"net/http"
 	"net/http/pprof"
@@ -44,4 +45,28 @@ func newPprofHTTPServer() *http.Server {
 		IdleTimeout:       30 * time.Second,
 		MaxHeaderBytes:    64 << 10,
 	}
+}
+
+// newPrivateHTTPServer shares the application/session handler but binds a
+// separate loopback port. Never configure a public proxy to use this port.
+func newPrivateHTTPServer(public *http.Server) (*http.Server, error) {
+	if strings.TrimSpace(os.Getenv("NATIVE_ADMIN_LISTEN_ADDRESS")) == "" {
+		if strings.TrimSpace(os.Getenv("UNIHUB_PRODUCT_ENABLED")) == "true" || strings.TrimSpace(os.Getenv("UNIHUB_PLATFORM_ENABLED")) == "true" {
+			return nil, fmt.Errorf("UniHub authority requires NATIVE_ADMIN_LISTEN_ADDRESS")
+		}
+		return nil, nil
+	}
+	policy, err := unihubaccess.FromEnv()
+	if err != nil {
+		return nil, err
+	}
+	_, publicPort, err := net.SplitHostPort(public.Addr)
+	if err != nil {
+		return nil, err
+	}
+	_, privatePort, _ := net.SplitHostPort(policy.PrivateListenAddress())
+	if publicPort == privatePort {
+		return nil, fmt.Errorf("private management must use a separate port")
+	}
+	return &http.Server{Addr: policy.PrivateListenAddress(), Handler: public.Handler, ReadHeaderTimeout: public.ReadHeaderTimeout, ReadTimeout: public.ReadTimeout, IdleTimeout: public.IdleTimeout, MaxHeaderBytes: public.MaxHeaderBytes}, nil
 }

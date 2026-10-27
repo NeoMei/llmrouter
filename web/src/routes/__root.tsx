@@ -151,6 +151,28 @@ export const Route = createRootRouteWithContext<{
 
     const pathname = location?.pathname || ''
     if (pathname === '/unihub') return
+    // The server derives this flag from the listener's local socket. Never
+    // infer operator access from browser origin, stored credentials, or query.
+    const nativeAccess = await fetch('/api/unihub/config', {
+      credentials: 'omit',
+      cache: 'no-store',
+    })
+      .then(async (response) => {
+        if (!response.ok) return false
+        const config = (await response.json()) as { native_access?: boolean }
+        return config.native_access === true
+      })
+      .catch(() => false)
+    if (!nativeAccess) {
+      if (
+        ['/about', '/docs', '/privacy-policy', '/user-agreement'].includes(
+          pathname
+        )
+      ) {
+        return
+      }
+      throw redirect({ to: '/unihub', replace: true })
+    }
     const needsSetupCheck =
       !setupStatusChecked && !pathname.startsWith('/setup')
     const authBootstrap = bootstrapAuthentication()

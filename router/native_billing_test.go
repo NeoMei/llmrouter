@@ -10,6 +10,7 @@ import (
 )
 
 func TestNativeBillingRoutesRequireAdmin(t *testing.T) {
+	enableNativeCompatibility(t)
 	f := newPoolHTTPFixture(t)
 	require.NoError(t, f.db.AutoMigrate(&model.NativeBilling{}))
 	registerNativeBillingRoutes(f.engine.Group("/api"))

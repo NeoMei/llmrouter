@@ -1,6 +1,9 @@
 package router
 
 import (
+	"context"
+	"github.com/QuantumNous/new-api/common"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -77,5 +80,28 @@ func TestNonLocalCapabilitiesCannotReachLocalFinancialNamespace(t *testing.T) {
 			r.ServeHTTP(w, req)
 			assert.Equal(t, http.StatusUnauthorized, w.Code, "%s must not bypass %s", token, path)
 		}
+	}
+}
+
+func TestUniHubConfigNativeUIAccessUsesTransportOnly(t *testing.T) {
+	enableUniHubBoundary(t)
+	r := gin.New()
+	SetUniHubRouter(r, platformaccount.Config{Enabled: true})
+	for _, private := range []bool{false, true} {
+		req := httptest.NewRequest("GET", "/api/unihub/config?native_access=true", nil)
+		req.Header.Set("X-Forwarded-Host", "127.0.0.1:3001")
+		req.Header.Set("Origin", "http://127.0.0.1:3001")
+		if private {
+			req = req.WithContext(context.WithValue(req.Context(), http.LocalAddrContextKey, &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 3001}))
+		}
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		require.Equal(t, 200, w.Code)
+		var config struct {
+			NativeAccess bool `json:"native_access"`
+		}
+		require.NoError(t, common.Unmarshal(w.Body.Bytes(), &config))
+		assert.Equal(t, private, config.NativeAccess)
+		assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
 	}
 }

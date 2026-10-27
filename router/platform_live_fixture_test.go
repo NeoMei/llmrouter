@@ -35,6 +35,7 @@ func TestPlatformLocalLiveFixture(t *testing.T) {
 	if os.Getenv("UNIHUB_PLATFORM_E2E") != "1" {
 		t.Skip("opt-in local UniHub acceptance fixture")
 	}
+	enableUniHubBoundary(t)
 	envFile := os.Getenv("UNIHUB_PLATFORM_E2E_ENV_FILE")
 	require.True(t, filepath.IsAbs(envFile), "UNIHUB_PLATFORM_E2E_ENV_FILE must explicitly name an absolute local env file")
 	values, e := godotenv.Read(envFile)

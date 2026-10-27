@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/internal/platformbilling"
+	"github.com/QuantumNous/new-api/internal/unihubaccess"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
@@ -27,7 +28,15 @@ func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 	if !adapter.Enabled() {
 		return
 	}
-	engine.GET("/platform/v1/calls/:callID", middleware.RouteTag("relay"), func(c *gin.Context) {
+	platform := engine.Group("/platform/v1", middleware.RouteTag("relay"), func(c *gin.Context) {
+		policy, err := unihubaccess.FromEnv()
+		if err != nil || !policy.PlatformEnabled {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"code": "platform_billing_unavailable"}})
+			return
+		}
+		c.Next()
+	})
+	platform.GET("/calls/:callID", func(c *gin.Context) {
 		if len(c.Request.Header.Values("Authorization")) != 1 || !strings.HasPrefix(c.GetHeader("Authorization"), "Bearer uh_model_") || len(c.Request.Header.Values("X-UniHub-Task-ID")) != 1 {
 			c.AbortWithStatus(401)
 			return
@@ -39,16 +48,16 @@ func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 		}
 		c.JSON(200, receipt)
 	})
-	registerPlatformOperation(engine, adapter, "/platform/v1/videos", "video", "/v1/videos", types.RelayFormatTask)
-	registerPlatformOperation(engine, adapter, "/platform/v1/ocr/jobs", "ocr", "/v1/ocr", types.RelayFormat("platform_ocr"))
-	registerPlatformTaskReads(engine, adapter)
-	registerPlatformOperation(engine, adapter, "/platform/v1/responses", "responses", "/v1/responses", types.RelayFormatOpenAIResponses)
-	registerPlatformOperation(engine, adapter, "/platform/v1/embeddings", "embedding", "/v1/embeddings", types.RelayFormatEmbedding)
-	registerPlatformOperation(engine, adapter, "/platform/v1/audio/speech", "speech", "/v1/audio/speech", types.RelayFormatOpenAIAudio)
-	registerPlatformOperation(engine, adapter, "/platform/v1/audio/transcriptions", "transcription", "/v1/audio/transcriptions", types.RelayFormatOpenAIAudio)
-	registerPlatformOperation(engine, adapter, "/platform/v1/images/generations", "image_generation", "/v1/images/generations", types.RelayFormatOpenAIImage)
-	registerPlatformOperation(engine, adapter, "/platform/v1/images/edits", "image_edit", "/v1/images/edits", types.RelayFormatOpenAIImage)
-	engine.POST("/platform/v1/chat/completions", middleware.RouteTag("relay"), func(c *gin.Context) {
+	registerPlatformOperation(platform, adapter, "/videos", "video", "/v1/videos", types.RelayFormatTask)
+	registerPlatformOperation(platform, adapter, "/ocr/jobs", "ocr", "/v1/ocr", types.RelayFormat("platform_ocr"))
+	registerPlatformTaskReads(platform, adapter)
+	registerPlatformOperation(platform, adapter, "/responses", "responses", "/v1/responses", types.RelayFormatOpenAIResponses)
+	registerPlatformOperation(platform, adapter, "/embeddings", "embedding", "/v1/embeddings", types.RelayFormatEmbedding)
+	registerPlatformOperation(platform, adapter, "/audio/speech", "speech", "/v1/audio/speech", types.RelayFormatOpenAIAudio)
+	registerPlatformOperation(platform, adapter, "/audio/transcriptions", "transcription", "/v1/audio/transcriptions", types.RelayFormatOpenAIAudio)
+	registerPlatformOperation(platform, adapter, "/images/generations", "image_generation", "/v1/images/generations", types.RelayFormatOpenAIImage)
+	registerPlatformOperation(platform, adapter, "/images/edits", "image_edit", "/v1/images/edits", types.RelayFormatOpenAIImage)
+	platform.POST("/chat/completions", func(c *gin.Context) {
 		if len(c.Request.Header.Values("Authorization")) != 1 || !strings.HasPrefix(c.GetHeader("Authorization"), "Bearer uh_model_") {
 			c.AbortWithStatusJSON(401, gin.H{"error": gin.H{"code": "invalid_model_credential"}})
 			return
@@ -105,7 +114,7 @@ func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 // tariff. Admission parses and canonicalizes the complete request before any
 // provider relay is entered; unsupported capability returns 400/503 instead of
 // falling back to local wallet billing.
-func registerPlatformOperation(engine *gin.Engine, adapter *platformbilling.Adapter, path, operation, target string, format types.RelayFormat) {
+func registerPlatformOperation(engine gin.IRoutes, adapter *platformbilling.Adapter, path, operation, target string, format types.RelayFormat) {
 	engine.POST(path, middleware.RouteTag("relay"), func(c *gin.Context) {
 		if len(c.Request.Header.Values("Authorization")) != 1 || !strings.HasPrefix(c.GetHeader("Authorization"), "Bearer uh_model_") || len(c.Request.Header.Values("Idempotency-Key")) != 1 || len(c.Request.Header.Values("X-UniHub-Task-ID")) != 1 {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": gin.H{"code": "invalid_platform_scope"}})

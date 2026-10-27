@@ -30,6 +30,7 @@ import (
 )
 
 func TestOCRPublicFullRequestByteAdmission(t *testing.T) {
+	enableNativeCompatibility(t)
 	gin.SetMode(gin.TestMode)
 	var sends, fetches, chunkedRequests atomic.Int32
 	var img bytes.Buffer

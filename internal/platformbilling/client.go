@@ -44,6 +44,13 @@ type Rational struct {
 	Numerator   string `json:"numerator"`
 	Denominator string `json:"denominator"`
 }
+
+// Request tariff aliases share the native metering wire contract while the
+// chat admission path applies its narrower request-only validation.
+type RequestTariff = metering.Price
+type RequestTerm = metering.Term
+type RequestUsage = metering.Usage
+type RequestMeasurement = metering.Measurement
 type Rate struct {
 	Metered    *metering.Price `json:"metered,omitempty"`
 	ID         string          `json:"id"`
@@ -170,7 +177,13 @@ func NormalizeUsage(u *dto.Usage) (Usage, error) {
 	return Usage{Input: strconv.Itoa(p - cr - cw), Output: strconv.Itoa(c - r), CacheRead: strconv.Itoa(cr), CacheWrite: strconv.Itoa(cw), Reasoning: strconv.Itoa(r)}, nil
 }
 func reserveBound(rate Rate, input, output int) (string, error) {
-	if rate.Status != "published" || rate.Semantics != "exclusive_v1" {
+	if rate.Status != "published" {
+		return "", ErrInvalid
+	}
+	if rate.Semantics == "metered_v2" {
+		return requestBound(rate)
+	}
+	if rate.Metered != nil || rate.Semantics != "exclusive_v1" {
 		return "", ErrInvalid
 	}
 	vals := []Rational{rate.Input, rate.CacheRead, rate.CacheWrite, rate.Output, rate.Reasoning}
@@ -285,6 +298,36 @@ func normalizeFunding(asset, mode string) (string, string, error) {
 		return "", "", ErrInvalid
 	}
 	return asset, mode, nil
+}
+
+// requestBound intentionally accepts only one flat chat request term, with no
+// step/minimum or token price. The selected tariff is immutable for the call.
+func requestBound(r Rate) (string, error) {
+	p := r.Metered
+	if p == nil || p.Version != "metered_v2" || p.Operation != "chat" || p.Policy != "sum" || len(p.Terms) != 1 || r.Input != (Rational{}) || r.Output != (Rational{}) || r.CacheRead != (Rational{}) || r.CacheWrite != (Rational{}) || r.Reasoning != (Rational{}) {
+		return "", ErrInvalid
+	}
+	t := p.Terms[0]
+	if t.Key != "requests" || t.Unit != "request" || t.ProviderUnit != "" || t.Step != nil || t.Minimum != nil || !canonicalCount.MatchString(t.Price.Numerator) || !canonicalCount.MatchString(t.Price.Denominator) || len(t.Price.Numerator) > 38 || len(t.Price.Denominator) > 38 {
+		return "", ErrInvalid
+	}
+	n, _ := new(big.Int).SetString(t.Price.Numerator, 10)
+	d, _ := new(big.Int).SetString(t.Price.Denominator, 10)
+	if d.Sign() <= 0 {
+		return "", ErrInvalid
+	}
+	q, rem := new(big.Int), new(big.Int)
+	q.QuoRem(n, d, rem)
+	if rem.Sign() > 0 {
+		q.Add(q, big.NewInt(1))
+	}
+	if q.Sign() == 0 {
+		q.SetInt64(1)
+	}
+	if q.BitLen() > 63 {
+		return "", ErrInvalid
+	}
+	return q.String(), nil
 }
 
 func (r RemoteCall) fundingSnapshot() string {

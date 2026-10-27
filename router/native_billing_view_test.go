@@ -13,6 +13,7 @@ import (
 )
 
 func TestNativeBillingSelfRequiresAuthenticationAndHidesOtherUsers(t *testing.T) {
+	enableNativeCompatibility(t)
 	f := newPoolHTTPFixture(t)
 	require.NoError(t, f.db.AutoMigrate(&model.NativeBilling{}))
 	contract, err := common.Marshal(model.NativeAdmission{Price: metering.Price{Version: "metered_v2", Operation: "speech", Policy: "unicode_scalar_v1", Terms: []metering.Term{{Key: "characters", Unit: "character", Price: metering.Rational{Numerator: "1", Denominator: "1000"}}}}})

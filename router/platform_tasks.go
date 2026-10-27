@@ -8,11 +8,11 @@ import (
 	"strings"
 )
 
-func registerPlatformTaskReads(engine *gin.Engine, a *platformbilling.Adapter) {
+func registerPlatformTaskReads(engine gin.IRoutes, a *platformbilling.Adapter) {
 	for _, op := range []string{"video", "ocr"} {
-		path := "/platform/v1/videos/:callID"
+		path := "/videos/:callID"
 		if op == "ocr" {
-			path = "/platform/v1/ocr/jobs/:callID"
+			path = "/ocr/jobs/:callID"
 		}
 		authorize := func(c *gin.Context) {
 			if len(c.Request.Header.Values("Authorization")) != 1 || !strings.HasPrefix(c.GetHeader("Authorization"), "Bearer uh_model_") || len(c.Request.Header.Values("X-UniHub-Task-ID")) != 1 {

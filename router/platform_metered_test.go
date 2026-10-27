@@ -33,6 +33,7 @@ import (
 )
 
 func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
+	enableUniHubBoundary(t)
 	for _, tc := range []struct {
 		op, path, body, response, unit, key, policy string
 		failed                                      bool

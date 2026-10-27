@@ -33,6 +33,7 @@ import (
 )
 
 func TestOCRPublicFixedConsumerAndCanonical(t *testing.T) {
+	enableNativeCompatibility(t)
 	var sends, polls, mode atomic.Int32
 	var img bytes.Buffer
 	require.NoError(t, png.Encode(&img, image.NewRGBA(image.Rect(0, 0, 2, 2))))

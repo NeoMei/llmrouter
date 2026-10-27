@@ -29,7 +29,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	toolpolicy.Clear(c)
 	info.InitChannelMeta(c)
 	if info.PlatformMode {
-		if info.PlatformBilling == nil || info.ChannelType != constant.ChannelTypeOpenAI || len(info.ParamOverride) > 0 || len(info.HeadersOverride) > 0 || info.ChannelSetting.SystemPrompt != "" || info.ChannelSetting.PassThroughBodyEnabled || model_setting.GetGlobalSettings().PassThroughRequestEnabled || service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) {
+		if info.PlatformBilling == nil || !platformChatChannel(info.ChannelType) || len(info.ParamOverride) > 0 || len(info.HeadersOverride) > 0 || info.ChannelSetting.SystemPrompt != "" || info.ChannelSetting.PassThroughBodyEnabled || model_setting.GetGlobalSettings().PassThroughRequestEnabled || service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) {
 			return types.NewErrorWithStatusCode(fmt.Errorf("platform route requires unmodified OpenAI Chat provider semantics"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
 	}
@@ -277,4 +277,14 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
 	}
 	return nil
+}
+
+// These adapters preserve the OpenAI chat wire response and share its raw usage
+// observer. Other provider formats require their own metering contract.
+func platformChatChannel(t int) bool {
+	switch t {
+	case constant.ChannelTypeOpenAI, constant.ChannelTypeDeepSeek, constant.ChannelTypeMoonshot, constant.ChannelTypeZhipu_v4:
+		return true
+	}
+	return false
 }

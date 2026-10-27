@@ -38,6 +38,7 @@ import (
 )
 
 func TestMultimodalEmbeddingHTTP(t *testing.T) {
+	enableNativeCompatibility(t)
 	scenarios := []string{"canonical", "native", "jpeg", "video", "remote-image", "text-only", "zero", "fixed-zero", "missing-token", "token-model", "channel-group", "missing-space", "space-semantics", "wrong-model", "dimension", "fps-zero", "fusion", "unknown-field", "override", "header-override", "missing-reserve", "bad-reserve", "missing-runtime", "bad-image", "bad-video", "image-limit", "video-limit", "video-pixels", "format-limit", "duplicate-index", "missing-index", "missing-vector", "dimension-output", "null-number", "string-number", "nonfinite", "fusion-output", "missing-usage", "null-usage", "negative-usage", "overflow-usage", "sum-usage", "text-cap", "visual-cap", "wrong-response-model", "response-extension", "pool-rate", "pool-veto", "pool-budget", "pool-unknown", "pool-transport", "cancel", "native-video", "omitted-fps", "audio", "null-fps", "too-many-images", "too-many-contents", "text-bytes", "body-bytes", "image-bytes", "response-bytes", "alias-search", "passthrough", "wrong-wire", "spaceless-legacy", "token-group", "null-dimension", "video-audio-policy", "missing-reserve-video", "video-frozen", "video-concurrent"}
 	for _, name := range scenarios {
 		t.Run(name, func(t *testing.T) {

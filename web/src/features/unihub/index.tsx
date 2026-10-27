@@ -122,7 +122,7 @@ function ProductShell(props: { config: ProductConfig }) {
                   .then(() => {
                     session.clear()
                     clearAuthentication()
-                    void navigate({ to: '/sign-in', replace: true })
+                    void navigate({ to: '/unihub', replace: true })
                   })
                   .catch((e) => setError(message(e)))
               }}
@@ -206,13 +206,13 @@ export function UniHub() {
     <main className='mx-auto max-w-6xl space-y-5 p-4 md:p-8'>
       <header className='flex items-center justify-between'>
         <h1 className='text-2xl font-semibold'>{t('LLMRouter · UniHub')}</h1>
-        {projected ? (
+        {config.data?.native_access && projected ? (
           <nav aria-label={t('UniHub account')}>
             <Link to='/dashboard'>{t('Console')}</Link>
           </nav>
-        ) : (
+        ) : config.data?.native_access ? (
           <Link to='/sign-in'>{t('Local operator sign in')}</Link>
-        )}
+        ) : null}
       </header>
       {config.isPending ? <p>{t('Loading')}</p> : null}
       {config.error ? <p role='alert'>{message(config.error)}</p> : null}

@@ -17,7 +17,7 @@ func SetRelayRouter(router *gin.Engine) {
 	router.Use(middleware.StatsMiddleware())
 	// https://platform.openai.com/docs/api-reference/introduction
 	modelsRouter := router.Group("/v1/models")
-	modelsRouter.Use(middleware.RouteTag("relay"))
+	modelsRouter.Use(middleware.RouteTag("relay"), middleware.NativePublicBoundary())
 	modelsRouter.Use(middleware.TokenAuth())
 	modelsRouter.Use(middleware.DistributedRateLimit())
 	{
@@ -43,7 +43,7 @@ func SetRelayRouter(router *gin.Engine) {
 	}
 
 	geminiRouter := router.Group("/v1beta/models")
-	geminiRouter.Use(middleware.RouteTag("relay"))
+	geminiRouter.Use(middleware.RouteTag("relay"), middleware.NativePublicBoundary())
 	geminiRouter.Use(middleware.TokenAuth())
 	geminiRouter.Use(middleware.DistributedRateLimit())
 	{
@@ -53,7 +53,7 @@ func SetRelayRouter(router *gin.Engine) {
 	}
 
 	geminiCompatibleRouter := router.Group("/v1beta/openai/models")
-	geminiCompatibleRouter.Use(middleware.RouteTag("relay"))
+	geminiCompatibleRouter.Use(middleware.RouteTag("relay"), middleware.NativePublicBoundary())
 	geminiCompatibleRouter.Use(middleware.TokenAuth())
 	geminiCompatibleRouter.Use(middleware.DistributedRateLimit())
 	{
@@ -63,14 +63,14 @@ func SetRelayRouter(router *gin.Engine) {
 	}
 
 	playgroundRouter := router.Group("/pg")
-	playgroundRouter.Use(middleware.RouteTag("relay"))
+	playgroundRouter.Use(middleware.RouteTag("relay"), middleware.NativePublicBoundary())
 	playgroundRouter.Use(middleware.SystemPerformanceCheck())
 	playgroundRouter.Use(middleware.UserAuth(), middleware.DistributedRateLimit(), middleware.Distribute())
 	{
 		playgroundRouter.POST("/chat/completions", controller.Playground)
 	}
 	relayV1Router := router.Group("/v1")
-	relayV1Router.Use(middleware.RouteTag("relay"))
+	relayV1Router.Use(middleware.RouteTag("relay"), middleware.NativePublicBoundary())
 	relayV1Router.Use(middleware.SystemPerformanceCheck())
 	relayV1Router.Use(middleware.TokenOrUserAuth())
 	relayV1Router.Use(middleware.DistributedRateLimit())
@@ -163,30 +163,30 @@ func SetRelayRouter(router *gin.Engine) {
 	}
 
 	compatible := router.Group("/compatible-mode/v1")
-	compatible.Use(middleware.RouteTag("relay"), middleware.SystemPerformanceCheck(), middleware.TokenOrUserAuth(), middleware.DistributedRateLimit(), middleware.ModelRequestRateLimit(), middleware.Distribute())
+	compatible.Use(middleware.RouteTag("relay"), middleware.NativePublicBoundary(), middleware.SystemPerformanceCheck(), middleware.TokenOrUserAuth(), middleware.DistributedRateLimit(), middleware.ModelRequestRateLimit(), middleware.Distribute())
 	compatible.POST("/embeddings", func(c *gin.Context) { controller.Relay(c, types.RelayFormatEmbedding) })
 	compatible.POST("/chat/completions", func(c *gin.Context) { controller.Relay(c, types.RelayFormatOpenAI) })
 
 	nativeMultimodal := router.Group("/api/v1/services/embeddings/multimodal-embedding")
-	nativeMultimodal.Use(middleware.RouteTag("relay"), middleware.SystemPerformanceCheck(), middleware.TokenOrUserAuth(), middleware.DistributedRateLimit(), middleware.ModelRequestRateLimit(), middleware.Distribute())
+	nativeMultimodal.Use(middleware.RouteTag("relay"), middleware.NativePublicBoundary(), middleware.SystemPerformanceCheck(), middleware.TokenOrUserAuth(), middleware.DistributedRateLimit(), middleware.ModelRequestRateLimit(), middleware.Distribute())
 	nativeMultimodal.POST("/multimodal-embedding", func(c *gin.Context) { controller.Relay(c, types.RelayFormatMultimodalEmbedding) })
 	nativeRerank := router.Group("/api/v1/services/rerank/text-rerank")
-	nativeRerank.Use(middleware.RouteTag("relay"), middleware.SystemPerformanceCheck(), middleware.TokenOrUserAuth(), middleware.AliNativeRerank(), middleware.DistributedRateLimit(), middleware.ModelRequestRateLimit(), middleware.Distribute())
+	nativeRerank.Use(middleware.RouteTag("relay"), middleware.NativePublicBoundary(), middleware.SystemPerformanceCheck(), middleware.TokenOrUserAuth(), middleware.AliNativeRerank(), middleware.DistributedRateLimit(), middleware.ModelRequestRateLimit(), middleware.Distribute())
 	nativeRerank.POST("/text-rerank", func(c *gin.Context) { controller.Relay(c, types.RelayFormatRerank) })
 
 	relayMjRouter := router.Group("/mj")
-	relayMjRouter.Use(middleware.RouteTag("relay"))
+	relayMjRouter.Use(middleware.RouteTag("relay"), middleware.NativePublicBoundary())
 	relayMjRouter.Use(middleware.SystemPerformanceCheck())
 	registerMjRouterGroup(relayMjRouter)
 
 	relayMjModeRouter := router.Group("/:mode/mj")
-	relayMjModeRouter.Use(middleware.RouteTag("relay"))
+	relayMjModeRouter.Use(middleware.RouteTag("relay"), middleware.NativePublicBoundary())
 	relayMjModeRouter.Use(middleware.SystemPerformanceCheck())
 	registerMjRouterGroup(relayMjModeRouter)
 	//relayMjRouter.Use()
 
 	relaySunoRouter := router.Group("/suno")
-	relaySunoRouter.Use(middleware.RouteTag("relay"))
+	relaySunoRouter.Use(middleware.RouteTag("relay"), middleware.NativePublicBoundary())
 	relaySunoRouter.Use(middleware.SystemPerformanceCheck())
 	relaySunoRouter.Use(middleware.TokenAuth(), middleware.DistributedRateLimit(), middleware.Distribute())
 	{
@@ -196,7 +196,7 @@ func SetRelayRouter(router *gin.Engine) {
 	}
 
 	relayGeminiRouter := router.Group("/v1beta")
-	relayGeminiRouter.Use(middleware.RouteTag("relay"))
+	relayGeminiRouter.Use(middleware.RouteTag("relay"), middleware.NativePublicBoundary())
 	relayGeminiRouter.Use(middleware.SystemPerformanceCheck())
 	relayGeminiRouter.Use(middleware.TokenAuth())
 	relayGeminiRouter.Use(middleware.DistributedRateLimit())

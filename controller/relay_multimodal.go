@@ -38,6 +38,20 @@ func prepareMultimodalForAttempt(c *gin.Context, info *relaycommon.RelayInfo, ch
 	if ch.GetSetting().PassThroughBodyEnabled || model_setting.GetGlobalSettings().PassThroughRequestEnabled || len(overrides) > 0 || len(ch.GetHeaderOverride()) > 0 || len(common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride)) > 0 || len(common.GetContextKeyStringMap(c, constant.ContextKeyChannelHeaderOverride)) > 0 {
 		return fmt.Errorf("multimodal embeddings require typed requests without overrides")
 	}
+	if info.PlatformMode {
+		value, exists := c.Get(helper.MultimodalPreparedKey)
+		if !exists || info.PlatformBilling == nil {
+			return fmt.Errorf("frozen knowledge media unavailable")
+		}
+		p, ok := value.(*helper.PreparedMultimodal)
+		if !ok {
+			return fmt.Errorf("invalid frozen media")
+		}
+		if _, err := info.PlatformBilling.KnowledgeBody(ch.Id, info.ResolvedModelNameOrOrigin(), ch.Key); err != nil {
+			return err
+		}
+		return helper.ValidatePreparedMultimodal(p, info.ModelCapabilities)
+	}
 	if billing_setting.GetBillingMode(info.BillingModelNameOrOrigin()) == billing_setting.BillingModeTieredExpr {
 		return fmt.Errorf("multimodal embeddings do not support tiered expression pricing")
 	}

@@ -1,0 +1,3773 @@
+{
+  "schema_version": 1,
+  "inventory_date": "2026-10-28",
+  "scope": "Approved R1-R9 builtin consumers and their actual direct/delegated/external runtime dependencies; optional discovered user extensions are not new required builtin providers.",
+  "source_roots": {
+    "gateway": "/Users/neomei/.codex/worktrees/superwagie-provider-gateway/llmrouter",
+    "superwagie": "/Users/neomei/项目/codexprojects/SuperWagie-Open",
+    "installed_host": "/Users/neomei"
+  },
+  "evidence_policy": {
+    "initial_state": "All five acceptance fields remain not_run, even where source or installed files exist.",
+    "source_is_not_acceptance": "Source presence, hashes, descriptors, cached source and staged manifests establish inventory only; no model/account/settlement/installed-app test ran.",
+    "operation_mapping": "operation uses canonical gateway capability IDs; native contracts with requires_adapter are semantic targets, not a claim of wire compatibility. alternative_operations are supported choices for the same fixture, not duplicate paid executions.",
+    "required_condition": "Conditional native realtime row remains required inventory; its activation condition must be explicitly resolved and cannot be satisfied by buffered dictation.",
+    "counts": "Count rows, distinct consumer strings, logical bundled skill IDs and physical descriptors separately. Readback rows are protocol lifecycle dependencies, not new paid logical model calls.",
+    "extension_contract": "Third-party/user skills may declare purpose+operation+capabilities and invoke a private authenticated scoped broker; server supplies actor/payer/task/parentCall, model/rate and idempotency identity, returns bounded typed output/receipt and enforces no silent legacy-key fallback. Discovery alone grants no execution or billing authority; no automatic rewrite of arbitrary user scripts."
+  },
+  "required_purposes": [
+    "agent",
+    "auxiliary",
+    "ocr",
+    "vision",
+    "embedding",
+    "rerank",
+    "stt-short",
+    "stt-realtime",
+    "stt-file",
+    "tts",
+    "image-generation",
+    "image-editing",
+    "routing",
+    "multimodal-embedding",
+    "video-generation"
+  ],
+  "requirement_review": {
+    "R1": "Primary protocol fixtures retain text/stream/tools/reasoning/schema/image/document input.",
+    "R2": "Children, resume, compaction, seven actual auxiliary entrypoints, native title/summary, routing/safety are retained.",
+    "R3": "All 13 catalog/bundled skills get inherited Agent rows; direct Python, delegated skills and external editable/runtime calls remain separate.",
+    "R4": "OCR lifecycle, vision, ingest/query embeddings and multimodal embeddings, actual rerank search and audio/video ingestion ASR are explicit.",
+    "R5": "Short/file/buffered/native realtime STT, TTS variants, generation/reference/mask editing and async video lifecycle are retained despite gaps.",
+    "R6": "Every actual model call must resolve one coherent connection; explicit local/BYOK choices are retained without managed failure fallback.",
+    "R7": "Every paid row requires identity, immutable rate, logical-call receipt and one settlement; readback shares original scope and never recharges.",
+    "R8": "Installed descriptor/runtime drift and exact managed-file migrations must be tested; no source-only installed acceptance.",
+    "R9": "Gateway, consumer fixture, actual account call, settlement and installed runtime remain independent not_run states."
+  },
+  "sources": {
+    "catalog": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/model-configuration/catalog.js",
+      "line": 2,
+      "anchor": "export const PURPOSE_IDS",
+      "sha256": "9ccabfdecde2e02b91d7585ad20be8dd59ccd19ba489208d82a8896c8c8ac851",
+      "evidence_kind": "source"
+    },
+    "installer": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/builtin-skills/install.js",
+      "line": 114,
+      "anchor": "export const installBuiltinSkills",
+      "sha256": "a0feecb2560225633f063428c658a42174ab88aa3b246d966ce0524d82cae3e3",
+      "evidence_kind": "source"
+    },
+    "reader-upgrade": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/builtin-skills/install.js",
+      "line": 15,
+      "anchor": "const MODEL_READER_BASELINES",
+      "sha256": "a0feecb2560225633f063428c658a42174ab88aa3b246d966ce0524d82cae3e3",
+      "evidence_kind": "source"
+    },
+    "host-roots": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/opencode/skills.js",
+      "line": 178,
+      "anchor": "for (const externalRootName of ['.claude', '.agents'])",
+      "sha256": "dd6ab2aa2242168c51b20f9fdd8159e0cc203a47a5b813c6d7603564bb9642c8",
+      "evidence_kind": "source"
+    },
+    "install-roots": {
+      "root": "superwagie",
+      "path": "packages/web/server/index.js",
+      "line": 2227,
+      "anchor": "existingSkillDirs:",
+      "sha256": "fa50b4d5c2fcda26a3bf8bc8a048c4c98e0cd53b38c62deeef543d917785f249",
+      "evidence_kind": "source"
+    },
+    "child-env": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/opencode/model-configuration-env.js",
+      "line": 4,
+      "anchor": "export const modelConfigurationChildEnvironment",
+      "sha256": "65ce592ade73906cce5b4eeb37c4b915ae6884a20fadafd0fd10a07068fe24d9",
+      "evidence_kind": "source"
+    },
+    "platform-plugin": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/platform-model/plugin.js",
+      "line": 11,
+      "anchor": "ctx.session.hook('model.request'",
+      "sha256": "1193d150d3f0cbfb8fe8ab9515801e9cd7d44953b8db5921a612f989996f6115",
+      "evidence_kind": "source"
+    },
+    "platform-runtime": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/platform-model/runtime.js",
+      "line": 131,
+      "anchor": "if (session.parentID)",
+      "sha256": "3f2b20e13706efca29c8f482d102b48b045af439060701ee1e869f5384e024a2",
+      "evidence_kind": "source"
+    },
+    "small-model": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/small-model/index.js",
+      "line": 324,
+      "anchor": "export async function generateSmallModelText",
+      "sha256": "e90f6846c94e676957944906c445ca017932dd35f8116522c87a33b5e2ae646a",
+      "evidence_kind": "source"
+    },
+    "small-model-route": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/small-model/routes.js",
+      "line": 24,
+      "anchor": "generateSmallModelText",
+      "sha256": "8bf7e0ebca8596acb0724cb9229cb3ae51d0a18ba3af2a8307b4c6fb1bb26497",
+      "evidence_kind": "source"
+    },
+    "session-assist": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/session-assist/runtime.js",
+      "line": 222,
+      "anchor": "generateSmallModelText",
+      "sha256": "17406479fa3fbbefae20caa00ea5b0bad1034332671d69d41e9d7a00416cd855",
+      "evidence_kind": "source"
+    },
+    "guest-helpers": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/guests/routes.js",
+      "line": 833,
+      "anchor": "generateSmallModelText",
+      "sha256": "6aec0c50a004f4a8f1b019b3bee703380f7aa7576d13cb31357594019dffff66",
+      "evidence_kind": "source"
+    },
+    "walkthrough": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/walkthrough/index.js",
+      "line": 3,
+      "anchor": "generateSmallModelText",
+      "sha256": "f1dfebb73b34a7693c84c5228bdfdc61b391ac2407c7c885187af097f95530e3",
+      "evidence_kind": "source"
+    },
+    "goal-create": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/session-goal/create.js",
+      "line": 22,
+      "anchor": "generateSmallModelText",
+      "sha256": "92271d381716cda0b6a598f70e94ff66917a5edb2324f9a24e6fbb7a01ee3f56",
+      "evidence_kind": "source"
+    },
+    "goal-runtime": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/session-goal/runtime.js",
+      "line": 495,
+      "anchor": "generateSmallModelText",
+      "sha256": "d0b05132295472cb6e66c78ddb07a286854069d2cb50e0e81060cdb6290380b8",
+      "evidence_kind": "source"
+    },
+    "product-help": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/product-help/service.js",
+      "line": 89,
+      "anchor": "generateSmallModelText",
+      "sha256": "c2d04c2cff3dc0bce25cfa99e884180cda54d6dbfb283b3f80a5310c9d3a8ef4",
+      "evidence_kind": "source"
+    },
+    "compaction": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/context-obligatory/runtime.js",
+      "line": 149,
+      "anchor": "session.compacted",
+      "sha256": "089701ddcc43c94c89414fd1ac5cce3dd1b49287106ace61aae044c49bdb93f8",
+      "evidence_kind": "source"
+    },
+    "compaction-accounting": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/session-goal/runtime.js",
+      "line": 245,
+      "anchor": "case 'compaction'",
+      "sha256": "d0b05132295472cb6e66c78ddb07a286854069d2cb50e0e81060cdb6290380b8",
+      "evidence_kind": "source"
+    },
+    "local-summary": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/text/summarization.js",
+      "line": 119,
+      "anchor": "export async function summarizeText",
+      "sha256": "6e3a4e7307b7bd2f18a094bafc51db81a8cf0736fa9b0f7dc10a7326ff4f1823",
+      "evidence_kind": "source"
+    },
+    "configuration": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/model-configuration/runtime.js",
+      "line": 86,
+      "anchor": "const resolved =",
+      "sha256": "1fcb608db03124993e3d8ab632ca5e5bd37b52c5c90be79ae68406a3b6801073",
+      "evidence_kind": "source"
+    },
+    "resolver": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/model-configuration/resolve-cli.js",
+      "line": 34,
+      "anchor": "resolveModelBindingFromDisk",
+      "sha256": "b0c6c32a092c40e3ff5c733dbe6465adbc02f59ae3759fb6612e13eb76794219",
+      "evidence_kind": "source"
+    },
+    "speech": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/model-configuration/speech.js",
+      "line": 34,
+      "anchor": "generateConfiguredSpeech",
+      "sha256": "f7b86b8ffbbfaacea9b9028ea39239488e447f79c544d98d8faa83e2ddaf109d",
+      "evidence_kind": "source"
+    },
+    "probes": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/model-configuration/adapters.js",
+      "line": 44,
+      "anchor": "testModelBinding",
+      "sha256": "7a7dc2e5edf89d53f8adfad63d888b4acd14a3e558a656f6a5cb62db7316c05c",
+      "evidence_kind": "source"
+    },
+    "short-stt": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/tts/routes.js",
+      "line": 304,
+      "anchor": "resolveModelBinding('stt-short'",
+      "sha256": "c81f013d4c5b0d0983ac36f32afa1b656b8ffe57e533dc5ebb16ba725e4923db",
+      "evidence_kind": "source"
+    },
+    "stt-client": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/tts/stt.js",
+      "line": 54,
+      "anchor": "client.audio.transcriptions.create",
+      "sha256": "d6bc63d93639dfc9b4f264febcc553ac645e63ea16b2a0a9c246e8a9ee3d1b6e",
+      "evidence_kind": "source"
+    },
+    "tts-client": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/tts/service.js",
+      "line": 135,
+      "anchor": "client.audio.speech.create",
+      "sha256": "96273782ac862642b12f4a59c0c9ef8e9cb3aa3eb4262817a30446c48d9d5f78",
+      "evidence_kind": "source"
+    },
+    "tts-route": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/tts/routes.js",
+      "line": 78,
+      "anchor": "resolveModelBinding('tts'",
+      "sha256": "c81f013d4c5b0d0983ac36f32afa1b656b8ffe57e533dc5ebb16ba725e4923db",
+      "evidence_kind": "source"
+    },
+    "dictation-binding": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/dictation/service.js",
+      "line": 94,
+      "anchor": "resolveModelBinding('stt-realtime'",
+      "sha256": "300ca378fec0f7a91bf6ca2cf6d29a8a28b12cbee864e1a24be5b3451ed2b85d",
+      "evidence_kind": "source"
+    },
+    "dictation-buffer": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/dictation/openai-compatible-session.js",
+      "line": 17,
+      "anchor": "transcribeAudio",
+      "sha256": "ca739c2d11d041145432655d9c48af74208665807467356c6120c56b53652199",
+      "evidence_kind": "source"
+    },
+    "dictation-ws": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/dictation/runtime.js",
+      "line": 23,
+      "anchor": "WebSocketServer",
+      "sha256": "1593c7e0c2d5dc9837bec170fab329181f01c1ad3f044f8d371c186dcecca681",
+      "evidence_kind": "source"
+    },
+    "knowledge-bindings": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/embedded-knowledge/model-bindings.js",
+      "line": 6,
+      "anchor": "const PURPOSES =",
+      "sha256": "3235263785b014c533f5793ced7d48915fe5f5b239722e0043123142b0bded06",
+      "evidence_kind": "source"
+    },
+    "knowledge-import": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/embedded-knowledge/local-defaults.js",
+      "line": 178,
+      "anchor": "asr: pickModel",
+      "sha256": "25e9682ffb73ac11e825f02df48f4e28e760de4d8809b5f66644cc1c194c6f5b",
+      "evidence_kind": "source"
+    },
+    "knowledge-provision": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/embedded-knowledge/provision.js",
+      "line": 38,
+      "anchor": "asr",
+      "sha256": "c96accf74b940748f0e1d8cc126690717717f34cebc128330ebeec9c4f5cee18",
+      "evidence_kind": "source"
+    },
+    "knowledge-search": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/knowledge-library/search.js",
+      "line": 87,
+      "anchor": "client.hybridSearch",
+      "sha256": "5577f71c69992e8a485463df89ee33e9e1a77934eb1461c2f3fb301f530852b7",
+      "evidence_kind": "source"
+    },
+    "knowledge-client": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/embedded-knowledge/client.js",
+      "line": 302,
+      "anchor": "if (rerank)",
+      "sha256": "1eaac786856755c871c4f21468802bdd7e764973073cad4f8b913b8b99622993",
+      "evidence_kind": "source"
+    },
+    "knowledge-ingest": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/knowledge-library/ingest.js",
+      "line": 55,
+      "anchor": "createIngest",
+      "sha256": "ebec4b1c64a7d0b19ca0d9fd728161e3ea24c01179ad5c8ac749266c55c639be",
+      "evidence_kind": "source"
+    },
+    "routing": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/routing/runtime.js",
+      "line": 19,
+      "anchor": "createJevClient",
+      "sha256": "183c34a66a9feae2d20ddb53f4a1b5bf95642d631d5007fe8b885aabad4b586d",
+      "evidence_kind": "source"
+    },
+    "jev": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/routing/jev.js",
+      "line": 87,
+      "anchor": "export const createJevClient",
+      "sha256": "ac7e3a4564657609547420f64b7ae49cd6173b59bc04e145045cbff0ea9d5a9f",
+      "evidence_kind": "source"
+    },
+    "classifier": {
+      "root": "superwagie",
+      "path": "packages/web/server/lib/routing/classifier.js",
+      "line": 130,
+      "anchor": "export const classifierEndpoint",
+      "sha256": "4f6d7074aa2667492c8157da4113c90387271ad46f9e0c0747eb72afcdee01e6",
+      "evidence_kind": "source"
+    },
+    "operations": {
+      "root": "gateway",
+      "path": "relay/capability/operation.go",
+      "line": 21,
+      "anchor": "type Operation string",
+      "sha256": "d46e0584fa3549ce007750d82f9f03a3ffc035f26e2bc28b27398fbfd739face",
+      "evidence_kind": "source"
+    },
+    "design": {
+      "root": "gateway",
+      "path": "docs/superpowers/specs/2026-10-28-superwagie-single-provider-design.md",
+      "line": 19,
+      "anchor": "## Required coverage",
+      "sha256": "644070d328516fa9530e3ed22bf48821d14736b3a5c47a99e46ddd85b294510d",
+      "evidence_kind": "source"
+    },
+    "superppt-deps": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/superppt/src/dependencies/task-dependencies.ts",
+      "line": 13,
+      "anchor": "export async function resolveTaskDependencies",
+      "sha256": "a30d181f505c51f0bd2d097c176c420b67e2aea7a7a10bf420dddf1e10adc13d",
+      "evidence_kind": "source"
+    },
+    "superppt-batch": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/superppt/src/generation/task-batch.ts",
+      "line": 60,
+      "anchor": "export async function beginRequest",
+      "sha256": "2125858c6821034f4a5e0214e0182d0c99b82b6f111bda900fbb3d7c4af2070c",
+      "evidence_kind": "source"
+    },
+    "image-dispatch": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/skills/ai-image-to-ppt/scripts/gen_slide.py",
+      "line": 65,
+      "anchor": "def generate_result",
+      "sha256": "fb8c775ff315a64d5dba9d96bbb4db9127b3e07aae2b9266dd3ebded473f98b8",
+      "evidence_kind": "source"
+    },
+    "image-credentials": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/skills/ai-image-to-ppt/scripts/provider_credentials.py",
+      "line": 43,
+      "anchor": "def load_model_binding",
+      "sha256": "3b4d8bb74d7932214f0d059a64257bd8566e04312d3b9372a9c4ebf2833f3330",
+      "evidence_kind": "source"
+    },
+    "image-openai": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/skills/ai-image-to-ppt/scripts/gen_slide_openai.py",
+      "line": 333,
+      "anchor": "def generate_result",
+      "sha256": "b3bc4d92f8b73b53803264fcc31fc5f0a010dbf82e063a2487ae8e1b8441f00c",
+      "evidence_kind": "source"
+    },
+    "image-gemini": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/skills/ai-image-to-ppt/scripts/gen_slide_gemini.py",
+      "line": 386,
+      "anchor": "def generate_result",
+      "sha256": "5f86640313b0837195c1b96d0347a770eaa73890dd25e534710d3afad629b73f",
+      "evidence_kind": "source"
+    },
+    "image-volc": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/skills/ai-image-to-ppt/scripts/gen_slide_doubao.py",
+      "line": 265,
+      "anchor": "def generate_result",
+      "sha256": "a0615b3662556b8363c1d65e2314ff66d39c759af2a2e88f1ed081df2be8ceb0",
+      "evidence_kind": "source"
+    },
+    "image-qa": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/skills/ai-image-to-ppt/scripts/vision_check_gemini.py",
+      "line": 200,
+      "anchor": "key = _load_api_key()",
+      "sha256": "9fcf939d5922f4651b089c3126ba9c6d4c9d380a980f0a407814738642d693c5",
+      "evidence_kind": "source"
+    },
+    "host-image": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/skills/ai-image-to-ppt/scripts/import_host_image.py",
+      "line": 54,
+      "anchor": "def ",
+      "sha256": "abff604311cc0d2e51792e878b4c0cb93a1b4b566d840c5de9889c6592415db1",
+      "evidence_kind": "source"
+    },
+    "video-tts": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/supervideo-engine/src/providers/tts.mjs",
+      "line": 3,
+      "anchor": "requestConfiguredSpeech",
+      "sha256": "d76e43121d9c26cd057504d9f7a3cd005ca025807007e9ff42729814026aba62",
+      "evidence_kind": "source"
+    },
+    "video-configured": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/supervideo-engine/src/providers/model-configuration.mjs",
+      "line": 39,
+      "anchor": "export async function requestConfiguredSpeech",
+      "sha256": "e8d35c36ea87b0afe61e33e39025be8c2df4bb7301c75cc465bb72ee0baeca09",
+      "evidence_kind": "source"
+    },
+    "video-bailian": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/supervideo-engine/src/providers/bailian.mjs",
+      "line": 64,
+      "anchor": "export async function requestBailian",
+      "sha256": "cbd8e35558959e81a89f530925c9a214a800956ea408fef995aa1d108e702378",
+      "evidence_kind": "source"
+    },
+    "video-openmontage": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/supervideo-engine/src/providers/openmontage.mjs",
+      "line": 10,
+      "anchor": "export ",
+      "sha256": "e7265b43208e7658f0b0628cf66164b7fd28f62b823d672ec74e5d1620247350",
+      "evidence_kind": "source"
+    },
+    "elevenlabs": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/supervideo-engine/vendor/openmontage/tools/audio/elevenlabs_tts.py",
+      "line": 178,
+      "anchor": "https://api.elevenlabs.io/v1/text-to-speech/",
+      "sha256": "2fb5b746093146f68649c519990c631bd6431cd1051028e87696bfc62a093601",
+      "evidence_kind": "source"
+    },
+    "video-assets": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/supervideo-engine/src/providers/assets.mjs",
+      "line": 25,
+      "anchor": "provider generation and host orchestration remain external",
+      "sha256": "44ad747cc38750047f194323f369caaaee50f67f97e3bcd1bf411c1db9d09595",
+      "evidence_kind": "source"
+    },
+    "bundle-engine": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/skills/supervideo/runtime.lock.json",
+      "line": 6,
+      "anchor": "engineManifestSha256",
+      "sha256": "8c37b9da179641881bc544b9e1dfbfd99bb1f6d5210529395a2e0b65ef6c173d",
+      "evidence_kind": "source"
+    },
+    "backend-manifest": {
+      "root": "superwagie",
+      "path": "packages/electron/resources/embedded-knowledge/manifest.json",
+      "line": 4,
+      "anchor": "commit",
+      "sha256": "82339367f3013ff8995a166b4cd9ae35302b59f70ff15a7572a93b5cd3f0b1dd",
+      "evidence_kind": "staged_manifest"
+    },
+    "backend-asr": {
+      "root": "superwagie",
+      "path": "packages/electron/.cache/embedded-knowledge/src/internal/models/asr/protocol.go",
+      "line": 129,
+      "anchor": "func (a *protocolASR) Transcribe",
+      "sha256": "e812fbc0e951914165f55009bd9e72f7323d21888d30ec2d2b5904722e8ba40c",
+      "evidence_kind": "build_cache_source_not_binary_proof"
+    },
+    "backend-ocr": {
+      "root": "superwagie",
+      "path": "packages/electron/.cache/embedded-knowledge/src/internal/infrastructure/docparser/paddleocr_vl_cloud_converter.go",
+      "line": 33,
+      "anchor": "Flow: POST",
+      "sha256": "f80b42ed328a2f2a850ccf3474d4cc66b52c06d223b4d257d4e784bd6ab0e430",
+      "evidence_kind": "build_cache_source_not_binary_proof"
+    },
+    "backend-audio": {
+      "root": "superwagie",
+      "path": "packages/electron/.cache/embedded-knowledge/src/internal/infrastructure/docparser/builtin_converter.go",
+      "line": 76,
+      "anchor": "audioToResult",
+      "sha256": "6de7f4aff690e48a5f79cc72e6cc6f0e5144cd76f8cc1e45fea57e506d859541",
+      "evidence_kind": "build_cache_source_not_binary_proof"
+    },
+    "editable-api": {
+      "root": "installed_host",
+      "path": ".local/share/image-to-editable-pptx/src/providers/provider-adapters.ts",
+      "line": 380,
+      "anchor": "export function createOpenAiExecutors",
+      "sha256": "6490b4ee6224cdead509f487c015eb88a8032a77ea3679d2246f0a13778ed34f",
+      "evidence_kind": "installed_runtime_source"
+    },
+    "editable-qwen-ocr": {
+      "root": "installed_host",
+      "path": ".local/share/image-to-editable-pptx/src/providers/qwen-ocr.ts",
+      "line": 159,
+      "anchor": "export async function recognizeText",
+      "sha256": "e8e2b3d4113824f447f5bd73190c6b674cf067008d3c958541642c4cfebc05f3",
+      "evidence_kind": "installed_runtime_source"
+    },
+    "editable-qwen-vision": {
+      "root": "installed_host",
+      "path": ".local/share/image-to-editable-pptx/src/providers/qwen-vision.ts",
+      "line": 113,
+      "anchor": "export ",
+      "sha256": "426e94ec99ab9880398dffbb7da64bdb1bf6349df0127ce69ab0c5eedf18cdf7",
+      "evidence_kind": "installed_runtime_source"
+    },
+    "editable-wanx": {
+      "root": "installed_host",
+      "path": ".local/share/image-to-editable-pptx/src/providers/wanx-edit.ts",
+      "line": 179,
+      "anchor": "/services/aigc/image2image/image-synthesis",
+      "sha256": "ff9b4f15bf9003dfb2a44258befef4c7edd880b8016c1089ad0300cf0f43bc02",
+      "evidence_kind": "installed_runtime_source"
+    },
+    "editable-host": {
+      "root": "installed_host",
+      "path": ".local/share/image-to-editable-pptx/src/providers/opencodex-bridge.ts",
+      "line": 149,
+      "anchor": "const call = async",
+      "sha256": "6ac3026f012d389244c1a2587672e8d85194c4e56e8699a5d7cd7d9118669807",
+      "evidence_kind": "installed_runtime_source"
+    },
+    "editable-config": {
+      "root": "installed_host",
+      "path": ".local/share/image-to-editable-pptx/src/config.ts",
+      "line": 149,
+      "anchor": "OPENAI_API_KEY",
+      "sha256": "5f69ae422c158bd66f381fc33c5925b7bbcde784dc70d5c236fec12918e57257",
+      "evidence_kind": "installed_runtime_source"
+    },
+    "installed-engine": {
+      "root": "installed_host",
+      "path": ".agents/skills/supervideo/runtime.lock.json",
+      "line": 6,
+      "anchor": "engineManifestSha256",
+      "sha256": "28164ef0767741f22d09edb6a3a486728e21fe55bf6d4f02fadac5f32247da02",
+      "evidence_kind": "installed_descriptor"
+    },
+    "installed-tts": {
+      "root": "installed_host",
+      "path": ".cache/supervideo/engines/c9c0d0fdd953c29cd540f56fe8f79cb1d959054714d3189cf8a9846b78e98748/src/providers/tts.mjs",
+      "line": 30,
+      "anchor": "ELEVENLABS_API_KEY",
+      "sha256": "4ba59d52256967aef70bfd4cb21587490d61cfd94def11f644e42a443cc157b8",
+      "evidence_kind": "installed_runtime_source"
+    },
+    "installed-image-reader": {
+      "root": "installed_host",
+      "path": ".agents/skills/ai-image-to-ppt/scripts/provider_credentials.py",
+      "line": 11,
+      "anchor": "def load_api_key",
+      "sha256": "779c7b687a5c54b9d908828a1a7c97d5fc2d37284646f10f0f475af9e3e549fd",
+      "evidence_kind": "installed_runtime_source"
+    },
+    "installed-image-qa": {
+      "root": "installed_host",
+      "path": ".agents/skills/ai-image-to-ppt/scripts/vision_check_gemini.py",
+      "line": 200,
+      "anchor": "key = _load_api_key()",
+      "sha256": "9fcf939d5922f4651b089c3126ba9c6d4c9d380a980f0a407814738642d693c5",
+      "evidence_kind": "installed_runtime_source"
+    },
+    "yichen-asr": {
+      "root": "installed_host",
+      "path": ".agents/skills/yichen-asr/SKILL.md",
+      "line": 51,
+      "anchor": "YICHEN_STEP_ASR_SCRIPT",
+      "sha256": "bb73b6d5574656d0de9508616bbe76f8605b0b20c0f1e6f3cec589f5ac244a67",
+      "evidence_kind": "optional_user_extension"
+    },
+    "yichen-route": {
+      "root": "installed_host",
+      "path": ".agents/skills/yichen-asr/scripts/route_asr.py",
+      "line": 32,
+      "anchor": "def route",
+      "sha256": "7bac0311316053727be02465460ff6b9d2ab85c2a305ca50fb102eac6eef9ac8",
+      "evidence_kind": "optional_user_extension"
+    },
+    "jianying": {
+      "root": "installed_host",
+      "path": ".agents/skills/yichen-jianying-edit/SKILL.md",
+      "line": 22,
+      "anchor": "转写属于独立的可选依赖",
+      "sha256": "5c3f6ba361213853d62d0a6be40f2698898c1da501db303e57cba026a47e2ea5",
+      "evidence_kind": "optional_user_extension"
+    },
+    "skill-superppt": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/superppt/skills/superppt/SKILL.md",
+      "line": 2,
+      "anchor": "name: superppt",
+      "sha256": "8cf5e7484e68e335e0d0e7d7a606285f214f6fb19b25846c771196b7d8280f52",
+      "evidence_kind": "bundled_descriptor"
+    },
+    "installed-superppt-agents": {
+      "root": "installed_host",
+      "path": ".agents/skills/superppt/SKILL.md",
+      "line": 2,
+      "anchor": "name: superppt",
+      "sha256": "8cf5e7484e68e335e0d0e7d7a606285f214f6fb19b25846c771196b7d8280f52",
+      "evidence_kind": "installed_descriptor"
+    },
+    "skill-ai-image-to-ppt": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/skills/ai-image-to-ppt/SKILL.md",
+      "line": 2,
+      "anchor": "name: ai-image-to-ppt",
+      "sha256": "a5d9c113e3418b2a1cb072e7a3036796c880a7709e298f74569e6f1e1bdac7a4",
+      "evidence_kind": "bundled_descriptor"
+    },
+    "installed-ai-image-to-ppt-claude": {
+      "root": "installed_host",
+      "path": ".claude/skills/ai-image-to-ppt/SKILL.md",
+      "line": 2,
+      "anchor": "name: ai-image-to-ppt",
+      "sha256": "999981005b9ea5cde2a2d5da837e2e9e46eabba847295cfb1e5bdbe29ef6ee3e",
+      "evidence_kind": "installed_descriptor"
+    },
+    "installed-ai-image-to-ppt-agents": {
+      "root": "installed_host",
+      "path": ".agents/skills/ai-image-to-ppt/SKILL.md",
+      "line": 2,
+      "anchor": "name: ai-image-to-ppt",
+      "sha256": "a5d9c113e3418b2a1cb072e7a3036796c880a7709e298f74569e6f1e1bdac7a4",
+      "evidence_kind": "installed_descriptor"
+    },
+    "skill-image-to-editable-pptx": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/skills/image-to-editable-pptx/SKILL.md",
+      "line": 2,
+      "anchor": "name: image-to-editable-pptx",
+      "sha256": "3970f393d0ad75dc9143964b6405b1305d95b53064e92155d92bcb7eee201811",
+      "evidence_kind": "bundled_descriptor"
+    },
+    "installed-image-to-editable-pptx-agents": {
+      "root": "installed_host",
+      "path": ".agents/skills/image-to-editable-pptx/SKILL.md",
+      "line": 2,
+      "anchor": "name: image-to-editable-pptx",
+      "sha256": "3970f393d0ad75dc9143964b6405b1305d95b53064e92155d92bcb7eee201811",
+      "evidence_kind": "installed_descriptor"
+    },
+    "skill-supervideo": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/skills/supervideo/SKILL.md",
+      "line": 2,
+      "anchor": "name: supervideo",
+      "sha256": "32e7d07b8051961d8b1d8b2e38f0db1947590efb2977691ae975241e8c8c8c8f",
+      "evidence_kind": "bundled_descriptor"
+    },
+    "installed-supervideo-agents": {
+      "root": "installed_host",
+      "path": ".agents/skills/supervideo/SKILL.md",
+      "line": 2,
+      "anchor": "name: supervideo",
+      "sha256": "32e7d07b8051961d8b1d8b2e38f0db1947590efb2977691ae975241e8c8c8c8f",
+      "evidence_kind": "installed_descriptor"
+    },
+    "skill-superwriter": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/skills/superwriter/SKILL.md",
+      "line": 2,
+      "anchor": "name: superwriter",
+      "sha256": "d73e396bd42c7b5366c7f9feccc9e39b69ab9f0f2f598b25523c9479b8dda823",
+      "evidence_kind": "bundled_descriptor"
+    },
+    "installed-superwriter-claude": {
+      "root": "installed_host",
+      "path": ".claude/skills/superwriter/SKILL.md",
+      "line": 2,
+      "anchor": "name: superwriter",
+      "sha256": "d73e396bd42c7b5366c7f9feccc9e39b69ab9f0f2f598b25523c9479b8dda823",
+      "evidence_kind": "installed_descriptor"
+    },
+    "installed-superwriter-agents": {
+      "root": "installed_host",
+      "path": ".agents/skills/superwriter/SKILL.md",
+      "line": 2,
+      "anchor": "name: superwriter",
+      "sha256": "d73e396bd42c7b5366c7f9feccc9e39b69ab9f0f2f598b25523c9479b8dda823",
+      "evidence_kind": "installed_descriptor"
+    },
+    "skill-WPSComposer": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/skills/WPSComposer/SKILL.md",
+      "line": 2,
+      "anchor": "name: WPSComposer",
+      "sha256": "cda14242e034981c4c5a3ecbe8fb58852357c8aea42b4c9402e94c61e65b1cd6",
+      "evidence_kind": "bundled_descriptor"
+    },
+    "installed-WPSComposer-claude": {
+      "root": "installed_host",
+      "path": ".claude/skills/WPSComposer/SKILL.md",
+      "line": 2,
+      "anchor": "name: WPSComposer",
+      "sha256": "cda14242e034981c4c5a3ecbe8fb58852357c8aea42b4c9402e94c61e65b1cd6",
+      "evidence_kind": "installed_descriptor"
+    },
+    "installed-WPSComposer-agents": {
+      "root": "installed_host",
+      "path": ".agents/skills/WPSComposer/SKILL.md",
+      "line": 2,
+      "anchor": "name: WPSComposer",
+      "sha256": "195bc0e16f8481f4ca082fa3deabb9a4242470263ffcad9022243f4f5eecdc2e",
+      "evidence_kind": "installed_descriptor"
+    },
+    "skill-superweb": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/skills/superweb/SKILL.md",
+      "line": 2,
+      "anchor": "name: superweb",
+      "sha256": "6f7633cfc09fd2ac308bbd1ce0d8164a6b33f1fd1972e118c1e528117a1df3b8",
+      "evidence_kind": "bundled_descriptor"
+    },
+    "installed-superweb-opencode": {
+      "root": "installed_host",
+      "path": ".config/opencode/skills/superweb/SKILL.md",
+      "line": 2,
+      "anchor": "name: superweb",
+      "sha256": "6f7633cfc09fd2ac308bbd1ce0d8164a6b33f1fd1972e118c1e528117a1df3b8",
+      "evidence_kind": "installed_descriptor"
+    },
+    "skill-obsidian-excalidraw": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/skills/obsidian-excalidraw/SKILL.md",
+      "line": 2,
+      "anchor": "name: obsidian-excalidraw",
+      "sha256": "3e7a7ff70b5a0d371700a74f486709a88bc1e348662a837eab1f77069b7c5ed3",
+      "evidence_kind": "bundled_descriptor"
+    },
+    "installed-obsidian-excalidraw-claude": {
+      "root": "installed_host",
+      "path": ".claude/skills/obsidian-excalidraw/SKILL.md",
+      "line": 2,
+      "anchor": "name: obsidian-excalidraw",
+      "sha256": "3e7a7ff70b5a0d371700a74f486709a88bc1e348662a837eab1f77069b7c5ed3",
+      "evidence_kind": "installed_descriptor"
+    },
+    "installed-obsidian-excalidraw-agents": {
+      "root": "installed_host",
+      "path": ".agents/skills/obsidian-excalidraw/SKILL.md",
+      "line": 2,
+      "anchor": "name: obsidian-excalidraw",
+      "sha256": "3e7a7ff70b5a0d371700a74f486709a88bc1e348662a837eab1f77069b7c5ed3",
+      "evidence_kind": "installed_descriptor"
+    },
+    "installed-obsidian-excalidraw-opencode": {
+      "root": "installed_host",
+      "path": ".config/opencode/skills/obsidian-excalidraw/SKILL.md",
+      "line": 2,
+      "anchor": "name: obsidian-excalidraw",
+      "sha256": "3e7a7ff70b5a0d371700a74f486709a88bc1e348662a837eab1f77069b7c5ed3",
+      "evidence_kind": "installed_descriptor"
+    },
+    "skill-grilling": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/skills/grilling/SKILL.md",
+      "line": 2,
+      "anchor": "name: grilling",
+      "sha256": "d2498125dd20a0d3a27f03e0ebcc8e681cf42be468e2d3e3c9e8f5dadcae8d47",
+      "evidence_kind": "bundled_descriptor"
+    },
+    "installed-grilling-claude": {
+      "root": "installed_host",
+      "path": ".claude/skills/grilling/SKILL.md",
+      "line": 2,
+      "anchor": "name: grilling",
+      "sha256": "d2498125dd20a0d3a27f03e0ebcc8e681cf42be468e2d3e3c9e8f5dadcae8d47",
+      "evidence_kind": "installed_descriptor"
+    },
+    "installed-grilling-agents": {
+      "root": "installed_host",
+      "path": ".agents/skills/grilling/SKILL.md",
+      "line": 2,
+      "anchor": "name: grilling",
+      "sha256": "d2498125dd20a0d3a27f03e0ebcc8e681cf42be468e2d3e3c9e8f5dadcae8d47",
+      "evidence_kind": "installed_descriptor"
+    },
+    "skill-grill-me": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/skills/grill-me/SKILL.md",
+      "line": 2,
+      "anchor": "name: grill-me",
+      "sha256": "85d0e9b34003f4ba5e532912c5aef781157fc8ba38e626a09d28584c38c0b7db",
+      "evidence_kind": "bundled_descriptor"
+    },
+    "installed-grill-me-claude": {
+      "root": "installed_host",
+      "path": ".claude/skills/grill-me/SKILL.md",
+      "line": 2,
+      "anchor": "name: grill-me",
+      "sha256": "85d0e9b34003f4ba5e532912c5aef781157fc8ba38e626a09d28584c38c0b7db",
+      "evidence_kind": "installed_descriptor"
+    },
+    "installed-grill-me-agents": {
+      "root": "installed_host",
+      "path": ".agents/skills/grill-me/SKILL.md",
+      "line": 2,
+      "anchor": "name: grill-me",
+      "sha256": "85d0e9b34003f4ba5e532912c5aef781157fc8ba38e626a09d28584c38c0b7db",
+      "evidence_kind": "installed_descriptor"
+    },
+    "skill-grill-with-docs": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/skills/grill-with-docs/SKILL.md",
+      "line": 2,
+      "anchor": "name: grill-with-docs",
+      "sha256": "f63c10b127f7bdc776bb4f57a4ff3fd70f1315e07c8b5bad135c3e577bc44b0a",
+      "evidence_kind": "bundled_descriptor"
+    },
+    "installed-grill-with-docs-claude": {
+      "root": "installed_host",
+      "path": ".claude/skills/grill-with-docs/SKILL.md",
+      "line": 2,
+      "anchor": "name: grill-with-docs",
+      "sha256": "f63c10b127f7bdc776bb4f57a4ff3fd70f1315e07c8b5bad135c3e577bc44b0a",
+      "evidence_kind": "installed_descriptor"
+    },
+    "installed-grill-with-docs-agents": {
+      "root": "installed_host",
+      "path": ".agents/skills/grill-with-docs/SKILL.md",
+      "line": 2,
+      "anchor": "name: grill-with-docs",
+      "sha256": "f63c10b127f7bdc776bb4f57a4ff3fd70f1315e07c8b5bad135c3e577bc44b0a",
+      "evidence_kind": "installed_descriptor"
+    },
+    "skill-to-spec": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/skills/to-spec/SKILL.md",
+      "line": 2,
+      "anchor": "name: to-spec",
+      "sha256": "f74eaf83b0c9595be739106f9b8aabb502b0bf66ffb5c36e1ae6f630862b2f9a",
+      "evidence_kind": "bundled_descriptor"
+    },
+    "installed-to-spec-claude": {
+      "root": "installed_host",
+      "path": ".claude/skills/to-spec/SKILL.md",
+      "line": 2,
+      "anchor": "name: to-spec",
+      "sha256": "f74eaf83b0c9595be739106f9b8aabb502b0bf66ffb5c36e1ae6f630862b2f9a",
+      "evidence_kind": "installed_descriptor"
+    },
+    "installed-to-spec-agents": {
+      "root": "installed_host",
+      "path": ".agents/skills/to-spec/SKILL.md",
+      "line": 2,
+      "anchor": "name: to-spec",
+      "sha256": "f74eaf83b0c9595be739106f9b8aabb502b0bf66ffb5c36e1ae6f630862b2f9a",
+      "evidence_kind": "installed_descriptor"
+    },
+    "skill-domain-modeling": {
+      "root": "superwagie",
+      "path": "packages/web/server/builtin-skills/skills/domain-modeling/SKILL.md",
+      "line": 2,
+      "anchor": "name: domain-modeling",
+      "sha256": "9617041db9b0f6606ecf974e2061c83596b05059b5bb20ddb884c60f147c70e9",
+      "evidence_kind": "bundled_descriptor"
+    },
+    "installed-domain-modeling-claude": {
+      "root": "installed_host",
+      "path": ".claude/skills/domain-modeling/SKILL.md",
+      "line": 2,
+      "anchor": "name: domain-modeling",
+      "sha256": "9617041db9b0f6606ecf974e2061c83596b05059b5bb20ddb884c60f147c70e9",
+      "evidence_kind": "installed_descriptor"
+    },
+    "installed-domain-modeling-agents": {
+      "root": "installed_host",
+      "path": ".agents/skills/domain-modeling/SKILL.md",
+      "line": 2,
+      "anchor": "name: domain-modeling",
+      "sha256": "9617041db9b0f6606ecf974e2061c83596b05059b5bb20ddb884c60f147c70e9",
+      "evidence_kind": "installed_descriptor"
+    },
+    "editable-qwen-scene": {
+      "root": "installed_host",
+      "path": ".local/share/image-to-editable-pptx/src/providers/qwen-scene.ts",
+      "line": 319,
+      "anchor": "export async function analyzeScene",
+      "sha256": "5ce6c29325dd70bb43f3f8d58389ea01bb5756a5956cec7b694ada84b40e449a",
+      "evidence_kind": "installed_runtime_source"
+    }
+  },
+  "skills": [
+    {
+      "id": "superppt",
+      "required": true,
+      "bundled_source": "skill-superppt",
+      "agent_inheritance_required": true,
+      "installed_candidates": [
+        {
+          "path": ".agents/skills/superppt/SKILL.md",
+          "physical_path": ".local/share/superppt/skills/superppt/SKILL.md",
+          "source": "installed-superppt-agents",
+          "same_as_bundle": true
+        }
+      ],
+      "runtime_selection_evidence": "discoverable_by_superwagie_loader; selected session path not observed",
+      "direct_dependencies": [
+        "superppt/slide-generation",
+        "superppt/editable-slide"
+      ]
+    },
+    {
+      "id": "ai-image-to-ppt",
+      "required": true,
+      "bundled_source": "skill-ai-image-to-ppt",
+      "agent_inheritance_required": true,
+      "installed_candidates": [
+        {
+          "path": ".claude/skills/ai-image-to-ppt/SKILL.md",
+          "physical_path": ".claude/skills/ai-image-to-ppt/SKILL.md",
+          "source": "installed-ai-image-to-ppt-claude",
+          "same_as_bundle": false
+        },
+        {
+          "path": ".agents/skills/ai-image-to-ppt/SKILL.md",
+          "physical_path": ".agents/skills/ai-image-to-ppt/SKILL.md",
+          "source": "installed-ai-image-to-ppt-agents",
+          "same_as_bundle": true
+        }
+      ],
+      "runtime_selection_evidence": "discoverable_by_superwagie_loader; selected session path not observed",
+      "direct_dependencies": [
+        "ai-image-to-ppt/generate-openai-compatible",
+        "ai-image-to-ppt/generate-aliyun",
+        "ai-image-to-ppt/generate-gemini",
+        "ai-image-to-ppt/generate-volcengine",
+        "ai-image-to-ppt/reference-image",
+        "ai-image-to-ppt/vision-qa",
+        "ai-image-to-ppt/host-generation"
+      ]
+    },
+    {
+      "id": "image-to-editable-pptx",
+      "required": true,
+      "bundled_source": "skill-image-to-editable-pptx",
+      "agent_inheritance_required": true,
+      "installed_candidates": [
+        {
+          "path": ".agents/skills/image-to-editable-pptx/SKILL.md",
+          "physical_path": ".local/share/image-to-editable-pptx/skills/image-to-editable-pptx/SKILL.md",
+          "source": "installed-image-to-editable-pptx-agents",
+          "same_as_bundle": true
+        }
+      ],
+      "runtime_selection_evidence": "discoverable_by_superwagie_loader; selected session path not observed",
+      "direct_dependencies": [
+        "image-to-editable-pptx/ocr-openai",
+        "image-to-editable-pptx/ocr-host",
+        "image-to-editable-pptx/scene-openai",
+        "image-to-editable-pptx/scene-host",
+        "image-to-editable-pptx/ocr-alibaba",
+        "image-to-editable-pptx/scene-alibaba",
+        "image-to-editable-pptx/region-analysis",
+        "image-to-editable-pptx/masked-completion-openai",
+        "image-to-editable-pptx/masked-completion-alibaba"
+      ]
+    },
+    {
+      "id": "supervideo",
+      "required": true,
+      "bundled_source": "skill-supervideo",
+      "agent_inheritance_required": true,
+      "installed_candidates": [
+        {
+          "path": ".agents/skills/supervideo/SKILL.md",
+          "physical_path": ".agents/skills/supervideo/SKILL.md",
+          "source": "installed-supervideo-agents",
+          "same_as_bundle": true
+        }
+      ],
+      "runtime_selection_evidence": "discoverable_by_superwagie_loader; selected session path not observed",
+      "direct_dependencies": [
+        "supervideo/narration-openai",
+        "supervideo/narration-minimax",
+        "supervideo/narration-bailian",
+        "supervideo/narration-elevenlabs",
+        "supervideo/narration-host",
+        "supervideo/illustration-assets",
+        "supervideo/video-generation-submit",
+        "supervideo/video-generation-poll",
+        "supervideo/video-generation-result"
+      ]
+    },
+    {
+      "id": "superwriter",
+      "required": true,
+      "bundled_source": "skill-superwriter",
+      "agent_inheritance_required": true,
+      "installed_candidates": [
+        {
+          "path": ".claude/skills/superwriter/SKILL.md",
+          "physical_path": ".claude/skills/superwriter/SKILL.md",
+          "source": "installed-superwriter-claude",
+          "same_as_bundle": true
+        },
+        {
+          "path": ".agents/skills/superwriter/SKILL.md",
+          "physical_path": ".agents/skills/superwriter/SKILL.md",
+          "source": "installed-superwriter-agents",
+          "same_as_bundle": true
+        }
+      ],
+      "runtime_selection_evidence": "discoverable_by_superwagie_loader; selected session path not observed",
+      "direct_dependencies": [
+        "superwriter/illustrations"
+      ]
+    },
+    {
+      "id": "WPSComposer",
+      "required": true,
+      "bundled_source": "skill-WPSComposer",
+      "agent_inheritance_required": true,
+      "installed_candidates": [
+        {
+          "path": ".claude/skills/WPSComposer/SKILL.md",
+          "physical_path": ".superwriter/dependencies/WPSComposer/702f709276d44d57cc854074d3fdce3af17e656a/skills/WPSComposer/SKILL.md",
+          "source": "installed-WPSComposer-claude",
+          "same_as_bundle": true
+        },
+        {
+          "path": ".agents/skills/WPSComposer/SKILL.md",
+          "physical_path": ".local/share/WPSComposer/runtime-installs/20261023-release-0.10.0-8e6ddbc0/runtime/skills/WPSComposer/SKILL.md",
+          "source": "installed-WPSComposer-agents",
+          "same_as_bundle": false
+        }
+      ],
+      "runtime_selection_evidence": "discoverable_by_superwagie_loader; selected session path not observed",
+      "direct_dependencies": []
+    },
+    {
+      "id": "superweb",
+      "required": true,
+      "bundled_source": "skill-superweb",
+      "agent_inheritance_required": true,
+      "installed_candidates": [
+        {
+          "path": ".config/opencode/skills/superweb/SKILL.md",
+          "physical_path": ".config/opencode/skills/superweb/SKILL.md",
+          "source": "installed-superweb-opencode",
+          "same_as_bundle": true
+        }
+      ],
+      "runtime_selection_evidence": "discoverable_by_superwagie_loader; selected session path not observed",
+      "direct_dependencies": []
+    },
+    {
+      "id": "obsidian-excalidraw",
+      "required": true,
+      "bundled_source": "skill-obsidian-excalidraw",
+      "agent_inheritance_required": true,
+      "installed_candidates": [
+        {
+          "path": ".claude/skills/obsidian-excalidraw/SKILL.md",
+          "physical_path": ".claude/skills/obsidian-excalidraw/SKILL.md",
+          "source": "installed-obsidian-excalidraw-claude",
+          "same_as_bundle": true
+        },
+        {
+          "path": ".agents/skills/obsidian-excalidraw/SKILL.md",
+          "physical_path": ".agents/skills/obsidian-excalidraw/SKILL.md",
+          "source": "installed-obsidian-excalidraw-agents",
+          "same_as_bundle": true
+        },
+        {
+          "path": ".config/opencode/skills/obsidian-excalidraw/SKILL.md",
+          "physical_path": ".config/opencode/skills/obsidian-excalidraw/SKILL.md",
+          "source": "installed-obsidian-excalidraw-opencode",
+          "same_as_bundle": true
+        }
+      ],
+      "runtime_selection_evidence": "discoverable_by_superwagie_loader; selected session path not observed",
+      "direct_dependencies": []
+    },
+    {
+      "id": "grilling",
+      "required": true,
+      "bundled_source": "skill-grilling",
+      "agent_inheritance_required": true,
+      "installed_candidates": [
+        {
+          "path": ".claude/skills/grilling/SKILL.md",
+          "physical_path": ".claude/skills/grilling/SKILL.md",
+          "source": "installed-grilling-claude",
+          "same_as_bundle": true
+        },
+        {
+          "path": ".agents/skills/grilling/SKILL.md",
+          "physical_path": ".agents/skills/grilling/SKILL.md",
+          "source": "installed-grilling-agents",
+          "same_as_bundle": true
+        }
+      ],
+      "runtime_selection_evidence": "discoverable_by_superwagie_loader; selected session path not observed",
+      "direct_dependencies": []
+    },
+    {
+      "id": "grill-me",
+      "required": true,
+      "bundled_source": "skill-grill-me",
+      "agent_inheritance_required": true,
+      "installed_candidates": [
+        {
+          "path": ".claude/skills/grill-me/SKILL.md",
+          "physical_path": ".claude/skills/grill-me/SKILL.md",
+          "source": "installed-grill-me-claude",
+          "same_as_bundle": true
+        },
+        {
+          "path": ".agents/skills/grill-me/SKILL.md",
+          "physical_path": ".agents/skills/grill-me/SKILL.md",
+          "source": "installed-grill-me-agents",
+          "same_as_bundle": true
+        }
+      ],
+      "runtime_selection_evidence": "discoverable_by_superwagie_loader; selected session path not observed",
+      "direct_dependencies": []
+    },
+    {
+      "id": "grill-with-docs",
+      "required": true,
+      "bundled_source": "skill-grill-with-docs",
+      "agent_inheritance_required": true,
+      "installed_candidates": [
+        {
+          "path": ".claude/skills/grill-with-docs/SKILL.md",
+          "physical_path": ".claude/skills/grill-with-docs/SKILL.md",
+          "source": "installed-grill-with-docs-claude",
+          "same_as_bundle": true
+        },
+        {
+          "path": ".agents/skills/grill-with-docs/SKILL.md",
+          "physical_path": ".agents/skills/grill-with-docs/SKILL.md",
+          "source": "installed-grill-with-docs-agents",
+          "same_as_bundle": true
+        }
+      ],
+      "runtime_selection_evidence": "discoverable_by_superwagie_loader; selected session path not observed",
+      "direct_dependencies": []
+    },
+    {
+      "id": "to-spec",
+      "required": true,
+      "bundled_source": "skill-to-spec",
+      "agent_inheritance_required": true,
+      "installed_candidates": [
+        {
+          "path": ".claude/skills/to-spec/SKILL.md",
+          "physical_path": ".claude/skills/to-spec/SKILL.md",
+          "source": "installed-to-spec-claude",
+          "same_as_bundle": true
+        },
+        {
+          "path": ".agents/skills/to-spec/SKILL.md",
+          "physical_path": ".agents/skills/to-spec/SKILL.md",
+          "source": "installed-to-spec-agents",
+          "same_as_bundle": true
+        }
+      ],
+      "runtime_selection_evidence": "discoverable_by_superwagie_loader; selected session path not observed",
+      "direct_dependencies": []
+    },
+    {
+      "id": "domain-modeling",
+      "required": true,
+      "bundled_source": "skill-domain-modeling",
+      "agent_inheritance_required": true,
+      "installed_candidates": [
+        {
+          "path": ".claude/skills/domain-modeling/SKILL.md",
+          "physical_path": ".claude/skills/domain-modeling/SKILL.md",
+          "source": "installed-domain-modeling-claude",
+          "same_as_bundle": true
+        },
+        {
+          "path": ".agents/skills/domain-modeling/SKILL.md",
+          "physical_path": ".agents/skills/domain-modeling/SKILL.md",
+          "source": "installed-domain-modeling-agents",
+          "same_as_bundle": true
+        }
+      ],
+      "runtime_selection_evidence": "discoverable_by_superwagie_loader; selected session path not observed",
+      "direct_dependencies": []
+    }
+  ],
+  "consumers": [
+    {
+      "id": "superwagie-chat--openai-chat--chat-completions-create",
+      "consumer": "superwagie-chat/openai-chat",
+      "purpose": "agent",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Ordinary and streamed dialogue; complete a two-step tool loop, reasoning and supported strict schema; read an image and document, then resume the session. Each real model request has its own logical call and immutable model/rate; retain actor/payer/task ancestry, consume output and reconcile one receipt.",
+      "source_refs": [
+        "platform-plugin",
+        "platform-runtime",
+        "catalog"
+      ],
+      "integration_kind": "opencode_hook",
+      "source_status": "gap",
+      "gap": "Managed proxy currently admits only primary streaming Chat; static catalog is text-only.",
+      "requirement_refs": [
+        "R1",
+        "R2",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "activation_condition": "Exercise each supported selected-model protocol; unsupported capabilities must be explicit admission failures, never silently removed from inventory."
+    },
+    {
+      "id": "superwagie-chat--openai-responses--responses-create",
+      "consumer": "superwagie-chat/openai-responses",
+      "purpose": "agent",
+      "operation": "responses.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Ordinary and streamed dialogue; complete a two-step tool loop, reasoning and supported strict schema; read an image and document, then resume the session. Each real model request has its own logical call and immutable model/rate; retain actor/payer/task ancestry, consume output and reconcile one receipt.",
+      "source_refs": [
+        "platform-plugin",
+        "platform-runtime",
+        "catalog"
+      ],
+      "integration_kind": "opencode_hook",
+      "source_status": "gap",
+      "gap": "Managed proxy currently admits only primary streaming Chat; static catalog is text-only.",
+      "requirement_refs": [
+        "R1",
+        "R2",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "activation_condition": "Exercise each supported selected-model protocol; unsupported capabilities must be explicit admission failures, never silently removed from inventory."
+    },
+    {
+      "id": "superwagie-chat--anthropic--claude-messages-create",
+      "consumer": "superwagie-chat/anthropic",
+      "purpose": "agent",
+      "operation": "claude.messages.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Ordinary and streamed dialogue; complete a two-step tool loop, reasoning and supported strict schema; read an image and document, then resume the session. Each real model request has its own logical call and immutable model/rate; retain actor/payer/task ancestry, consume output and reconcile one receipt.",
+      "source_refs": [
+        "platform-plugin",
+        "platform-runtime",
+        "catalog"
+      ],
+      "integration_kind": "opencode_hook",
+      "source_status": "gap",
+      "gap": "Managed proxy currently admits only primary streaming Chat; static catalog is text-only.",
+      "requirement_refs": [
+        "R1",
+        "R2",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "activation_condition": "Exercise each supported selected-model protocol; unsupported capabilities must be explicit admission failures, never silently removed from inventory."
+    },
+    {
+      "id": "superwagie-chat--gemini--gemini-generate",
+      "consumer": "superwagie-chat/gemini",
+      "purpose": "agent",
+      "operation": "gemini.generate",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Ordinary and streamed dialogue; complete a two-step tool loop, reasoning and supported strict schema; read an image and document, then resume the session. Each real model request has its own logical call and immutable model/rate; retain actor/payer/task ancestry, consume output and reconcile one receipt.",
+      "source_refs": [
+        "platform-plugin",
+        "platform-runtime",
+        "catalog"
+      ],
+      "integration_kind": "opencode_hook",
+      "source_status": "gap",
+      "gap": "Managed proxy currently admits only primary streaming Chat; static catalog is text-only.",
+      "requirement_refs": [
+        "R1",
+        "R2",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "activation_condition": "Exercise each supported selected-model protocol; unsupported capabilities must be explicit admission failures, never silently removed from inventory."
+    },
+    {
+      "id": "superwagie-tasks--child-agent--chat-completions-create",
+      "consumer": "superwagie-tasks/child-agent",
+      "purpose": "agent",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "A primary tool spawns two child Agents concurrently; each child consumes its own result with server-confirmed parentTask/parentCall ancestry. Each real model request has its own logical call and immutable model/rate; retain actor/payer/task ancestry, consume output and reconcile one receipt.",
+      "source_refs": [
+        "platform-runtime",
+        "platform-plugin"
+      ],
+      "integration_kind": "opencode_hook",
+      "source_status": "gap",
+      "gap": "Current runtime rejects session.parentID and plugin rejects non-primary model kinds.",
+      "requirement_refs": [
+        "R1",
+        "R2",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "superwagie-tasks--resume--chat-completions-create",
+      "consumer": "superwagie-tasks/resume",
+      "purpose": "agent",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Restart app during an admitted call; resume using durable logical-call identity and reconcile output/receipt without creating another paid request.",
+      "source_refs": [
+        "platform-runtime",
+        "platform-plugin"
+      ],
+      "integration_kind": "opencode_hook",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R2",
+        "R7",
+        "R8",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "superwagie-tasks--compaction--chat-completions-create",
+      "consumer": "superwagie-tasks/compaction",
+      "purpose": "auxiliary",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Trigger actual context compaction, consume the summary, restore obligatory context, then continue on the primary model; compaction has its own call/model/usage rather than inheriting the previous assistant record.",
+      "source_refs": [
+        "compaction",
+        "compaction-accounting",
+        "platform-plugin"
+      ],
+      "integration_kind": "opencode_hook",
+      "source_status": "gap",
+      "gap": "Compaction is visible in event/accounting code but current managed hook only accepts primary calls; wire choice must come from actual OpenCode hook.",
+      "requirement_refs": [
+        "R2",
+        "R7",
+        "R8",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "responses.compact",
+        "responses.create",
+        "claude.messages.create",
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "superwagie-helpers--generate--chat-completions-create",
+      "consumer": "superwagie-helpers/generate",
+      "purpose": "auxiliary",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Invoke the actual helpers/generate consumer via generateSmallModelText; consume its text/structured result, allowing its independently selected auxiliary model within the same provider. Each real model request has its own logical call and immutable model/rate; retain actor/payer/task ancestry, consume output and reconcile one receipt.",
+      "source_refs": [
+        "small-model-route",
+        "small-model",
+        "platform-plugin"
+      ],
+      "integration_kind": "opencode_generate",
+      "source_status": "gap",
+      "gap": "client.generate.text is a separate OpenCode generation path; managed proxy has no auxiliary admission.",
+      "requirement_refs": [
+        "R2",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "responses.create",
+        "claude.messages.create",
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "superwagie-session-assist--chat-completions-create",
+      "consumer": "superwagie-session-assist",
+      "purpose": "auxiliary",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Invoke the actual session-assist consumer via generateSmallModelText; consume its text/structured result, allowing its independently selected auxiliary model within the same provider. Each real model request has its own logical call and immutable model/rate; retain actor/payer/task ancestry, consume output and reconcile one receipt.",
+      "source_refs": [
+        "session-assist",
+        "small-model",
+        "platform-plugin"
+      ],
+      "integration_kind": "opencode_generate",
+      "source_status": "gap",
+      "gap": "client.generate.text is a separate OpenCode generation path; managed proxy has no auxiliary admission.",
+      "requirement_refs": [
+        "R2",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "responses.create",
+        "claude.messages.create",
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "superwagie-guest-helpers--chat-completions-create",
+      "consumer": "superwagie-guest-helpers",
+      "purpose": "auxiliary",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Invoke the actual guest-helpers consumer via generateSmallModelText; consume its text/structured result, allowing its independently selected auxiliary model within the same provider. Each real model request has its own logical call and immutable model/rate; retain actor/payer/task ancestry, consume output and reconcile one receipt.",
+      "source_refs": [
+        "guest-helpers",
+        "small-model",
+        "platform-plugin"
+      ],
+      "integration_kind": "opencode_generate",
+      "source_status": "gap",
+      "gap": "client.generate.text is a separate OpenCode generation path; managed proxy has no auxiliary admission.",
+      "requirement_refs": [
+        "R2",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "responses.create",
+        "claude.messages.create",
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "superwagie-diff-walkthrough--chat-completions-create",
+      "consumer": "superwagie-diff-walkthrough",
+      "purpose": "auxiliary",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Invoke the actual diff-walkthrough consumer via generateSmallModelText; consume its text/structured result, allowing its independently selected auxiliary model within the same provider. Each real model request has its own logical call and immutable model/rate; retain actor/payer/task ancestry, consume output and reconcile one receipt.",
+      "source_refs": [
+        "walkthrough",
+        "small-model",
+        "platform-plugin"
+      ],
+      "integration_kind": "opencode_generate",
+      "source_status": "gap",
+      "gap": "client.generate.text is a separate OpenCode generation path; managed proxy has no auxiliary admission.",
+      "requirement_refs": [
+        "R2",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "responses.create",
+        "claude.messages.create",
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "superwagie-session-goal--create--chat-completions-create",
+      "consumer": "superwagie-session-goal/create",
+      "purpose": "auxiliary",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Invoke the actual session-goal/create consumer via generateSmallModelText; consume its text/structured result, allowing its independently selected auxiliary model within the same provider. Each real model request has its own logical call and immutable model/rate; retain actor/payer/task ancestry, consume output and reconcile one receipt.",
+      "source_refs": [
+        "goal-create",
+        "small-model",
+        "platform-plugin"
+      ],
+      "integration_kind": "opencode_generate",
+      "source_status": "gap",
+      "gap": "client.generate.text is a separate OpenCode generation path; managed proxy has no auxiliary admission.",
+      "requirement_refs": [
+        "R2",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "responses.create",
+        "claude.messages.create",
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "superwagie-session-goal--continue--chat-completions-create",
+      "consumer": "superwagie-session-goal/continue",
+      "purpose": "auxiliary",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Invoke the actual session-goal/continue consumer via generateSmallModelText; consume its text/structured result, allowing its independently selected auxiliary model within the same provider. Each real model request has its own logical call and immutable model/rate; retain actor/payer/task ancestry, consume output and reconcile one receipt.",
+      "source_refs": [
+        "goal-runtime",
+        "small-model",
+        "platform-plugin"
+      ],
+      "integration_kind": "opencode_generate",
+      "source_status": "gap",
+      "gap": "client.generate.text is a separate OpenCode generation path; managed proxy has no auxiliary admission.",
+      "requirement_refs": [
+        "R2",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "responses.create",
+        "claude.messages.create",
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "superwagie-product-help--chat-completions-create",
+      "consumer": "superwagie-product-help",
+      "purpose": "auxiliary",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Invoke the actual product-help consumer via generateSmallModelText; consume its text/structured result, allowing its independently selected auxiliary model within the same provider. Each real model request has its own logical call and immutable model/rate; retain actor/payer/task ancestry, consume output and reconcile one receipt.",
+      "source_refs": [
+        "product-help",
+        "small-model",
+        "platform-plugin"
+      ],
+      "integration_kind": "opencode_generate",
+      "source_status": "gap",
+      "gap": "client.generate.text is a separate OpenCode generation path; managed proxy has no auxiliary admission.",
+      "requirement_refs": [
+        "R2",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "responses.create",
+        "claude.messages.create",
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "superwagie-helpers--native-title-summary--chat-completions-create",
+      "consumer": "superwagie-helpers/native-title-summary",
+      "purpose": "auxiliary",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Create a fresh session that invokes native title/summary work and verify actual hook kind, selected model, result and independent call receipt.",
+      "source_refs": [
+        "small-model",
+        "platform-plugin"
+      ],
+      "integration_kind": "opencode_hook",
+      "source_status": "gap",
+      "gap": "Native OpenCode title/summary provider implementation is external to this server source; non-primary managed hook is currently rejected.",
+      "requirement_refs": [
+        "R2",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "superppt--agent--chat-completions-create",
+      "consumer": "superppt/agent",
+      "purpose": "agent",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Load the superppt skill from the actually selected installed path; complete a representative Agent/tool turn through the unified connection. Direct/delegated media calls listed separately remain required.",
+      "source_refs": [
+        "skill-superppt",
+        "catalog",
+        "host-roots",
+        "platform-plugin"
+      ],
+      "integration_kind": "agent_inheritance",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "responses.create",
+        "claude.messages.create",
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "ai-image-to-ppt--agent--chat-completions-create",
+      "consumer": "ai-image-to-ppt/agent",
+      "purpose": "agent",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Load the ai-image-to-ppt skill from the actually selected installed path; complete a representative Agent/tool turn through the unified connection. Direct/delegated media calls listed separately remain required.",
+      "source_refs": [
+        "skill-ai-image-to-ppt",
+        "catalog",
+        "host-roots",
+        "platform-plugin"
+      ],
+      "integration_kind": "agent_inheritance",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "responses.create",
+        "claude.messages.create",
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "image-to-editable-pptx--agent--chat-completions-create",
+      "consumer": "image-to-editable-pptx/agent",
+      "purpose": "agent",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Load the image-to-editable-pptx skill from the actually selected installed path; complete a representative Agent/tool turn through the unified connection. Direct/delegated media calls listed separately remain required.",
+      "source_refs": [
+        "skill-image-to-editable-pptx",
+        "catalog",
+        "host-roots",
+        "platform-plugin"
+      ],
+      "integration_kind": "agent_inheritance",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "responses.create",
+        "claude.messages.create",
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "supervideo--agent--chat-completions-create",
+      "consumer": "supervideo/agent",
+      "purpose": "agent",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Load the supervideo skill from the actually selected installed path; complete a representative Agent/tool turn through the unified connection. Direct/delegated media calls listed separately remain required.",
+      "source_refs": [
+        "skill-supervideo",
+        "catalog",
+        "host-roots",
+        "platform-plugin"
+      ],
+      "integration_kind": "agent_inheritance",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "responses.create",
+        "claude.messages.create",
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "superwriter--agent--chat-completions-create",
+      "consumer": "superwriter/agent",
+      "purpose": "agent",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Load the superwriter skill from the actually selected installed path; complete a representative Agent/tool turn through the unified connection. Direct/delegated media calls listed separately remain required.",
+      "source_refs": [
+        "skill-superwriter",
+        "catalog",
+        "host-roots",
+        "platform-plugin"
+      ],
+      "integration_kind": "agent_inheritance",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "responses.create",
+        "claude.messages.create",
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "WPSComposer--agent--chat-completions-create",
+      "consumer": "WPSComposer/agent",
+      "purpose": "agent",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Load the WPSComposer skill from the actually selected installed path; complete a representative Agent/tool turn through the unified connection. Direct/delegated media calls listed separately remain required.",
+      "source_refs": [
+        "skill-WPSComposer",
+        "catalog",
+        "host-roots",
+        "platform-plugin"
+      ],
+      "integration_kind": "agent_inheritance",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "responses.create",
+        "claude.messages.create",
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "superweb--agent--chat-completions-create",
+      "consumer": "superweb/agent",
+      "purpose": "agent",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Load the superweb skill from the actually selected installed path; complete a representative Agent/tool turn through the unified connection. Direct/delegated media calls listed separately remain required.",
+      "source_refs": [
+        "skill-superweb",
+        "catalog",
+        "host-roots",
+        "platform-plugin"
+      ],
+      "integration_kind": "agent_inheritance",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "responses.create",
+        "claude.messages.create",
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "obsidian-excalidraw--agent--chat-completions-create",
+      "consumer": "obsidian-excalidraw/agent",
+      "purpose": "agent",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Load the obsidian-excalidraw skill from the actually selected installed path; complete a representative Agent/tool turn through the unified connection. Direct/delegated media calls listed separately remain required.",
+      "source_refs": [
+        "skill-obsidian-excalidraw",
+        "catalog",
+        "host-roots",
+        "platform-plugin"
+      ],
+      "integration_kind": "agent_inheritance",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "responses.create",
+        "claude.messages.create",
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "grilling--agent--chat-completions-create",
+      "consumer": "grilling/agent",
+      "purpose": "agent",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Load the grilling skill from the actually selected installed path; complete a representative Agent/tool turn through the unified connection. Direct/delegated media calls listed separately remain required.",
+      "source_refs": [
+        "skill-grilling",
+        "catalog",
+        "host-roots",
+        "platform-plugin"
+      ],
+      "integration_kind": "agent_inheritance",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "responses.create",
+        "claude.messages.create",
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "grill-me--agent--chat-completions-create",
+      "consumer": "grill-me/agent",
+      "purpose": "agent",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Load the grill-me skill from the actually selected installed path; complete a representative Agent/tool turn through the unified connection. Direct/delegated media calls listed separately remain required.",
+      "source_refs": [
+        "skill-grill-me",
+        "catalog",
+        "host-roots",
+        "platform-plugin"
+      ],
+      "integration_kind": "agent_inheritance",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "responses.create",
+        "claude.messages.create",
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "grill-with-docs--agent--chat-completions-create",
+      "consumer": "grill-with-docs/agent",
+      "purpose": "agent",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Load the grill-with-docs skill from the actually selected installed path; complete a representative Agent/tool turn through the unified connection. Direct/delegated media calls listed separately remain required.",
+      "source_refs": [
+        "skill-grill-with-docs",
+        "catalog",
+        "host-roots",
+        "platform-plugin"
+      ],
+      "integration_kind": "agent_inheritance",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "responses.create",
+        "claude.messages.create",
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "to-spec--agent--chat-completions-create",
+      "consumer": "to-spec/agent",
+      "purpose": "agent",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Load the to-spec skill from the actually selected installed path; complete a representative Agent/tool turn through the unified connection. Direct/delegated media calls listed separately remain required.",
+      "source_refs": [
+        "skill-to-spec",
+        "catalog",
+        "host-roots",
+        "platform-plugin"
+      ],
+      "integration_kind": "agent_inheritance",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "responses.create",
+        "claude.messages.create",
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "domain-modeling--agent--chat-completions-create",
+      "consumer": "domain-modeling/agent",
+      "purpose": "agent",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Load the domain-modeling skill from the actually selected installed path; complete a representative Agent/tool turn through the unified connection. Direct/delegated media calls listed separately remain required.",
+      "source_refs": [
+        "skill-domain-modeling",
+        "catalog",
+        "host-roots",
+        "platform-plugin"
+      ],
+      "integration_kind": "agent_inheritance",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "responses.create",
+        "claude.messages.create",
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "ai-image-to-ppt--generate-openai-compatible--images-generations-create",
+      "consumer": "ai-image-to-ppt/generate-openai-compatible",
+      "purpose": "image-generation",
+      "operation": "images.generations.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Generate one strict 16:9 slide with the selected openai-compatible adapter, decode its bytes, validate geometry, save artifact and generation receipt; managed failure cannot read a legacy key.",
+      "source_refs": [
+        "image-dispatch",
+        "image-credentials",
+        "image-openai"
+      ],
+      "integration_kind": "python_direct",
+      "source_status": "gap",
+      "gap": "Resolver currently returns provider credentials to script; scoped managed invocation broker and installed-reader migration remain required.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "ai-image-to-ppt--generate-aliyun--images-generations-create",
+      "consumer": "ai-image-to-ppt/generate-aliyun",
+      "purpose": "image-generation",
+      "operation": "images.generations.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Generate one strict 16:9 slide with the selected aliyun adapter, decode its bytes, validate geometry, save artifact and generation receipt; managed failure cannot read a legacy key.",
+      "source_refs": [
+        "image-dispatch",
+        "image-credentials",
+        "image-openai"
+      ],
+      "integration_kind": "python_direct",
+      "source_status": "gap",
+      "gap": "Resolver currently returns provider credentials to script; scoped managed invocation broker and installed-reader migration remain required.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "ai-image-to-ppt--host-generation--images-generations-create",
+      "consumer": "ai-image-to-ppt/host-generation",
+      "purpose": "image-generation",
+      "operation": "images.generations.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Invoke a real registered host image capability through declared scoped broker execution, import the actual returned image, verify normalized 16:9 bytes and provenance, and bind its independent logical call/receipt. Importing a pre-existing host image alone is not a paid model invocation.",
+      "source_refs": [
+        "skill-ai-image-to-ppt",
+        "host-image",
+        "image-dispatch"
+      ],
+      "integration_kind": "host_tool_bridge",
+      "source_status": "gap",
+      "gap": "Host image tools have priority in the skill; gen_slide.py is API-only and cannot establish host transport coverage. Host must expose a declared authenticated managed invocation capability rather than unrelated consumer-account execution.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "ai-image-to-ppt--generate-gemini--gemini-generate",
+      "consumer": "ai-image-to-ppt/generate-gemini",
+      "purpose": "image-generation",
+      "operation": "gemini.generate",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Generate one strict 16:9 slide with the selected gemini adapter, decode its bytes, validate geometry, save artifact and generation receipt; managed failure cannot read a legacy key.",
+      "source_refs": [
+        "image-dispatch",
+        "image-credentials",
+        "image-gemini"
+      ],
+      "integration_kind": "python_direct",
+      "source_status": "gap",
+      "gap": "Resolver currently returns provider credentials to script; scoped managed invocation broker and installed-reader migration remain required.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "ai-image-to-ppt--generate-volcengine--images-generations-create",
+      "consumer": "ai-image-to-ppt/generate-volcengine",
+      "purpose": "image-generation",
+      "operation": "images.generations.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Generate one strict 16:9 slide with the selected volcengine adapter, decode its bytes, validate geometry, save artifact and generation receipt; managed failure cannot read a legacy key.",
+      "source_refs": [
+        "image-dispatch",
+        "image-credentials",
+        "image-volc"
+      ],
+      "integration_kind": "python_direct",
+      "source_status": "gap",
+      "gap": "Resolver currently returns provider credentials to script; scoped managed invocation broker and installed-reader migration remain required.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "ai-image-to-ppt--reference-image--images-generations-create",
+      "consumer": "ai-image-to-ppt/reference-image",
+      "purpose": "image-editing",
+      "operation": "images.generations.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Generate with an actual local reference image via the Seedream JSON reference path, verify reference provenance and changed output; label this as reference-guided generation rather than multipart mask editing.",
+      "source_refs": [
+        "image-dispatch",
+        "image-volc"
+      ],
+      "integration_kind": "python_direct",
+      "source_status": "gap",
+      "gap": "Reference images are supported only by the current Doubao adapter; no generic image-editing binding is consumed.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "wire_contract": "reference-guided generation; operation is generation despite editing purpose"
+    },
+    {
+      "id": "ai-image-to-ppt--vision-qa--gemini-generate",
+      "consumer": "ai-image-to-ppt/vision-qa",
+      "purpose": "vision",
+      "operation": "gemini.generate",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Pass a generated slide image to vision_check_gemini.py; the QA result must identify an intentionally planted visual/text feature, with unified vision binding and call receipt.",
+      "source_refs": [
+        "image-qa",
+        "installed-image-qa"
+      ],
+      "integration_kind": "python_direct",
+      "source_status": "gap",
+      "gap": "QA always loads GEMINI_API_KEY or ~/.secrets/gemini_api_key and uses a fixed Gemini API root; it does not resolve the vision purpose.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "superppt--slide-generation--images-generations-create",
+      "consumer": "superppt/slide-generation",
+      "purpose": "image-generation",
+      "operation": "images.generations.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Run the actual delegating skill and consume an ai-image-to-ppt generated asset in its task; preserve call budget, references and artifact identity. Delegation creates no duplicate model charge. Clean bundle and older installed helper must both pass.",
+      "source_refs": [
+        "superppt-deps",
+        "image-dispatch",
+        "image-credentials"
+      ],
+      "integration_kind": "delegated_skill",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "superwriter--illustrations--images-generations-create",
+      "consumer": "superwriter/illustrations",
+      "purpose": "image-generation",
+      "operation": "images.generations.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Run the actual delegating skill and consume an ai-image-to-ppt generated asset in its task; preserve call budget, references and artifact identity. Delegation creates no duplicate model charge. Clean bundle and older installed helper must both pass.",
+      "source_refs": [
+        "skill-superwriter",
+        "image-dispatch",
+        "image-credentials"
+      ],
+      "integration_kind": "delegated_skill",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "superppt--editable-slide--responses-create",
+      "consumer": "superppt/editable-slide",
+      "purpose": "vision",
+      "operation": "responses.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Run SuperPPT editable conversion through its resolved image-to-editable-pptx dependency; OCR, scene/regional analysis and completion retain individual broker calls and conversion artifact provenance.",
+      "source_refs": [
+        "superppt-deps",
+        "skill-image-to-editable-pptx",
+        "editable-api"
+      ],
+      "integration_kind": "external_runtime_bridge",
+      "source_status": "gap",
+      "gap": "Editable converter implementation is separate from bundled descriptor; existing runtime directly uses host/API clients.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "depends_on_consumers": [
+        "image-to-editable-pptx/ocr-openai",
+        "image-to-editable-pptx/scene-openai",
+        "image-to-editable-pptx/region-analysis",
+        "image-to-editable-pptx/masked-completion-openai"
+      ]
+    },
+    {
+      "id": "image-to-editable-pptx--ocr-openai--responses-create",
+      "consumer": "image-to-editable-pptx/ocr-openai",
+      "purpose": "ocr",
+      "operation": "responses.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Run analyze on a known slide; validate ocr JSON and coordinates, consume it into editable layers, record actual selected response model and independent request.",
+      "source_refs": [
+        "skill-image-to-editable-pptx",
+        "editable-api"
+      ],
+      "integration_kind": "external_runtime_direct",
+      "source_status": "gap",
+      "gap": "Runtime uses fixed OpenAI Responses endpoint and OPENAI_API_KEY; descriptor is bundled but executable provider runtime is external.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "image-to-editable-pptx--ocr-host--responses-create",
+      "consumer": "image-to-editable-pptx/ocr-host",
+      "purpose": "ocr",
+      "operation": "responses.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Service the registered-file or local OpenCodex ocr request through the scoped broker; validate model output and geometry; no consumer-account credential extraction.",
+      "source_refs": [
+        "skill-image-to-editable-pptx",
+        "editable-host"
+      ],
+      "integration_kind": "external_runtime_bridge",
+      "source_status": "gap",
+      "gap": "Local OpenCodex discovery and file bridge are independent model transports, not ordinary Agent inheritance; selected host must support broker execution.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "image-to-editable-pptx--scene-openai--responses-create",
+      "consumer": "image-to-editable-pptx/scene-openai",
+      "purpose": "vision",
+      "operation": "responses.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Run analyze on a known slide; validate scene JSON and coordinates, consume it into editable layers, record actual selected response model and independent request.",
+      "source_refs": [
+        "skill-image-to-editable-pptx",
+        "editable-api"
+      ],
+      "integration_kind": "external_runtime_direct",
+      "source_status": "gap",
+      "gap": "Runtime uses fixed OpenAI Responses endpoint and OPENAI_API_KEY; descriptor is bundled but executable provider runtime is external.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "image-to-editable-pptx--scene-host--responses-create",
+      "consumer": "image-to-editable-pptx/scene-host",
+      "purpose": "vision",
+      "operation": "responses.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Service the registered-file or local OpenCodex scene request through the scoped broker; validate model output and geometry; no consumer-account credential extraction.",
+      "source_refs": [
+        "skill-image-to-editable-pptx",
+        "editable-host"
+      ],
+      "integration_kind": "external_runtime_bridge",
+      "source_status": "gap",
+      "gap": "Local OpenCodex discovery and file bridge are independent model transports, not ordinary Agent inheritance; selected host must support broker execution.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "image-to-editable-pptx--ocr-alibaba--chat-completions-create",
+      "consumer": "image-to-editable-pptx/ocr-alibaba",
+      "purpose": "ocr",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Read slide text using the Qwen OCR native multimodal request and preserve its OCR options/geometry through a certified gateway adapter.",
+      "source_refs": [
+        "editable-qwen-ocr",
+        "skill-image-to-editable-pptx"
+      ],
+      "integration_kind": "external_runtime_direct",
+      "source_status": "gap",
+      "gap": "Actual native DashScope multimodal OCR endpoint is not Chat wire-compatible; canonical operation mapping requires an adapter.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "wire_contract": "POST /api/v1/services/aigc/multimodal-generation/generation with ocr_options; target semantic mapping unresolved",
+      "operation_mapping_status": "requires_adapter"
+    },
+    {
+      "id": "image-to-editable-pptx--scene-alibaba--chat-completions-create",
+      "consumer": "image-to-editable-pptx/scene-alibaba",
+      "purpose": "vision",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Read whole-slide scene structure with Qwen vision and consume normalized geometry in the editable result.",
+      "source_refs": [
+        "editable-qwen-scene",
+        "skill-image-to-editable-pptx"
+      ],
+      "integration_kind": "external_runtime_direct",
+      "source_status": "gap",
+      "gap": "Workspace-scoped Alibaba base URL/credentials are independent from unified model settings.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "image-to-editable-pptx--region-analysis--responses-create",
+      "consumer": "image-to-editable-pptx/region-analysis",
+      "purpose": "vision",
+      "operation": "responses.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Exercise bounded regional crops (0..8), with one logical call per actual crop, no extra calls for skipped crops, and consumed asset/recomposition output.",
+      "source_refs": [
+        "skill-image-to-editable-pptx",
+        "editable-api"
+      ],
+      "integration_kind": "external_runtime_direct",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "chat.completions.create"
+      ]
+    },
+    {
+      "id": "image-to-editable-pptx--masked-completion-openai--images-edits-create",
+      "consumer": "image-to-editable-pptx/masked-completion-openai",
+      "purpose": "image-editing",
+      "operation": "images.edits.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Complete an eligible hidden-region crop with multipart image+mask, decode and validate geometry, then verify protected pixels and PPTX recomposition; host completion remains disabled.",
+      "source_refs": [
+        "editable-api",
+        "skill-image-to-editable-pptx"
+      ],
+      "integration_kind": "external_runtime_direct",
+      "source_status": "gap",
+      "gap": "External runtime uses fixed OpenAI images/edits endpoint and provider key; Gemini and host completion are explicitly unsupported.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "image-to-editable-pptx--masked-completion-alibaba--images-edits-create",
+      "consumer": "image-to-editable-pptx/masked-completion-alibaba",
+      "purpose": "image-editing",
+      "operation": "images.edits.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Run bounded completion (0..4) through Wanx submit/poll/result-download, recover its task after interruption and consume the verified cropped PNG.",
+      "source_refs": [
+        "editable-wanx",
+        "skill-image-to-editable-pptx"
+      ],
+      "integration_kind": "external_runtime_direct",
+      "source_status": "gap",
+      "gap": "Native DashScope async mask edit needs its own submit/poll/result adapter; cannot be replaced by a reference-image generation request.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "wire_contract": "POST /api/v1/services/aigc/image2image/image-synthesis; GET /api/v1/tasks/{id}; result image download",
+      "operation_mapping_status": "requires_adapter"
+    },
+    {
+      "id": "read-aloud--openai--audio-speech-create",
+      "consumer": "read-aloud/openai",
+      "purpose": "tts",
+      "operation": "audio.speech.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Synthesize actual read-aloud/openai narration, decode/play audio and use its measured duration in the consumer; preserve explicit voice/model and bind receipt. A cached audio replay must not redispatch. Commands that only import an existing receipt are separate non-model operations.",
+      "source_refs": [
+        "tts-route",
+        "tts-client"
+      ],
+      "integration_kind": "server_direct",
+      "source_status": "gap",
+      "gap": "Native openai or host adapter must be bound to scoped execution; legacy env keys may remain only as explicit BYOK override.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "wire_contract": "native/provider-specific where selected; audio.speech.create is target semantic operation",
+      "operation_mapping_status": "canonical"
+    },
+    {
+      "id": "read-aloud--minimax--audio-speech-create",
+      "consumer": "read-aloud/minimax",
+      "purpose": "tts",
+      "operation": "audio.speech.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Synthesize actual read-aloud/minimax narration, decode/play audio and use its measured duration in the consumer; preserve explicit voice/model and bind receipt. A cached audio replay must not redispatch. Commands that only import an existing receipt are separate non-model operations.",
+      "source_refs": [
+        "speech",
+        "tts-client"
+      ],
+      "integration_kind": "server_direct",
+      "source_status": "gap",
+      "gap": "Native minimax or host adapter must be bound to scoped execution; legacy env keys may remain only as explicit BYOK override.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "wire_contract": "native/provider-specific where selected; audio.speech.create is target semantic operation",
+      "operation_mapping_status": "requires_adapter"
+    },
+    {
+      "id": "supervideo--narration-openai--audio-speech-create",
+      "consumer": "supervideo/narration-openai",
+      "purpose": "tts",
+      "operation": "audio.speech.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Synthesize actual supervideo/narration-openai narration, decode/play audio and use its measured duration in the consumer; preserve explicit voice/model and bind receipt. A cached audio replay must not redispatch. Commands that only import an existing receipt are separate non-model operations.",
+      "source_refs": [
+        "video-configured",
+        "video-tts"
+      ],
+      "integration_kind": "runtime_direct",
+      "source_status": "gap",
+      "gap": "Native narration-openai or host adapter must be bound to scoped execution; legacy env keys may remain only as explicit BYOK override.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "wire_contract": "native/provider-specific where selected; audio.speech.create is target semantic operation",
+      "operation_mapping_status": "canonical"
+    },
+    {
+      "id": "supervideo--narration-minimax--audio-speech-create",
+      "consumer": "supervideo/narration-minimax",
+      "purpose": "tts",
+      "operation": "audio.speech.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Synthesize actual supervideo/narration-minimax narration, decode/play audio and use its measured duration in the consumer; preserve explicit voice/model and bind receipt. A cached audio replay must not redispatch. Commands that only import an existing receipt are separate non-model operations.",
+      "source_refs": [
+        "video-configured",
+        "video-tts"
+      ],
+      "integration_kind": "runtime_direct",
+      "source_status": "gap",
+      "gap": "Native narration-minimax or host adapter must be bound to scoped execution; legacy env keys may remain only as explicit BYOK override.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "wire_contract": "native/provider-specific where selected; audio.speech.create is target semantic operation",
+      "operation_mapping_status": "requires_adapter"
+    },
+    {
+      "id": "supervideo--narration-bailian--audio-speech-create",
+      "consumer": "supervideo/narration-bailian",
+      "purpose": "tts",
+      "operation": "audio.speech.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Synthesize actual supervideo/narration-bailian narration, decode/play audio and use its measured duration in the consumer; preserve explicit voice/model and bind receipt. A cached audio replay must not redispatch. Commands that only import an existing receipt are separate non-model operations.",
+      "source_refs": [
+        "video-bailian",
+        "video-tts"
+      ],
+      "integration_kind": "runtime_direct",
+      "source_status": "gap",
+      "gap": "Native narration-bailian or host adapter must be bound to scoped execution; legacy env keys may remain only as explicit BYOK override.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "wire_contract": "native/provider-specific where selected; audio.speech.create is target semantic operation",
+      "operation_mapping_status": "requires_adapter"
+    },
+    {
+      "id": "supervideo--narration-elevenlabs--audio-speech-create",
+      "consumer": "supervideo/narration-elevenlabs",
+      "purpose": "tts",
+      "operation": "audio.speech.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Synthesize actual supervideo/narration-elevenlabs narration, decode/play audio and use its measured duration in the consumer; preserve explicit voice/model and bind receipt. A cached audio replay must not redispatch. Commands that only import an existing receipt are separate non-model operations.",
+      "source_refs": [
+        "elevenlabs",
+        "video-tts"
+      ],
+      "integration_kind": "runtime_direct",
+      "source_status": "gap",
+      "gap": "Native narration-elevenlabs or host adapter must be bound to scoped execution; legacy env keys may remain only as explicit BYOK override.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "wire_contract": "native/provider-specific where selected; audio.speech.create is target semantic operation",
+      "operation_mapping_status": "requires_adapter"
+    },
+    {
+      "id": "supervideo--narration-host--audio-speech-create",
+      "consumer": "supervideo/narration-host",
+      "purpose": "tts",
+      "operation": "audio.speech.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Synthesize actual supervideo/narration-host narration, decode/play audio and use its measured duration in the consumer; preserve explicit voice/model and bind receipt. A cached audio replay must not redispatch. Commands that only import an existing receipt are separate non-model operations.",
+      "source_refs": [
+        "video-tts",
+        "video-tts"
+      ],
+      "integration_kind": "runtime_direct",
+      "source_status": "gap",
+      "gap": "Native narration-host or host adapter must be bound to scoped execution; legacy env keys may remain only as explicit BYOK override.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "wire_contract": "native/provider-specific where selected; audio.speech.create is target semantic operation",
+      "operation_mapping_status": "requires_adapter"
+    },
+    {
+      "id": "supervideo--illustration-assets--images-generations-create",
+      "consumer": "supervideo/illustration-assets",
+      "purpose": "image-generation",
+      "operation": "images.generations.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Generate a storyboard image through scoped host/delegated image invocation and import its verified bytes/provenance into SuperVideo; importing alone is not model execution.",
+      "source_refs": [
+        "video-assets",
+        "skill-supervideo",
+        "image-dispatch"
+      ],
+      "integration_kind": "delegated_or_host",
+      "source_status": "gap",
+      "gap": "Engine imports media but does not implement provider image generation itself.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "gemini.generate"
+      ]
+    },
+    {
+      "id": "supervideo--video-generation-submit--videos-create",
+      "consumer": "supervideo/video-generation-submit",
+      "purpose": "video-generation",
+      "operation": "videos.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Run an actual video-generation task: submit under the original actor/payer/task/model scope; consume playable video, persist task identity, survive restart and preserve unresolved timeout/cancellation outcomes without a fresh submit.",
+      "source_refs": [
+        "catalog",
+        "video-assets",
+        "skill-supervideo",
+        "operations"
+      ],
+      "integration_kind": "missing_consumer",
+      "source_status": "gap",
+      "gap": "Catalog purpose is planned; bundled engine has no executable video-generation submit/status/content consumer.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "supervideo--video-generation-poll--videos-retrieve",
+      "consumer": "supervideo/video-generation-poll",
+      "purpose": "video-generation",
+      "operation": "videos.retrieve",
+      "required": true,
+      "kind": "readback",
+      "fixture": "Run an actual video-generation task: poll under the original actor/payer/task/model scope; consume playable video, persist task identity, survive restart and preserve unresolved timeout/cancellation outcomes without a fresh submit.",
+      "source_refs": [
+        "catalog",
+        "video-assets",
+        "skill-supervideo",
+        "operations"
+      ],
+      "integration_kind": "missing_consumer",
+      "source_status": "gap",
+      "gap": "Catalog purpose is planned; bundled engine has no executable video-generation submit/status/content consumer.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "supervideo--video-generation-result--videos-content",
+      "consumer": "supervideo/video-generation-result",
+      "purpose": "video-generation",
+      "operation": "videos.content",
+      "required": true,
+      "kind": "readback",
+      "fixture": "Run an actual video-generation task: result under the original actor/payer/task/model scope; consume playable video, persist task identity, survive restart and preserve unresolved timeout/cancellation outcomes without a fresh submit.",
+      "source_refs": [
+        "catalog",
+        "video-assets",
+        "skill-supervideo",
+        "operations"
+      ],
+      "integration_kind": "missing_consumer",
+      "source_status": "gap",
+      "gap": "Catalog purpose is planned; bundled engine has no executable video-generation submit/status/content consumer.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "voice-input--short-upload--audio-transcriptions-create",
+      "consumer": "voice-input/short-upload",
+      "purpose": "stt-short",
+      "operation": "audio.transcriptions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Upload a short audio sample through the actual voice-input route; consume exact transcript in input UI and record measured audio usage.",
+      "source_refs": [
+        "short-stt",
+        "stt-client"
+      ],
+      "integration_kind": "server_direct",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "voice-transcription--buffered-dictation--audio-transcriptions-create",
+      "consumer": "voice-transcription/buffered-dictation",
+      "purpose": "stt-realtime",
+      "operation": "audio.transcriptions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Speak across two pause-separated buffered WAV segments through dictation WS; observe interim/final composed transcript, commit order, each segment call/receipt and restart failure recovery.",
+      "source_refs": [
+        "dictation-binding",
+        "dictation-buffer",
+        "dictation-ws"
+      ],
+      "integration_kind": "buffered_audio_upload",
+      "source_status": "gap",
+      "gap": "UI/server WebSocket transports PCM locally; upstream is buffered audio/transcriptions, not bidirectional native realtime.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "transport": "buffered_wav_http"
+    },
+    {
+      "id": "voice-transcription--native-realtime--realtime-connect",
+      "consumer": "voice-transcription/native-realtime",
+      "purpose": "stt-realtime",
+      "operation": "realtime.connect",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "For an explicitly selected native realtime consumer/model, establish a real bidirectional session, receive partial/final transcripts, close/reconnect and certify session usage/receipt; buffered uploads cannot satisfy this row.",
+      "source_refs": [
+        "catalog",
+        "dictation-buffer",
+        "operations"
+      ],
+      "integration_kind": "missing_consumer",
+      "source_status": "gap",
+      "gap": "No native upstream realtime session adapter is present in the dictation consumer.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "activation_condition": "Required if a native realtime model/consumer is selectable; otherwise retain explicit unavailable state and prove admission refusal without claiming buffered transport passes native realtime.",
+      "transport": "native_bidirectional_session"
+    },
+    {
+      "id": "voice-transcription--file--audio-transcriptions-create",
+      "consumer": "voice-transcription/file",
+      "purpose": "stt-file",
+      "operation": "audio.transcriptions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Import a complete audio file in the file-transcription consumer; consume full transcript/timestamps and persist/recover any async job without resubmission.",
+      "source_refs": [
+        "catalog",
+        "stt-client"
+      ],
+      "integration_kind": "missing_consumer",
+      "source_status": "gap",
+      "gap": "Catalog labels stt-file planned; short-upload and buffered dictation do not establish a standalone complete-file product workflow.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "knowledge-library--ocr-submit--ocr-jobs-create",
+      "consumer": "knowledge-library/ocr-submit",
+      "purpose": "ocr",
+      "operation": "ocr.jobs.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Ingest a scanned PDF/image through actual PaddleOCR parser: multipart submit, bounded poll and authenticated resource/JSONL download; use parsed text/layout in indexed passages and search it. submit retains original job/actor/payer scope across restart.",
+      "source_refs": [
+        "knowledge-bindings",
+        "knowledge-ingest",
+        "backend-ocr",
+        "backend-manifest"
+      ],
+      "integration_kind": "embedded_backend",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R4",
+        "R6",
+        "R7",
+        "R8",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "knowledge-library--ocr-poll--ocr-jobs-retrieve",
+      "consumer": "knowledge-library/ocr-poll",
+      "purpose": "ocr",
+      "operation": "ocr.jobs.retrieve",
+      "required": true,
+      "kind": "readback",
+      "fixture": "Ingest a scanned PDF/image through actual PaddleOCR parser: multipart submit, bounded poll and authenticated resource/JSONL download; use parsed text/layout in indexed passages and search it. poll retains original job/actor/payer scope across restart.",
+      "source_refs": [
+        "knowledge-bindings",
+        "knowledge-ingest",
+        "backend-ocr",
+        "backend-manifest"
+      ],
+      "integration_kind": "embedded_backend",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R4",
+        "R6",
+        "R7",
+        "R8",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "knowledge-library--ocr-resources--ocr-resources-retrieve",
+      "consumer": "knowledge-library/ocr-resources",
+      "purpose": "ocr",
+      "operation": "ocr.resources.retrieve",
+      "required": true,
+      "kind": "readback",
+      "fixture": "Ingest a scanned PDF/image through actual PaddleOCR parser: multipart submit, bounded poll and authenticated resource/JSONL download; use parsed text/layout in indexed passages and search it. resources retains original job/actor/payer scope across restart.",
+      "source_refs": [
+        "knowledge-bindings",
+        "knowledge-ingest",
+        "backend-ocr",
+        "backend-manifest"
+      ],
+      "integration_kind": "embedded_backend",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R4",
+        "R6",
+        "R7",
+        "R8",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "knowledge-library--vision--chat-completions-create",
+      "consumer": "knowledge-library/vision",
+      "purpose": "vision",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Ingest an image with a known visual fact, consume VLM description into the knowledge library, then retrieve it through actual search.",
+      "source_refs": [
+        "knowledge-bindings",
+        "knowledge-ingest"
+      ],
+      "integration_kind": "embedded_backend",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R4",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "knowledge-library--embedding-ingest--embeddings-create",
+      "consumer": "knowledge-library/embedding-ingest",
+      "purpose": "embedding",
+      "operation": "embeddings.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Run actual ingest embedding; indexing and query share provider/model/version/dimensions/input semantics embedding_space. Retrieve a known indexed passage, preserve existing index across proven credential-only migration, and refuse unknown semantic-space changes.",
+      "source_refs": [
+        "knowledge-bindings",
+        "knowledge-ingest"
+      ],
+      "integration_kind": "embedded_backend",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R4",
+        "R6",
+        "R7",
+        "R8",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "knowledge-library--embedding-query--embeddings-create",
+      "consumer": "knowledge-library/embedding-query",
+      "purpose": "embedding",
+      "operation": "embeddings.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Run actual query embedding; indexing and query share provider/model/version/dimensions/input semantics embedding_space. Retrieve a known indexed passage, preserve existing index across proven credential-only migration, and refuse unknown semantic-space changes.",
+      "source_refs": [
+        "knowledge-bindings",
+        "knowledge-search"
+      ],
+      "integration_kind": "embedded_backend",
+      "source_status": "present",
+      "gap": null,
+      "requirement_refs": [
+        "R4",
+        "R6",
+        "R7",
+        "R8",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "knowledge-library--rerank--rerank-create",
+      "consumer": "knowledge-library/rerank",
+      "purpose": "rerank",
+      "operation": "rerank.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Search actual indexed documents whose candidate ranking differs after rerank; consume reranked passages, not merely a successful connection probe, and reconcile the published certified rerank usage unit.",
+      "source_refs": [
+        "knowledge-client",
+        "knowledge-search",
+        "knowledge-bindings"
+      ],
+      "integration_kind": "embedded_backend",
+      "source_status": "gap",
+      "gap": "Bindings currently accept only aliyun rerank protocol; gateway/account tariff and actual consumer usage need certification.",
+      "requirement_refs": [
+        "R4",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run"
+    },
+    {
+      "id": "knowledge-library--multimodal-embedding-ingest--multimodal-embeddings-create",
+      "consumer": "knowledge-library/multimodal-embedding-ingest",
+      "purpose": "multimodal-embedding",
+      "operation": "multimodal.embeddings.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Embed an image/text pair for ingest and retrieve its paired indexed material in the same semantic embedding_space; consume actual multimodal vectors, never substitute equal-dimension text vectors.",
+      "source_refs": [
+        "catalog",
+        "knowledge-bindings",
+        "knowledge-import"
+      ],
+      "integration_kind": "missing_consumer",
+      "source_status": "gap",
+      "gap": "Purpose is planned and model-bindings only synchronize embedding/rerank/vision/ocr; no multimodal-index consumer binding exists.",
+      "requirement_refs": [
+        "R4",
+        "R6",
+        "R7",
+        "R8",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "gemini.embed"
+      ]
+    },
+    {
+      "id": "knowledge-library--multimodal-embedding-query--multimodal-embeddings-create",
+      "consumer": "knowledge-library/multimodal-embedding-query",
+      "purpose": "multimodal-embedding",
+      "operation": "multimodal.embeddings.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Embed an image/text pair for query and retrieve its paired indexed material in the same semantic embedding_space; consume actual multimodal vectors, never substitute equal-dimension text vectors.",
+      "source_refs": [
+        "catalog",
+        "knowledge-bindings",
+        "knowledge-import"
+      ],
+      "integration_kind": "missing_consumer",
+      "source_status": "gap",
+      "gap": "Purpose is planned and model-bindings only synchronize embedding/rerank/vision/ocr; no multimodal-index consumer binding exists.",
+      "requirement_refs": [
+        "R4",
+        "R6",
+        "R7",
+        "R8",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "gemini.embed"
+      ]
+    },
+    {
+      "id": "knowledge-library--transcription-audio--audio-transcriptions-create",
+      "consumer": "knowledge-library/transcription-audio",
+      "purpose": "stt-file",
+      "operation": "audio.transcriptions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Ingest a real audio file, transcribe its audio, index actual transcript and retrieve a spoken fact; preserve timestamps/duration and original job scope through restart.",
+      "source_refs": [
+        "knowledge-import",
+        "knowledge-provision",
+        "knowledge-ingest",
+        "backend-asr",
+        "backend-audio",
+        "backend-manifest"
+      ],
+      "integration_kind": "embedded_backend",
+      "source_status": "gap",
+      "gap": "ASR is imported/provisioned separately and is absent from unified knowledge PURPOSES; video extraction/acceptance must be proven against staged binary. Cached backend source is not binary provenance proof.",
+      "requirement_refs": [
+        "R4",
+        "R5",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "chat.completions.create"
+      ]
+    },
+    {
+      "id": "knowledge-library--transcription-video--audio-transcriptions-create",
+      "consumer": "knowledge-library/transcription-video",
+      "purpose": "stt-file",
+      "operation": "audio.transcriptions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Ingest a real video file, transcribe its audio, index actual transcript and retrieve a spoken fact; preserve timestamps/duration and original job scope through restart.",
+      "source_refs": [
+        "knowledge-import",
+        "knowledge-provision",
+        "knowledge-ingest",
+        "backend-asr",
+        "backend-audio",
+        "backend-manifest"
+      ],
+      "integration_kind": "embedded_backend",
+      "source_status": "gap",
+      "gap": "ASR is imported/provisioned separately and is absent from unified knowledge PURPOSES; video extraction/acceptance must be proven against staged binary. Cached backend source is not binary provenance proof.",
+      "requirement_refs": [
+        "R4",
+        "R5",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "alternative_operations": [
+        "chat.completions.create"
+      ]
+    },
+    {
+      "id": "auto-routing--chat-completions-create",
+      "consumer": "auto-routing",
+      "purpose": "routing",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Route a real Auto prompt to an enabled known model and consume that model response. Preserve native Jev questions/answers or implement and certify explicit structured classification adapter. No credentialless/Zen/provider fallback may silently change payer.",
+      "source_refs": [
+        "routing",
+        "jev",
+        "classifier"
+      ],
+      "integration_kind": "native_jev",
+      "source_status": "gap",
+      "gap": "Native Jev POST state/questions/answers contract is not Chat wire-compatible; no native Jev capability operation exists yet.",
+      "requirement_refs": [
+        "R2",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "wire_contract": "POST selected Jev endpoint with state/questions/model; response answers",
+      "operation_mapping_status": "requires_adapter"
+    },
+    {
+      "id": "permission-safety--chat-completions-create",
+      "consumer": "permission-safety",
+      "purpose": "routing",
+      "operation": "chat.completions.create",
+      "required": true,
+      "kind": "model_call",
+      "fixture": "Classify a real permission request; use the returned ask score/kind in the actual hold decision. Preserve native Jev questions/answers or implement and certify explicit structured classification adapter. No credentialless/Zen/provider fallback may silently change payer.",
+      "source_refs": [
+        "routing",
+        "jev",
+        "classifier"
+      ],
+      "integration_kind": "native_jev",
+      "source_status": "gap",
+      "gap": "Native Jev POST state/questions/answers contract is not Chat wire-compatible; no native Jev capability operation exists yet.",
+      "requirement_refs": [
+        "R2",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "wire_contract": "POST selected Jev endpoint with state/questions/model; response answers",
+      "operation_mapping_status": "requires_adapter"
+    },
+    {
+      "id": "yichen-asr--step--audio-transcriptions-create",
+      "consumer": "yichen-asr/step",
+      "purpose": "stt-file",
+      "operation": "audio.transcriptions.create",
+      "required": false,
+      "kind": "model_call",
+      "fixture": "If explicitly integrated/delegated by a builtin, route one local media sample to step, consume transcript/SRT and recover pending submission without cross-provider retry.",
+      "source_refs": [
+        "yichen-asr",
+        "yichen-route",
+        "host-roots"
+      ],
+      "integration_kind": "optional_user_extension",
+      "source_status": "gap",
+      "gap": "Descriptor is discoverable in a supported host root, but no builtin delegation was found and referenced backend executor is absent at its default path.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "activation_condition": "Only becomes required after explicit integration or demonstrated builtin delegation; arbitrary user scripts are not automatically migrated.",
+      "operation_mapping_status": "requires_declared_adapter"
+    },
+    {
+      "id": "yichen-asr--doubao--audio-transcriptions-create",
+      "consumer": "yichen-asr/doubao",
+      "purpose": "stt-file",
+      "operation": "audio.transcriptions.create",
+      "required": false,
+      "kind": "model_call",
+      "fixture": "If explicitly integrated/delegated by a builtin, route one local media sample to doubao, consume transcript/SRT and recover pending submission without cross-provider retry.",
+      "source_refs": [
+        "yichen-asr",
+        "yichen-route",
+        "host-roots"
+      ],
+      "integration_kind": "optional_user_extension",
+      "source_status": "gap",
+      "gap": "Descriptor is discoverable in a supported host root, but no builtin delegation was found and referenced backend executor is absent at its default path.",
+      "requirement_refs": [
+        "R3",
+        "R6",
+        "R7",
+        "R9"
+      ],
+      "gateway": "not_run",
+      "consumer_fixture": "not_run",
+      "actual_account_call": "not_run",
+      "settlement": "not_run",
+      "installed_runtime": "not_run",
+      "activation_condition": "Only becomes required after explicit integration or demonstrated builtin delegation; arbitrary user scripts are not automatically migrated.",
+      "operation_mapping_status": "requires_declared_adapter"
+    }
+  ],
+  "non_model_operations": [
+    {
+      "consumer": "WPSComposer/export",
+      "operation": "office.document.render-export",
+      "source_refs": [
+        "skill-WPSComposer"
+      ],
+      "reason": "WPS/Office native layout, DOCX/PPTX/PDF generation and visual acceptance are local application work; Agent drafting remains in WPSComposer/agent.",
+      "kind": "non_model_operation",
+      "required": false
+    },
+    {
+      "consumer": "obsidian-excalidraw/render",
+      "operation": "diagram.serialize-render",
+      "source_refs": [
+        "skill-obsidian-excalidraw"
+      ],
+      "reason": "Local Excalidraw creation/rendering has no separate model client; Agent reasoning uses inherited provider.",
+      "kind": "non_model_operation",
+      "required": false
+    },
+    {
+      "consumer": "image-to-editable-pptx/offline-build",
+      "operation": "pptx.build-raster-patch",
+      "source_refs": [
+        "skill-image-to-editable-pptx"
+      ],
+      "reason": "Offline build/raster patch uses saved analysis and local geometry, not model execution.",
+      "kind": "non_model_operation",
+      "required": false
+    },
+    {
+      "consumer": "superppt/package",
+      "operation": "pptx.package-export",
+      "source_refs": [
+        "superppt-batch",
+        "skill-superppt"
+      ],
+      "reason": "Image validation/checkpoints/packaging use existing artifacts; paid generation is listed separately.",
+      "kind": "non_model_operation",
+      "required": false
+    },
+    {
+      "consumer": "supervideo/render-mix-import",
+      "operation": "media.render-mix-import",
+      "source_refs": [
+        "video-assets",
+        "video-openmontage",
+        "skill-supervideo"
+      ],
+      "reason": "FFmpeg rendering, mixing, audio duration probing and host artifact/receipt import do not themselves execute models.",
+      "kind": "non_model_operation",
+      "required": false
+    },
+    {
+      "consumer": "voice/local-system",
+      "operation": "local.speech-dictation",
+      "source_refs": [
+        "dictation-binding",
+        "tts-route"
+      ],
+      "reason": "Explicit local dictation/Kokoro/macOS say remains local user choice and never proves cloud provider coverage.",
+      "kind": "non_model_operation",
+      "required": false
+    },
+    {
+      "consumer": "text/summarize-retired",
+      "operation": "local.sanitize-truncate",
+      "source_refs": [
+        "local-summary"
+      ],
+      "reason": "Current summarizer returns local fallback with summarized:false; no live Zen model request is present.",
+      "kind": "non_model_operation",
+      "required": false
+    },
+    {
+      "consumer": "yichen-jianying-edit",
+      "operation": "local.video-draft-edit",
+      "source_refs": [
+        "jianying",
+        "host-roots"
+      ],
+      "reason": "Optional installed user extension; Jianying draft editing/export is local. Optional yichen-asr delegation is not builtin delegation.",
+      "kind": "non_model_operation",
+      "required": false
+    },
+    {
+      "consumer": "model-configuration/resolution",
+      "operation": "configuration.resolve",
+      "source_refs": [
+        "configuration",
+        "resolver",
+        "child-env"
+      ],
+      "reason": "Credential/model resolution and subprocess setup are not model calls; a private broker contract must carry task/model/operation identity without broad credentials.",
+      "kind": "non_model_operation",
+      "required": false
+    },
+    {
+      "consumer": "skills/install-upgrade",
+      "operation": "skills.copy-refresh",
+      "source_refs": [
+        "installer",
+        "reader-upgrade",
+        "install-roots"
+      ],
+      "reason": "Copy/link/byte-baseline migration is local; still a mandatory R8 installation check independent of model acceptance.",
+      "kind": "non_model_operation",
+      "required": false
+    }
+  ],
+  "diagnostic_model_calls": {
+    "source_refs": [
+      "probes"
+    ],
+    "purposes": [
+      "embedding",
+      "vision",
+      "rerank",
+      "tts",
+      "image-generation",
+      "routing"
+    ],
+    "status": "not_run",
+    "limitation": "These probes may call real models, but are not actual product consumer fixtures and cannot close their rows."
+  },
+  "installed_runtime_findings": [
+    {
+      "runtime": "supervideo",
+      "source_refs": [
+        "bundle-engine",
+        "installed-engine",
+        "installed-tts",
+        "reader-upgrade"
+      ],
+      "finding": "Installed lock selects c9c0d0fdd953c29cd540f56fe8f79cb1d959054714d3189cf8a9846b78e98748; bundle lock/installer selects 8506f1cdb3e5cc4cbc4dd8af44e5994fc132b70f84e66dee547438a91b76cb88. Installed engine lacks current configured narration adapter.",
+      "acceptance": "not_run"
+    },
+    {
+      "runtime": "ai-image-to-ppt",
+      "source_refs": [
+        "image-credentials",
+        "installed-image-reader",
+        "image-qa",
+        "installed-image-qa",
+        "reader-upgrade"
+      ],
+      "finding": "Supported host-root copies are present; source and installed model-reader hashes differ. QA is direct Gemini in both. Existing other-host copies are preserved by installer; current migration targets only managed skillDir.",
+      "acceptance": "not_run"
+    },
+    {
+      "runtime": "image-to-editable-pptx",
+      "source_refs": [
+        "skill-image-to-editable-pptx",
+        "editable-api",
+        "editable-qwen-ocr",
+        "editable-wanx",
+        "editable-host",
+        "superppt-deps"
+      ],
+      "finding": "Bundled SKILL.md contains instructions only; installed ~/.agents symlink reaches executable ~/.local/share/image-to-editable-pptx. OpenAI Responses/mask editing, Alibaba native OCR/vision/async editing and local host bridges are real independent transports.",
+      "acceptance": "not_run"
+    },
+    {
+      "runtime": "embedded-knowledge",
+      "source_refs": [
+        "backend-manifest",
+        "backend-asr",
+        "backend-ocr",
+        "knowledge-bindings"
+      ],
+      "finding": "Staged manifest pins f5adb9eac166e7d3da7dceed7aa50049d4c4db1f. Build-cache source is inspectable but is not proof of that binary contents or installed app selection. Unified bindings omit ASR and multimodal embedding.",
+      "acceptance": "not_run"
+    },
+    {
+      "runtime": "optional-user-extensions",
+      "source_refs": [
+        "host-roots",
+        "yichen-asr",
+        "jianying"
+      ],
+      "finding": "Loader discovers ~/.agents and ~/.claude, but no observed active session selected these extensions and no builtin delegation was found. Step/Volc default ASR executor paths are missing. No full-provider completion requirement is added for arbitrary user providers.",
+      "acceptance": "not_run"
+    }
+  ],
+  "remaining_scope_gaps": [
+    "Current managed provider only permits primary streaming Chat; non-primary, alternate protocols and multimodal catalog need implementation.",
+    "Native Jev, Alibaba OCR/async mask edit and native TTS protocols require declared adaptation and certified billing semantics rather than endpoint/key substitution.",
+    "Missing standalone file STT, native realtime, multimodal index and video-generation consumers remain visible required inventory.",
+    "External editable-PPT runtime availability and version must be admitted explicitly; bundled instructions alone do not ship the executable bridge.",
+    "Runtime discovery proves supported search paths and file presence, not selected active session path or installed app execution; every installed_runtime field is not_run.",
+    "Build-cache knowledge sources may differ from staged/installed binary; actual source-to-package/installed provenance must be verified before acceptance.",
+    "No supplier calls, account authorization, usage, settlement, deployment, migration or installed UI acceptance ran."
+  ]
+}

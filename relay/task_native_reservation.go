@@ -24,6 +24,16 @@ func NativeVideoReservation(c *gin.Context, modelName string, price metering.Pri
 	if err != nil {
 		return u, err
 	}
+	resolution := ""
+	if price.Policy == "ali_wan26_t2v_billable_duration_v1" {
+		if len(req.Metadata) != 0 {
+			return u, errors.New("native Wan video does not permit metadata overrides")
+		}
+		resolution, err = NativeVideoResolution(c)
+		if err != nil {
+			return u, err
+		}
+	}
 	// All currently supported native video adapters submit one output. Reject
 	// caller metadata that asks for plural outputs until a tariff defines how
 	// each provider's output array is measured.
@@ -54,10 +64,22 @@ func NativeVideoReservation(c *gin.Context, modelName string, price metering.Pri
 		return u, errors.New("native video requires bounded explicit seconds")
 	}
 	q := metering.Quantity{Value: strconv.Itoa(seconds)}
-	if len(price.Terms) != 1 {
+	if len(price.Terms) != 1 && resolution == "" {
 		return u, errors.New("unsupported video dimensions")
 	}
 	term := price.Terms[0]
+	if resolution != "" {
+		term = metering.Term{}
+		for _, candidate := range price.Terms {
+			if candidate.Key == resolution {
+				term = candidate
+				break
+			}
+		}
+		if term.Key == "" {
+			return u, errors.New("native Wan resolution tariff missing")
+		}
+	}
 	if term.Unit == "provider_unit" {
 		if configured, ok := billing_setting.ResolveModelNativeReservationLimit(modelName, "video"); ok {
 			q = configured
@@ -83,4 +105,19 @@ func NativeVideoReservation(c *gin.Context, modelName string, price metering.Pri
 		return u, err
 	}
 	return u, nil
+}
+
+func NativeVideoResolution(c *gin.Context) (string, error) {
+	req, err := relaycommon.GetTaskRequest(c)
+	if err != nil {
+		return "", err
+	}
+	switch req.Size {
+	case "1280*720":
+		return "video_720p", nil
+	case "1920*1080":
+		return "video_1080p", nil
+	default:
+		return "", errors.New("native Wan video requires an explicit certified resolution")
+	}
 }

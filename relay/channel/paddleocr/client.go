@@ -99,7 +99,7 @@ func (c Client) Submit(ctx context.Context, jobsURL, key string, in Input) (stri
 	var data struct {
 		JobID string `json:"jobId"`
 	}
-	if err = common.Unmarshal(r.Data, &data); err != nil || data.JobID == "" || len(data.JobID) > 256 {
+	if err = common.UnmarshalUnique(r.Data, &data); err != nil || data.JobID == "" || len(data.JobID) > 256 {
 		return "", r, errors.New("invalid PaddleOCR job response")
 	}
 	return data.JobID, r, nil
@@ -115,7 +115,7 @@ func (c Client) Status(ctx context.Context, jobsURL, key, id string) (Status, Re
 	if err != nil {
 		return status, r, err
 	}
-	if err = common.Unmarshal(r.Data, &status); err != nil {
+	if err = common.UnmarshalUnique(r.Data, &status); err != nil {
 		return status, r, errors.New("invalid PaddleOCR status")
 	}
 	status.State = strings.ToLower(status.State)
@@ -144,7 +144,7 @@ func (c Client) do(req *http.Request) (Response, error) {
 		Msg  string          `json:"msg"`
 		Data json.RawMessage `json:"data"`
 	}
-	if err := common.Unmarshal(raw, &envelope); err != nil || envelope.Code == nil || *envelope.Code != 0 || len(envelope.Data) == 0 || string(envelope.Data) == "null" {
+	if err := common.UnmarshalUnique(raw, &envelope); err != nil || envelope.Code == nil || *envelope.Code != 0 || len(envelope.Data) == 0 || string(envelope.Data) == "null" {
 		if envelope.Code != nil {
 			out.Code = *envelope.Code
 		}

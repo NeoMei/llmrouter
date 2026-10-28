@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/capability"
 	"github.com/gin-gonic/gin"
@@ -323,6 +324,11 @@ func ValidateResources(c *gin.Context) error {
 	if err != nil {
 		return err
 	}
+	if v, ok := c.Get("platform_billing"); ok {
+		if s, ok := v.(*platformbilling.Session); ok && s.NativeHistoryBodyPermit(body, false) {
+			return nil
+		}
+	}
 	var value any
 	if err := common.Unmarshal(body, &value); err != nil {
 		return err
@@ -413,6 +419,15 @@ func ValidateOutboundResources(c *gin.Context, request *http.Request) error {
 		return err
 	}
 	defer body.Close()
+	if v, ok := c.Get("platform_billing"); ok {
+		if s, ok := v.(*platformbilling.Session); ok && s.NativeHistoryEnabled() {
+			raw, e := io.ReadAll(io.LimitReader(body, (1<<20)+1))
+			if e != nil || len(raw) > 1<<20 || !s.NativeHistoryBodyPermit(raw, true) {
+				return errors.New("native_history_unavailable")
+			}
+			return nil
+		}
+	}
 	var value any
 	if err := common.DecodeJson(body, &value); err != nil {
 		return err

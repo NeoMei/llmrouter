@@ -21,6 +21,9 @@
     "audio.transcriptions.create",
     "audio.translations.create",
     "audio.speech.create",
+    "bailian.audio.speech.create",
+    "dashscope.audio.transcriptions.create",
+    "elevenlabs.audio.speech.create",
     "images.generations.create",
     "images.edits.create",
     "images.variations.create",
@@ -39,6 +42,9 @@
     "multimodal.embeddings.create",
     "ocr.jobs.create",
     "ocr.jobs.retrieve",
-    "ocr.resources.retrieve"
+    "ocr.resources.retrieve",
+    "dashscope.ocr.recognitions.create",
+    "gemini.images.generate",
+    "dashscope.images.generate"
   ]
 }

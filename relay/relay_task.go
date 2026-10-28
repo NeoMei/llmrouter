@@ -164,6 +164,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if platform == "" {
 		platform = GetTaskPlatform(c)
 	}
+	if platform == "" && info.ChannelType > 0 {
+		platform = constant.TaskPlatform(strconv.Itoa(info.ChannelType))
+	}
 	adaptor := GetTaskAdaptor(platform)
 	if adaptor == nil {
 		return nil, service.TaskErrorWrapperLocal(fmt.Errorf("invalid api platform: %s", platform), "invalid_api_platform", http.StatusBadRequest)
@@ -189,6 +192,13 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// 3. 预生成公开 task ID（仅首次）
 	if info.PublicTaskID == "" {
 		info.PublicTaskID = model.GenerateTaskID()
+	}
+	if info.PlatformMode && info.NativeBilling != nil && info.NativeBilling.Price.Policy == "ali_wan26_t2v_billable_duration_v1" {
+		resolution, resolutionErr := NativeVideoResolution(c)
+		if resolutionErr != nil {
+			return nil, service.TaskErrorWrapperLocal(resolutionErr, "invalid_native_video_resolution", http.StatusBadRequest)
+		}
+		info.NativeBilling.VideoResolution = resolution
 	}
 
 	// Native funding is admitted once, independently of legacy per-call prices.
@@ -247,6 +257,11 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 
 	}
 	// 8. 构建请求体
+	if info.PlatformBilling != nil && info.PlatformBilling.WireOperation().ID == "videos.create" {
+		if err := info.PlatformBilling.ValidateVideoTarget(info.ChannelId, info.ChannelType, info.UpstreamModelName, info.ApiKey, info.ChannelBaseUrl); err != nil {
+			return nil, service.TaskErrorWrapperLocal(err, "video_target_mismatch", http.StatusConflict)
+		}
+	}
 	requestBody, err := adaptor.BuildRequestBody(c, info)
 	if err != nil {
 		return nil, service.TaskErrorWrapper(err, "build_request_failed", http.StatusInternalServerError)

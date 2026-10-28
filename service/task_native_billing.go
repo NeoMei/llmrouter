@@ -28,7 +28,7 @@ func prepareNativeTaskIntent(task *model.Task, body []byte) error {
 	if bc == nil || bc.NativePrice == nil {
 		return errors.New("native task contract missing")
 	}
-	u := taskcommon.VideoNativeUsage(*bc.NativePrice, body, task.GetUpstreamTaskID())
+	u := taskcommon.VideoNativeUsage(*bc.NativePrice, body, task.GetUpstreamTaskID(), bc.VideoResolution)
 	if task.Status != model.TaskStatusSuccess {
 		u.State = "incomplete"
 		u.Measurements = nil
@@ -43,6 +43,14 @@ func prepareNativeTaskIntent(task *model.Task, body []byte) error {
 	task.NativeEvidence = string(raw)
 	task.NativePending = true
 	return nil
+}
+
+func PrepareNativeTaskEvidence(task *model.Task, body []byte) error {
+	return prepareNativeTaskIntent(task, body)
+}
+
+func SettleNativeTask(ctx context.Context, task *model.Task) error {
+	return settleNativeTask(ctx, task)
 }
 func settleNativeTask(ctx context.Context, task *model.Task) error {
 	if err := model.DB.WithContext(ctx).First(task, task.ID).Error; err != nil {

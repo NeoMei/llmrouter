@@ -120,6 +120,47 @@ func TestRelayMediaImmutableGrantAndRestart(t *testing.T) {
 	require.NoError(t, s.db.Model(&model.RelayMediaResource{}).Count(&n).Error)
 	assert.Zero(t, n)
 }
+
+func TestRelayMediaPreparesIdempotentOwnedPlatformArtifact(t *testing.T) {
+	s, data := fixtureService(t)
+	facts, err := InspectMP4(data)
+	require.NoError(t, err)
+	var fetches atomic.Int32
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetches.Add(1)
+		_, _ = w.Write(data)
+	}))
+	defer origin.Close()
+	requestID := uuid.NewSHA1(uuid.NameSpaceURL, []byte("platform-video:wan-call")).String()
+	input := PrepareInput{
+		UserID: 7, TokenID: 7, RequestID: requestID, SourceURL: origin.URL + "/video.mp4",
+	}
+	first, err := s.PrepareMP4WithResolution(context.Background(), input, facts.Width, facts.Height)
+	require.NoError(t, err)
+	assert.NotEmpty(t, first.ID)
+	assert.Equal(t, int64(len(data)), first.Size)
+	assert.Len(t, first.SHA256, 64)
+	assert.Equal(t, "video/mp4", first.ContentType)
+
+	second, err := s.PrepareMP4WithResolution(context.Background(), input, facts.Width, facts.Height)
+	require.NoError(t, err)
+	assert.Equal(t, first.ID, second.ID)
+	assert.Equal(t, first.SHA256, second.SHA256)
+	assert.EqualValues(t, 1, fetches.Load())
+
+	owned, err := s.ReadOwned(context.Background(), first.ID, 7, 7)
+	require.NoError(t, err)
+	assert.Equal(t, data, owned)
+	_, err = s.ReadOwned(context.Background(), first.ID, 8, 7)
+	require.Error(t, err)
+
+	input.RequestID = uuid.NewSHA1(uuid.NameSpaceURL, []byte("platform-video:wrong-resolution")).String()
+	_, err = s.PrepareMP4WithResolution(context.Background(), input, facts.Height, facts.Width)
+	require.Error(t, err)
+	var rows int64
+	require.NoError(t, s.db.Model(&model.RelayMediaResource{}).Where("request_id = ?", input.RequestID).Count(&rows).Error)
+	assert.Zero(t, rows)
+}
 func TestRelayMediaFetchBoundaries(t *testing.T) {
 	s, data := fixtureService(t)
 	for _, kind := range []string{"invalid", "oversized-header", "oversized-chunked", "oversized-gzip", "redirect-credentials", "redirect-scheme", "canceled", "private-denied"} {

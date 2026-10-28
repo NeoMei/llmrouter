@@ -27,6 +27,7 @@ export interface ManagedKey {
   origin_product_id: string
   instance_id: string
   models: string[]
+  operations?: Record<string, string[]>
   funding_mode: FundingMode
   asset: BillingAsset
   created_at: string
@@ -41,6 +42,7 @@ export interface ManagedKey {
 export interface KeyRequest {
   name: string
   models: string[]
+  operations?: Record<string, string[]>
   funding_mode: FundingMode
   expires_at?: string
   max_total: string

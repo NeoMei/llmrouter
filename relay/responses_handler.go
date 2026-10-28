@@ -26,6 +26,11 @@ import (
 )
 
 func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
+	if info.PlatformMode && info.PlatformBilling != nil {
+		if _, metered := info.PlatformBilling.MeteredPrice(); metered {
+			return platformGeneration(c, info)
+		}
+	}
 	toolpolicy.Clear(c)
 	if err := helper.ValidateUniqueResponsesBody(c); err != nil {
 		return types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
@@ -359,6 +364,11 @@ func PrepareResponsesContinuityForAttempt(c *gin.Context, info *relaycommon.Rela
 	}
 	if err := helper.ValidateUniqueResponsesBody(c); err != nil {
 		return types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+	// Managed native create/compact owns a separate immutable reference index.
+	// Its canonical supplier bytes never enter local TokenID replay or normalization.
+	if info.PlatformMode && info.PlatformBilling != nil {
+		return nil
 	}
 	if !responsesstate.Enabled() {
 		return nil

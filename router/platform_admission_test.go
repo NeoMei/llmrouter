@@ -57,7 +57,7 @@ func TestPlatformAdmissionRejectsWithoutNativeSideEffects(t *testing.T) {
 						w.WriteHeader(403)
 						return
 					}
-					grant := platformbilling.Claims{ID: "grant", Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: "product", Models: []string{"platform-test"}, TaskID: "task", ExpiresAt: time.Now().Add(time.Hour)}
+					grant := platformbilling.Claims{Operations: map[string][]string{"platform-test": {"chat.completions.create"}}, ID: "grant", Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: "product", Models: []string{"platform-test"}, TaskID: "task", ExpiresAt: time.Now().Add(time.Hour)}
 					switch tc.name {
 					case "wrong_audience":
 						grant.Audience = "other"
@@ -85,7 +85,7 @@ func TestPlatformAdmissionRejectsWithoutNativeSideEffects(t *testing.T) {
 				case "/internal/v1/calls/reserve":
 					var body map[string]string
 					require.NoError(t, common.DecodeJson(r.Body, &body))
-					remote := platformbilling.RemoteCall{CallID: body["call_id"], Status: "RESERVED", ActorID: "actor", AccountID: "account", OriginProductID: "product", RequestDigest: body["request_digest"], Rate: rate}
+					remote := platformbilling.RemoteCall{WireOperation: body["wire_operation"], CallID: body["call_id"], Status: "RESERVED", ActorID: "actor", AccountID: "account", OriginProductID: "product", RequestDigest: body["request_digest"], Rate: rate}
 					if tc.name == "wrong_reserved_account" {
 						remote.AccountID = "attacker"
 					}

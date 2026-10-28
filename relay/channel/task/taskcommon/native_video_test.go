@@ -30,7 +30,7 @@ func TestVideoNativeFinalEvidence(t *testing.T) {
 				key = "provider"
 			}
 			p := metering.Price{Version: "metered_v2", Operation: "video", Policy: tc.policy, Terms: []metering.Term{{Key: key, Unit: tc.unit, ProviderUnit: tc.namespace, Price: metering.Rational{Numerator: "1", Denominator: "1"}}}}
-			u := VideoNativeUsage(p, []byte(tc.body), "task-1")
+			u := VideoNativeUsage(p, []byte(tc.body), "task-1", "")
 			assert.Equal(t, tc.state, u.State)
 			if tc.state == "confirmed" {
 				require.NoError(t, metering.ValidateUsage(p, u))
@@ -41,9 +41,45 @@ func TestVideoNativeFinalEvidence(t *testing.T) {
 	}
 }
 
+func TestWan26NativeEvidenceRequiresSelectedResolutionAndCompleteReceipt(t *testing.T) {
+	p := metering.Price{Version: "metered_v2", Operation: "video", Policy: "ali_wan26_t2v_billable_duration_v1", Terms: []metering.Term{
+		{Key: "video_720p", Unit: "video_second", Price: metering.Rational{Numerator: "1", Denominator: "1"}},
+		{Key: "video_1080p", Unit: "video_second", Price: metering.Rational{Numerator: "2", Denominator: "1"}},
+	}}
+	complete := `{"output":{"task_status":"SUCCEEDED","video_url":"https://media.example/video.mp4"},"usage":{"duration":5,"video_count":1}}`
+	u := VideoNativeUsage(p, []byte(complete), "task-1", "video_720p")
+	assert.Equal(t, "confirmed", u.State)
+	require.NoError(t, metering.ValidateUsage(p, u))
+	require.Len(t, u.Measurements, 1)
+	assert.Equal(t, metering.Quantity{Value: "5"}, u.Measurements[0].Quantity)
+
+	for name, body := range map[string]string{
+		"missing_count":      `{"output":{"task_status":"SUCCEEDED","video_url":"https://media.example/video.mp4"},"usage":{"duration":5}}`,
+		"plural_count":       `{"output":{"task_status":"SUCCEEDED","video_url":"https://media.example/video.mp4"},"usage":{"duration":5,"video_count":2}}`,
+		"string_count":       `{"output":{"task_status":"SUCCEEDED","video_url":"https://media.example/video.mp4"},"usage":{"duration":5,"video_count":"1"}}`,
+		"canceled_not_empty": `{"output":{"task_status":"CANCELED"},"usage":{"video_count":1}}`,
+		"missing_resolution": complete,
+		"unknown_resolution": complete,
+		"conflicting_output": `{"output":{"task_status":"SUCCEEDED","video_url":"one","results":[{},{"url":"two"}]},"usage":{"duration":5,"video_count":1}}`,
+	} {
+		resolution := "video_720p"
+		if name == "missing_resolution" {
+			resolution = ""
+		}
+		if name == "unknown_resolution" {
+			resolution = "video_480p"
+		}
+		assert.NotEqual(t, "confirmed", VideoNativeUsage(p, []byte(body), "task-1", resolution).State, name)
+	}
+	cancelBody := `{"output":{"task_status":"CANCELED","results":[]},"usage":{"video_count":0}}`
+	canceled := VideoNativeUsage(p, []byte(cancelBody), "task-1", "video_720p")
+	assert.Equal(t, "incomplete", canceled.State)
+	assert.Equal(t, "provider_confirmed_no_output", canceled.Source)
+}
+
 func TestVideoNativeNoOutputRequiresExplicitEmptyCollection(t *testing.T) {
 	p := metering.Price{Policy: "sora_completed_seconds_v1"}
-	assert.NotEqual(t, "provider_confirmed_no_output", VideoNativeUsage(p, []byte(`{"status":"failed"}`), "id").Source)
-	assert.Equal(t, "provider_confirmed_no_output", VideoNativeUsage(p, []byte(`{"status":"failed","videos":[]}`), "id").Source)
-	assert.NotEqual(t, "provider_confirmed_no_output", VideoNativeUsage(p, []byte(`{"status":"failed","videos":[{"id":"output"}]}`), "id").Source)
+	assert.NotEqual(t, "provider_confirmed_no_output", VideoNativeUsage(p, []byte(`{"status":"failed"}`), "id", "").Source)
+	assert.Equal(t, "provider_confirmed_no_output", VideoNativeUsage(p, []byte(`{"status":"failed","videos":[]}`), "id", "").Source)
+	assert.NotEqual(t, "provider_confirmed_no_output", VideoNativeUsage(p, []byte(`{"status":"failed","videos":[{"id":"output"}]}`), "id", "").Source)
 }

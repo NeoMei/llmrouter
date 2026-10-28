@@ -1,6 +1,9 @@
 package ali
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -169,4 +172,27 @@ func TestConvertToAliRequestWan25I2VKeepsLegacyImgURL(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(body), `"img_url"`)
 	require.NotContains(t, string(body), `"media"`)
+}
+
+func TestAliWan26CancelUsesOfficialPendingOnlyEndpoint(t *testing.T) {
+	var requests []*http.Request
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"output":{"task_id":"provider-1","task_status":"CANCELED"},"request_id":"req-1"}`))
+	}))
+	defer server.Close()
+
+	adaptor := &TaskAdaptor{}
+	resp, err := adaptor.CancelTask(server.URL, "channel-key", "provider-1", "")
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	require.Contains(t, string(body), "CANCELED")
+	require.Len(t, requests, 1)
+	require.Equal(t, http.MethodPost, requests[0].Method)
+	require.Equal(t, "/api/v1/tasks/provider-1/cancel", requests[0].URL.Path)
+	require.Equal(t, "Bearer channel-key", requests[0].Header.Get("Authorization"))
 }

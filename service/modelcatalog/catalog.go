@@ -31,6 +31,7 @@ const (
 	WireResponses           WireProtocol = "responses"
 	WireOpenAIChat          WireProtocol = "openai_chat"
 	WireAnthropic           WireProtocol = "anthropic"
+	WireGemini              WireProtocol = "gemini"
 )
 
 // ClientModel is the immutable public identity exposed to a client.
@@ -609,7 +610,7 @@ func decodeWires(raw string) ([]WireProtocol, error) {
 	for _, value := range values {
 		wire := WireProtocol(strings.ToLower(strings.TrimSpace(value)))
 		switch wire {
-		case WireResponses, WireOpenAIChat, WireAnthropic, WirePaddleOCR, WireMultimodalEmbedding:
+		case WireResponses, WireOpenAIChat, WireAnthropic, WireGemini, WirePaddleOCR, WireMultimodalEmbedding:
 		default:
 			return nil, fmt.Errorf("unknown wire protocol %q", value)
 		}

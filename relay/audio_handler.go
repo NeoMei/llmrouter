@@ -47,6 +47,11 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
 
+	if info.PlatformMode {
+		if info.PlatformBilling == nil || info.PlatformBilling.ValidateAudioTarget(info.ChannelId, info.ChannelType, request.Model, info.ApiKey, info.ChannelBaseUrl) != nil {
+			return types.NewError(errors.New("certified audio target unavailable"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+	}
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())

@@ -37,7 +37,7 @@ type fundingHub struct {
 
 func fundingFixture(t *testing.T, asset, mode string, version int) (*Adapter, *gorm.DB, *fundingHub) {
 	t.Helper()
-	hub := &fundingHub{grant: map[string]any{"id": "cred", "audience": "llmrouter", "actor_id": "actor", "account_id": "account", "origin_product_id": "product", "models": []string{"test"}, "task_id": "task", "expires_at": time.Now().Add(time.Hour), "asset": asset, "funding_mode": mode, "billing_profile_version": version}, reserved: make(map[string]map[string]string)}
+	hub := &fundingHub{grant: map[string]any{"id": "cred", "audience": "llmrouter", "actor_id": "actor", "account_id": "account", "origin_product_id": "product", "models": []string{"test"}, "operations": map[string][]string{"test": {"chat.completions.create"}}, "task_id": "task", "expires_at": time.Now().Add(time.Hour), "asset": asset, "funding_mode": mode, "billing_profile_version": version}, reserved: make(map[string]map[string]string)}
 	for _, pair := range []struct{ id, asset string }{{"credit-rate", ""}, {"cash-rate", "CNY/6"}} {
 		hub.rates = append(hub.rates, map[string]any{"id": pair.id, "asset": pair.asset, "model": "test", "status": "published", "semantics": "exclusive_v1", "input": Rational{"1", "1"}, "output": Rational{"2", "1"}, "cache_read": Rational{"1", "1"}, "cache_write": Rational{"1", "1"}, "reasoning": Rational{"2", "1"}})
 	}
@@ -102,7 +102,7 @@ func fundingFixture(t *testing.T, asset, mode string, version int) (*Adapter, *g
 			if hub.responseVersion != nil {
 				remoteVersion = *hub.responseVersion
 			}
-			v = map[string]any{"call_id": id, "status": status, "actor_id": "actor", "account_id": "account", "origin_product_id": "product", "request_digest": request["request_digest"], "rate": map[string]any{"id": request["rate_id"], "model": "test", "asset": rateAsset}, "charge_asset": asset, "funding_mode": mode, "funding_product_id": funder, "billing_profile_version": remoteVersion, "charged": "20"}
+			v = map[string]any{"call_id": id, "status": status, "actor_id": "actor", "account_id": "account", "origin_product_id": "product", "request_digest": request["request_digest"], "wire_operation": request["wire_operation"], "rate": map[string]any{"id": request["rate_id"], "model": "test", "asset": rateAsset}, "charge_asset": asset, "funding_mode": mode, "funding_product_id": funder, "billing_profile_version": remoteVersion, "charged": "20"}
 		}
 		b, err := common.Marshal(v)
 		assert.NoError(t, err)
@@ -128,7 +128,7 @@ func TestAdmissionSelectsVerifiedFundingAsset(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, db, hub := fundingFixture(t, tc.asset, tc.mode, tc.version)
-			_, err := a.Admit(context.Background(), "uh_model_token", "task", "call", []byte(`{"model":"test","max_tokens":50}`))
+			_, err := a.Admit(context.Background(), "uh_model_token", "task", "call", []byte(`{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`))
 			require.NoError(t, err)
 			hub.mu.Lock()
 			assert.Equal(t, tc.rate, hub.reserved["call"]["rate_id"])
@@ -158,7 +158,7 @@ func TestAdmissionRejectsMalformedVerifiedFunding(t *testing.T) {
 			hub.mu.Lock()
 			hub.rates = hub.rates[:1]
 			hub.mu.Unlock()
-			_, err := a.Admit(context.Background(), "uh_model_token", "task", "call", []byte(`{"model":"test","max_tokens":50}`))
+			_, err := a.Admit(context.Background(), "uh_model_token", "task", "call", []byte(`{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`))
 			assert.ErrorIs(t, err, ErrInvalid)
 			hub.mu.Lock()
 			assert.Zero(t, hub.reserveCount)
@@ -170,11 +170,11 @@ func TestAdmissionRejectsMalformedVerifiedFunding(t *testing.T) {
 func TestLegacyRatePinOnlyAppliesToCredits(t *testing.T) {
 	a, _, _ := fundingFixture(t, "CNY/6", "prepaid_cash", 1)
 	a.config.RateIDs = map[string]string{"test": "credit-rate"}
-	_, err := a.Admit(context.Background(), "uh_model_token", "task", "call", []byte(`{"model":"test","max_tokens":50}`))
+	_, err := a.Admit(context.Background(), "uh_model_token", "task", "call", []byte(`{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`))
 	require.NoError(t, err)
 }
 
-func TestAssetRatePinDisambiguatesOnlyItsFundingAsset(t *testing.T) {
+func TestAssetRatePinCannotBypassCentralTupleAmbiguity(t *testing.T) {
 	a, _, hub := fundingFixture(t, "CNY/6", "prepaid_cash", 1)
 	hub.mu.Lock()
 	other := make(map[string]any)
@@ -189,10 +189,10 @@ func TestAssetRatePinDisambiguatesOnlyItsFundingAsset(t *testing.T) {
 	require.NoError(t, err)
 	c.Origin, c.ServiceToken, c.Group = a.config.Origin, a.config.ServiceToken, a.config.Group
 	a.config = c
-	_, err = a.Admit(context.Background(), "uh_model_token", "task", "call", []byte(`{"model":"test","max_tokens":50}`))
-	require.NoError(t, err)
+	_, err = a.Admit(context.Background(), "uh_model_token", "task", "call", []byte(`{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`))
+	require.ErrorIs(t, err, ErrInvalid)
 	hub.mu.Lock()
-	assert.Equal(t, "cash-rate", hub.reserved["call"]["rate_id"])
+	assert.Zero(t, hub.reserveCount)
 	hub.mu.Unlock()
 }
 
@@ -201,19 +201,24 @@ func TestLegacyCallDigestAndOldRowsRemainCompatible(t *testing.T) {
 	fail := false
 	a, db := fixture(t, &fail)
 	ctx := context.Background()
-	body := []byte(`{"model":"test","max_tokens":50}`)
+	body := []byte(`{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`)
 	_, err := a.Admit(ctx, "uh_model_token", "task", "call", body)
 	require.NoError(t, err)
 	var row Call
 	require.NoError(t, db.First(&row).Error)
-	sum := sha256.Sum256(append([]byte("task\x00"), body...))
-	assert.Equal(t, hex.EncodeToString(sum[:]), row.Digest)
-	require.NoError(t, db.Model(&Call{}).Where("call_id = ?", "call").Updates(map[string]any{"asset": "", "funding_mode": "", "funding_product_id": "", "updated_at": time.Now().Add(-2 * time.Minute)}).Error)
-	_, err = a.Admit(ctx, "uh_model_token", "task", "call", body)
-	assert.ErrorIs(t, err, ErrDuplicate)
+
+	require.NoError(t, db.Model(&Call{}).Where("call_id = ?", "call").Update("updated_at", time.Now().Add(-2*time.Minute)).Error)
 	require.NoError(t, a.Recover(ctx))
 	require.NoError(t, db.First(&row).Error)
 	assert.Equal(t, "RELEASED", row.Status)
+	// Simulate the exact pre-v3 persisted contract after the original call has
+	// completed. Upgrading credentials must not reinterpret its old digest.
+	sum := sha256.Sum256(append([]byte("task\x00"), body...))
+	require.NoError(t, db.Model(&Call{}).Where("call_id = ?", "call").Updates(map[string]any{"digest": hex.EncodeToString(sum[:]), "digest_version": "", "wire_operation": "", "asset": "", "funding_mode": "", "funding_product_id": ""}).Error)
+	_, err = a.Admit(ctx, "uh_model_token", "task", "call", body)
+	assert.ErrorIs(t, err, ErrDuplicate)
+	require.NoError(t, db.First(&row).Error)
+	assert.Equal(t, hex.EncodeToString(sum[:]), row.Digest)
 	receipt, err := a.Receipt(ctx, "uh_model_reissued", "task", "call")
 	require.NoError(t, err)
 	data, err := common.Marshal(receipt)
@@ -230,7 +235,7 @@ func TestRequestDigestBindsAssetAndProfileSnapshot(t *testing.T) {
 		version     int
 	}{{"", "", 0}, {"CNY/6", "prepaid_cash", 1}, {"CNY/6", "prepaid_cash", 2}, {"CREDIT/6", "credits", 1}} {
 		a, _, _ := fundingFixture(t, tc.asset, tc.mode, tc.version)
-		s, err := a.Admit(context.Background(), "uh_model_token", "task", "call", []byte(`{"model":"test","max_tokens":50}`))
+		s, err := a.Admit(context.Background(), "uh_model_token", "task", "call", []byte(`{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`))
 		require.NoError(t, err)
 		assert.False(t, seen[s.call.Digest], "funding snapshots must have different idempotency digests")
 		seen[s.call.Digest] = true
@@ -266,7 +271,7 @@ func TestCashLostReserveResponseReleasesWithoutRedispatch(t *testing.T) {
 	hub.failReserve = true
 	hub.mu.Unlock()
 	ctx := context.Background()
-	body := []byte(`{"model":"test","max_tokens":50}`)
+	body := []byte(`{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`)
 	_, err := a.Admit(ctx, "uh_model_token", "task", "call", body)
 	require.Error(t, err)
 	_, err = a.Admit(ctx, "uh_model_token", "task", "call", body)
@@ -288,7 +293,7 @@ func TestCashLostReserveResponseReleasesWithoutRedispatch(t *testing.T) {
 func TestFundingSnapshotPreventsCallIDReinterpretation(t *testing.T) {
 	a, _, hub := fundingFixture(t, "CNY/6", "prepaid_cash", 1)
 	ctx := context.Background()
-	body := []byte(`{"model":"test","max_tokens":50}`)
+	body := []byte(`{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`)
 	_, err := a.Admit(ctx, "uh_model_token", "task", "call", body)
 	require.NoError(t, err)
 	hub.mu.Lock()
@@ -322,7 +327,7 @@ func TestCashReservationRecoveryRejectsChangedFunding(t *testing.T) {
 			}
 			hub.mu.Unlock()
 			ctx := context.Background()
-			_, err := a.Admit(ctx, "uh_model_token", "task", "call", []byte(`{"model":"test","max_tokens":50}`))
+			_, err := a.Admit(ctx, "uh_model_token", "task", "call", []byte(`{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`))
 			assert.ErrorIs(t, err, ErrPending)
 			require.NoError(t, a.Recover(ctx))
 			var row Call
@@ -347,7 +352,7 @@ func TestCashReservationRecoveryRejectsChangedFunding(t *testing.T) {
 func TestCashSettlementReceiptKeepsOriginalAssetAfterProfileChange(t *testing.T) {
 	a, db, hub := fundingFixture(t, "CNY/6", "prepaid_cash", 3)
 	ctx := context.Background()
-	s, err := a.Admit(ctx, "uh_model_token", "task", "call", []byte(`{"model":"test","max_tokens":50}`))
+	s, err := a.Admit(ctx, "uh_model_token", "task", "call", []byte(`{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`))
 	require.NoError(t, err)
 	require.NoError(t, s.Dispatch(ctx, 1))
 	s.observe(&dto.Usage{PromptTokens: 10, CompletionTokens: 5})

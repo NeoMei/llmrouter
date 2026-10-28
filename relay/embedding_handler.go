@@ -32,6 +32,9 @@ func EmbeddingHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	}
 
 	space := info.ModelCapabilities.EmbeddingSpace
+	if info.PlatformMode && space == nil {
+		return types.NewError(fmt.Errorf("certified embedding space required"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
 	if space != nil {
 		if request.Dimensions != nil && *request.Dimensions != space.Dimensions {
 			return types.NewErrorWithStatusCode(fmt.Errorf("dimensions differ from fixed embedding_space"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
@@ -124,6 +127,15 @@ func EmbeddingHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		httpResp.Body.Close()
 		if readErr != nil || len(raw) > maxContractEmbeddingResponseBytes {
 			return types.NewErrorWithStatusCode(fmt.Errorf("embedding response unreadable or exceeds size limit"), types.ErrorCodeBadResponseBody, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+		}
+		if info.PlatformMode {
+			count, e := request.InputCount()
+			if e != nil {
+				return types.NewError(e, types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
+			}
+			if _, e = normalizeEmbeddingResponse(raw, *space, count); e != nil {
+				return types.NewError(e, types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
+			}
 		}
 		httpResp.Body = io.NopCloser(bytes.NewReader(raw))
 		gate = &embeddingResponseGate{ResponseWriter: c.Writer, header: c.Writer.Header().Clone(), status: http.StatusOK}

@@ -665,7 +665,10 @@ func (s *OCRBillingStore) ClaimSubmission(ctx context.Context, id string, select
 	})
 	return claim, err
 }
-func (s *OCRBillingStore) RecordSubmission(ctx context.Context, c OCRClaim, providerID string, uncertain bool) error {
+func (s *OCRBillingStore) RecordSubmission(ctx context.Context, c OCRClaim, providerID string, uncertain bool, bind ...func(*gorm.DB) error) error {
+	if len(bind) > 1 || (uncertain && len(bind) > 0) {
+		return ErrOCRConflict
+	}
 	if len(providerID) > 256 || (!uncertain && providerID == "") {
 		return ErrOCRConflict
 	}
@@ -694,6 +697,11 @@ func (s *OCRBillingStore) RecordSubmission(ctx context.Context, c OCRClaim, prov
 		}
 		if err := ocrUpdateAttempt(j, j.SubmissionState, 0); err != nil {
 			return err
+		}
+		if len(bind) == 1 {
+			if err := bind[0](tx); err != nil {
+				return err
+			}
 		}
 		return ocrSaveJob(tx, j)
 	})

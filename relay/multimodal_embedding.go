@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/QuantumNous/new-api/pkg/metering"
 	"io"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -161,6 +163,14 @@ func MultimodalEmbeddingHelper(c *gin.Context, info *relaycommon.RelayInfo) *typ
 	accountpool.DeferAllStatusNativeOutcome(c)
 	info.UpstreamRequestBodySize = int64(len(raw))
 	info.UpstreamRequestGetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(raw)), nil }
+	if info.PlatformMode {
+		if info.PlatformBilling == nil || info.NativeBilling == nil {
+			return invalidMultimodalResponse()
+		}
+		if err := info.PlatformBilling.Dispatch(c.Request.Context(), info.ChannelId); err != nil {
+			return invalidMultimodalResponse()
+		}
+	}
 	response, err := adaptor.DoRequest(c, info, bytes.NewReader(raw))
 	if err != nil {
 		return types.NewErrorWithStatusCode(fmt.Errorf("multimodal upstream transport failed"), types.ErrorCodeDoRequestFailed, http.StatusBadGateway)
@@ -194,6 +204,16 @@ func MultimodalEmbeddingHelper(c *gin.Context, info *relaycommon.RelayInfo) *typ
 	}
 	if accountpool.CompleteNativeOutcome(c, nil) != nil {
 		return invalidMultimodalResponse()
+	}
+	if info.PlatformMode {
+		textCap, visualCap := info.PlatformBilling.ReservationBounds()
+		if int64(usage.PromptTokensDetails.TextTokens) > textCap || int64(usage.PromptTokensDetails.ImageTokens) > visualCap {
+			return invalidMultimodalResponse()
+		}
+		actual := metering.Usage{Version: "metered_v2", Operation: "multimodal_embedding", State: "confirmed", Source: "ali_multimodal_actual_v1", Measurements: []metering.Measurement{{Key: "text", Unit: "token", Quantity: metering.Quantity{Value: strconv.Itoa(usage.PromptTokensDetails.TextTokens)}}, {Key: "visual", Unit: "token", Quantity: metering.Quantity{Value: strconv.Itoa(usage.PromptTokensDetails.ImageTokens)}}}}
+		if err := service.RecordNativeUsageForRelay(c.Request.Context(), info, actual); err != nil {
+			return invalidMultimodalResponse()
+		}
 	}
 	info.ActualUsageValidated = true
 	c.Header("Content-Type", "application/json")

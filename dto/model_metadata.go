@@ -4,6 +4,8 @@ package dto
 // fields preserve the legacy relay behavior; explicit false remains meaningful.
 // This package owns the transport types so relay/common need not import model.
 type ModelCapabilities struct {
+	StrictSchema     *bool           `json:"strict_schema,omitempty"`
+	MaxOutputTokens  *int            `json:"max_output_tokens,omitempty"`
 	InputModalities  []string        `json:"input_modalities,omitempty"`
 	OutputModalities []string        `json:"output_modalities,omitempty"`
 	Operations       []string        `json:"operations,omitempty"`

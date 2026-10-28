@@ -28,3 +28,29 @@ func TestNativeSTTPreservesBoundedServerDuration(t *testing.T) {
 		})
 	}
 }
+
+func TestManagedSpeechRejectsWrongAudioBeforeDelivery(t *testing.T) {
+	c, w, resp, info := newImageTestContext(t, "not audio", "audio/mpeg", false)
+	info.PlatformMode = true
+	text := "hello"
+	info.NativeSpeechText = &text
+	OpenaiTTSHandler(c, resp, info)
+	assert.Equal(t, 502, w.Code)
+	assert.Nil(t, info.NativeSpeechText)
+	assert.NotContains(t, w.Body.String(), "not audio")
+}
+func TestManagedTranscriptionRejectsEmptyTranscript(t *testing.T) {
+	c, _, resp, info := newImageTestContext(t, `{"text":""}`, "application/json", false)
+	info.PlatformMode = true
+	e, _ := OpenaiSTTHandler(c, resp, info, "json")
+	require.NotNil(t, e)
+}
+
+func TestManagedTranscriptionRejectsWrongMIMEAndErrorEnvelope(t *testing.T) {
+	for _, tc := range []struct{ body, mime, format string }{{`{"text":"hello"}`, "text/html", "json"}, {`{"error":"failed","text":"hello"}`, "application/json", "json"}, {`{"error":"failed"}`, "application/json", "text"}} {
+		c, _, resp, info := newImageTestContext(t, tc.body, tc.mime, false)
+		info.PlatformMode = true
+		e, _ := OpenaiSTTHandler(c, resp, info, tc.format)
+		require.NotNil(t, e)
+	}
+}

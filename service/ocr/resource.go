@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -111,7 +112,7 @@ func (s *Service) preserveResults(ctx context.Context, j model.OCRJob) error {
 	if err := common.UnmarshalJsonStr(j.Execution, &execution); err != nil {
 		return err
 	}
-	data, err := s.fetch(ctx, j.ResultURL, MaxResultBytes)
+	data, err := s.fetchOwnedResult(ctx, j, execution, j.ResultURL, MaxResultBytes)
 	if err != nil {
 		return err
 	}
@@ -139,15 +140,15 @@ func (s *Service) preserveResults(ctx context.Context, j model.OCRJob) error {
 			continue
 		}
 		var root map[string]json.RawMessage
-		if err = common.Unmarshal(line, &root); err != nil || root == nil {
+		if err = common.UnmarshalUnique(line, &root); err != nil || root == nil {
 			return errors.New("invalid OCR JSONL")
 		}
 		var result map[string]json.RawMessage
-		if err = common.Unmarshal(root["result"], &result); err != nil || result == nil {
+		if err = common.UnmarshalUnique(root["result"], &result); err != nil || result == nil {
 			return errors.New("missing OCR native result")
 		}
 		var layouts []json.RawMessage
-		if err = common.Unmarshal(result["layoutParsingResults"], &layouts); err != nil || len(layouts) == 0 {
+		if err = common.UnmarshalUnique(result["layoutParsingResults"], &layouts); err != nil || len(layouts) == 0 {
 			return errors.New("missing OCR native pages")
 		}
 		for i, page := range layouts {
@@ -156,17 +157,26 @@ func (s *Service) preserveResults(ctx context.Context, j model.OCRJob) error {
 				return errors.New("OCR result page bound exceeded")
 			}
 			var pageObject map[string]json.RawMessage
-			if err = common.Unmarshal(page, &pageObject); err != nil || pageObject == nil {
+			if err = common.UnmarshalUnique(page, &pageObject); err != nil || pageObject == nil {
 				return errors.New("invalid OCR page")
+			}
+			if j.Funding == "platform" {
+				// The selected managed consumer requires actual Markdown output.
+				// Empty/absent pages have no declared blank-result billing semantics.
+				var markdown map[string]json.RawMessage
+				var text string
+				if common.UnmarshalUnique(pageObject["markdown"], &markdown) != nil || markdown == nil || common.UnmarshalUnique(markdown["text"], &text) != nil || strings.TrimSpace(text) == "" {
+					return errors.New("missing managed OCR page content")
+				}
 			}
 			if raw, ok := pageObject["markdown"]; ok {
 				var markdown map[string]json.RawMessage
-				if err = common.Unmarshal(raw, &markdown); err != nil || markdown == nil {
+				if err = common.UnmarshalUnique(raw, &markdown); err != nil || markdown == nil {
 					return errors.New("invalid OCR markdown")
 				}
 				if imageRaw, ok := markdown["images"]; ok && string(imageRaw) != "null" {
 					var refs map[string]string
-					if err = common.Unmarshal(imageRaw, &refs); err != nil {
+					if err = common.UnmarshalUnique(imageRaw, &refs); err != nil {
 						return errors.New("invalid OCR image references")
 					}
 					for name, upstream := range refs {
@@ -178,7 +188,7 @@ func (s *Service) preserveResults(ctx context.Context, j model.OCRJob) error {
 							if len(images) >= MaxImages {
 								return errors.New("OCR image count bound exceeded")
 							}
-							bytes, err := s.fetch(ctx, upstream, MaxImageBytes)
+							bytes, err := s.fetchOwnedResult(ctx, j, execution, upstream, MaxImageBytes)
 							if err != nil {
 								return err
 							}
@@ -272,19 +282,19 @@ func (s *Service) refreshResultGrants(ctx context.Context, jobID string, data []
 			continue
 		}
 		var root, result map[string]json.RawMessage
-		if err := common.Unmarshal(line, &root); err != nil {
+		if err := common.UnmarshalUnique(line, &root); err != nil {
 			return nil, err
 		}
-		if err := common.Unmarshal(root["result"], &result); err != nil {
+		if err := common.UnmarshalUnique(root["result"], &result); err != nil {
 			return nil, err
 		}
 		var pages []json.RawMessage
-		if err := common.Unmarshal(result["layoutParsingResults"], &pages); err != nil {
+		if err := common.UnmarshalUnique(result["layoutParsingResults"], &pages); err != nil {
 			return nil, err
 		}
 		for i, raw := range pages {
 			var page map[string]json.RawMessage
-			if err := common.Unmarshal(raw, &page); err != nil {
+			if err := common.UnmarshalUnique(raw, &page); err != nil {
 				return nil, err
 			}
 			markdownRaw, ok := page["markdown"]
@@ -292,7 +302,7 @@ func (s *Service) refreshResultGrants(ctx context.Context, jobID string, data []
 				continue
 			}
 			var markdown map[string]json.RawMessage
-			if err := common.Unmarshal(markdownRaw, &markdown); err != nil {
+			if err := common.UnmarshalUnique(markdownRaw, &markdown); err != nil {
 				return nil, err
 			}
 			imagesRaw, ok := markdown["images"]
@@ -300,7 +310,7 @@ func (s *Service) refreshResultGrants(ctx context.Context, jobID string, data []
 				continue
 			}
 			var images map[string]string
-			if err := common.Unmarshal(imagesRaw, &images); err != nil {
+			if err := common.UnmarshalUnique(imagesRaw, &images); err != nil {
 				return nil, err
 			}
 			for name, oldURL := range images {
@@ -365,4 +375,14 @@ func (s *Service) refreshResultGrants(ctx context.Context, jobID string, data []
 		return nil, errors.New("OCR projected aggregate result bound exceeded")
 	}
 	return output.Bytes(), nil
+}
+
+func (s *Service) fetchOwnedResult(ctx context.Context, j model.OCRJob, e model.OCRExecution, raw string, limit int64) ([]byte, error) {
+	if j.Funding == "platform" {
+		u, err := url.Parse(raw)
+		if err != nil || u.User != nil || u.Fragment != "" || !slices.Contains(e.ResourceOrigins, u.Scheme+"://"+u.Host) {
+			return nil, model.ErrOCRConflict
+		}
+	}
+	return s.fetch(ctx, raw, limit)
 }

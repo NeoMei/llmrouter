@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 
@@ -314,4 +315,50 @@ func TestProtectedFetchRoundTripperReusesTransportPerProxy(t *testing.T) {
 	require.NotSame(t, direct, proxied)
 	require.True(t, direct.ForceAttemptHTTP2)
 	require.False(t, direct.DisableKeepAlives)
+}
+
+func TestManagedImageClientIgnoresLegacyProtectionDisable(t *testing.T) {
+	settings := system_setting.GetFetchSetting()
+	old := *settings
+	t.Cleanup(func() { *settings = old })
+	settings.EnableSSRFProtection = false
+	settings.AllowPrivateIp = true
+	client := NewManagedImageHTTPClient()
+	request, err := http.NewRequest("GET", "https://127.0.0.1:443/image.png", nil)
+	require.NoError(t, err)
+	_, err = client.Do(request)
+	require.ErrorContains(t, err, "private")
+}
+
+func TestManagedImageClientRequiresTLSVerification(t *testing.T) {
+	old := common.TLSInsecureSkipVerify
+	common.TLSInsecureSkipVerify = true
+	t.Cleanup(func() { common.TLSInsecureSkipVerify = old })
+	settings := system_setting.GetFetchSetting()
+	prev := *settings
+	settings.EnableSSRFProtection = false
+	t.Cleanup(func() { *settings = prev })
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+	t.Cleanup(srv.Close)
+	client := NewManagedImageHTTPClient()
+	transport := client.Transport.(*ssrfProtectedRoundTripper)
+	transport.resolver = staticSSRFResolver{"api.openai.com": []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}}
+	transport.dialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "tcp", srv.Listener.Addr().String())
+	}
+	res, err := client.Get("https://api.openai.com/image")
+	if res != nil {
+		t.Logf("untrusted_TLS_server_status=%d", res.StatusCode)
+		res.Body.Close()
+	}
+	require.Error(t, err, "managed producer/resource TLS must verify certificate despite global legacy setting")
+	legacy := newProtectedFetchHTTPClientWithProxy(transport.resolver, transport.dialContext, transport.getProtection, func(*http.Request) (*url.URL, error) { return nil, nil })
+	res, err = legacy.Get("https://api.openai.com/image")
+	require.NoError(t, err, "legacy opt-in insecure TLS semantics are unchanged")
+	require.Equal(t, 200, res.StatusCode)
+	require.NoError(t, res.Body.Close())
+	legacy.CloseIdleConnections()
+	client.CloseIdleConnections()
+
 }

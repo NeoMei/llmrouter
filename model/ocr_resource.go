@@ -37,7 +37,7 @@ func (s *OCRBillingStore) PublishOCRResources(ctx context.Context, id string, re
 		if j.ResultResourceID != "" {
 			return nil
 		}
-		if j.ProviderState != "done" || j.Decision != "success" || j.BillingState != "settled" {
+		if j.ProviderState != "done" || (j.Funding != "platform" && (j.Decision != "success" || j.BillingState != "settled")) || (j.Funding == "platform" && j.Decision != "" && j.Decision != "success") {
 			return ErrOCRConflict
 		}
 		found := false

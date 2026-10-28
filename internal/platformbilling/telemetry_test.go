@@ -14,7 +14,7 @@ func TestTechnicalUsageUsesVerifiedLogicalCallAcrossRetriesAndRecovery(t *testin
 	failSettle := true
 	a, db := fixture(t, &failSettle)
 	ctx := context.Background()
-	s, err := a.Admit(ctx, "uh_model_token", "task", "call", []byte(`{"model":"test","max_tokens":50}`))
+	s, err := a.Admit(ctx, "uh_model_token", "task", "call", []byte(`{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`))
 	require.NoError(t, err)
 	require.NoError(t, s.Dispatch(ctx, 1))
 	s.Rejected()
@@ -62,7 +62,7 @@ func TestTechnicalUsageNeverExposesOtherActorInstanceOrUnconfirmedTokens(t *test
 	fail := false
 	a, db := fixture(t, &fail)
 	ctx := context.Background()
-	s, err := a.Admit(ctx, "uh_model_token", "task", "call", []byte(`{"model":"test","max_tokens":50}`))
+	s, err := a.Admit(ctx, "uh_model_token", "task", "call", []byte(`{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`))
 	require.NoError(t, err)
 	require.NoError(t, s.Dispatch(ctx, 1))
 	s.observe(&dto.Usage{PromptTokens: 10, CompletionTokens: 5})
@@ -89,7 +89,7 @@ func TestTechnicalUsageTracksAsyncTerminalWithoutAnotherRequest(t *testing.T) {
 	ctx := context.Background()
 	s, err := a.AdmitOperation(ctx, "uh_model_token", "task", "call", "speech", "application/json", []byte(`{"model":"test","input":"hello","voice":"v"}`))
 	require.NoError(t, err)
-	require.NoError(t, s.Dispatch(ctx, 2))
+	require.NoError(t, s.Dispatch(ctx, 1))
 	require.NoError(t, s.BindTask(ctx, "upstream-task"))
 	read := func() []TechnicalUsage {
 		rows, readErr := ReadTechnicalUsage(ctx, db, TechnicalScope{ActorID: "actor", InstanceID: "default"}, time.Now().Unix()-60, time.Now().Unix()+60)

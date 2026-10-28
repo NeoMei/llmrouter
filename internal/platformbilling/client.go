@@ -28,19 +28,20 @@ var (
 )
 
 type Claims struct {
-	CredentialKind        string    `json:"credential_kind"`
-	InstanceID            string    `json:"instance_id"`
-	ID                    string    `json:"id"`
-	Audience              string    `json:"audience"`
-	ActorID               string    `json:"actor_id"`
-	AccountID             string    `json:"account_id"`
-	OriginProductID       string    `json:"origin_product_id"`
-	Models                []string  `json:"models"`
-	TaskID                string    `json:"task_id"`
-	ExpiresAt             time.Time `json:"expires_at"`
-	Asset                 string    `json:"asset"`
-	FundingMode           string    `json:"funding_mode"`
-	BillingProfileVersion int       `json:"billing_profile_version"`
+	Operations            map[string][]string `json:"operations,omitempty"`
+	CredentialKind        string              `json:"credential_kind"`
+	InstanceID            string              `json:"instance_id"`
+	ID                    string              `json:"id"`
+	Audience              string              `json:"audience"`
+	ActorID               string              `json:"actor_id"`
+	AccountID             string              `json:"account_id"`
+	OriginProductID       string              `json:"origin_product_id"`
+	Models                []string            `json:"models"`
+	TaskID                string              `json:"task_id"`
+	ExpiresAt             time.Time           `json:"expires_at"`
+	Asset                 string              `json:"asset"`
+	FundingMode           string              `json:"funding_mode"`
+	BillingProfileVersion int                 `json:"billing_profile_version"`
 }
 type Rational struct {
 	Numerator   string `json:"numerator"`
@@ -79,6 +80,7 @@ type Allocation struct {
 	Amount  string `json:"amount"`
 }
 type RemoteCall struct {
+	WireOperation         string       `json:"wire_operation,omitempty"`
 	InstanceID            string       `json:"instance_id"`
 	Held                  string       `json:"held"`
 	CashHoldAddress       string       `json:"cash_hold_address,omitempty"`
@@ -98,6 +100,15 @@ type RemoteCall struct {
 	BillingProfileVersion int          `json:"billing_profile_version"`
 }
 type Config struct {
+	NativeHistory                   *NativeHistoryConfig
+	ImagePolicies                   map[string]map[string]ImagePolicy
+	NativePresetPolicies            map[string]map[string]NativePresetPolicy
+	OCRPolicies                     map[string]map[string]OCRPolicy
+	AudioPolicies                   map[string]map[string]AudioPolicy
+	VideoPolicies                   map[string]map[string]VideoPolicy
+	KnowledgePolicies               map[string]map[string]KnowledgePolicy
+	CompactPolicies                 map[string]CompactPolicy
+	NativeInputPolicies             map[string]map[string]NativeInputPolicy
 	OperationLimits                 map[string]map[string]OperationLimits
 	OperationRateIDs                map[string]map[string]map[string]string
 	Enabled                         bool
@@ -236,7 +247,7 @@ func HTTPStatus(err error) int {
 	if errors.Is(err, ErrDuplicate) || errors.Is(err, ErrConflict) {
 		return 409
 	}
-	if errors.Is(err, ErrInvalid) {
+	if errors.Is(err, ErrInvalid) || errors.Is(err, ErrNativeHistory) {
 		return 400
 	}
 	var re *remoteError
@@ -254,7 +265,7 @@ func (remote RemoteCall) matches(row Call) bool {
 	if remoteInstance == "" {
 		remoteInstance = "default"
 	}
-	if localInstance != remoteInstance {
+	if localInstance != remoteInstance || row.WireOperation != remote.WireOperation {
 		return false
 	}
 	if row.Operation != "" {

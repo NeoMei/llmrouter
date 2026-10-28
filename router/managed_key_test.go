@@ -88,7 +88,7 @@ func TestManagedKeyStandardChatUsesOnlyCentralBilling(t *testing.T) {
 			if input["token"] == "uh_key_wrongmodel" {
 				models = []string{"different"}
 			}
-			out = platformbilling.Claims{ID: input["token"] + "-id", CredentialKind: "api_key", InstanceID: instance, Audience: "llmrouter", ActorID: "actor", AccountID: "payer", OriginProductID: "client", Models: models, ExpiresAt: time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)}
+			out = platformbilling.Claims{Operations: map[string][]string{"managed-test": {"chat.completions.create"}}, ID: input["token"] + "-id", CredentialKind: "api_key", InstanceID: instance, Audience: "llmrouter", ActorID: "actor", AccountID: "payer", OriginProductID: "client", Models: models, ExpiresAt: time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)}
 		case "/internal/v1/rates":
 			out = []platformbilling.Rate{rate}
 		case "/internal/v1/calls/reserve":
@@ -102,7 +102,7 @@ func TestManagedKeyStandardChatUsesOnlyCentralBilling(t *testing.T) {
 				w.WriteHeader(402)
 				return
 			}
-			remote := platformbilling.RemoteCall{CallID: input["call_id"], Status: "RESERVED", ActorID: "actor", AccountID: "payer", OriginProductID: "client", InstanceID: "instance-a", CredentialID: input["credential"] + "-id", RequestDigest: input["request_digest"], Rate: rate}
+			remote := platformbilling.RemoteCall{WireOperation: input["wire_operation"], CallID: input["call_id"], Status: "RESERVED", ActorID: "actor", AccountID: "payer", OriginProductID: "client", InstanceID: "instance-a", CredentialID: input["credential"] + "-id", RequestDigest: input["request_digest"], Rate: rate}
 			remoteMu.Lock()
 			remoteCalls[input["call_id"]] = remote
 			remoteMu.Unlock()

@@ -11,13 +11,16 @@ import (
 // observer; platform callers attach UniHub settlement evidence. The context
 // itself never mutates local quota.
 type NativeBillingContext struct {
-	CallID    string
-	AttemptID string
-	Price     metering.Price
-	Policy    string
-	Platform  bool
-	Usage     *metering.Usage
-	Observe   func(context.Context, metering.Usage) error
+	CallID                     string
+	AttemptID                  string
+	Price                      metering.Price
+	Policy                     string
+	VideoResolution            string
+	VideoResourceOrigins       []string
+	VideoResourceAllowLoopback bool
+	Platform                   bool
+	Usage                      *metering.Usage
+	Observe                    func(context.Context, metering.Usage) error
 }
 
 func (n *NativeBillingContext) Record(ctx context.Context, u metering.Usage) error {

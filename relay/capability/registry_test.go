@@ -88,3 +88,20 @@ func TestSnapshotIsDefensiveCopy(t *testing.T) {
 	snapshot[key] = Decision{Supported: !before.Supported}
 	assert.Equal(t, before, registry.Resolve(key.ChannelType, key.Protocol, key.Operation))
 }
+
+func TestClosedNativeImageRoutes(t *testing.T) {
+	for _, tc := range []struct {
+		path      string
+		protocol  Protocol
+		operation Operation
+	}{{"/v1/native/gemini/images/models/image:generateContent", ProtocolGemini, OperationGeminiImage}, {"/v1/native/dashscope/images/generations", ProtocolDashScope, OperationQwenImage}} {
+		protocol, operation, e := ResolveRequest(http.MethodPost, tc.path)
+		require.NoError(t, e)
+		assert.Equal(t, tc.protocol, protocol)
+		assert.Equal(t, tc.operation, operation)
+		_, _, e = ResolveRequest(http.MethodGet, tc.path)
+		require.Error(t, e)
+	}
+	_, _, e := ResolveRequest(http.MethodPost, "/v1/native/gemini/images/models/image:streamGenerateContent")
+	require.Error(t, e)
+}

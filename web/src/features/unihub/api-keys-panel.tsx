@@ -83,6 +83,15 @@ function BudgetForm(props: {
 }
 
 export function ApiKeysPanel(props: PanelProps) {
+  return (
+    <ScopedApiKeysPanel
+      key={`${props.session.epoch}:${props.account.id}:${props.config.product_id}:${props.config.instance_id}`}
+      {...props}
+    />
+  )
+}
+
+function ScopedApiKeysPanel(props: PanelProps) {
   const { t } = useTranslation()
   const cache = useQueryClient()
   const [busy, setBusy] = useState(false)
@@ -108,7 +117,13 @@ export function ApiKeysPanel(props: PanelProps) {
   const mode = modeOverride ?? profile.data?.usage.default_funding_mode ?? ''
   const asset = mode === 'prepaid_cash' ? 'CNY/6' : 'CREDIT/6'
   const keys = useQuery({
-    queryKey: ['managed-keys', props.account.id],
+    queryKey: [
+      'managed-keys',
+      props.session.epoch,
+      props.account.id,
+      props.config.product_id,
+      props.config.instance_id,
+    ],
     queryFn: () => props.session.bound(() => access.keys()),
     retry: false,
   })
@@ -159,7 +174,13 @@ export function ApiKeysPanel(props: PanelProps) {
       setSecret(key.token)
       form.reset()
       await cache.invalidateQueries({
-        queryKey: ['managed-keys', props.account.id],
+        queryKey: [
+          'managed-keys',
+          props.session.epoch,
+          props.account.id,
+          props.config.product_id,
+          props.config.instance_id,
+        ],
       })
     } catch (cause) {
       setError(message(cause))
@@ -175,7 +196,13 @@ export function ApiKeysPanel(props: PanelProps) {
     try {
       await props.session.bound(() => access.revokeKey(id))
       await cache.invalidateQueries({
-        queryKey: ['managed-keys', props.account.id],
+        queryKey: [
+          'managed-keys',
+          props.session.epoch,
+          props.account.id,
+          props.config.product_id,
+          props.config.instance_id,
+        ],
       })
     } catch (cause) {
       setError(message(cause))
@@ -214,6 +241,17 @@ export function ApiKeysPanel(props: PanelProps) {
           )}
         </p>
         <code className='block break-all'>{window.location.origin}/v1</code>
+        <p className='text-muted-foreground text-sm'>
+          {t(
+            'This form preserves primary model permissions. Configure SuperWagie skills and knowledge permissions in UniHub.'
+          )}{' '}
+          <a
+            className='underline'
+            href={`${props.config.public_origin}/?view=api-keys&account=${encodeURIComponent(props.account.id)}`}
+          >
+            {t('Configure SuperWagie API key permissions')}
+          </a>
+        </p>
         <label className='grid gap-1 text-sm'>
           {t('Funding mode')}
           <select
@@ -357,6 +395,24 @@ export function ApiKeysPanel(props: PanelProps) {
                   </td>
                   <td className='max-w-56 p-2 break-words'>
                     {key.models.join(', ')}
+                    <details>
+                      <summary>
+                        {t('Granted capabilities (fixed at creation)')}
+                      </summary>
+                      {key.operations ? (
+                        Object.entries(key.operations).map(
+                          ([model, operations]) => (
+                            <p key={model}>
+                              {model}: {operations.join(', ') || '—'}
+                            </p>
+                          )
+                        )
+                      ) : (
+                        <p>
+                          {t('Legacy keys retain their original permissions.')}
+                        </p>
+                      )}
+                    </details>
                   </td>
                   <td>{exactAmount(key.used, key.asset)}</td>
                   <td>{exactAmount(key.held, key.asset)}</td>

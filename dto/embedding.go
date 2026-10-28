@@ -1,9 +1,11 @@
 package dto
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/types"
 
@@ -94,7 +96,7 @@ type EmbeddingResponse struct {
 func (r *EmbeddingRequest) InputCount() (int, error) {
 	switch input := r.Input.(type) {
 	case string:
-		if input == "" {
+		if input == "" || !utf8.ValidString(input) {
 			return 0, fmt.Errorf("input is empty")
 		}
 		return 1, nil
@@ -103,7 +105,7 @@ func (r *EmbeddingRequest) InputCount() (int, error) {
 			return 0, fmt.Errorf("input is empty")
 		}
 		for _, s := range input {
-			if s == "" {
+			if s == "" || !utf8.ValidString(s) {
 				return 0, fmt.Errorf("input is empty")
 			}
 		}
@@ -113,7 +115,7 @@ func (r *EmbeddingRequest) InputCount() (int, error) {
 			return 0, fmt.Errorf("input is empty")
 		}
 		for _, n := range input {
-			if n < 0 {
+			if n < 0 || int64(n) > math.MaxInt32 {
 				return 0, fmt.Errorf("invalid token input")
 			}
 		}
@@ -135,7 +137,7 @@ func (r *EmbeddingRequest) InputCount() (int, error) {
 		if _, ok := input[0].(string); ok {
 			for _, v := range input {
 				s, ok := v.(string)
-				if !ok || s == "" {
+				if !ok || s == "" || !utf8.ValidString(s) {
 					return 0, fmt.Errorf("invalid text embedding batch")
 				}
 			}
@@ -168,6 +170,9 @@ func (r *EmbeddingRequest) InputCount() (int, error) {
 
 func validEmbeddingToken(v any) bool {
 	switch n := v.(type) {
+	case json.Number:
+		value, err := n.Int64()
+		return err == nil && value >= 0 && value <= math.MaxInt32
 	case float64:
 		return n >= 0 && n <= math.MaxInt32 && math.Trunc(n) == n
 	case int:

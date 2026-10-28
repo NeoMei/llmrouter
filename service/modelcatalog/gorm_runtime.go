@@ -98,3 +98,41 @@ func RecognizesPublicModel(ctx context.Context, db *gorm.DB, requested string) (
 	}
 	return false, nil
 }
+
+func PublicModelSupportsOperation(ctx context.Context, db *gorm.DB, requested, operation string) (bool, error) {
+	if db == nil || !db.Migrator().HasTable(&model.ClientModelRoute{}) || !db.Migrator().HasTable(&model.ClientModelTarget{}) {
+		return false, nil
+	}
+	var routes []model.ClientModelRoute
+	if err := db.WithContext(ctx).Select("public_id", "aliases", "metadata").Where("enabled = ?", true).Find(&routes).Error; err != nil {
+		return false, err
+	}
+	for _, route := range routes {
+		matches := strings.EqualFold(strings.TrimSpace(route.PublicId), strings.TrimSpace(requested))
+		if !matches {
+			aliases, err := decodeStrings(route.Aliases)
+			if err != nil {
+				return false, err
+			}
+			for _, alias := range aliases {
+				matches = matches || strings.EqualFold(strings.TrimSpace(alias), strings.TrimSpace(requested))
+			}
+		}
+		if !matches {
+			continue
+		}
+		var metadata struct {
+			Operations []string `json:"operations"`
+		}
+		if common.Unmarshal([]byte(route.Metadata), &metadata) != nil {
+			return false, nil
+		}
+		for _, candidate := range metadata.Operations {
+			if candidate == operation {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+	return false, nil
+}

@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/controller"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/model"
@@ -49,7 +50,7 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 		{"responses", "/responses", `{"model":"platform-test","input":"hello","max_output_tokens":10}`, `{"id":"resp","object":"response","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`, "token", "input", "sum", false},
 		{"transcription", "/audio/transcriptions", "", `{"text":"hello"}`, "audio_second", "audio", "server_audio_measurement_v1", false},
 		{"image_edit", "/images/edits", "", `{"created":1,"data":[{"b64_json":"aGVsbG8="}]}`, "image", "images", "successful_outputs_v1", false},
-		{"embedding", "/embeddings", `{"model":"platform-test","input":"hello"}`, `{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1]}],"model":"platform-test","usage":{"prompt_tokens":1,"total_tokens":1}}`, "token", "input", "sum", false},
+		{"embedding", "/embeddings", `{"model":"platform-test","input":"hello"}`, `{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1]}],"model":"platform-test","usage":{"prompt_tokens":1,"total_tokens":1}}`, "token", "input", "provider_reported_v1", false},
 		{"speech", "/audio/speech", `{"model":"platform-test","input":"hello","voice":"alloy"}`, "audio-bytes", "character", "characters", "unicode_scalar_v1", false},
 		{"image_generation", "/images/generations", `{"model":"platform-test","prompt":"hello","n":1}`, `{"created":1,"data":[{"b64_json":"aGVsbG8="}]}`, "image", "images", "successful_outputs_v1", false},
 	} {
@@ -125,13 +126,13 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 					if input["token"] == "uh_model_other" {
 						account = "other"
 					}
-					out = platformbilling.Claims{ID: "credential", Audience: "llmrouter", ActorID: "actor", AccountID: account, OriginProductID: "origin", Models: []string{"platform-test"}, TaskID: "task", ExpiresAt: time.Now().Add(time.Hour)}
+					out = platformbilling.Claims{Operations: map[string][]string{"platform-test": {map[string]string{"chat": "chat.completions.create", "responses": "responses.create", "embedding": "embeddings.create", "speech": "audio.speech.create", "transcription": "audio.transcriptions.create", "image_generation": "images.generations.create", "image_edit": "images.edits.create", "ocr": "ocr.jobs.create", "video": "videos.create"}[tc.op]}}, ID: "credential", Audience: "llmrouter", ActorID: "actor", AccountID: account, OriginProductID: "origin", Models: []string{"platform-test"}, TaskID: "task", ExpiresAt: time.Now().Add(time.Hour)}
 				case "/internal/v1/rates":
 					out = []platformbilling.Rate{rate}
 				case "/internal/v1/calls/reserve":
 					var in map[string]string
 					require.NoError(t, common.DecodeJson(r.Body, &in))
-					remote = platformbilling.RemoteCall{CallID: "call", ActorID: "actor", AccountID: "account", OriginProductID: "origin", CredentialID: "credential", RequestDigest: in["request_digest"], Rate: rate, ChargeAsset: "CREDIT/6", FundingMode: "credits", FundingProductID: "llmrouter", Held: in["amount"], Status: "RESERVED"}
+					remote = platformbilling.RemoteCall{WireOperation: in["wire_operation"], CallID: "call", ActorID: "actor", AccountID: "account", OriginProductID: "origin", CredentialID: "credential", RequestDigest: in["request_digest"], Rate: rate, ChargeAsset: "CREDIT/6", FundingMode: "credits", FundingProductID: "llmrouter", Held: in["amount"], Status: "RESERVED"}
 					out = remote
 				case "/internal/v1/calls/call/settle":
 					settles++
@@ -186,7 +187,15 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 			model.InitChannelCache()
 			service.InitHttpClient()
 			service.InitTokenEncoders()
-			a, e := platformbilling.New(db, platformbilling.Config{Enabled: true, Origin: hub.URL, ServiceToken: "service-service-service-service-token", PrincipalID: 1, Group: "platform", MaxInputTokens: 1000, MaxOutputTokens: 100, MaxBodyBytes: 65536, OperationLimits: map[string]map[string]platformbilling.OperationLimits{"transcription": {"platform-test": {MaxQuantity: 60, Policy: "server_audio_measurement_v1"}}, "video": {"platform-test": {MaxQuantity: 60, Policy: "sora_completed_seconds_v1"}}}, OperationRateIDs: map[string]map[string]map[string]string{"chat": {"CREDIT/6": {"platform-test": "rate"}}}})
+			config := platformbilling.Config{Enabled: true, Origin: hub.URL, ServiceToken: "service-service-service-service-token", PrincipalID: 1, Group: "platform", MaxInputTokens: 1000, MaxOutputTokens: 100, MaxBodyBytes: 65536, OperationLimits: map[string]map[string]platformbilling.OperationLimits{"transcription": {"platform-test": {MaxQuantity: 60, Policy: "server_audio_measurement_v1"}}, "video": {"platform-test": {MaxQuantity: 60, Policy: "sora_completed_seconds_v1"}}}, OperationRateIDs: map[string]map[string]map[string]string{"chat": {"CREDIT/6": {"platform-test": "rate"}}}}
+			if tc.op == "embedding" {
+				p := platformbilling.KnowledgePolicy{ChannelKeySHA256: "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683", Version: "knowledge_v1", ProviderReference: "https://fixture.test/embedding", PublicModel: "platform-test", WireOperation: "embeddings.create", ChannelID: 1, ChannelType: constant.ChannelTypeOpenAI, UpstreamModel: "platform-test", HardInputTokens: 1000, MaxItemTokens: 100, MaxBatch: 10, Space: &dto.EmbeddingSpace{Provider: "openai", Model: "platform-test", Version: "v1", Dimensions: 1, InputSemantics: "text"}, RateIDs: map[string]string{"CREDIT/6": "rate"}}
+				config.KnowledgePolicies = map[string]map[string]platformbilling.KnowledgePolicy{"embeddings.create": {"platform-test": p}}
+				config.OperationLimits["embedding"] = map[string]platformbilling.OperationLimits{"platform-test": {Policy: "provider_reported_v1"}}
+				require.NoError(t, db.Create(&model.ClientModelRoute{Id: 1, PublicId: "platform-test", Client: "all", Enabled: true, Metadata: `{"operations":["embeddings.create"],"embedding_space":{"provider":"openai","model":"platform-test","version":"v1","dimensions":1,"input_semantics":"text"}}`}).Error)
+				require.NoError(t, db.Create(&model.ClientModelTarget{Id: 1, RouteId: 1, ChannelId: 1, UpstreamModel: "platform-test", PreferredWires: `["openai_chat"]`, Weight: 1, Enabled: true}).Error)
+			}
+			a, e := platformbilling.New(db, config)
 			require.NoError(t, e)
 			if tc.op == "ocr" {
 				objects, e := objectstore.NewLocal(t.TempDir())
@@ -252,6 +261,16 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 				return w
 			}
 			w := send()
+			if tc.op == "speech" || tc.op == "transcription" || tc.op == "ocr" || tc.op == "image_generation" || tc.op == "image_edit" {
+				require.Equal(t, 503, w.Code, "uncertified legacy media fixture must fail before supplier IO")
+				assert.Zero(t, sends)
+				assert.Zero(t, settles)
+				assert.Zero(t, releases)
+				var calls int64
+				require.NoError(t, db.Model(&platformbilling.Call{}).Count(&calls).Error)
+				assert.Zero(t, calls)
+				return
+			}
 			expected := 200
 			if tc.op == "ocr" {
 				expected = 202
@@ -315,7 +334,11 @@ func TestPlatformMeteredSyncActualUsageAndReplay(t *testing.T) {
 				r.Header.Set("X-UniHub-Task-ID", "task")
 				unsupported := httptest.NewRecorder()
 				engine.ServeHTTP(unsupported, r)
-				assert.Equal(t, 501, unsupported.Code)
+				expectedCancel := http.StatusNotImplemented
+				if tc.op == "video" {
+					expectedCancel = http.StatusConflict
+				}
+				assert.Equal(t, expectedCancel, unsupported.Code)
 			}
 			w = send()
 			assert.Equal(t, 409, w.Code)

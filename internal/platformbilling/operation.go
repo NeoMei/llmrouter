@@ -27,22 +27,25 @@ type OperationLimits struct {
 	ProviderUnit    string `json:"provider_unit"`
 }
 type operationRequest struct {
-	Model     string
-	Canonical []byte
-	Quantity  int
-	Output    int
+	MediaSnapshot   string
+	Model           string
+	Canonical       []byte
+	Quantity        int
+	Output          int
+	VideoResolution string
+	MeasurementKey  string
 }
 
 func parseOperation(c Config, op, contentType string, body []byte) (operationRequest, error) {
 	var result operationRequest
 	fields := map[string]string{
-		"responses":        "model input instructions max_output_tokens stream temperature top_p tools tool_choice parallel_tool_calls reasoning text metadata store",
+		"responses":        "model input instructions max_output_tokens stream stream_options temperature top_p tools tool_choice parallel_tool_calls reasoning text metadata store include previous_response_id background max_tool_calls truncation prompt_cache_key prompt_cache_retention safety_identifier user top_logprobs",
 		"embedding":        "model input encoding_format dimensions user",
 		"speech":           "model input voice response_format speed instructions",
 		"transcription":    "model file language prompt response_format temperature stream",
 		"image_generation": "model prompt n size quality style response_format background output_format output_compression moderation user",
 		"image_edit":       "model prompt image mask n size quality response_format background output_format output_compression user",
-		"ocr":              "model file language",
+		"ocr":              "model file optionalPayload",
 		"video":            "model prompt seconds size input_reference",
 	}
 	var request map[string]any
@@ -54,6 +57,8 @@ func parseOperation(c Config, op, contentType string, body []byte) (operationReq
 	if mediaType == "application/json" {
 		if op == "chat" {
 			request, err = strictChatRequest(body)
+		} else if op == "responses" {
+			request, err = strictResponsesRequest(body)
 		} else {
 			err = common.UnmarshalUnique(body, &request)
 		}
@@ -143,6 +148,10 @@ func parseOperation(c Config, op, contentType string, body []byte) (operationReq
 	}
 	switch op {
 	case "chat", "responses":
+		result.Quantity, result.MediaSnapshot, err = nativeMediaReservation(c, legacyWireOperation(op), result.Model, request)
+		if err != nil {
+			return result, err
+		}
 		key := "max_output_tokens"
 		if op == "chat" {
 			key = "max_tokens"
@@ -151,18 +160,14 @@ func parseOperation(c Config, op, contentType string, body []byte) (operationReq
 			}
 		}
 		result.Output, err = count(key, 0)
-		if err != nil || result.Output < 1 || result.Output > c.MaxOutputTokens || len(body) > c.MaxInputTokens/2 {
+		if err != nil || result.Output < 1 || result.Output > c.MaxOutputTokens || (result.MediaSnapshot == "" && len(body) > c.MaxInputTokens/2) {
 			return result, ErrInvalid
 		}
-		if op == "responses" {
-			if _, ok := request["input"].(string); !ok {
-				return result, ErrInvalid
-			}
-			if _, ok := request["tools"]; ok {
-				return result, ErrInvalid
-			}
-		}
 		if op == "chat" {
+			messages, ok := request["messages"].([]any)
+			if !ok || len(messages) == 0 {
+				return result, ErrInvalid
+			}
 			n, e := count("n", 1)
 			if e != nil || n != 1 {
 				return result, ErrInvalid
@@ -177,25 +182,51 @@ func parseOperation(c Config, op, contentType string, body []byte) (operationReq
 			}
 		}
 	case "embedding":
-		total := 0
-		switch input := request["input"].(type) {
-		case string:
-			total = len(input)
-		case []any:
-			if len(input) > 2048 {
-				return result, ErrInvalid
-			}
-			for _, v := range input {
-				s, ok := v.(string)
-				if !ok || s == "" {
-					return result, ErrInvalid
-				}
-				total += len(s)
-			}
-		default:
+		if !protocolKeys(request, "model input encoding_format dimensions user") {
 			return result, ErrInvalid
 		}
-		if total == 0 || total > c.MaxInputTokens/2 {
+		if !utf8.Valid(body) {
+			return result, ErrInvalid
+		}
+		input := &dto.EmbeddingRequest{Input: request["input"]}
+		batch, e := input.InputCount()
+		if e != nil || batch > 2048 {
+			return result, ErrInvalid
+		}
+		if v, exists := request["encoding_format"]; exists && v != "float" {
+			return result, ErrInvalid
+		}
+		if v, exists := request["dimensions"]; exists {
+			n, e := confirmedCount(v)
+			if e != nil || n < 1 || n > 65536 {
+				return result, ErrInvalid
+			}
+		}
+		if v, exists := request["user"]; exists {
+			user, ok := v.(string)
+			if !ok || len(user) > 256 || !utf8.ValidString(user) {
+				return result, ErrInvalid
+			}
+		}
+		// Text uses a deliberately conservative byte bound; token inputs are
+		// already token counts and must never pass through ParseInput's text view.
+		total := 0
+		switch value := request["input"].(type) {
+		case string:
+			total = len(value) * 2
+		case []any:
+			for _, v := range value {
+				switch item := v.(type) {
+				case string:
+					total += len(item) * 2
+				case []any:
+					total += len(item)
+				default:
+					total++
+				}
+			}
+		}
+		if total < 1 || total > c.MaxInputTokens {
 			return result, ErrInvalid
 		}
 	case "speech":

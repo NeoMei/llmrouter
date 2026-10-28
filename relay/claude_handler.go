@@ -23,6 +23,11 @@ import (
 )
 
 func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
+	if info.PlatformMode && info.PlatformBilling != nil {
+		if _, metered := info.PlatformBilling.MeteredPrice(); metered {
+			return platformGeneration(c, info)
+		}
+	}
 	toolpolicy.Clear(c)
 	info.InitChannelMeta(c)
 

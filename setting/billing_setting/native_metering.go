@@ -153,7 +153,25 @@ func ValidateModelNativePricing(c map[string]map[string]metering.Price) error {
 // ValidateNativeVideoPrice only enables receipt contracts implemented by the
 // video producers. Generic or unmeasured policies cannot reserve user funds.
 func ValidateNativeVideoPrice(p metering.Price) error {
-	if p.Operation != "video" || len(p.Terms) != 1 || metering.ValidatePrice(p) != nil {
+	if p.Operation != "video" || metering.ValidatePrice(p) != nil {
+		return errors.New("unsupported native video tariff")
+	}
+	if p.Policy == "ali_wan26_t2v_billable_duration_v1" {
+		if len(p.Terms) != 2 {
+			return errors.New("unsupported native video tariff")
+		}
+		expected := map[string]metering.Rational{
+			"video_720p":  {Numerator: "3", Denominator: "5"},
+			"video_1080p": {Numerator: "1", Denominator: "1"},
+		}
+		for _, term := range p.Terms {
+			if term.Unit != "video_second" || expected[term.Key] != term.Price {
+				return errors.New("unsupported native video tariff")
+			}
+		}
+		return nil
+	}
+	if len(p.Terms) != 1 {
 		return errors.New("unsupported native video tariff")
 	}
 	term := p.Terms[0]

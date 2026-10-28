@@ -111,15 +111,33 @@ func (a *Adapter) ManagedTask(ctx context.Context, credential, id string) (Call,
 // ManagedRequestBody applies deployment-owned output bounds when SDKs omit
 // them. Existing task credentials retain their explicit-bounds contract.
 func (a *Adapter) ManagedRequestBody(operation string, body []byte) ([]byte, error) {
-	if operation != "chat" && operation != "responses" {
+	if operation != "chat" && operation != "responses" && operation != "claude.messages.create" && operation != "gemini.generate" {
 		return body, nil
 	}
 	var request map[string]any
 	if common.UnmarshalUnique(body, &request) != nil || request == nil {
 		return nil, ErrInvalid
 	}
+	if operation == "gemini.generate" {
+		generation, ok := request["generationConfig"].(map[string]any)
+		if !ok {
+			if _, exists := request["generationConfig"]; exists {
+				return nil, ErrInvalid
+			}
+			generation = map[string]any{}
+			request["generationConfig"] = generation
+		}
+		if _, exists := generation["maxOutputTokens"]; exists {
+			return body, nil
+		}
+		if _, exists := generation["max_output_tokens"]; exists {
+			return body, nil
+		}
+		generation["maxOutputTokens"] = a.config.MaxOutputTokens
+		return common.Marshal(request)
+	}
 	field := "max_output_tokens"
-	if operation == "chat" {
+	if operation == "chat" || operation == "claude.messages.create" {
 		field = "max_tokens"
 		if _, present := request["max_completion_tokens"]; present {
 			return body, nil

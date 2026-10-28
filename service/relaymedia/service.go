@@ -37,6 +37,8 @@ type PrepareInput struct {
 type Prepared struct {
 	ID, URL                         string
 	Facts                           VideoFacts
+	SHA256, ContentType             string
+	Size                            int64
 	GrantExpiresAt, AttemptDeadline time.Time
 }
 
@@ -49,6 +51,14 @@ type Service struct {
 }
 
 func (s *Service) PrepareMP4(ctx context.Context, in PrepareInput) (Prepared, error) {
+	return s.prepareMP4(ctx, in, 0, 0)
+}
+
+func (s *Service) PrepareMP4WithResolution(ctx context.Context, in PrepareInput, width, height int) (Prepared, error) {
+	return s.prepareMP4(ctx, in, width, height)
+}
+
+func (s *Service) prepareMP4(ctx context.Context, in PrepareInput, expectedWidth, expectedHeight int) (Prepared, error) {
 	if s == nil {
 		return Prepared{}, ErrUnavailable
 	}
@@ -57,6 +67,26 @@ func (s *Service) PrepareMP4(ctx context.Context, in PrepareInput) (Prepared, er
 	}
 	if _, err := uuid.Parse(in.RequestID); err != nil {
 		return Prepared{}, ErrInvalidInput
+	}
+	var existing model.RelayMediaResource
+	existingErr := s.db.WithContext(ctx).Where("request_id = ?", in.RequestID).First(&existing).Error
+	if existingErr == nil {
+		if existing.UserID != in.UserID || existing.TokenID != in.TokenID || existing.State != "ready" || existing.ExpiresAt <= s.now().Unix() {
+			return Prepared{}, ErrUnavailable
+		}
+		stored, readErr := s.readObject(ctx, existing)
+		if readErr != nil {
+			return Prepared{}, ErrUnavailable
+		}
+		storedFacts, inspectErr := InspectMP4(stored)
+		if inspectErr != nil || !expectedVideoDimensions(expectedWidth, expectedHeight, storedFacts) {
+			return Prepared{}, ErrUnavailable
+		}
+		expires := min(s.now().Add(GrantTTL).Unix(), existing.ExpiresAt)
+		return Prepared{ID: existing.ID, URL: s.resourceURL(existing, expires), Facts: storedFacts, SHA256: existing.SHA256, ContentType: "video/mp4", Size: existing.Size, GrantExpiresAt: time.Unix(expires, 0), AttemptDeadline: time.Unix(expires, 0).Add(-30 * time.Second)}, nil
+	}
+	if !errors.Is(existingErr, gorm.ErrRecordNotFound) {
+		return Prepared{}, ErrUnavailable
 	}
 	ctx, cancel := context.WithTimeout(ctx, FetchTimeout)
 	defer cancel()
@@ -102,6 +132,9 @@ func (s *Service) PrepareMP4(ctx context.Context, in PrepareInput) (Prepared, er
 	if err != nil {
 		return Prepared{}, err
 	}
+	if !expectedVideoDimensions(expectedWidth, expectedHeight, facts) {
+		return Prepared{}, ErrInvalidInput
+	}
 	now := s.now()
 	sum := sha256.Sum256(data)
 	r := model.RelayMediaResource{ID: uuid.NewString(), UserID: in.UserID, TokenID: in.TokenID, RequestID: in.RequestID, Format: facts.Format, Size: facts.Bytes, SHA256: hex.EncodeToString(sum[:]), Width: facts.Width, Height: facts.Height, Seconds: facts.Seconds, AudioKnown: facts.AudioKnown, HasAudio: facts.HasAudio, State: "staging", ExpiresAt: now.Add(Retention).Unix(), CreatedAt: now.Unix(), UpdatedAt: now.Unix()}
@@ -123,7 +156,15 @@ func (s *Service) PrepareMP4(ctx context.Context, in PrepareInput) (Prepared, er
 		return Prepared{}, ErrUnavailable
 	}
 	expires := min(s.now().Add(GrantTTL).Unix(), r.ExpiresAt)
-	return Prepared{ID: r.ID, URL: s.origin + "/api/relay-media/resources/" + r.ID + "?token=" + url.QueryEscape(s.grant(r, expires)), Facts: facts, GrantExpiresAt: time.Unix(expires, 0), AttemptDeadline: time.Unix(expires, 0).Add(-30 * time.Second)}, nil
+	return Prepared{ID: r.ID, URL: s.resourceURL(r, expires), Facts: facts, SHA256: r.SHA256, ContentType: "video/mp4", Size: r.Size, GrantExpiresAt: time.Unix(expires, 0), AttemptDeadline: time.Unix(expires, 0).Add(-30 * time.Second)}, nil
+}
+
+func expectedVideoDimensions(width, height int, facts VideoFacts) bool {
+	return width == 0 || (facts.Width == width && facts.Height == height)
+}
+
+func (s *Service) resourceURL(r model.RelayMediaResource, expires int64) string {
+	return s.origin + "/api/relay-media/resources/" + r.ID + "?token=" + url.QueryEscape(s.grant(r, expires))
 }
 func validSource(u *url.URL) bool {
 	return u != nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" && u.User == nil && u.Fragment == ""

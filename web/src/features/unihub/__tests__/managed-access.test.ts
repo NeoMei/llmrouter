@@ -107,3 +107,41 @@ test('budget writes retain asset selection and compare-and-set version without f
     assert.throws(() => limitAmount(invalid))
   }
 })
+
+test('explicit operation selection is sent unchanged and never filled from a newer catalog', async () => {
+  let sent: unknown
+  const client = new UniHubClient({
+    baseUrl: 'https://hub.test',
+    clientId: 'sw',
+    redirectUri: 'https://sw.test/callback',
+    fetch: async (_url, init) => {
+      sent = JSON.parse(String(init?.body))
+      return new Response(
+        JSON.stringify({
+          id: 'fixed',
+          operations: { model: ['embeddings.create', 'rerank.create'] },
+        })
+      )
+    },
+  })
+  const access = new ManagedAccess(
+    client,
+    'payer',
+    'superwagie',
+    'server-instance'
+  )
+  const key = await access.createKey({
+    name: 'knowledge',
+    models: ['model'],
+    operations: { model: ['embeddings.create', 'rerank.create'] },
+    funding_mode: 'credits',
+    max_total: '',
+    max_per_call: '',
+  })
+  assert.deepEqual((sent as { operations: unknown }).operations, {
+    model: ['embeddings.create', 'rerank.create'],
+  })
+  assert.deepEqual(key.operations, {
+    model: ['embeddings.create', 'rerank.create'],
+  })
+})

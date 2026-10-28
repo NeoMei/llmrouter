@@ -12,6 +12,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/relay/channel/nativespeech"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service/accountpool"
@@ -179,6 +180,9 @@ func handleTTSResponse(c *gin.Context, resp *http.Response, info *relaycommon.Re
 		}
 		total, err = hex.DecodeString(packet.Data.Audio)
 		if err != nil || len(total) == 0 || len(total) > maxSpeechBytes {
+			return nil, nativeSpeechError()
+		}
+		if info.PlatformMode && nativespeech.ValidateAudioFile(total, getContentTypeByFormat(info.OutputAudioFormat), 600) != nil {
 			return nil, nativeSpeechError()
 		}
 		c.Set("binary_stream_content_type", getContentTypeByFormat(info.OutputAudioFormat))

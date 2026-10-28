@@ -55,7 +55,11 @@ func TestInvalidQuantityAndHuge(t *testing.T) {
 func TestExactFamilies(t *testing.T) {
 	for _, tc := range []struct{ op, key, unit string }{{"chat", "input", "token"}, {"image_generation", "small", "image"}, {"ocr", "requests", "request"}, {"video", "video", "video_second"}, {"video", "provider", "provider_unit"}} {
 		t.Run(tc.unit, func(t *testing.T) {
-			p := Price{Version: "metered_v2", Operation: tc.op, Policy: "sum", Terms: []Term{{Key: tc.key, Unit: tc.unit, ProviderUnit: "", Price: Rational{"2", "3"}, Step: &Quantity{"2", 0}, Minimum: &Quantity{"3", 0}}}}
+			policy := "sum"
+			if tc.op == "ocr" {
+				policy = "success_request"
+			}
+			p := Price{Version: "metered_v2", Operation: tc.op, Policy: policy, Terms: []Term{{Key: tc.key, Unit: tc.unit, ProviderUnit: "", Price: Rational{"2", "3"}, Step: &Quantity{"2", 0}, Minimum: &Quantity{"3", 0}}}}
 			u := Usage{Version: "metered_v2", Operation: tc.op, State: "confirmed", Measurements: []Measurement{{Key: tc.key, Unit: tc.unit, ProviderUnit: "", Quantity: qty("1", 0)}}}
 			if tc.unit == "provider_unit" {
 				p.Terms[0].ProviderUnit = "vendor:unit"
@@ -68,6 +72,53 @@ func TestExactFamilies(t *testing.T) {
 			got, err = Calculate(p, u)
 			require.NoError(t, err)
 			assert.Equal(t, "0", got.RatString())
+		})
+	}
+}
+
+func TestOCROfficialProviderTokenTariffs(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		input, output, want     string
+		inputPrice, outputPrice Rational
+	}{
+		{"qwen-vl-ocr", "1000000", "1000000", "800000", Rational{"3", "10"}, Rational{"1", "2"}},
+		{"qwen3.5-ocr", "1000000", "1000000", "2500000", Rational{"1", "2"}, Rational{"2", "1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := Price{Version: "metered_v2", Operation: "ocr", Policy: "provider_tokens_v1", Terms: []Term{
+				{Key: "input", Unit: "token", Price: tc.inputPrice},
+				{Key: "output", Unit: "token", Price: tc.outputPrice},
+			}}
+			u := Usage{Version: "metered_v2", Operation: "ocr", State: "confirmed", Source: "provider_tokens_v1", Measurements: []Measurement{
+				{Key: "input", Unit: "token", Quantity: qty(tc.input, 0)},
+				{Key: "output", Unit: "token", Quantity: qty(tc.output, 0)},
+			}}
+			require.NoError(t, ValidatePrice(p))
+			got, err := Calculate(p, u)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got.RatString())
+		})
+	}
+}
+
+func TestOCRProviderTokenPolicyRemainsClosed(t *testing.T) {
+	base := Price{Version: "metered_v2", Operation: "ocr", Policy: "provider_tokens_v1", Terms: []Term{
+		{Key: "input", Unit: "token", Price: Rational{"1", "2"}},
+		{Key: "output", Unit: "token", Price: Rational{"2", "1"}},
+	}}
+	for name, mutate := range map[string]func(*Price){
+		"missing output":    func(p *Price) { p.Terms = p.Terms[:1] },
+		"request dimension": func(p *Price) { p.Terms[1] = Term{Key: "requests", Unit: "request", Price: Rational{"1", "1"}} },
+		"cache dimension": func(p *Price) {
+			p.Terms = append(p.Terms, Term{Key: "cache_read", Unit: "token", Price: Rational{"1", "1"}})
+		},
+		"wrong policy": func(p *Price) { p.Policy = "sum" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := base
+			mutate(&p)
+			require.Error(t, ValidatePrice(p))
 		})
 	}
 }
@@ -198,4 +249,17 @@ func TestOperationUnitMatrix(t *testing.T) {
 	}
 	p := Price{Version: "metered_v2", Operation: "speech", Policy: "sum", Terms: []Term{{Key: "characters", Unit: "character", ProviderUnit: "stray", Price: Rational{"1", "1"}}}}
 	require.Error(t, ValidatePrice(p))
+}
+
+func TestTieredVideoPriceAcceptsExactlyOneSelectedResolution(t *testing.T) {
+	p := Price{Version: "metered_v2", Operation: "video", Policy: "ali_wan26_t2v_billable_duration_v1", Terms: []Term{
+		{Key: "video_720p", Unit: "video_second", Price: Rational{Numerator: "3", Denominator: "5"}},
+		{Key: "video_1080p", Unit: "video_second", Price: Rational{Numerator: "1", Denominator: "1"}},
+	}}
+	require.NoError(t, ValidatePrice(p))
+	u := Usage{Version: "metered_v2", Operation: "video", State: "confirmed", Measurements: []Measurement{{Key: "video_720p", Unit: "video_second", Quantity: Quantity{Value: "5"}}}}
+	require.NoError(t, ValidateUsage(p, u))
+	total, err := Calculate(p, u)
+	require.NoError(t, err)
+	assert.Equal(t, "3", total.RatString())
 }

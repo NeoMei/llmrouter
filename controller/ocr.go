@@ -223,6 +223,15 @@ func (h *OCRHandler) Create(c *gin.Context) {
 			h.fail(c, 400, "platform OCR tariff required")
 			return
 		}
+		policy, e := session.OCRPolicy()
+		if e != nil || selected.ChannelID != policy.ChannelID || target.ProfileID != 0 || target.Model != policy.UpstreamModel || target.JobsURL != policy.Origin+"/api/v2/ocr/jobs" {
+			h.fail(c, 503, "certified OCR target unavailable")
+			return
+		}
+		admission.ValidateTarget = session.ValidateOCRTarget
+		target.KeySHA256 = policy.ChannelKeySHA256
+		target.ResourceOrigins = policy.ResourceOrigins
+		admission.BindTaskTx = session.BindTaskOn
 		admission.PlatformCallID = session.CallID()
 		admission.PlatformPrice = &price
 		admission.Dispatch = func(ctx context.Context) error { return session.Dispatch(ctx, selected.ChannelID) }
@@ -235,6 +244,11 @@ func (h *OCRHandler) Create(c *gin.Context) {
 	}
 	if value, platform := c.Get("platform_billing"); platform {
 		session := value.(*platformbilling.Session)
+		if session.WireOperation().Mode == "paddle-native-v1" {
+			status.JobID = session.CallID()
+			c.JSON(200, gin.H{"code": 0, "msg": "", "data": status})
+			return
+		}
 		c.JSON(202, gin.H{"id": session.CallID(), "job_id": status.JobID, "state": status.State, "status_url": "/platform/v1/ocr/jobs/" + session.CallID()})
 		return
 	}
@@ -347,7 +361,11 @@ func (h *OCRHandler) candidates(c *gin.Context, name string) ([]modelcatalog.Res
 		return nil, user, token, err
 	}
 	if recognized {
-		catalog, err := modelcatalog.AssembleRuntimeCatalog(ctx, modelcatalog.RuntimeContext{UserID: user.Id, Groups: groups}, routes, targets, modelcatalog.NewGormRuntimeSources(h.Runtime.DB), requestCatalogAuthorizer{})
+		assemble := modelcatalog.AssembleRuntimeCatalog
+		if _, platform := c.Get("platform_billing"); platform {
+			assemble = modelcatalog.AssembleManagedRuntimeCatalog
+		}
+		catalog, err := assemble(ctx, modelcatalog.RuntimeContext{UserID: user.Id, Groups: groups}, routes, targets, modelcatalog.NewGormRuntimeSources(h.Runtime.DB), requestCatalogAuthorizer{})
 		if err != nil {
 			return nil, user, token, err
 		}

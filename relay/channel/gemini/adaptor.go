@@ -130,6 +130,14 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
+	if info.PlatformMode && info.PlatformBilling != nil && info.PlatformBilling.WireOperation().ID == "gemini.generate" {
+		mode := info.PlatformBilling.WireOperation().Mode
+		if mode == "streamGenerateContent" {
+			mode += "?alt=sse"
+			info.DisablePing = true
+		}
+		return fmt.Sprintf("%s/v1beta/models/%s:%s", info.ChannelBaseUrl, info.UpstreamModelName, mode), nil
+	}
 
 	if model_setting.GetGeminiSettings().ThinkingAdapterEnabled &&
 		!model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {

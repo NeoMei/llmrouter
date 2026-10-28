@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/pkg/mediafacts"
 	"github.com/QuantumNous/new-api/relay/capability"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
@@ -55,7 +56,24 @@ func ValidateModelAdmission(c *gin.Context, info *relaycommon.RelayInfo, m dto.M
 		}
 		return nil // Actual certified facts are checked per selected candidate before money.
 	}
-	facts, mediaErr := InspectRequestMedia(info.Request)
+	if info.PlatformBilling != nil && info.PlatformBilling.WireOperation().ID == "responses.compact" {
+		_, output := info.PlatformBilling.ReservationBounds()
+		if m.MaxOutputTokens != nil && output > int64(*m.MaxOutputTokens) {
+			return fmt.Errorf("certified compact output exceeds declared max_output_tokens")
+		}
+	}
+	var facts []MediaFact
+	var mediaErr error
+	certifiedMedia := false
+	if info.PlatformBilling != nil {
+		facts, certifiedMedia, mediaErr = info.PlatformBilling.AdmittedMediaFacts(info.RelayFormat)
+	}
+	if mediaErr != nil {
+		return mediaErr
+	}
+	if !certifiedMedia {
+		facts, mediaErr = InspectRequestMedia(info.Request)
+	}
 	if _, audio := info.Request.(*dto.AudioRequest); audio && c.GetString(DomesticASRDataKey) != "" {
 		fact, err := DecodeMediaFact("audio", c.GetString(DomesticASRDataKey))
 		if err != nil {
@@ -149,7 +167,16 @@ func ValidateModelAdmission(c *gin.Context, info *relaycommon.RelayInfo, m dto.M
 			return fmt.Errorf("model does not support %s output", output)
 		}
 	}
-	inspectModelMedia(body, modalities, counts)
+	if certifiedMedia {
+		// The frozen native content traversal is authoritative for input media,
+		// including Gemini documents and native tool-result content lost by DTOs.
+		for _, fact := range facts {
+			modalities[fact.Modality] = true
+			counts[fact.Modality]++
+		}
+	} else {
+		inspectModelMedia(body, modalities, counts)
+	}
 	for modality := range modalities {
 		if len(m.InputModalities) > 0 && !containsCapability(m.InputModalities, modality) {
 			return fmt.Errorf("model does not accept %s input", modality)
@@ -184,10 +211,10 @@ func ValidateModelAdmission(c *gin.Context, info *relaycommon.RelayInfo, m dto.M
 		if l.MaxImages != nil && counts["image"] > *l.MaxImages {
 			return fmt.Errorf("image count exceeds declared max_images")
 		}
-		if (l.MaxPages != nil && modalities["document"]) || (l.MaxPixels != nil && containsCapability(outputs, "image")) || (l.MaxAudioSeconds != nil && containsCapability(outputs, "audio")) || (l.MaxVideoSeconds != nil && containsCapability(outputs, "video")) {
+		if (l.MaxPages != nil && modalities["document"] && !certifiedMedia) || (l.MaxPixels != nil && containsCapability(outputs, "image")) || (l.MaxAudioSeconds != nil && containsCapability(outputs, "audio")) || (l.MaxVideoSeconds != nil && containsCapability(outputs, "video")) {
 			return fmt.Errorf("declared output/document bounds require verified media metadata")
 		}
-		if len(l.Formats) > 0 && (modalities["document"] || containsCapability(outputs, "image") || containsCapability(outputs, "audio") || containsCapability(outputs, "video")) {
+		if len(l.Formats) > 0 && ((modalities["document"] && !certifiedMedia) || containsCapability(outputs, "image") || containsCapability(outputs, "audio") || containsCapability(outputs, "video")) {
 			return fmt.Errorf("declared output/document format requires verified media metadata")
 		}
 		verifiedInputs := map[string]int{}
@@ -200,12 +227,21 @@ func ValidateModelAdmission(c *gin.Context, info *relaycommon.RelayInfo, m dto.M
 				return fmt.Errorf("declared media bounds require verified media metadata")
 			}
 		}
+		pages := 0
 		for _, fact := range facts {
+			pages += fact.Pages
+			if l.MaxPages != nil && pages > *l.MaxPages {
+				return fmt.Errorf("document exceeds declared max_pages")
+			}
 			required := len(l.Formats) > 0 || (fact.Modality == "image" && l.MaxPixels != nil) || (fact.Modality == "audio" && l.MaxAudioSeconds != nil) || (fact.Modality == "video" && l.MaxVideoSeconds != nil)
 			if required && fact.Format == "" {
 				return fmt.Errorf("declared media bounds require verified media metadata")
 			}
-			if len(l.Formats) > 0 && !containsCapability(l.Formats, fact.Format) {
+			formatAllowed := containsCapability(l.Formats, fact.Format)
+			if certifiedMedia {
+				formatAllowed = mediafacts.AllowsFormat(l.Formats, fact.Format)
+			}
+			if len(l.Formats) > 0 && !formatAllowed {
 				return fmt.Errorf("decoded format is not declared")
 			}
 			if fact.Modality == "image" && l.MaxPixels != nil && fact.Pixels > *l.MaxPixels {

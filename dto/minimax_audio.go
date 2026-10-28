@@ -8,6 +8,9 @@ import (
 	"unicode/utf8"
 )
 
+// MaxMiniMaxSpeechBodyBytes bounds the original canonical request, including JSON whitespace.
+const MaxMiniMaxSpeechBodyBytes = 128 << 10
+
 // MiniMaxSpeechOptions is an explicit native extension allowlist. Routing,
 // text, stream and priced codec always come from the canonical AudioRequest.
 type MiniMaxSpeechOptions struct {

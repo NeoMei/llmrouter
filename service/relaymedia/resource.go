@@ -65,6 +65,39 @@ func (s *Service) ReadGranted(ctx context.Context, id, token string) ([]byte, er
 	return data, nil
 }
 
+func (s *Service) ReadOwned(ctx context.Context, id string, userID, tokenID int) ([]byte, error) {
+	if s == nil || len(id) != 36 || userID < 1 || tokenID < 1 {
+		return nil, ErrUnavailable
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	var snapshot model.RelayMediaResource
+	err := model.ReadRelayMedia(ctx, s.db, id, func(r model.RelayMediaResource) error {
+		if r.UserID != userID || r.TokenID != tokenID || r.State != "ready" || r.ExpiresAt <= s.now().Unix() {
+			return ErrUnavailable
+		}
+		snapshot = r
+		return nil
+	})
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	data, err := s.readObject(ctx, snapshot)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	err = model.ReadRelayMedia(ctx, s.db, id, func(r model.RelayMediaResource) error {
+		if r != snapshot {
+			return ErrUnavailable
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	return data, nil
+}
+
 func (s *Service) validGrant(r model.RelayMediaResource, expires int64, token string) bool {
 	now := s.now().Unix()
 	return r.State == "ready" && r.ExpiresAt > now && expires > now && expires <= r.ExpiresAt && expires <= now+int64(GrantTTL/time.Second) && hmac.Equal([]byte(s.grant(r, expires)), []byte(token))

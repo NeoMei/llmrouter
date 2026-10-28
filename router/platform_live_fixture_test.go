@@ -3,6 +3,8 @@ package router
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"github.com/QuantumNous/new-api/dto"
 	"io"
 	"net"
 	"net/http"
@@ -10,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -60,9 +63,113 @@ func TestPlatformLocalLiveFixture(t *testing.T) {
 	common.MemoryCacheEnabled = true
 	common.RedisEnabled = false
 	common.RetryTimes = 1
+	nativeWire := os.Getenv("UNIHUB_PLATFORM_E2E_NATIVE_WIRE")
 	var upstreamCalls atomic.Int64
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamCalls.Add(1)
+		if nativeWire != "" {
+			var call platformbilling.Call
+			require.NoError(t, db.Order("created_at DESC").First(&call).Error)
+			require.Equal(t, "UNKNOWN", call.Status)
+			var attempts int64
+			require.NoError(t, db.Model(&platformbilling.Attempt{}).Where("call_id = ? AND status = ?", call.CallID, "DISPATCHED").Count(&attempts).Error)
+			require.EqualValues(t, 1, attempts)
+			raw, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			if nativeWire == "embeddings.create" || nativeWire == "rerank.create" || nativeWire == "multimodal.embeddings.create" {
+				usage := `{"total_tokens":3}`
+				if nativeWire == "multimodal.embeddings.create" {
+					usage = `{"input_tokens":2,"image_tokens":3,"total_tokens":5}`
+				}
+				mode := os.Getenv("UNIHUB_PLATFORM_E2E_KNOWLEDGE_CASE")
+				if mode == "zero" {
+					usage = `{"total_tokens":0}`
+					if nativeWire == "multimodal.embeddings.create" {
+						usage = `{"input_tokens":0,"image_tokens":0,"total_tokens":0}`
+					}
+				}
+				if mode == "missing" {
+					usage = `{}`
+				}
+				switch mode {
+				case "duplicate":
+					usage = `{"total_tokens":3,"total_tokens":3}`
+					if nativeWire == "multimodal.embeddings.create" {
+						usage = `{"input_tokens":2,"input_tokens":2,"image_tokens":3,"total_tokens":5}`
+					}
+				case "partial":
+					usage = `{"prompt_tokens":3}`
+					if nativeWire == "multimodal.embeddings.create" {
+						usage = `{"input_tokens":2,"total_tokens":5}`
+					}
+				case "conflict":
+					usage = `{"total_tokens":3,"input_tokens":4}`
+					if nativeWire == "multimodal.embeddings.create" {
+						usage = `{"input_tokens":2,"image_tokens":3,"total_tokens":4}`
+					}
+				case "overcap":
+					usage = `{"total_tokens":1001}`
+					if nativeWire == "multimodal.embeddings.create" {
+						usage = `{"input_tokens":1001,"image_tokens":3,"total_tokens":1004}`
+					}
+				}
+				response := `{"output":{"results":[{"index":0,"relevance_score":0.9}]},"usage":` + usage + `}`
+				if nativeWire == "multimodal.embeddings.create" {
+					vector := "[" + strings.TrimSuffix(strings.Repeat("0.1,", 256), ",") + "]"
+					response = fmt.Sprintf(`{"output":{"embeddings":[{"index":0,"type":"vl","embedding":%s}]},"usage":%s}`, vector, usage)
+					require.Equal(t, "/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding", r.URL.Path)
+				} else if nativeWire == "embeddings.create" {
+					require.Equal(t, "/v1/embeddings", r.URL.Path)
+				} else {
+					require.Equal(t, "/api/v1/services/rerank/text-rerank/text-rerank", r.URL.Path)
+				}
+				if nativeWire == "embeddings.create" {
+					usage = `{"prompt_tokens":3,"total_tokens":3}`
+					switch mode {
+					case "zero":
+						usage = `{"prompt_tokens":0,"total_tokens":0}`
+					case "missing":
+						usage = `{}`
+					case "duplicate":
+						usage = `{"prompt_tokens":3,"prompt_tokens":3,"total_tokens":3}`
+					case "partial":
+						usage = `{"total_tokens":3}`
+					case "conflict":
+						usage = `{"prompt_tokens":3,"total_tokens":4}`
+					case "overcap":
+						usage = `{"prompt_tokens":1001,"total_tokens":1001}`
+					}
+					response = `{"model":"upstream-embed","object":"list","data":[{"index":0,"embedding":[0.1,0.2,0.3]}],"usage":` + usage + `}`
+				}
+				if mode == "bad-result" {
+					response = strings.Replace(response, `"index":0`, `"index":9`, 1)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(response))
+				return
+			}
+			require.Contains(t, string(raw), "JVBERi0")
+			response := `{"id":"c","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"synthetic local provider"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`
+			switch nativeWire {
+			case "responses.compact":
+				require.Equal(t, "/v1/responses/compact", r.URL.Path)
+				require.NotContains(t, string(raw), "max_output_tokens")
+				require.Contains(t, string(raw), "prior-opaque")
+				response = `{"id":"cmp","created_at":1700000000,"object":"response.compaction","output":[{"type":"compaction","id":"ci","encrypted_content":"synthetic local provider"}],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15,"input_tokens_details":{"cached_tokens":2,"cache_write_tokens":3},"output_tokens_details":{"reasoning_tokens":1}}}`
+			case "responses.create":
+				response = `{"id":"r","object":"response","status":"completed","output":[{"id":"m","type":"message","role":"assistant","content":[{"type":"output_text","text":"synthetic local provider"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+			case "claude.messages.create":
+				require.Equal(t, "/v1/messages", r.URL.Path)
+				response = `{"id":"m","type":"message","role":"assistant","content":[{"type":"text","text":"synthetic local provider"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`
+			case "gemini.generate":
+				require.Equal(t, "/v1beta/models/unihub-synthetic-model:generateContent", r.URL.Path)
+				response = `{"candidates":[{"content":{"role":"model","parts":[{"text":"synthetic local provider"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}`
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(response))
+			return
+		}
+
 		var body struct {
 			Stream bool `json:"stream"`
 		}
@@ -82,8 +189,18 @@ func TestPlatformLocalLiveFixture(t *testing.T) {
 	require.NoError(t, db.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.User{Id: 1, Username: "isolated-non-financial-principal", AffCode: "fixture-principal", Status: common.UserStatusEnabled, Group: "platform", Quota: 0}).Error)
 	require.NoError(t, db.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.User{Id: 2, Username: "isolated-native-compatibility-marker", AffCode: "fixture-native", Status: common.UserStatusEnabled, Group: "default", Quota: 12345, UsedQuota: 7, RequestCount: 3}).Error)
 	require.NoError(t, db.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.Token{Id: 1, UserId: 2, Key: "fixtureNativePreserved", Status: common.TokenStatusEnabled, RemainQuota: 54321, UsedQuota: 11, ExpiredTime: -1}).Error)
+	channelType := constant.ChannelTypeOpenAI
+	if nativeWire == "claude.messages.create" {
+		channelType = constant.ChannelTypeAnthropic
+	}
+	if nativeWire == "gemini.generate" {
+		channelType = constant.ChannelTypeGemini
+	}
+	if nativeWire == "rerank.create" || nativeWire == "multimodal.embeddings.create" {
+		channelType = constant.ChannelTypeAli
+	}
 	base := upstream.URL
-	require.NoError(t, db.Save(&model.Channel{Id: 1, Type: constant.ChannelTypeOpenAI, Key: "synthetic-not-a-provider-key", Status: common.ChannelStatusEnabled, Name: "isolated synthetic channel", BaseURL: &base, Models: "unihub-synthetic-model", Group: "platform"}).Error)
+	require.NoError(t, db.Save(&model.Channel{Id: 1, Type: channelType, Key: "synthetic-not-a-provider-key", Status: common.ChannelStatusEnabled, Name: "isolated synthetic channel", BaseURL: &base, Models: "unihub-synthetic-model", Group: "platform"}).Error)
 	require.NoError(t, db.Save(&model.Ability{Group: "platform", Model: "unihub-synthetic-model", ChannelId: 1, Enabled: true}).Error)
 	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"unihub-synthetic-model":0}`))
 	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"platform":1}`))
@@ -98,8 +215,63 @@ func TestPlatformLocalLiveFixture(t *testing.T) {
 	if raw := os.Getenv("UNIHUB_PLATFORM_E2E_ASSET_RATES"); raw != "" {
 		require.NoError(t, common.UnmarshalJsonStr(raw, &config.AssetRateIDs))
 	}
+	if nativeWire != "" {
+		require.Contains(t, []string{"chat.completions.create", "responses.create", "responses.compact", "claude.messages.create", "gemini.generate", "embeddings.create", "rerank.create", "multimodal.embeddings.create"}, nativeWire)
+		operation := "chat"
+		if nativeWire == "responses.create" || nativeWire == "responses.compact" {
+			operation = "responses"
+		}
+		config.OperationRateIDs = map[string]map[string]map[string]string{operation: {"CNY/6": {"unihub-synthetic-model": "native-rate"}}}
+		config.NativeInputPolicies = map[string]map[string]platformbilling.NativeInputPolicy{nativeWire: {"unihub-synthetic-model": {Version: "hard_context_v1", ProviderReference: "https://fixture.example/hard-context", ChannelType: channelType, UpstreamModel: "unihub-synthetic-model", HardInputTokens: 65536, MaxBytes: 10000, MaxImages: 2, MaxPixels: 100, MaxDocuments: 1, MaxPages: 2}}}
+	}
+	if nativeWire == "responses.compact" {
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{}`))
+		config.OperationLimits = map[string]map[string]platformbilling.OperationLimits{"responses": {"unihub-synthetic-model": {Policy: "sum"}}}
+		config.CompactPolicies = map[string]platformbilling.CompactPolicy{"unihub-synthetic-model": {Version: "hard_context_v1", ProviderReference: "https://fixture.example/compact", PublicModel: "unihub-synthetic-model", ChannelID: 1, ChannelType: channelType, UpstreamModel: "unihub-synthetic-model", WireOperation: nativeWire, EndpointPath: "/v1/responses/compact", HardInputTokens: 65536, HardOutputTokens: 8192, ServiceTier: "auto", RateIDs: map[string]string{"CNY/6": "native-rate"}}}
+		metadata := `{"operations":["responses.compact"],"input_modalities":["text","image","document"],"output_modalities":["text"],"max_output_tokens":8192,"media_limits":{"max_pages":2,"max_pixels":100,"max_images":2,"max_request_bytes":10000,"formats":["png","application/pdf"]}}`
+		require.NoError(t, db.Save(&model.ClientModelRoute{Id: 1, PublicId: "unihub-synthetic-model", DisplayName: "Synthetic compact", Client: "all", Enabled: true, Metadata: metadata}).Error)
+		require.NoError(t, db.Save(&model.ClientModelTarget{Id: 1, RouteId: 1, ChannelId: 1, UpstreamModel: "unihub-synthetic-model", PreferredWires: `["responses"]`, Enabled: true, Weight: 1}).Error)
+	}
+	if nativeWire == "embeddings.create" || nativeWire == "rerank.create" || nativeWire == "multimodal.embeddings.create" {
+		config.NativeInputPolicies = nil
+		op, upstreamModel, wire := "rerank", "qwen3-rerank", "openai_chat"
+		metadata := `{"operations":["rerank.create"],"input_modalities":["text"]}`
+		if nativeWire == "embeddings.create" {
+			op, upstreamModel = "embedding", "upstream-embed"
+			metadata = `{"operations":["embeddings.create"],"input_modalities":["text"],"embedding_space":{"provider":"openai","model":"upstream-embed","version":"v1","dimensions":3,"input_semantics":"text"}}`
+		}
+
+		if nativeWire == "multimodal.embeddings.create" {
+			op, upstreamModel, wire = "multimodal_embedding", "qwen3-vl-embedding", "qwen_multimodal_embedding"
+			metadata = `{"operations":["multimodal.embeddings.create"],"input_modalities":["text","image","video"],"output_modalities":["embedding"],"embedding_space":{"provider":"aliyun","model":"qwen3-vl-embedding","version":"v1","dimensions":256,"input_semantics":"` + dto.QwenMultimodalInputSemantics + `"},"media_limits":{"max_images":5,"max_pixels":16000000,"max_request_bytes":65536,"max_video_seconds":30,"formats":["png","mp4"]}}`
+		}
+		require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 1).Update("models", upstreamModel).Error)
+		require.NoError(t, db.Save(&model.Ability{Group: "platform", Model: upstreamModel, ChannelId: 1, Enabled: true}).Error)
+		require.NoError(t, db.Save(&model.ClientModelRoute{Id: 1, PublicId: "unihub-synthetic-model", DisplayName: "Knowledge", Client: "all", Enabled: true, Metadata: metadata}).Error)
+		require.NoError(t, db.Save(&model.ClientModelTarget{Id: 1, RouteId: 1, ChannelId: 1, UpstreamModel: upstreamModel, PreferredWires: `["` + wire + `"]`, Enabled: true, Weight: 1}).Error)
+		p := platformbilling.KnowledgePolicy{ChannelKeySHA256: "d03933be66561c29ba59bef3ca8dc6aac78b7bafeefcd9ef9744cb9913f8c75b", Version: "knowledge_v1", ProviderReference: "https://fixture.test/policy", PublicModel: "unihub-synthetic-model", WireOperation: nativeWire, ChannelID: 1, ChannelType: channelType, UpstreamModel: upstreamModel, HardInputTokens: 1000, MaxItemTokens: 100, MaxBatch: 10, RateIDs: map[string]string{"CNY/6": "native-rate", "CREDIT/6": "native-rate"}}
+		if op == "embedding" {
+			p.Space = &dto.EmbeddingSpace{Provider: "openai", Model: upstreamModel, Version: "v1", Dimensions: 3, InputSemantics: "text"}
+		}
+		if op == "multimodal_embedding" {
+			p.MaxBatch = 5
+			p.VisualTokens = 2000
+			p.Space = &dto.EmbeddingSpace{Provider: "aliyun", Model: upstreamModel, Version: "v1", Dimensions: 256, InputSemantics: dto.QwenMultimodalInputSemantics}
+		}
+		config.KnowledgePolicies = map[string]map[string]platformbilling.KnowledgePolicy{nativeWire: {"unihub-synthetic-model": p}}
+		config.OperationLimits = map[string]map[string]platformbilling.OperationLimits{op: {"unihub-synthetic-model": {Policy: "provider_reported_v1"}}}
+		config.OperationRateIDs = map[string]map[string]map[string]string{op: {"CNY/6": {"unihub-synthetic-model": "native-rate"}, "CREDIT/6": {"unihub-synthetic-model": "native-rate"}}}
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{}`))
+		model.InitChannelCache()
+	}
 	adapter, e := platformbilling.New(db, config)
 	require.NoError(t, e)
+	if nativeWire == "responses.compact" || nativeWire == "embeddings.create" || nativeWire == "rerank.create" || nativeWire == "multimodal.embeddings.create" {
+		catalog, err := readTechnicalCatalog(context.Background(), adapter, "superwagie")
+		require.NoError(t, err)
+		require.Len(t, catalog.Models, 1)
+		require.True(t, catalog.Models[0].Operations[0].Available, catalog.Models[0].Operations[0].DisabledReason)
+	}
 	engine := gin.New()
 	engine.Use(func(c *gin.Context) {
 		if c.Request.Method != http.MethodPost || c.Request.URL.Path != "/platform/v1/chat/completions" {

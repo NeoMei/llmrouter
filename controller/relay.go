@@ -597,8 +597,16 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 			// Session.Dispatch and raw usage observation.
 			return nil
 		}
-		if (price.Operation == "chat" || price.Operation == "responses" || price.Operation == "embedding") && c.GetInt("channel_type") != constant.ChannelTypeOpenAI {
-			return types.NewError(errors.New("platform metered producer unavailable for this channel"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		if price.Operation == "chat" || price.Operation == "responses" || price.Operation == "embedding" || price.Operation == "rerank" || price.Operation == "multimodal_embedding" {
+			_, proven := platformbilling.TokenProducer(info.PlatformBilling.WireOperation().ID, c.GetInt("channel_type"))
+			if !proven {
+				return types.NewError(errors.New("platform metered producer unavailable for this channel"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+			}
+		}
+		if price.Operation == "embedding" || price.Operation == "rerank" || price.Operation == "multimodal_embedding" {
+			if _, err := info.PlatformBilling.KnowledgeBody(info.ChannelId, info.ResolvedModelNameOrOrigin(), info.ApiKey); err != nil {
+				return types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+			}
 		}
 		if len(info.ParamOverride) > 0 || len(info.HeadersOverride) > 0 || info.ChannelSetting.SystemPrompt != "" || info.ChannelSetting.PassThroughBodyEnabled || model_setting.GetGlobalSettings().PassThroughRequestEnabled {
 			return types.NewError(errors.New("platform metering requires unchanged validated request"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
@@ -971,6 +979,12 @@ func RelayTask(c *gin.Context) {
 			return
 		}
 		relayInfo.NativeBilling = &relaycommon.NativeBillingContext{CallID: relayInfo.PlatformBilling.CallID(), Platform: true, Price: price, Observe: relayInfo.PlatformBilling.ObserveMetering}
+		if price.Policy == "ali_wan26_t2v_billable_duration_v1" {
+			if frozen, frozenErr := relayInfo.PlatformBilling.FrozenVideoPolicy(); frozenErr == nil {
+				relayInfo.NativeBilling.VideoResourceOrigins = frozen.Policy.ResourceOrigins
+				relayInfo.NativeBilling.VideoResourceAllowLoopback = frozen.Policy.AllowLoopbackHTTP
+			}
+		}
 	}
 
 	if taskErr := relay.ResolveOriginTask(c, relayInfo); taskErr != nil {
@@ -1203,7 +1217,11 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 		return nil
 	}
 
-	catalog, err := modelcatalog.AssembleRuntimeCatalog(c.Request.Context(), modelcatalog.RuntimeContext{
+	assemble := modelcatalog.AssembleRuntimeCatalog
+	if relayInfo.PlatformMode && relayInfo.PlatformBilling != nil {
+		assemble = modelcatalog.AssembleManagedRuntimeCatalog
+	}
+	catalog, err := assemble(c.Request.Context(), modelcatalog.RuntimeContext{
 		UserID: c.GetInt("id"),
 		Groups: groups.ownerGroups,
 		Client: client,
@@ -1215,6 +1233,20 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 	resolved, err := catalog.ResolveCandidates(c.Request.Context(), c.GetInt("id"), groups.ownerGroups, relayInfo.OriginModelName, client)
 	if err != nil {
 		return types.NewError(fmt.Errorf("configured model route %s has no available target: %w", relayInfo.OriginModelName, err), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+	}
+	if relayInfo.PlatformBilling != nil {
+		if pinned, ok := relayInfo.PlatformBilling.NativeHistoryTarget(); ok {
+			filtered := resolved[:0]
+			for _, candidate := range resolved {
+				if int64(candidate.ChannelID) == pinned.ChannelID && candidate.UpstreamModel == relayInfo.PlatformBilling.NativeHistoryUpstream() {
+					filtered = append(filtered, candidate)
+				}
+			}
+			resolved = filtered
+			if len(resolved) == 0 {
+				return types.NewError(platformbilling.ErrNativeHistory, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+			}
+		}
 	}
 	if len(resolved) > 0 {
 		_, operation, operationErr := capability.ResolveRequest(c.Request.Method, c.Request.URL.Path)
@@ -1244,6 +1276,10 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 				admissionTokens = independentEstimate
 			}
 		}
+	}
+	if relayInfo.PlatformBilling != nil && relayInfo.PlatformBilling.WireOperation().ID == "responses.compact" {
+		input, _ := relayInfo.PlatformBilling.ReservationBounds()
+		admissionTokens = int(input)
 	}
 	eligible, rejected := filterRouteCandidatesByContext(resolved, admissionTokens)
 	relayInfo.RejectedRouteCandidates = make([]relaycommon.RouteCandidate, 0, len(rejected))
@@ -1438,6 +1474,8 @@ func expectedWireForFormat(format types.RelayFormat) modelcatalog.WireProtocol {
 		return modelcatalog.WireMultimodalEmbedding
 	case types.RelayFormatOpenAIResponses, types.RelayFormatOpenAIResponsesCompaction:
 		return modelcatalog.WireResponses
+	case types.RelayFormatGemini:
+		return modelcatalog.WireGemini
 	case types.RelayFormatClaude:
 		return modelcatalog.WireAnthropic
 	case types.RelayFormatOpenAI, types.RelayFormatOpenAIAudio, types.RelayFormatOpenAIImage, types.RelayFormatEmbedding, types.RelayFormatRerank:

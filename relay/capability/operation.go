@@ -10,52 +10,62 @@ import (
 type Protocol string
 
 const (
-	ProtocolPaddleOCR Protocol = "paddleocr_jobs"
-	ProtocolOpenAI    Protocol = "openai"
-	ProtocolClaude    Protocol = "claude"
-	ProtocolGemini    Protocol = "gemini"
-	ProtocolTask      Protocol = "task"
-	ProtocolInternal  Protocol = "internal"
+	ProtocolDashScope  Protocol = "dashscope"
+	ProtocolBailian    Protocol = "bailian"
+	ProtocolElevenLabs Protocol = "elevenlabs"
+	ProtocolPaddleOCR  Protocol = "paddleocr_jobs"
+	ProtocolOpenAI     Protocol = "openai"
+	ProtocolClaude     Protocol = "claude"
+	ProtocolGemini     Protocol = "gemini"
+	ProtocolTask       Protocol = "task"
+	ProtocolInternal   Protocol = "internal"
 )
 
 type Operation string
 
 const (
-	OperationOCRCreate           Operation = "ocr.jobs.create"
-	OperationOCRRetrieve         Operation = "ocr.jobs.retrieve"
-	OperationOCRResource         Operation = "ocr.resources.retrieve"
-	OperationModelList           Operation = "models.list"
-	OperationModelRetrieve       Operation = "models.retrieve"
-	OperationModelDelete         Operation = "models.delete"
-	OperationChatCreate          Operation = "chat.completions.create"
-	OperationCompletionCreate    Operation = "completions.create"
-	OperationResponseCreate      Operation = "responses.create"
-	OperationResponseCompact     Operation = "responses.compact"
-	OperationRealtimeConnect     Operation = "realtime.connect"
-	OperationClaudeMessageCreate Operation = "claude.messages.create"
-	OperationMultimodalEmbedding Operation = "multimodal.embeddings.create"
-	OperationEmbeddingCreate     Operation = "embeddings.create"
-	OperationAudioTranscription  Operation = "audio.transcriptions.create"
-	OperationAudioTranslation    Operation = "audio.translations.create"
-	OperationAudioSpeech         Operation = "audio.speech.create"
-	OperationImageGeneration     Operation = "images.generations.create"
-	OperationImageEdit           Operation = "images.edits.create"
-	OperationImageVariation      Operation = "images.variations.create"
-	OperationRerankCreate        Operation = "rerank.create"
-	OperationModerationCreate    Operation = "moderations.create"
-	OperationGeminiGenerate      Operation = "gemini.generate"
-	OperationGeminiEmbed         Operation = "gemini.embed"
-	OperationVideoCreate         Operation = "videos.create"
-	OperationVideoRetrieve       Operation = "videos.retrieve"
-	OperationVideoRemix          Operation = "videos.remix"
-	OperationVideoContent        Operation = "videos.content"
-	OperationMidjourneySubmit    Operation = "midjourney.submit"
-	OperationMidjourneyFetch     Operation = "midjourney.fetch"
-	OperationSunoSubmit          Operation = "suno.submit"
-	OperationSunoFetch           Operation = "suno.fetch"
+	OperationGeminiImage                 Operation = "gemini.images.generate"
+	OperationQwenImage                   Operation = "dashscope.images.generate"
+	OperationQwenOCR                     Operation = "dashscope.ocr.recognitions.create"
+	OperationBailianSpeech               Operation = "bailian.audio.speech.create"
+	OperationElevenSpeech                Operation = "elevenlabs.audio.speech.create"
+	OperationDashScopeAudioTranscription Operation = "dashscope.audio.transcriptions.create"
+	OperationOCRCreate                   Operation = "ocr.jobs.create"
+	OperationOCRRetrieve                 Operation = "ocr.jobs.retrieve"
+	OperationOCRResource                 Operation = "ocr.resources.retrieve"
+	OperationModelList                   Operation = "models.list"
+	OperationModelRetrieve               Operation = "models.retrieve"
+	OperationModelDelete                 Operation = "models.delete"
+	OperationChatCreate                  Operation = "chat.completions.create"
+	OperationCompletionCreate            Operation = "completions.create"
+	OperationResponseCreate              Operation = "responses.create"
+	OperationResponseCompact             Operation = "responses.compact"
+	OperationRealtimeConnect             Operation = "realtime.connect"
+	OperationClaudeMessageCreate         Operation = "claude.messages.create"
+	OperationMultimodalEmbedding         Operation = "multimodal.embeddings.create"
+	OperationEmbeddingCreate             Operation = "embeddings.create"
+	OperationAudioTranscription          Operation = "audio.transcriptions.create"
+	OperationAudioTranslation            Operation = "audio.translations.create"
+	OperationAudioSpeech                 Operation = "audio.speech.create"
+	OperationImageGeneration             Operation = "images.generations.create"
+	OperationImageEdit                   Operation = "images.edits.create"
+	OperationImageVariation              Operation = "images.variations.create"
+	OperationRerankCreate                Operation = "rerank.create"
+	OperationModerationCreate            Operation = "moderations.create"
+	OperationGeminiGenerate              Operation = "gemini.generate"
+	OperationGeminiEmbed                 Operation = "gemini.embed"
+	OperationVideoCreate                 Operation = "videos.create"
+	OperationVideoRetrieve               Operation = "videos.retrieve"
+	OperationVideoRemix                  Operation = "videos.remix"
+	OperationVideoContent                Operation = "videos.content"
+	OperationMidjourneySubmit            Operation = "midjourney.submit"
+	OperationMidjourneyFetch             Operation = "midjourney.fetch"
+	OperationSunoSubmit                  Operation = "suno.submit"
+	OperationSunoFetch                   Operation = "suno.fetch"
 )
 
 var allOperations = []Operation{
+	OperationGeminiImage, OperationQwenImage, OperationQwenOCR, OperationBailianSpeech, OperationElevenSpeech, OperationDashScopeAudioTranscription,
 	OperationOCRCreate, OperationOCRRetrieve, OperationOCRResource,
 	OperationModelList, OperationModelRetrieve, OperationModelDelete,
 	OperationChatCreate, OperationCompletionCreate, OperationResponseCreate, OperationResponseCompact,
@@ -74,11 +84,17 @@ func AllOperations() []Operation {
 
 func ProtocolForOperation(operation Operation) Protocol {
 	switch operation {
+	case OperationQwenOCR, OperationQwenImage, OperationDashScopeAudioTranscription:
+		return ProtocolDashScope
+	case OperationBailianSpeech:
+		return ProtocolBailian
+	case OperationElevenSpeech:
+		return ProtocolElevenLabs
 	case OperationOCRCreate, OperationOCRRetrieve, OperationOCRResource:
 		return ProtocolPaddleOCR
 	case OperationClaudeMessageCreate:
 		return ProtocolClaude
-	case OperationGeminiGenerate, OperationGeminiEmbed:
+	case OperationGeminiGenerate, OperationGeminiEmbed, OperationGeminiImage:
 		return ProtocolGemini
 	case OperationMidjourneySubmit, OperationMidjourneyFetch, OperationSunoSubmit, OperationSunoFetch:
 		return ProtocolTask
@@ -119,8 +135,14 @@ func PublicRouteManifest() []RouteManifestEntry {
 }
 
 var publicRoutes = []routeSpec{
+	route(http.MethodPost, `^/v1/native/gemini/images/models/[^/]+:generateContent$`, OperationGeminiImage),
+	route(http.MethodPost, `^/v1/native/dashscope/images/generations$`, OperationQwenImage),
+	route(http.MethodPost, `^/v1/native/bailian/audio/speech$`, OperationBailianSpeech),
+	route(http.MethodPost, `^/v1/native/elevenlabs/audio/speech$`, OperationElevenSpeech),
+	route(http.MethodPost, `^/v1/native/dashscope/audio/transcriptions$`, OperationDashScopeAudioTranscription),
 	route(http.MethodPost, `^/v1/multimodal/embeddings$`, OperationMultimodalEmbedding),
 	route(http.MethodPost, `^/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding$`, OperationMultimodalEmbedding),
+	route(http.MethodPost, `^/v1/native/dashscope/ocr/recognitions$`, OperationQwenOCR),
 	route(http.MethodPost, `^/api/v2/ocr/jobs$`, OperationOCRCreate),
 	route(http.MethodGet, `^/api/v2/ocr/jobs/[^/]+$`, OperationOCRRetrieve),
 	route(http.MethodPost, `^/v1/ocr$`, OperationOCRCreate),

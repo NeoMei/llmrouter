@@ -3,6 +3,8 @@ package channel
 import (
 	"errors"
 	"fmt"
+	ci "github.com/QuantumNous/new-api/internal/platformbilling/continuityindex"
+	"github.com/QuantumNous/new-api/model"
 	"io"
 	"net/http"
 	"regexp"
@@ -466,6 +468,34 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		requestClient := *client
 		requestClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 		client = &requestClient
+	}
+	if info.PlatformBilling != nil && info.PlatformBilling.NativeHistoryEnabled() {
+		sent := accountpool.State(c).Sent
+		if sent == nil || req.GetBody == nil {
+			return nil, errors.New("native_history_unavailable")
+		}
+		var channel model.Channel
+		if model.DB.WithContext(c.Request.Context()).First(&channel, info.ChannelId).Error != nil {
+			return nil, errors.New("native_history_unavailable")
+		}
+		key, e := model.ResolveTaskAccountKey(c.Request.Context(), model.DB, &channel, sent.Ref)
+		if e != nil || req.Header.Get("Authorization") != "Bearer "+key {
+			return nil, errors.New("native_history_unavailable")
+		}
+		reader, e := req.GetBody()
+		if e != nil {
+			return nil, e
+		}
+		raw, e := io.ReadAll(io.LimitReader(reader, 1<<20+1))
+		reader.Close()
+		if e != nil || len(raw) > 1<<20 {
+			return nil, errors.New("native_history_unavailable")
+		}
+		target, _ := info.PlatformBilling.NativeHistoryTarget()
+		actual := ci.Target{ChannelID: int64(sent.Ref.ChannelID), MemberID: sent.Ref.MemberID, PoolID: sent.Ref.PoolID, Namespace: target.Namespace, APIOrganization: target.APIOrganization}
+		if e = info.PlatformBilling.DispatchNativeHistory(c.Request.Context(), actual, info.UpstreamModelName, req, raw); e != nil {
+			return nil, e
+		}
 	}
 	resp, err := client.Do(req.WithContext(c.Request.Context()))
 	if observeErr := accountpool.Observe(c, resp, err); observeErr != nil {

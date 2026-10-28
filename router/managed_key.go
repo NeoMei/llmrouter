@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -56,19 +57,49 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 			c.AbortWithStatusJSON(platformbilling.HTTPStatus(err), gin.H{"error": gin.H{"code": "model_credential_rejected"}})
 			return
 		}
+		// Discovery stays constrained to the verified key even if metadata is
+		// unavailable. Technical metadata does not grant execution authority.
+		config := platformbilling.CatalogConfigFromEnv(os.Getenv)
+		metadata := map[string]platformbilling.CatalogModel{}
+		scoped := []platformbilling.CatalogModel{}
+		if config.Valid() {
+			if catalog, e := readTechnicalCatalog(c.Request.Context(), adapter, config.ProductID); e == nil && catalog.InstanceID == config.InstanceID {
+				for _, m := range catalog.Models {
+					if slices.Contains(models, m.ID) {
+						metadata[m.ID] = m
+						scoped = append(scoped, m)
+					}
+				}
+			}
+		}
+		raw, _ := common.Marshal(struct {
+			Models            []string
+			Metadata          []platformbilling.CatalogModel
+			Product, Instance string
+		}{models, scoped, config.ProductID, config.InstanceID})
+		version := sha256.Sum256(raw)
+		project := func(id string) gin.H {
+			value := gin.H{"id": id, "object": "model", "created": 0, "owned_by": "unihub", "catalog_version": hex.EncodeToString(version[:])}
+			if m, ok := metadata[id]; ok {
+				value["capability_metadata"] = m
+			} else {
+				value["disabled_reason"] = "capability_metadata_unavailable"
+			}
+			return value
+		}
 		if model := c.Param("model"); model != "" {
 			if !slices.Contains(models, model) {
 				c.AbortWithStatusJSON(404, gin.H{"error": gin.H{"code": "model_not_found"}})
 				return
 			}
-			c.JSON(200, gin.H{"id": model, "object": "model", "created": 0, "owned_by": "unihub"})
+			c.JSON(200, project(model))
 			return
 		}
 		data := make([]gin.H, 0, len(models))
 		for _, model := range models {
-			data = append(data, gin.H{"id": model, "object": "model", "created": 0, "owned_by": "unihub"})
+			data = append(data, project(model))
 		}
-		c.JSON(200, gin.H{"object": "list", "data": data})
+		c.JSON(200, gin.H{"object": "list", "data": data, "schemaVersion": 1, "catalog_version": hex.EncodeToString(version[:])})
 	}
 	platform.GET("/platform/v1/models", middleware.DistributedRateLimit(), modelsHandler)
 	platform.GET("/platform/v1/models/:model", middleware.DistributedRateLimit(), modelsHandler)
@@ -99,18 +130,41 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 		}
 		credential := fields[1]
 		path := c.Request.URL.Path
+		if (path == "/v1/responses/compact" || path == "/v1/audio/speech" || path == "/v1/audio/transcriptions" || path == "/v1/images/generations" || path == "/v1/images/edits" || strings.HasPrefix(path, "/v1/native/")) && c.Request.URL.RawQuery != "" {
+			c.AbortWithStatus(http.StatusBadRequest)
+			return
+		}
 		target := ""
 		taskID := ""
 		if c.Request.Method == http.MethodGet && (path == "/v1/models" || strings.HasPrefix(path, "/v1/models/")) {
 			target = "/platform" + path
 		}
 		if c.Request.Method == http.MethodPost {
+			if strings.HasPrefix(path, "/v1/videos/") && strings.HasSuffix(path, "/cancel") {
+				id := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/videos/"), "/cancel")
+				row, err := adapter.ManagedTask(c.Request.Context(), credential, id)
+				if err != nil || row.Operation != "video" {
+					c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": gin.H{"code": "unified_task_not_found"}})
+					return
+				}
+				target = "/platform/v1/videos/" + row.CallID + "/cancel"
+				taskID = row.TaskID
+				path = "/__managed_video_cancel_handled"
+			}
 			switch path {
-			case "/v1/chat/completions", "/v1/responses", "/v1/embeddings", "/v1/audio/speech", "/v1/audio/transcriptions", "/v1/images/generations", "/v1/images/edits", "/v1/videos":
+			case "/v1/native/dashscope/images/generations", "/v1/native/dashscope/ocr/recognitions", "/v1/native/bailian/audio/speech", "/v1/native/elevenlabs/audio/speech", "/v1/rerank", "/v1/multimodal/embeddings", "/api/v1/services/rerank/text-rerank/text-rerank", "/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding", "/v1/messages", "/v1/chat/completions", "/v1/responses", "/v1/responses/compact", "/v1/embeddings", "/v1/audio/speech", "/v1/audio/transcriptions", "/v1/images/generations", "/v1/images/edits", "/v1/videos":
 				target = "/platform" + path
-			case "/v1/ocr", "/api/v2/ocr/jobs":
+			case "/api/v2/ocr/jobs":
+				target = "/platform/api/v2/ocr/jobs"
+			case "/v1/ocr":
 				target = "/platform/v1/ocr/jobs"
 			}
+		}
+		if c.Request.Method == http.MethodPost && strings.HasPrefix(path, "/v1/native/gemini/images/models/") {
+			target = "/platform" + path
+		}
+		if c.Request.Method == http.MethodPost && strings.HasPrefix(path, "/v1beta/models/") {
+			target = "/platform/v1/models/" + strings.TrimPrefix(path, "/v1beta/models/")
 		}
 		if c.Request.Method == http.MethodGet {
 			var operation, id, suffix string
@@ -147,6 +201,9 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 					target = "/platform/v1/videos/" + row.CallID + suffix
 				case "ocr":
 					target = "/platform/v1/ocr/jobs/" + row.CallID + suffix
+					if strings.HasPrefix(path, "/api/v2/ocr/jobs/") && row.WireMode == "paddle-native-v1" && suffix == "" {
+						target = "/platform/api/v2/ocr/jobs/" + row.CallID
+					}
 				case "receipt":
 					target = "/platform/v1/calls/" + row.CallID
 				}
@@ -168,6 +225,9 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 		}
 		request := c.Request.Clone(c.Request.Context())
 		request.URL.Path, request.URL.RawPath, request.URL.RawQuery = target, "", ""
+		if strings.HasPrefix(path, "/v1beta/models/") {
+			request.URL.RawQuery = c.Request.URL.RawQuery
+		}
 		request.Header.Set("Authorization", "Bearer "+credential)
 		request.Header.Set("Idempotency-Key", callID)
 		if taskID == "" {

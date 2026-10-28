@@ -37,7 +37,7 @@ func fixture(t *testing.T, failSettle *bool, reserveFailure ...bool) (*Adapter, 
 		var v any
 		switch r.URL.Path {
 		case "/internal/v1/model-credentials/verify":
-			v = Claims{ID: "cred", Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: "product", Models: []string{"test"}, TaskID: "task", ExpiresAt: time.Now().Add(time.Hour)}
+			v = Claims{Operations: map[string][]string{"test": {"chat.completions.create"}}, ID: "cred", Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: "product", Models: []string{"test"}, TaskID: "task", ExpiresAt: time.Now().Add(time.Hour)}
 		case "/internal/v1/rates":
 			v = []Rate{{ID: "rate", Model: "test", Status: "published", Semantics: "exclusive_v1", Input: Rational{"1", "1"}, Output: Rational{"2", "1"}, CacheRead: Rational{"1", "1"}, CacheWrite: Rational{"1", "1"}, Reasoning: Rational{"2", "1"}}}
 		case "/internal/v1/calls/call/settle":
@@ -66,6 +66,7 @@ func fixture(t *testing.T, failSettle *bool, reserveFailure ...bool) (*Adapter, 
 			remote.ActorID = "actor"
 			remote.AccountID = "account"
 			remote.OriginProductID = "product"
+			remote.WireOperation = reserved["wire_operation"]
 			remote.RequestDigest = reserved["request_digest"]
 			remote.Rate = Rate{ID: "rate", Model: "test"}
 			v = remote
@@ -114,7 +115,7 @@ func TestUnknownAndMissingUsageNeverRelease(t *testing.T) {
 			fail := false
 			a, db := fixture(t, &fail)
 			ctx := context.Background()
-			s, err := a.Admit(ctx, "uh_model_token", "task", "call", []byte(`{"model":"test","max_tokens":50}`))
+			s, err := a.Admit(ctx, "uh_model_token", "task", "call", []byte(`{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`))
 			require.NoError(t, err)
 			require.NoError(t, s.Dispatch(ctx, 1))
 			if !dispatch {
@@ -131,7 +132,7 @@ func TestUnknownAndMissingUsageNeverRelease(t *testing.T) {
 func TestAdmissionRejectsUntrustedScopeAndBounds(t *testing.T) {
 	fail := false
 	a, _ := fixture(t, &fail)
-	for _, tt := range []struct{ task, id, body string }{{"other", "call", `{"model":"test","max_tokens":50}`}, {"task", "", `{"model":"test","max_tokens":50}`}, {"task", "call", `{"model":"test","max_tokens":101}`}, {"task", "call", `{"model":"test","max_tokens":50,"group":"other"}`}, {"task", "call", `{"model":"unknown","max_tokens":50}`}, {"task", "call", `{"model":"test","max_tokens":50,"web_search_options":{}}`}} {
+	for _, tt := range []struct{ task, id, body string }{{"other", "call", `{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`}, {"task", "", `{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`}, {"task", "call", `{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":101}`}, {"task", "call", `{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":50,"group":"other"}`}, {"task", "call", `{"model":"unknown","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`}, {"task", "call", `{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":50,"web_search_options":{}}`}} {
 		_, err := a.Admit(context.Background(), "uh_model_token", tt.task, tt.id, []byte(tt.body))
 		require.Error(t, err)
 	}
@@ -164,7 +165,7 @@ func TestDefinitiveProviderRetryPersistsSeparateAttempts(t *testing.T) {
 	fail := false
 	a, db := fixture(t, &fail)
 	ctx := context.Background()
-	s, err := a.Admit(ctx, "uh_model_token", "task", "call", []byte(`{"model":"test","max_tokens":50}`))
+	s, err := a.Admit(ctx, "uh_model_token", "task", "call", []byte(`{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`))
 	require.NoError(t, err)
 	require.NoError(t, s.Dispatch(ctx, 1))
 	assert.False(t, s.CanRetry())
@@ -184,7 +185,7 @@ func TestReceiptRequiresExactVerifiedScopeWithoutRedispatch(t *testing.T) {
 	fail := false
 	a, db := fixture(t, &fail)
 	ctx := context.Background()
-	_, err := a.Admit(ctx, "uh_model_token", "task", "call", []byte(`{"model":"test","max_tokens":50}`))
+	_, err := a.Admit(ctx, "uh_model_token", "task", "call", []byte(`{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`))
 	require.NoError(t, err)
 	receipt, err := a.Receipt(ctx, "uh_model_reissued", "task", "call")
 	require.NoError(t, err)
@@ -239,7 +240,7 @@ func TestLostReservationResponseReconcilesWithoutProviderDispatch(t *testing.T) 
 	fail := false
 	a, db := fixture(t, &fail, true)
 	ctx := context.Background()
-	_, err := a.Admit(ctx, "uh_model_token", "task", "call", []byte(`{"model":"test","max_tokens":50}`))
+	_, err := a.Admit(ctx, "uh_model_token", "task", "call", []byte(`{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`))
 	require.Error(t, err)
 	var row Call
 	require.NoError(t, db.First(&row).Error)
@@ -255,7 +256,7 @@ func TestLostReservationResponseReconcilesWithoutProviderDispatch(t *testing.T) 
 func TestInvalidFinalUsageDoesNotChargeEarlierPartialCounters(t *testing.T) {
 	fail := false
 	a, db := fixture(t, &fail)
-	s, e := a.Admit(context.Background(), "uh_model_token", "task", "call", []byte(`{"model":"test","max_tokens":50}`))
+	s, e := a.Admit(context.Background(), "uh_model_token", "task", "call", []byte(`{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`))
 	require.NoError(t, e)
 	require.NoError(t, s.Dispatch(context.Background(), 1))
 	s.observe(&dto.Usage{PromptTokens: 10, CompletionTokens: 5})
@@ -270,7 +271,7 @@ func TestExpiredUndispatchedLeaseCannotDispatchAfterRecovery(t *testing.T) {
 	fail := false
 	a, db := fixture(t, &fail)
 	ctx := context.Background()
-	s, e := a.Admit(ctx, "uh_model_token", "task", "call", []byte(`{"model":"test","max_tokens":50}`))
+	s, e := a.Admit(ctx, "uh_model_token", "task", "call", []byte(`{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":50}`))
 	require.NoError(t, e)
 	require.NoError(t, db.Model(&Call{}).Where("call_id = ?", "call").UpdateColumn("updated_at", time.Now().Add(-2*time.Minute)).Error)
 	require.NoError(t, a.Recover(ctx))

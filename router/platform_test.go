@@ -167,7 +167,7 @@ func TestPlatformChatUsesFixedPayerAndNeverDebitsLegacy(t *testing.T) {
 				var v any
 				switch r.URL.Path {
 				case "/internal/v1/model-credentials/verify":
-					v = platformbilling.Claims{ID: "cred", Audience: "llmrouter", ActorID: "actor", AccountID: "fixed-account", OriginProductID: "product", Models: []string{"platform-test"}, TaskID: "task", ExpiresAt: time.Now().Add(time.Hour)}
+					v = platformbilling.Claims{Operations: map[string][]string{"platform-test": {"chat.completions.create"}}, ID: "cred", Audience: "llmrouter", ActorID: "actor", AccountID: "fixed-account", OriginProductID: "product", Models: []string{"platform-test"}, TaskID: "task", ExpiresAt: time.Now().Add(time.Hour)}
 				case "/internal/v1/rates":
 					v = []platformbilling.Rate{{ID: "rate", Model: "platform-test", Status: "published", Semantics: "exclusive_v1", Input: platformbilling.Rational{Numerator: "1", Denominator: "1"}, Output: platformbilling.Rational{Numerator: "1", Denominator: "1"}, CacheRead: platformbilling.Rational{Numerator: "1", Denominator: "1"}, CacheWrite: platformbilling.Rational{Numerator: "1", Denominator: "1"}, Reasoning: platformbilling.Rational{Numerator: "1", Denominator: "1"}}}
 				case "/internal/v1/calls/reserve":
@@ -214,6 +214,7 @@ func TestPlatformChatUsesFixedPayerAndNeverDebitsLegacy(t *testing.T) {
 					remote.ActorID = "actor"
 					remote.AccountID = "fixed-account"
 					remote.OriginProductID = "product"
+					remote.WireOperation = reserved["wire_operation"]
 					remote.RequestDigest = reserved["request_digest"]
 					remote.Rate = platformbilling.Rate{ID: "rate", Model: "platform-test"}
 					v = remote

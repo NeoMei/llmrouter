@@ -229,6 +229,7 @@ func main() {
 	}
 	// 设置路由
 	router.SetManagedKeyDispatch(server, platformAdapter)
+	router.SetModelCatalogRouter(server, platformAdapter, platformbilling.CatalogConfigFromEnv(os.Getenv))
 	router.SetRouter(server, router.WebAssets{
 		BuildFS:   buildFS,
 		IndexPage: indexPage,

@@ -3,8 +3,10 @@ package ali
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/QuantumNous/new-api/pkg/metering"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -58,7 +60,7 @@ func RerankHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayI
 		} `json:"usage"`
 		AliError
 	}
-	if err := common.Unmarshal(responseBody, &wire); err != nil {
+	if err := common.UnmarshalUnique(responseBody, &wire); err != nil {
 		return types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway), nil
 	}
 	if wire.Code != "" {
@@ -81,6 +83,28 @@ func RerankHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayI
 		return types.NewOpenAIError(fmt.Errorf("Ali rerank response requires nonnegative usage.total_tokens"), types.ErrorCodeBadResponseBody, http.StatusBadGateway), nil
 	}
 
+	if info.PlatformMode {
+		for _, raw := range wire.Output.Results {
+			var item struct {
+				Index    int `json:"index"`
+				Document *struct {
+					Text string `json:"text"`
+				} `json:"document"`
+			}
+			if common.UnmarshalUnique(raw, &item) != nil || (item.Document != nil && item.Document.Text != request.Documents[item.Index]) || (request.ReturnDocuments != nil && *request.ReturnDocuments && item.Document == nil) {
+				return types.NewOpenAIError(fmt.Errorf("rerank document differs from original input"), types.ErrorCodeBadResponseBody, http.StatusBadGateway), nil
+			}
+		}
+	}
+	if info.PlatformMode {
+		var envelope struct {
+			Usage map[string]json.RawMessage `json:"usage"`
+		}
+		if common.UnmarshalUnique(responseBody, &envelope) != nil || len(envelope.Usage) != 1 || envelope.Usage["total_tokens"] == nil || *wire.Usage.TotalTokens > 120000 {
+			return types.NewOpenAIError(fmt.Errorf("uncertified Ali rerank counters"), types.ErrorCodeBadResponseBody, http.StatusBadGateway), nil
+		}
+	}
+
 	var aliResponse AliRerankResponse
 	if err := common.Unmarshal(responseBody, &aliResponse); err != nil {
 		return types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway), nil
@@ -99,6 +123,18 @@ func RerankHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayI
 	jsonResponse, err := common.Marshal(rerankResponse)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
+	}
+	if info.PlatformMode {
+		if info.PlatformBilling != nil {
+			cap, _ := info.PlatformBilling.ReservationBounds()
+			if int64(*wire.Usage.TotalTokens) > cap {
+				return types.NewOpenAIError(fmt.Errorf("Ali rerank usage exceeds certified cap"), types.ErrorCodeBadResponseBody, http.StatusBadGateway), nil
+			}
+		}
+		actual := metering.Usage{Version: "metered_v2", Operation: "rerank", State: "confirmed", Source: "ali_rerank_actual_v1", Measurements: []metering.Measurement{{Key: "input", Unit: "token", Quantity: metering.Quantity{Value: strconv.Itoa(*wire.Usage.TotalTokens)}}}}
+		if err := service.RecordNativeUsageForRelay(c.Request.Context(), info, actual); err != nil {
+			return types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway), nil
+		}
 	}
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)

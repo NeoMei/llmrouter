@@ -64,6 +64,11 @@ func validateImage(data []byte) (string, error) {
 	}
 	return "image/png", nil
 }
+func (s *Service) ValidateInput(ctx context.Context, in Input) error {
+	_, err := s.validateInput(ctx, in)
+	return err
+}
+
 func (s *Service) validateInput(ctx context.Context, in Input) (validatedInput, error) {
 	var out validatedInput
 	if (len(in.File) == 0) == (in.FileURL == "") {
@@ -74,7 +79,7 @@ func (s *Service) validateInput(ctx context.Context, in Input) (validatedInput, 
 	}
 	opts := map[string]json.RawMessage{}
 	if len(in.OptionalPayload) > 0 {
-		if err := common.Unmarshal(in.OptionalPayload, &opts); err != nil || opts == nil {
+		if err := common.UnmarshalUnique(in.OptionalPayload, &opts); err != nil || opts == nil {
 			return out, errors.New("invalid OCR optionalPayload")
 		}
 	}

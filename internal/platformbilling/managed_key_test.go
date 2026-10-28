@@ -41,7 +41,7 @@ func TestDurableKeyAdmissionRequiresVerifiedKindAndInstance(t *testing.T) {
 					if tc.expired {
 						expiry = time.Now().Add(-time.Minute)
 					}
-					out = Claims{ID: "key-id", Audience: "llmrouter", ActorID: "actor", AccountID: "payer", OriginProductID: "client", Models: []string{"test"}, InstanceID: tc.instance, CredentialKind: tc.kind, ExpiresAt: expiry}
+					out = Claims{Operations: map[string][]string{"test": {"chat.completions.create"}}, ID: "key-id", Audience: "llmrouter", ActorID: "actor", AccountID: "payer", OriginProductID: "client", Models: []string{"test"}, InstanceID: tc.instance, CredentialKind: tc.kind, ExpiresAt: expiry}
 				case "/internal/v1/rates":
 					out = []Rate{rate}
 				case "/internal/v1/calls/reserve":
@@ -50,7 +50,7 @@ func TestDurableKeyAdmissionRequiresVerifiedKindAndInstance(t *testing.T) {
 					require.NoError(t, common.DecodeJson(r.Body, &in))
 					assert.Equal(t, "instance-a", in["instance_id"])
 					assert.Equal(t, "server-task", in["task_id"])
-					out = RemoteCall{CallID: in["call_id"], ActorID: "actor", AccountID: "payer", OriginProductID: "client", InstanceID: "instance-a", CredentialID: "key-id", RequestDigest: in["request_digest"], Rate: rate, Status: "RESERVED"}
+					out = RemoteCall{WireOperation: in["wire_operation"], CallID: in["call_id"], ActorID: "actor", AccountID: "payer", OriginProductID: "client", InstanceID: "instance-a", CredentialID: "key-id", RequestDigest: in["request_digest"], Rate: rate, Status: "RESERVED"}
 				default:
 					t.Errorf("unexpected operation %s", r.URL.Path)
 					w.WriteHeader(500)

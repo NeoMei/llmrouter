@@ -25,10 +25,11 @@ type protectedFetchDialer struct {
 }
 
 type ssrfProtectedRoundTripper struct {
-	resolver      ssrfResolver
-	dialContext   func(ctx context.Context, network, address string) (net.Conn, error)
-	getProtection func() (*common.SSRFProtection, bool, error)
-	proxy         func(*http.Request) (*url.URL, error)
+	resolver               ssrfResolver
+	dialContext            func(ctx context.Context, network, address string) (net.Conn, error)
+	getProtection          func() (*common.SSRFProtection, bool, error)
+	proxy                  func(*http.Request) (*url.URL, error)
+	requireTLSVerification bool
 
 	mutex      sync.Mutex
 	transports map[string]*http.Transport
@@ -161,7 +162,7 @@ func (t *ssrfProtectedRoundTripper) newTransport(proxyURL *url.URL) *http.Transp
 		Proxy:               proxyFunc,
 		DialContext:         dialContext,
 	}
-	if common.TLSInsecureSkipVerify {
+	if common.TLSInsecureSkipVerify && !t.requireTLSVerification {
 		transport.TLSClientConfig = common.InsecureTLSConfig
 	}
 	return transport
@@ -236,4 +237,16 @@ func networkAllowsIP(network string, ip net.IP) bool {
 	default:
 		return true
 	}
+}
+
+// NewManagedImageHTTPClient fixes the managed resource policy independently of
+// optional legacy fetch settings: direct TLS with DNS-pinned public addresses.
+func NewManagedImageHTTPClient() *http.Client {
+	protection, err := common.NewSSRFProtectionFromFetchSetting(false, false, false, nil, nil, []string{"443"}, true)
+	client := newProtectedFetchHTTPClientWithProxy(nil, nil, func() (*common.SSRFProtection, bool, error) { return protection, true, err }, func(*http.Request) (*url.URL, error) { return nil, nil })
+	client.Transport.(*ssrfProtectedRoundTripper).requireTLSVerification = true
+	client.Timeout = 120 * time.Second
+	client.Jar = nil
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return client
 }

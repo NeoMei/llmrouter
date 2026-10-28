@@ -51,6 +51,9 @@ func meteredFixture(t *testing.T, op string) (*Adapter, *gorm.DB, *atomic.Int64)
 	t.Helper()
 	var settles atomic.Int64
 	rate := Rate{ID: "native", Model: "test", Asset: "CREDIT/6", Status: "published", Semantics: "metered_v2", Metered: &metering.Price{Version: "metered_v2", Operation: op, Policy: "sum", Terms: []metering.Term{{Key: "characters", Unit: "character", Price: metering.Rational{Numerator: "1", Denominator: "1"}}}}}
+	if op == "speech" {
+		rate.Metered.Policy = "unicode_scalar_v1"
+	}
 	if op == "ocr" {
 		rate.Metered.Terms[0].Key = "requests"
 		rate.Metered.Terms[0].Unit = "request"
@@ -69,13 +72,13 @@ func meteredFixture(t *testing.T, op string) (*Adapter, *gorm.DB, *atomic.Int64)
 			if in["token"] == "uh_model_other" {
 				account = "other"
 			}
-			out = Claims{ID: "credential", Audience: "llmrouter", ActorID: "actor", AccountID: account, OriginProductID: "origin", Models: []string{"test"}, TaskID: "task", ExpiresAt: time.Now().Add(time.Hour)}
+			out = Claims{Operations: map[string][]string{"test": {legacyWireOperation(op)}}, ID: "credential", Audience: "llmrouter", ActorID: "actor", AccountID: account, OriginProductID: "origin", Models: []string{"test"}, TaskID: "task", ExpiresAt: time.Now().Add(time.Hour)}
 		case "/internal/v1/rates":
 			out = []Rate{rate}
 		case "/internal/v1/calls/reserve":
 			var in map[string]string
 			require.NoError(t, common.DecodeJson(r.Body, &in))
-			remote = RemoteCall{CallID: in["call_id"], ActorID: "actor", AccountID: "account", OriginProductID: "origin", RequestDigest: in["request_digest"], Rate: rate, Status: "RESERVED", Held: in["amount"], CredentialID: "credential", ChargeAsset: "CREDIT/6", FundingMode: "credits", FundingProductID: "llmrouter", Allocations: []Allocation{{BatchID: "batch", Amount: in["amount"]}}}
+			remote = RemoteCall{WireOperation: in["wire_operation"], CallID: in["call_id"], ActorID: "actor", AccountID: "account", OriginProductID: "origin", RequestDigest: in["request_digest"], Rate: rate, Status: "RESERVED", Held: in["amount"], CredentialID: "credential", ChargeAsset: "CREDIT/6", FundingMode: "credits", FundingProductID: "llmrouter", Allocations: []Allocation{{BatchID: "batch", Amount: in["amount"]}}}
 			out = remote
 		case "/internal/v1/calls/call/settle":
 			var in struct {
@@ -104,6 +107,9 @@ func meteredFixture(t *testing.T, op string) (*Adapter, *gorm.DB, *atomic.Int64)
 	require.NoError(t, err)
 	a, err := New(db, Config{Enabled: true, Origin: server.URL, ServiceToken: "service-service-service-service-token", Group: "platform", MaxBodyBytes: 8192, MaxInputTokens: 1000, MaxOutputTokens: 100})
 	require.NoError(t, err)
+	if op == "speech" {
+		a.config.AudioPolicies = map[string]map[string]AudioPolicy{"audio.speech.create": {"test": {Version: "audio_v1", PublicModel: "test", WireOperation: "audio.speech.create", ChannelID: 1, ChannelType: 1, UpstreamModel: "tts-1", ChannelKeySHA256: "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683", Origin: "https://api.openai.com", UsagePolicy: "unicode_scalar_v1", MaxQuantity: 600, RateIDs: map[string]string{"CREDIT/6": "native"}}}}
+	}
 	return a, db, &settles
 }
 func speechUsage(value string) metering.Usage {
@@ -135,7 +141,7 @@ func TestMeteredZeroSettlementAndCanonicalDuplicate(t *testing.T) {
 func TestMeteredConflictingEvidenceRetainsHold(t *testing.T) {
 	a, db, settles := meteredFixture(t, "speech")
 	ctx := context.Background()
-	s, e := a.AdmitOperation(ctx, "uh_model_token", "task", "call", "speech", "application/json", []byte(`{"model":"test","input":"hello"}`))
+	s, e := a.AdmitOperation(ctx, "uh_model_token", "task", "call", "speech", "application/json", []byte(`{"model":"test","input":"hello","voice":"alloy"}`))
 	require.NoError(t, e)
 	require.NoError(t, s.Dispatch(ctx, 1))
 	require.NoError(t, s.ObserveMetering(ctx, speechUsage("2")))
@@ -150,7 +156,7 @@ func TestMeteredConflictingEvidenceRetainsHold(t *testing.T) {
 func TestMeteredAsyncBindingRecovery(t *testing.T) {
 	a, db, settles := meteredFixture(t, "speech")
 	ctx := context.Background()
-	s, e := a.AdmitOperation(ctx, "uh_model_token", "task", "call", "speech", "application/json", []byte(`{"model":"test","input":"hello"}`))
+	s, e := a.AdmitOperation(ctx, "uh_model_token", "task", "call", "speech", "application/json", []byte(`{"model":"test","input":"hello","voice":"alloy"}`))
 	require.NoError(t, e)
 	require.NoError(t, s.Dispatch(ctx, 1))
 	require.NoError(t, s.BindTask(ctx, "provider-task"))
@@ -194,7 +200,7 @@ func TestMultipartDigestIgnoresBoundaryAndRejectsDuplicate(t *testing.T) {
 func TestConcurrentMeteredReceiptsPersistConflict(t *testing.T) {
 	a, db, _ := meteredFixture(t, "speech")
 	ctx := context.Background()
-	s, e := a.AdmitOperation(ctx, "uh_model_token", "task", "call", "speech", "application/json", []byte(`{"model":"test","input":"hello"}`))
+	s, e := a.AdmitOperation(ctx, "uh_model_token", "task", "call", "speech", "application/json", []byte(`{"model":"test","input":"hello","voice":"alloy"}`))
 	require.NoError(t, e)
 	require.NoError(t, s.Dispatch(ctx, 1))
 	// Independent sessions model independent provider callbacks, not a shared lock.
@@ -216,7 +222,7 @@ func TestConcurrentMeteredReceiptsPersistConflict(t *testing.T) {
 func TestTaskBindingAndBusinessInsertAreAtomic(t *testing.T) {
 	a, db, _ := meteredFixture(t, "speech")
 	ctx := context.Background()
-	s, e := a.AdmitOperation(ctx, "uh_model_token", "task", "call", "speech", "application/json", []byte(`{"model":"test","input":"hello"}`))
+	s, e := a.AdmitOperation(ctx, "uh_model_token", "task", "call", "speech", "application/json", []byte(`{"model":"test","input":"hello","voice":"alloy"}`))
 	require.NoError(t, e)
 	require.NoError(t, s.Dispatch(ctx, 1))
 	failure := errors.New("injected task insert failure")
@@ -234,7 +240,7 @@ func TestTaskBindingAndBusinessInsertAreAtomic(t *testing.T) {
 func TestRecoverDurableProviderBindingBeforeObservation(t *testing.T) {
 	a, _, settles := meteredFixture(t, "speech")
 	ctx := context.Background()
-	s, e := a.AdmitOperation(ctx, "uh_model_token", "task", "call", "speech", "application/json", []byte(`{"model":"test","input":"hello"}`))
+	s, e := a.AdmitOperation(ctx, "uh_model_token", "task", "call", "speech", "application/json", []byte(`{"model":"test","input":"hello","voice":"alloy"}`))
 	require.NoError(t, e)
 	require.NoError(t, s.Dispatch(ctx, 1))
 	// Worker reconstructs the exact provider ID from its durable OCR submission.

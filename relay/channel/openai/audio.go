@@ -3,9 +3,13 @@ package openai
 import (
 	"bytes"
 	"fmt"
+	"github.com/QuantumNous/new-api/relay/channel/nativespeech"
 	"io"
 	"math"
+	"mime"
 	"net/http"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -27,6 +31,26 @@ func OpenaiTTSHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	// and can be terminated directly.
 	defer service.CloseResponseBodyGracefully(resp)
 	usage := &dto.Usage{}
+	if info.PlatformMode {
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, (32<<20)+1))
+		ct, _, ctErr := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+		expected := "audio/mpeg"
+		if r, ok := info.Request.(*dto.AudioRequest); ok && r.ResponseFormat == "wav" {
+			expected = "audio/wav"
+		}
+		if err != nil || ctErr != nil || ct != expected || nativespeech.ValidateAudioFile(raw, ct, 600) != nil || info.IsStream {
+			info.NativeSpeechText = nil
+			c.AbortWithStatus(502)
+			return usage
+		}
+		c.Header("Content-Type", ct)
+		c.Header("Cache-Control", "no-store")
+		n, err := c.Writer.Write(raw)
+		if err != nil || n != len(raw) {
+			info.NativeSpeechText = nil
+		}
+		return usage
+	}
 	usage.PromptTokens = info.GetEstimatePromptTokens()
 	usage.TotalTokens = info.GetEstimatePromptTokens()
 	for k, v := range resp.Header {
@@ -118,9 +142,24 @@ func OpenaiTTSHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 func OpenaiSTTHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, responseFormat string) (*types.NewAPIError, *dto.Usage) {
 	defer service.CloseResponseBodyGracefully(resp)
 
-	responseBody, err := io.ReadAll(resp.Body)
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, (8<<20)+1))
 	if err != nil {
 		return types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError), nil
+	}
+	if info.PlatformMode {
+		text := ""
+		ct, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+		if responseFormat == "text" && ct == "text/plain" {
+			text = string(responseBody)
+		} else {
+			var raw map[string]any
+			if responseFormat != "text" && ct == "application/json" && common.UnmarshalUnique(responseBody, &raw) == nil && raw["error"] == nil {
+				text, _ = raw["text"].(string)
+			}
+		}
+		if len(responseBody) > 8<<20 || !utf8.Valid(responseBody) || strings.TrimSpace(text) == "" {
+			return types.NewErrorWithStatusCode(fmt.Errorf("empty or invalid transcript"), types.ErrorCodeBadResponseBody, 502, types.ErrOptionWithSkipRetry()), nil
+		}
 	}
 	// 写入新的 response body
 	service.IOCopyBytesGracefully(c, resp, responseBody)

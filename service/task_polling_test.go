@@ -3,8 +3,10 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/metering"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/stretchr/testify/assert"
@@ -31,6 +34,27 @@ type taskPollingFetchAdaptor struct {
 
 type sunoFailurePollingAdaptor struct {
 	failReason string
+}
+
+type wanPlatformVideoAdaptor struct {
+	fetches int
+	url     string
+}
+
+func (a *wanPlatformVideoAdaptor) Init(*relaycommon.RelayInfo) {}
+
+func (a *wanPlatformVideoAdaptor) FetchTask(string, string, map[string]any, string) (*http.Response, error) {
+	a.fetches++
+	body := `{"output":{"task_id":"provider-wan","task_status":"SUCCEEDED","video_url":"` + a.url + `"},"usage":{"duration":5,"video_count":1}}`
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+}
+
+func (a *wanPlatformVideoAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskInfo, error) {
+	return &relaycommon.TaskInfo{Status: model.TaskStatusSuccess, Url: a.url, Progress: "100%"}, nil
+}
+
+func (a *wanPlatformVideoAdaptor) AdjustBillingOnComplete(*model.Task, *relaycommon.TaskInfo) int {
+	return 0
 }
 
 func (a *sunoFailurePollingAdaptor) Init(_ *relaycommon.RelayInfo) {}
@@ -423,6 +447,60 @@ func TestUpdateSunoTasksStalePollsRefundExactlyOnce(t *testing.T) {
 	assert.Equal(t, initialUserQuota+taskQuota, getUserQuota(t, userID))
 	assert.Equal(t, initialTokenQuota+taskQuota, getTokenRemainQuota(t, tokenID))
 	assert.Equal(t, int64(1), countLogs(t))
+}
+
+func TestPlatformWanVideoCompletionRequiresValidatedOwnedArtifact(t *testing.T) {
+	truncate(t)
+	const channelID = 451
+	seedTaskPollingChannel(t, channelID, true)
+	task := seedPollingTask(t, channelID, "task_wan_public", "provider-wan")
+	task.FundingOwner = "platform"
+	task.PlatformCallID = "wan-call"
+	task.PrivateData.BillingContext = &model.TaskBillingContext{
+		NativePrice: &metering.Price{Version: "metered_v2", Operation: "video", Policy: "ali_wan26_t2v_billable_duration_v1", Terms: []metering.Term{
+			{Key: "video_720p", Unit: "video_second", Price: metering.Rational{Numerator: "3", Denominator: "5"}},
+			{Key: "video_1080p", Unit: "video_second", Price: metering.Rational{Numerator: "1", Denominator: "1"}},
+		}},
+		PlatformCallID:       "wan-call",
+		VideoResolution:      "video_720p",
+		VideoResourceOrigins: []string{"https://media.example"},
+	}
+	require.NoError(t, model.DB.Save(task).Error)
+
+	oldMedia := PlatformVideoMedia
+	PlatformVideoMedia = func(context.Context, string, string, int, int) (PlatformVideoArtifact, error) {
+		return PlatformVideoArtifact{}, errors.New("media runtime unavailable")
+	}
+	t.Cleanup(func() { PlatformVideoMedia = oldMedia })
+	adaptor := &wanPlatformVideoAdaptor{url: "https://media.example/video.mp4"}
+	require.Error(t, updateVideoSingleTask(context.Background(), adaptor, &model.Channel{Id: channelID, Type: constant.ChannelTypeAli}, task.GetUpstreamTaskID(), map[string]*model.Task{task.GetUpstreamTaskID(): task}))
+	var pending model.Task
+	require.NoError(t, model.DB.First(&pending, task.ID).Error)
+	assert.Equal(t, model.TaskStatus(model.TaskStatusInProgress), pending.Status)
+	assert.Empty(t, pending.NativeEvidence)
+	assert.False(t, pending.NativePending)
+
+	PlatformVideoMedia = func(_ context.Context, sourceURL, callID string, width, height int) (PlatformVideoArtifact, error) {
+		require.Equal(t, "https://media.example/video.mp4", sourceURL)
+		require.Equal(t, "wan-call", callID)
+		require.Equal(t, 1280, width)
+		require.Equal(t, 720, height)
+		return PlatformVideoArtifact{ID: "resource-id", SHA256: strings.Repeat("a", 64), ContentType: "video/mp4", Size: 123, Width: width, Height: height, Seconds: 5}, nil
+	}
+	reloaded := &pending
+	require.NoError(t, updateVideoSingleTask(context.Background(), adaptor, &model.Channel{Id: channelID, Type: constant.ChannelTypeAli}, reloaded.GetUpstreamTaskID(), map[string]*model.Task{reloaded.GetUpstreamTaskID(): reloaded}))
+	var done model.Task
+	require.NoError(t, model.DB.First(&done, task.ID).Error)
+	assert.Equal(t, model.TaskStatus(model.TaskStatusSuccess), done.Status)
+	assert.Equal(t, "resource-id", done.PrivateData.ResultResourceID)
+	assert.Equal(t, strings.Repeat("a", 64), done.PrivateData.ResultSHA256)
+	assert.Equal(t, int64(123), done.PrivateData.ResultSize)
+	assert.Equal(t, "video/mp4", done.PrivateData.ResultContentType)
+	assert.NotContains(t, done.GetResultURL(), "media.example")
+	assert.True(t, done.NativePending)
+	var evidence metering.Usage
+	require.NoError(t, common.UnmarshalJsonStr(done.NativeEvidence, &evidence))
+	assert.Equal(t, "confirmed", evidence.State)
 }
 
 func TestSweepUnrefundedFailedTasksRefundsModernTaskAndSkipsLegacy(t *testing.T) {

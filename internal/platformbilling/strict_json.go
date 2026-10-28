@@ -75,9 +75,9 @@ func strictChatRequest(body []byte) (map[string]any, error) {
 	if common.UnmarshalUnique(body, &request) != nil || request == nil {
 		return nil, ErrInvalid
 	}
-	// Platform rates cover text Chat token usage only. The shared provider DTO
-	// also carries native search and other billable extensions; adding a field
-	// there must never implicitly expand the funded platform contract.
+	// The shared provider DTO also carries native search, output media and
+	// other billable extensions. Adding a DTO field must never implicitly
+	// expand the funded platform admission contract.
 	for key := range request {
 		switch key {
 		case "model", "messages", "stream", "stream_options", "max_tokens", "max_completion_tokens",
@@ -93,41 +93,8 @@ func strictChatRequest(body []byte) (map[string]any, error) {
 	if validateDTOKeys(request, reflect.TypeOf(dto.GeneralOpenAIRequest{})) != nil {
 		return nil, ErrInvalid
 	}
-	// These fields contain protocol objects declared as any/RawMessage in the
-	// legacy DTO. Validate their protocol keys before its permissive decoder.
-	if messages, ok := request["messages"].([]any); ok {
-		for _, item := range messages {
-			message, ok := item.(map[string]any)
-			if !ok {
-				return nil, ErrInvalid
-			}
-			if parts, ok := message["content"].([]any); ok {
-				for _, part := range parts {
-					if validateDTOKeys(part, reflect.TypeOf(dto.MediaContent{})) != nil {
-						return nil, ErrInvalid
-					}
-				}
-			}
-			if calls, ok := message["tool_calls"].([]any); ok {
-				for _, call := range calls {
-					if validateDTOKeys(call, reflect.TypeOf(dto.ToolCallRequest{})) != nil {
-						return nil, ErrInvalid
-					}
-				}
-			}
-		}
-	}
-	if choice, ok := request["tool_choice"].(map[string]any); ok {
-		if validateDTOKeys(choice, reflect.TypeOf(dto.ToolCallRequest{})) != nil {
-			return nil, ErrInvalid
-		}
-	}
-	if format, ok := request["response_format"].(map[string]any); ok {
-		if schema, ok := format["json_schema"].(map[string]any); ok {
-			if validateDTOKeys(schema, reflect.TypeOf(dto.FormatJsonSchema{})) != nil {
-				return nil, ErrInvalid
-			}
-		}
+	if validateChatProtocol(request) != nil {
+		return nil, ErrInvalid
 	}
 	return request, nil
 }

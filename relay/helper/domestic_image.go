@@ -56,9 +56,11 @@ func ValidateDomesticImage(c *gin.Context, info *relaycommon.RelayInfo, channelT
 	if info.RelayMode != relayconstant.RelayModeImagesGenerations && info.RelayMode != relayconstant.RelayModeImagesEdits {
 		return fmt.Errorf("unsupported Ali image operation")
 	}
-	price, exists := ratio_setting.GetModelPrice(billingModel, false)
-	if !exists || price < 0 || math.IsNaN(price) || math.IsInf(price, 0) || billing_setting.GetBillingMode(billingModel) == billing_setting.BillingModeTieredExpr {
-		return fmt.Errorf("Ali images require explicit configured per-image price")
+	if !info.PlatformMode || info.PlatformBilling == nil {
+		price, exists := ratio_setting.GetModelPrice(billingModel, false)
+		if !exists || price < 0 || math.IsNaN(price) || math.IsInf(price, 0) || billing_setting.GetBillingMode(billingModel) == billing_setting.BillingModeTieredExpr {
+			return fmt.Errorf("Ali images require explicit configured per-image price")
+		}
 	}
 	storage, err := common.GetBodyStorage(c)
 	if err != nil {
@@ -222,6 +224,9 @@ func ValidateDomesticImage(c *gin.Context, info *relaycommon.RelayInfo, channelT
 }
 
 func ValidateNativeImagePrice(c *gin.Context, info *relaycommon.RelayInfo) error {
+	if info.PlatformMode && info.PlatformBilling != nil {
+		return nil
+	}
 	if c.GetInt("channel_type") != constant.ChannelTypeAli {
 		return nil
 	}

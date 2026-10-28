@@ -9,7 +9,7 @@ import (
 
 // VideoNativeUsage accepts a pinned provider receipt policy, never request
 // duration. Veo requires a bounded output probe and remains pending here.
-func VideoNativeUsage(price metering.Price, body []byte, providerID string) metering.Usage {
+func VideoNativeUsage(price metering.Price, body []byte, providerID, resolution string) metering.Usage {
 	u := metering.Usage{Version: "metered_v2", Operation: "video", Source: price.Policy, ProviderRequestID: providerID, State: "missing"}
 	var r struct {
 		Status  string          `json:"status"`
@@ -23,12 +23,17 @@ func VideoNativeUsage(price metering.Price, body []byte, providerID string) mete
 			} `json:"task_result"`
 		} `json:"data"`
 		Output struct {
-			Status string `json:"task_status"`
+			Status   string `json:"task_status"`
+			VideoURL string `json:"video_url"`
+			Results  []struct {
+				URL string `json:"url"`
+			} `json:"results"`
 		} `json:"output"`
 		Usage struct {
 			Tokens        json.RawMessage `json:"completion_tokens"`
 			VideoDuration json.RawMessage `json:"video_duration"`
 			Duration      json.RawMessage `json:"duration"`
+			VideoCount    json.RawMessage `json:"video_count"`
 		} `json:"usage"`
 	}
 	if common.UnmarshalUnique(body, &r) != nil {
@@ -74,10 +79,35 @@ func VideoNativeUsage(price metering.Price, body []byte, providerID string) mete
 	// This policy is explicitly provider billable duration for Wan 2.6 t2v,
 	// not independent measured output seconds or a generic Wan schema.
 	case "ali_wan26_t2v_billable_duration_v1":
+		if resolution != "video_720p" && resolution != "video_1080p" {
+			return u
+		}
+		if (r.Output.Status == "FAILED" || r.Output.Status == "CANCELED" || r.Output.Status == "UNKNOWN") && r.Output.VideoURL == "" && len(r.Output.Results) == 0 {
+			u.State = "incomplete"
+			u.Source = "provider_confirmed_no_output"
+			return u
+		}
 		if r.Output.Status != "SUCCEEDED" {
 			return u
 		}
+		outputs := 0
+		if r.Output.VideoURL != "" {
+			outputs++
+		}
+		for _, result := range r.Output.Results {
+			if result.URL == "" {
+				u.State = "invalid"
+				return u
+			}
+			outputs++
+		}
+		var count int
+		if len(r.Usage.VideoCount) == 0 || string(r.Usage.VideoCount) == "null" || r.Usage.VideoCount[0] == '"' || common.Unmarshal(r.Usage.VideoCount, &count) != nil || count != 1 || outputs != 1 {
+			u.State = "incomplete"
+			return u
+		}
 		raw = r.Usage.Duration
+		key = resolution
 	default:
 		return u
 	}

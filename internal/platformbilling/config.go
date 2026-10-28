@@ -17,6 +17,39 @@ func ConfigFromEnv(get func(string) string) (Config, error) {
 	if !c.Enabled {
 		return c, nil
 	}
+	if raw := get("UNIHUB_NATIVE_HISTORY"); raw != "" {
+		if common.UnmarshalUnique([]byte(raw), &c.NativeHistory) != nil {
+			return c, ErrInvalid
+		}
+	}
+	if raw := get("UNIHUB_IMAGE_POLICIES"); raw != "" {
+		var values map[string]map[string]map[string]any
+		if common.UnmarshalUnique([]byte(raw), &values) != nil {
+			return c, ErrInvalid
+		}
+		for _, models := range values {
+			for _, p := range models {
+				if !protocolKeys(p, "version public_model wire_operation channel_id channel_type upstream_model channel_key_sha256 origin api_version max_body_bytes max_image_bytes max_pixels max_images max_input_images resource_origins rate_ids") {
+					return c, ErrInvalid
+				}
+			}
+		}
+		if common.UnmarshalUnique([]byte(raw), &c.ImagePolicies) != nil {
+			return c, ErrInvalid
+		}
+		for wire, models := range c.ImagePolicies {
+			for model, p := range models {
+				if !p.valid(model, wire) {
+					return c, ErrInvalid
+				}
+			}
+		}
+	}
+	if raw := get("UNIHUB_OCR_POLICIES"); raw != "" {
+		if common.UnmarshalJsonStr(raw, &c.OCRPolicies) != nil {
+			return c, ErrInvalid
+		}
+	}
 	c.Origin = get("UNIHUB_ORIGIN")
 	c.ServiceToken = get("UNIHUB_MODEL_SERVICE_TOKEN")
 	c.Group = get("UNIHUB_ROUTING_GROUP")
@@ -71,6 +104,117 @@ func ConfigFromEnv(get func(string) string) (Config, error) {
 					return c, ErrInvalid
 				}
 			}
+		}
+	}
+	if raw := get("UNIHUB_AUDIO_POLICIES"); raw != "" {
+		var policies map[string]map[string]map[string]any
+		if common.UnmarshalUnique([]byte(raw), &policies) != nil {
+			return c, ErrInvalid
+		}
+		for _, models := range policies {
+			for _, p := range models {
+				if !protocolKeys(p, "version public_model wire_operation channel_id channel_type upstream_model channel_key_sha256 origin usage_policy max_quantity rate_ids") {
+					return c, ErrInvalid
+				}
+			}
+		}
+		if common.UnmarshalUnique([]byte(raw), &c.AudioPolicies) != nil {
+			return c, ErrInvalid
+		}
+		for wire, models := range c.AudioPolicies {
+			for model, p := range models {
+				if !p.valid(model, wire) {
+					return c, ErrInvalid
+				}
+			}
+		}
+	}
+	if raw := get("UNIHUB_VIDEO_POLICIES"); raw != "" {
+		var policies map[string]map[string]map[string]any
+		if common.UnmarshalUnique([]byte(raw), &policies) != nil {
+			return c, ErrInvalid
+		}
+		for _, models := range policies {
+			for _, p := range models {
+				if !protocolKeys(p, "version public_model wire_operation channel_id channel_type upstream_model channel_key_sha256 origin api_version usage_policy max_seconds max_video_bytes resolutions resource_origins rate_ids") {
+					return c, ErrInvalid
+				}
+			}
+		}
+		if common.UnmarshalUnique([]byte(raw), &c.VideoPolicies) != nil {
+			return c, ErrInvalid
+		}
+		for wire, models := range c.VideoPolicies {
+			for model, p := range models {
+				if !p.valid(model, wire) {
+					return c, ErrInvalid
+				}
+			}
+		}
+	}
+	if raw := get("UNIHUB_KNOWLEDGE_POLICIES"); raw != "" {
+		var policies map[string]map[string]map[string]any
+		if common.UnmarshalUnique([]byte(raw), &policies) != nil {
+			return c, ErrInvalid
+		}
+		for _, models := range policies {
+			for _, p := range models {
+				if !protocolKeys(p, "channel_key_sha256 version provider_reference public_model wire_operation channel_id channel_type upstream_model hard_input_tokens visual_tokens max_item_tokens max_batch embedding_space rate_ids") {
+					return c, ErrInvalid
+				}
+				if raw, exists := p["embedding_space"]; exists {
+					space, ok := raw.(map[string]any)
+					if !ok || !protocolKeys(space, "provider model version dimensions input_semantics") {
+						return c, ErrInvalid
+					}
+				}
+			}
+		}
+		if common.UnmarshalUnique([]byte(raw), &c.KnowledgePolicies) != nil {
+			return c, ErrInvalid
+		}
+		for wire, models := range c.KnowledgePolicies {
+			for model, p := range models {
+				if !p.valid(c, model, wire) {
+					return c, ErrInvalid
+				}
+			}
+		}
+	}
+	if raw := get("UNIHUB_NATIVE_INPUT_POLICIES"); raw != "" {
+		if common.UnmarshalUnique([]byte(raw), &c.NativeInputPolicies) != nil {
+			return c, ErrInvalid
+		}
+		for wire, models := range c.NativeInputPolicies {
+			for _, policy := range models {
+				if !policy.valid(c, wire) {
+					return c, ErrInvalid
+				}
+			}
+		}
+	}
+	if raw := get("UNIHUB_COMPACT_POLICIES"); raw != "" {
+		var policies map[string]map[string]any
+		if common.UnmarshalUnique([]byte(raw), &policies) != nil {
+			return c, ErrInvalid
+		}
+		for _, p := range policies {
+			if !protocolKeys(p, "version provider_reference public_model channel_id channel_type upstream_model wire_operation endpoint_path hard_input_tokens hard_output_tokens service_tier rate_ids") {
+				return c, ErrInvalid
+			}
+		}
+		if common.UnmarshalUnique([]byte(raw), &c.CompactPolicies) != nil {
+			return c, ErrInvalid
+		}
+		for model, p := range c.CompactPolicies {
+			if !p.valid(c, model) {
+				return c, ErrInvalid
+			}
+		}
+	}
+	if raw := get("UNIHUB_NATIVE_PRESET_POLICIES"); raw != "" {
+		if decodeNativePresetPolicies([]byte(raw), &c) != nil {
+			return c, ErrInvalid
 		}
 	}
 	return c, nil

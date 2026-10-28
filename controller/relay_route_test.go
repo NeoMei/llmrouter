@@ -550,9 +550,10 @@ func TestPrepareAttemptBillingPreservesInsufficientQuotaAPIError(t *testing.T) {
 	assert.Equal(t, types.ErrorCodeInsufficientUserQuota, apiErr.GetErrorCode())
 }
 
-func TestExpectedWireMapsResponsesCompactAndFailsClosedForGemini(t *testing.T) {
+func TestExpectedWireMapsResponsesCompactAndNativeGemini(t *testing.T) {
 	assert.Equal(t, modelcatalog.WireResponses, expectedWireForFormat(types.RelayFormatOpenAIResponsesCompaction))
-	assert.Empty(t, expectedWireForFormat(types.RelayFormatGemini))
+	assert.Equal(t, modelcatalog.WireGemini, expectedWireForFormat(types.RelayFormatGemini))
+	assert.Empty(t, expectedWireForFormat(types.RelayFormat("unknown")))
 }
 
 func TestRouteCandidateFromResolvedReturnsUnsupportedWireError(t *testing.T) {

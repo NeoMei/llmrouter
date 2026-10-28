@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,7 +27,14 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 
 	// read response body
 	var responsesResponse dto.OpenAIResponsesResponse
-	responseBody, err := io.ReadAll(resp.Body)
+	reader := io.Reader(resp.Body)
+	if info != nil && info.PlatformBilling != nil {
+		reader = io.LimitReader(resp.Body, 16<<20+1)
+	}
+	responseBody, err := io.ReadAll(reader)
+	if info != nil && info.PlatformBilling != nil && len(responseBody) > 16<<20 {
+		return nil, types.NewError(fmt.Errorf("managed response exceeds completion bound"), types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
+	}
 	nativeEvidence.Observe(responseBody, false)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
@@ -51,6 +59,11 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		c.Set("image_generation_call_size", responsesResponse.GetSize())
 	}
 
+	if info != nil && info.PlatformBilling != nil {
+		if err := info.PlatformBilling.RegisterNativeCompletion(c.Request.Context(), responseBody); err != nil {
+			return nil, toolpolicy.NewResponseValidationError(err)
+		}
+	}
 	persistResponsesTurn(c, info, &responsesResponse)
 
 	// 写入新的 response body
@@ -120,6 +133,19 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		if wasTerminalSeen {
 			terminalValid = false
 			terminalResponse = nil
+		}
+		if info != nil && info.PlatformBilling != nil && (streamResponse.Type == "response.completed" || streamResponse.Type == "response.done") {
+			var envelope map[string]json.RawMessage
+			if common.UnmarshalUnique([]byte(data), &envelope) != nil {
+				streamErr = toolpolicy.NewResponseValidationError(fmt.Errorf("invalid managed terminal JSON"))
+				stopStream(sr)
+				return false
+			}
+			if err := info.PlatformBilling.RegisterNativeCompletion(c.Request.Context(), envelope["response"]); err != nil {
+				streamErr = toolpolicy.NewResponseValidationError(err)
+				stopStream(sr)
+				return false
+			}
 		}
 		if err := helper.ResponseChunkData(c, streamResponse, data); err != nil {
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway, types.ErrOptionWithSkipRetry())

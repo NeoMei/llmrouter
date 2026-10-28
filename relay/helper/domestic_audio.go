@@ -115,7 +115,7 @@ func ValidateDomesticAudio(c *gin.Context, info *relaycommon.RelayInfo, channelT
 		if err != nil {
 			return err
 		}
-		if storage.Size() > 128<<10 {
+		if storage.Size() > dto.MaxMiniMaxSpeechBodyBytes {
 			return fmt.Errorf("speech request exceeds 128 KiB")
 		}
 		raw, err := storage.Bytes()
@@ -132,6 +132,9 @@ func ValidateDomesticAudio(c *gin.Context, info *relaycommon.RelayInfo, channelT
 			default:
 				return fmt.Errorf("unsupported speech field %q", name)
 			}
+		}
+		if info.PlatformMode {
+			return nil
 		}
 		price, exists := ratio_setting.GetModelPrice(billingModel, false)
 		if !exists || price < 0 || math.IsNaN(price) || math.IsInf(price, 0) || billing_setting.GetBillingMode(billingModel) == billing_setting.BillingModeTieredExpr {

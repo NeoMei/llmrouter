@@ -644,6 +644,15 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		task.Progress = taskResult.Progress
 	}
 
+	if task.Status == model.TaskStatusSuccess && task.FundingOwner == "platform" {
+		if err := preparePlatformWanVideoArtifact(ctx, task, taskResult.Url); err != nil {
+			return err
+		}
+		if task.PrivateData.ResultResourceID != "" {
+			task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
+		}
+	}
+
 	isDone := task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure
 	if isDone && snap.Status != task.Status {
 		if err := prepareNativeTaskIntent(task, responseBody); err != nil {

@@ -74,16 +74,21 @@ type AliVideoResponse struct {
 
 // AliVideoOutput 输出信息
 type AliVideoOutput struct {
-	TaskID        string `json:"task_id"`
-	TaskStatus    string `json:"task_status"`
-	SubmitTime    string `json:"submit_time,omitempty"`
-	ScheduledTime string `json:"scheduled_time,omitempty"`
-	EndTime       string `json:"end_time,omitempty"`
-	OrigPrompt    string `json:"orig_prompt,omitempty"`
-	ActualPrompt  string `json:"actual_prompt,omitempty"`
-	VideoURL      string `json:"video_url,omitempty"`
-	Code          string `json:"code,omitempty"`
-	Message       string `json:"message,omitempty"`
+	TaskID        string           `json:"task_id"`
+	TaskStatus    string           `json:"task_status"`
+	SubmitTime    string           `json:"submit_time,omitempty"`
+	ScheduledTime string           `json:"scheduled_time,omitempty"`
+	EndTime       string           `json:"end_time,omitempty"`
+	OrigPrompt    string           `json:"orig_prompt,omitempty"`
+	ActualPrompt  string           `json:"actual_prompt,omitempty"`
+	VideoURL      string           `json:"video_url,omitempty"`
+	Results       []AliVideoResult `json:"results,omitempty"`
+	Code          string           `json:"code,omitempty"`
+	Message       string           `json:"message,omitempty"`
+}
+
+type AliVideoResult struct {
+	URL string `json:"url"`
 }
 
 // AliUsage 使用统计
@@ -544,6 +549,20 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 	return client.Do(req)
 }
 
+func (a *TaskAdaptor) CancelTask(baseUrl, key, taskID, proxy string) (*http.Response, error) {
+	uri := fmt.Sprintf("%s/api/v1/tasks/%s/cancel", baseUrl, taskID)
+	req, err := http.NewRequest(http.MethodPost, uri, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	client, err := service.GetHttpClientWithProxy(proxy)
+	if err != nil {
+		return nil, fmt.Errorf("new proxy http client failed: %w", err)
+	}
+	return client.Do(req)
+}
+
 func (a *TaskAdaptor) GetModelList() []string {
 	return ModelList
 }
@@ -570,9 +589,12 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	case "RUNNING":
 		taskResult.Status = model.TaskStatusInProgress
 	case "SUCCEEDED":
+		url, err := aliVideoOutputURL(aliResp.Output)
+		if err != nil {
+			return nil, err
+		}
 		taskResult.Status = model.TaskStatusSuccess
-		// 阿里直接返回视频URL，不需要额外的代理端点
-		taskResult.Url = aliResp.Output.VideoURL
+		taskResult.Url = url
 	case "FAILED", "CANCELED", "UNKNOWN":
 		taskResult.Status = model.TaskStatusFailure
 		if aliResp.Message != "" {
@@ -587,6 +609,26 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	}
 
 	return &taskResult, nil
+}
+
+func aliVideoOutputURL(output AliVideoOutput) (string, error) {
+	urls := 0
+	if output.VideoURL != "" {
+		urls++
+	}
+	for _, result := range output.Results {
+		if result.URL == "" {
+			return "", errors.New("ali task result missing video url")
+		}
+		urls++
+	}
+	if urls != 1 {
+		return "", errors.New("ali task must contain exactly one video output")
+	}
+	if output.VideoURL != "" {
+		return output.VideoURL, nil
+	}
+	return output.Results[0].URL, nil
 }
 
 func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {

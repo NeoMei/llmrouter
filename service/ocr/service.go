@@ -2,6 +2,8 @@ package ocr
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"net/url"
@@ -27,8 +29,10 @@ var ErrInvalidInput = errors.New("invalid OCR input")
 // Target is trusted, authorized catalog data, never decoded directly from a
 // client. Cross-channel fallback after intent creation is deliberately forbidden.
 type Target struct {
-	JobsURL, Model string
-	ProfileID      int
+	JobsURL, Model  string
+	ResourceOrigins []string
+	KeySHA256       string
+	ProfileID       int
 }
 type CreateRequest struct {
 	Capabilities   dto.ModelCapabilities
@@ -110,7 +114,9 @@ func NewService(db *gorm.DB, billing *Billing, c Config) (*Service, error) {
 	if fetch == nil {
 		return nil, errors.New("OCR protected fetch client unavailable")
 	}
-	return &Service{db: db, billing: billing, objects: c.Objects, keys: c.GatewayKeys, supplier: paddleocr.Client{HTTP: &copyClient}, fetchClient: fetch, grantSecret: append([]byte(nil), c.GrantSecret...), publicOrigin: origin, grantTTL: ttl, retention: retention, now: now}, nil
+	fetchCopy := *fetch
+	fetchCopy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &Service{db: db, billing: billing, objects: c.Objects, keys: c.GatewayKeys, supplier: paddleocr.Client{HTTP: &copyClient}, fetchClient: &fetchCopy, grantSecret: append([]byte(nil), c.GrantSecret...), publicOrigin: origin, grantTTL: ttl, retention: retention, now: now}, nil
 }
 
 type JobStatus struct {
@@ -158,11 +164,14 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (JobStatus, err
 			return JobStatus{}, errors.New("OCR BYOK owned jobs are not supported; platform fallback forbidden")
 		}
 	}
+	if req.Admission.PlatformCallID != "" && (req.Admission.ValidateTarget == nil || channel.ChannelInfo.IsMultiKey || req.Admission.ValidateTarget(channel.Id, channel.Type, req.Target.Model, channel.Key, channel.GetBaseURL()) != nil) {
+		return JobStatus{}, errors.New("certified OCR target changed")
+	}
 	j, err := s.billing.CreateIntent(ctx, req.Admission)
 	if err != nil {
 		return JobStatus{}, err
 	}
-	execution := model.OCRExecution{RequestedModel: req.RequestedModel, JobsURL: req.Target.JobsURL, Model: req.Target.Model, ProfileID: req.Target.ProfileID, InputDigest: input.digest, InputPages: input.pages, MaxAttempts: maxAttempts}
+	execution := model.OCRExecution{ResourceOrigins: req.Target.ResourceOrigins, KeySHA256: req.Target.KeySHA256, RequestedModel: req.RequestedModel, JobsURL: req.Target.JobsURL, Model: req.Target.Model, ProfileID: req.Target.ProfileID, InputDigest: input.digest, InputPages: input.pages, MaxAttempts: maxAttempts}
 	if err = s.billing.ConfigureOCRSubmission(ctx, j.ID, execution); err != nil {
 		return JobStatus{}, err
 	}
@@ -250,6 +259,9 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (JobStatus, err
 			}
 			return JobStatus{}, err
 		}
+		if req.Admission.PlatformCallID != "" && (channel.ChannelInfo.IsMultiKey || req.Admission.ValidateTarget(channel.Id, channel.Type, execution.Model, key, channel.GetBaseURL()) != nil) {
+			return JobStatus{}, errors.New("certified OCR target changed")
+		}
 		claim, err := s.billing.ClaimSubmission(ctx, j.ID, selection, owner)
 		if err != nil {
 			if errors.Is(err, model.ErrOCRConflict) {
@@ -261,7 +273,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (JobStatus, err
 			return JobStatus{}, err
 		}
 		if req.Admission.PlatformCallID != "" {
-			if req.Admission.Dispatch == nil || req.Admission.BindTask == nil {
+			if req.Admission.Dispatch == nil || req.Admission.BindTaskTx == nil {
 				return JobStatus{}, errors.New("platform OCR dispatch binding missing")
 			}
 			if err := req.Admission.Dispatch(ctx); err != nil {
@@ -273,9 +285,10 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (JobStatus, err
 		persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		healthErr := s.observe(persistCtx, selection, j.Model, response, sendErr)
 		if sendErr == nil {
-			err = s.billing.RecordSubmission(persistCtx, claim, id, false)
-			if err == nil && req.Admission.PlatformCallID != "" {
-				err = req.Admission.BindTask(persistCtx, id)
+			if req.Admission.PlatformCallID != "" {
+				err = s.billing.RecordSubmission(persistCtx, claim, id, false, func(tx *gorm.DB) error { return req.Admission.BindTaskTx(persistCtx, tx, id) })
+			} else {
+				err = s.billing.RecordSubmission(persistCtx, claim, id, false)
 			}
 			cancel()
 			if err != nil {
@@ -388,7 +401,7 @@ func (s *Service) Status(ctx context.Context, id string, userID, tokenID int) (J
 	if j.SubmissionState != "submitted" {
 		return s.project(ctx, j)
 	}
-	if j.ProviderState != "done" && j.ProviderState != "failed" {
+	if (j.ProviderState != "done" && j.ProviderState != "failed") || (j.Funding == "platform" && j.ProviderState == "done" && j.ResultResourceID == "") {
 		var execution model.OCRExecution
 		var binding model.OCRAccountBinding
 		if err = common.UnmarshalJsonStr(j.Execution, &execution); err != nil {
@@ -414,6 +427,12 @@ func (s *Service) Status(ctx context.Context, id string, userID, tokenID int) (J
 		if err != nil {
 			return JobStatus{}, err
 		}
+		if j.Funding == "platform" {
+			h := sha256.Sum256([]byte(key))
+			if execution.KeySHA256 == "" || execution.KeySHA256 != hex.EncodeToString(h[:]) {
+				return JobStatus{}, model.ErrOCRConflict
+			}
+		}
 		status, _, err := s.supplier.Status(ctx, execution.JobsURL, key, j.ProviderJobID)
 		if err != nil {
 			return JobStatus{}, err
@@ -436,8 +455,21 @@ func (s *Service) Status(ctx context.Context, id string, userID, tokenID int) (J
 		j = snapshot.Job
 	}
 	if j.ProviderState == "done" {
-		// Supplier success is chargeable even when result delivery fails. Persist the
-		// decision before download; a restart can retry delivery without another debit.
+		// Managed success requires preserved, valid output before settlement. Native
+		// billing retains its original terminal-state charge and delivery recovery.
+		if j.Funding == "platform" && j.ResultResourceID == "" {
+			if j.CreatedAt+int64(s.retention/time.Second) <= s.now().Unix() {
+				return JobStatus{}, model.ErrOCRGrant
+			}
+			if err = s.preserveResults(ctx, j); err != nil {
+				return JobStatus{}, err
+			}
+			snap, e := s.billing.Inspect(ctx, j.ID)
+			if e != nil {
+				return JobStatus{}, e
+			}
+			j = snap.Job
+		}
 		if _, err = s.billing.Finish(ctx, j.ID, "success"); err != nil {
 			return JobStatus{}, err
 		}

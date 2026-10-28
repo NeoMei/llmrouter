@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	ci "github.com/QuantumNous/new-api/internal/platformbilling/continuityindex"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"net/http"
@@ -21,6 +22,19 @@ import (
 // Call stores immutable verified payer scope and terminal command intent. Model
 // credentials are never persisted: recovery cannot authorize another dispatch.
 type Call struct {
+	ContinuitySnapshot  string `gorm:"type:text"`
+	NativeRequestDigest string `gorm:"size:64"`
+	NativeObservation   string `gorm:"type:text"`
+	// Unbounded string maps to LONGTEXT on our MySQL driver and TEXT on
+	// PostgreSQL/SQLite; admission caps serialized snapshots at 160 MiB.
+	ImageObservation      string
+	OCRObservation        string
+	AudioObservation      string `gorm:"type:text"`
+	MediaSnapshot         string
+	WireOperation         string `gorm:"size:64"`
+	WirePathModel         string `gorm:"size:255"`
+	WireMode              string `gorm:"size:32"`
+	DigestVersion         string `gorm:"size:32"`
 	InstanceID            string `gorm:"size:128;index"`
 	TelemetryGroup        string `gorm:"size:128"`
 	TelemetryLatencyMS    int64
@@ -40,6 +54,7 @@ type Call struct {
 	AccountID             string `gorm:"size:128"`
 	OriginProductID       string `gorm:"size:128"`
 	CredentialID          string `gorm:"size:128"`
+	CredentialKind        string `gorm:"size:16"`
 	TaskID                string `gorm:"size:128"`
 	Model                 string `gorm:"size:255"`
 	Digest                string `gorm:"size:64"`
@@ -59,22 +74,27 @@ type Call struct {
 func (Call) TableName() string { return "platform_model_calls" }
 
 type Attempt struct {
-	ID        uint   `gorm:"primaryKey"`
-	CallID    string `gorm:"size:128;index"`
-	ChannelID int
-	Status    string `gorm:"size:32"`
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	UpstreamIdentity string `gorm:"type:text"`
+	ID               uint   `gorm:"primaryKey"`
+	CallID           string `gorm:"size:128;index"`
+	ChannelID        int
+	Status           string `gorm:"size:32"`
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 func (Attempt) TableName() string { return "platform_model_attempts" }
 
 type Adapter struct {
-	db     *gorm.DB
-	config Config
-	client *client
+	history         *ci.Index
+	historyResolver NativeHistoryResolver
+	db              *gorm.DB
+	config          Config
+	client          *client
 }
 type Session struct {
+	nativeSend    string
+	canonical     []byte
 	adapter       *Adapter
 	call          Call
 	attempt       Attempt
@@ -92,6 +112,48 @@ func New(db *gorm.DB, c Config) (*Adapter, error) {
 	if c.InstanceID == "" {
 		c.InstanceID = "default"
 	}
+	for wire, models := range c.ImagePolicies {
+		for model, p := range models {
+			if !p.valid(model, wire) {
+				return nil, ErrInvalid
+			}
+		}
+	}
+	for wire, models := range c.OCRPolicies {
+		for model, p := range models {
+			if !p.valid(model, wire) {
+				return nil, ErrInvalid
+			}
+		}
+	}
+	for wire, models := range c.AudioPolicies {
+		for model, p := range models {
+			if !p.valid(model, wire) {
+				return nil, ErrInvalid
+			}
+		}
+	}
+	for model, policy := range c.CompactPolicies {
+		if !policy.valid(c, model) {
+			return nil, ErrInvalid
+		}
+	}
+	for wire, models := range c.NativeInputPolicies {
+		for _, policy := range models {
+			if !policy.valid(c, wire) {
+				return nil, ErrInvalid
+			}
+		}
+	}
+	if c.NativePresetPolicies != nil {
+		raw, err := common.Marshal(c.NativePresetPolicies)
+		if err != nil {
+			return nil, ErrInvalid
+		}
+		if decodeNativePresetPolicies(raw, &c) != nil {
+			return nil, ErrInvalid
+		}
+	}
 	a := &Adapter{db: db, config: c}
 	if !c.Enabled {
 		return a, nil
@@ -105,6 +167,9 @@ func New(db *gorm.DB, c Config) (*Adapter, error) {
 		return nil, err
 	}
 	if err = db.AutoMigrate(&Call{}, &Attempt{}); err != nil {
+		return nil, err
+	}
+	if err = a.initNativeHistory(context.Background()); err != nil {
 		return nil, err
 	}
 	return a, nil
@@ -187,10 +252,10 @@ func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body [
 		}
 	}
 	var grant Claims
-	if err := a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": model, "instance_id": a.config.InstanceID}, &grant); err != nil {
+	if err := a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": model, "instance_id": a.config.InstanceID, "wire_operation": "chat.completions.create"}, &grant); err != nil {
 		return nil, err
 	}
-	if a.validateModelCredential(credential, task, model, grant) != nil {
+	if a.validateModelCredential(credential, task, model, grant) != nil || !allowsWire(grant, model, "chat.completions.create") {
 		return nil, ErrInvalid
 	}
 	asset, mode, err := normalizeFunding(grant.Asset, grant.FundingMode)
@@ -204,13 +269,22 @@ func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body [
 		prefix := fmt.Sprintf("unihub-funding-v1\x00%s\x00%s\x00%d\x00", asset, mode, grant.BillingProfileVersion)
 		digestBody = append([]byte(prefix), digestBody...)
 	}
+	legacySum := sha256.Sum256(digestBody)
+	legacyDigest := hex.EncodeToString(legacySum[:])
+	if grant.Operations != nil {
+		digestBody, _ = common.Marshal(struct{ Version, Wire, Task, Actor, Account, Origin, Body string }{"platform-wire-v3", "chat.completions.create", task, grant.ActorID, grant.AccountID, grant.OriginProductID, string(digestBody)})
+	}
 	sum := sha256.Sum256(digestBody)
 	digest := hex.EncodeToString(sum[:])
 	row := Call{CallID: id, ActorID: grant.ActorID, AccountID: grant.AccountID, OriginProductID: grant.OriginProductID, CredentialID: grant.ID, TaskID: task, Model: model, Digest: digest, Asset: asset, FundingMode: mode, FundingProductID: "llmrouter", BillingProfileVersion: grant.BillingProfileVersion, Status: "RESERVING"}
 	row.InstanceID = a.config.InstanceID
+	if grant.Operations != nil {
+		row.WireOperation = "chat.completions.create"
+		row.DigestVersion = "platform-wire-v3"
+	}
 	var old Call
 	if err := a.db.WithContext(ctx).First(&old, "call_id = ?", id).Error; err == nil {
-		return nil, compareCall(old, row)
+		return nil, compareWireCall(old, row, legacyDigest)
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
@@ -219,14 +293,21 @@ func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body [
 		return nil, err
 	}
 	var chosen *Rate
+	candidates := 0
 	for i := range rates {
 		r := &rates[i]
-		if r.Model != model || r.Status != "published" {
+		if r.Model != model || r.Status != "published" || (r.Metered != nil && r.Metered.Operation != "chat") {
 			continue
 		}
 		rateAsset, err := normalizeAsset(r.Asset)
 		if err != nil {
 			return nil, err
+		}
+		if rateAsset == asset {
+			candidates++
+			if candidates > 1 {
+				return nil, ErrInvalid
+			}
 		}
 		pin := ""
 		if asset == "CREDIT/6" {
@@ -259,10 +340,10 @@ func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body [
 		if err := a.db.First(&old, "call_id = ?", id).Error; err != nil {
 			return nil, err
 		}
-		return nil, compareCall(old, row)
+		return nil, compareWireCall(old, row, legacyDigest)
 	}
 	var remote RemoteCall
-	err = a.client.do(ctx, http.MethodPost, "/internal/v1/calls/reserve", id, map[string]string{"credential": credential, "task_id": task, "call_id": id, "request_digest": digest, "rate_id": chosen.ID, "amount": amount, "instance_id": a.config.InstanceID}, &remote)
+	err = a.client.do(ctx, http.MethodPost, "/internal/v1/calls/reserve", id, map[string]string{"credential": credential, "task_id": task, "call_id": id, "request_digest": digest, "rate_id": chosen.ID, "amount": amount, "instance_id": a.config.InstanceID, "wire_operation": row.WireOperation}, &remote)
 	if err != nil {
 		status := "RESERVE_UNKNOWN"
 		var re *remoteError
@@ -295,16 +376,55 @@ func compareCall(old, row Call) error {
 		return ErrConflict
 	}
 	oldAsset, oldMode, err := normalizeFunding(old.Asset, old.FundingMode)
-	if err != nil || oldAsset != row.Asset || oldMode != row.FundingMode || old.BillingProfileVersion != row.BillingProfileVersion || (old.FundingProductID != "" && old.FundingProductID != row.FundingProductID) || old.Operation != row.Operation || old.CallID != row.CallID || old.ActorID != row.ActorID || old.AccountID != row.AccountID || old.OriginProductID != row.OriginProductID || old.TaskID != row.TaskID || old.Model != row.Model || old.Digest != row.Digest {
+	if err != nil || oldAsset != row.Asset || oldMode != row.FundingMode || old.BillingProfileVersion != row.BillingProfileVersion || (old.FundingProductID != "" && old.FundingProductID != row.FundingProductID) || old.Operation != row.Operation || old.WireOperation != row.WireOperation || old.WirePathModel != row.WirePathModel || old.WireMode != row.WireMode || old.DigestVersion != row.DigestVersion || old.CallID != row.CallID || old.ActorID != row.ActorID || old.AccountID != row.AccountID || old.OriginProductID != row.OriginProductID || old.TaskID != row.TaskID || old.Model != row.Model || old.Digest != row.Digest {
 		return ErrConflict
 	}
 	return ErrDuplicate
 }
 func (s *Session) Dispatch(ctx context.Context, channel int) error {
+	if IsImageWire(s.WireOperation().ID) {
+		p, e := s.ImagePolicy()
+		if e != nil || p.ChannelID != channel {
+			return ErrInvalid
+		}
+	}
+	if s.WireOperation().ID == "ocr.jobs.create" || s.WireOperation().ID == "dashscope.ocr.recognitions.create" {
+		p, e := s.OCRPolicy()
+		if e != nil || p.ChannelID != channel {
+			return ErrInvalid
+		}
+	}
+	if IsAudioWire(s.WireOperation().ID) {
+		p, e := s.AudioPolicy()
+		if e != nil || p.ChannelID != channel {
+			return ErrInvalid
+		}
+	}
+	if s.WireOperation().ID == "videos.create" {
+		if _, ok := s.adapter.config.VideoPolicies["videos.create"][s.call.Model]; ok {
+			var frozen frozenVideo
+			if common.UnmarshalUnique([]byte(s.call.MediaSnapshot), &frozen) != nil || frozen.Policy.ChannelID != channel {
+				return ErrInvalid
+			}
+		}
+	}
+	if s.WireOperation().ID == "embeddings.create" || s.WireOperation().ID == "rerank.create" || s.WireOperation().ID == "multimodal.embeddings.create" {
+		var f frozenKnowledge
+		if common.UnmarshalUnique([]byte(s.call.MediaSnapshot), &f) != nil || f.Policy.ChannelID != channel {
+			return ErrInvalid
+		}
+	}
+
+	if s.WireOperation().ID == "responses.compact" {
+		var frozen frozenMediaReservation
+		if common.Unmarshal([]byte(s.call.MediaSnapshot), &frozen) != nil || frozen.CompactPolicy == nil || frozen.CompactPolicy.ChannelID != channel {
+			return ErrInvalid
+		}
+	}
 	if s.err != nil || s.uncertain || s.confirmed != nil {
 		return ErrPending
 	}
-	attempt := Attempt{CallID: s.call.CallID, ChannelID: channel, Status: "DISPATCHED"}
+	attempt := Attempt{UpstreamIdentity: s.nativeSend, CallID: s.call.CallID, ChannelID: channel, Status: "DISPATCHED"}
 	err := s.adapter.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		claim := tx.Model(&Call{}).Where("call_id = ? AND status = ?", s.call.CallID, "RESERVED").Update("status", "UNKNOWN")
 		if claim.Error != nil {
@@ -439,6 +559,11 @@ func (a *Adapter) Recover(ctx context.Context) error {
 	if !a.Enabled() {
 		return nil
 	}
+	if a.history != nil {
+		if _, err := a.history.Cleanup(ctx, 500); err != nil {
+			common.SysError("native history bounded cleanup failed")
+		}
+	}
 	// Expired undispatched calls are fenced before remote recovery. Dispatch
 	// atomically requires RESERVED, so a paused original handler cannot send
 	// upstream after its hold was recovered by another process.
@@ -509,7 +634,7 @@ func (a *Adapter) Receipt(ctx context.Context, credential, task, id string) (Rec
 		return Receipt{}, ErrInvalid
 	}
 	var grant Claims
-	if err := a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": row.Model, "purpose": "receipt", "instance_id": a.config.InstanceID}, &grant); err != nil {
+	if err := a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": row.Model, "wire_operation": row.WireOperation, "purpose": "receipt", "instance_id": a.config.InstanceID}, &grant); err != nil {
 		return Receipt{}, err
 	}
 	instance := row.InstanceID
@@ -517,6 +642,9 @@ func (a *Adapter) Receipt(ctx context.Context, credential, task, id string) (Rec
 		instance = "default"
 	}
 	if a.validateModelCredential(credential, task, row.Model, grant) != nil || instance != a.config.InstanceID || row.CallID != id || grant.ActorID != row.ActorID || grant.AccountID != row.AccountID || grant.OriginProductID != row.OriginProductID || row.TaskID != task {
+		return Receipt{}, ErrInvalid
+	}
+	if row.WireOperation != "" && !allowsWire(grant, row.Model, row.WireOperation) {
 		return Receipt{}, ErrInvalid
 	}
 	if strings.HasPrefix(credential, "uh_key_") && grant.ID != row.CredentialID {

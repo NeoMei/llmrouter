@@ -19,22 +19,200 @@ import (
 )
 
 func (a *Adapter) AdmitOperation(ctx context.Context, credential, task, id, operation, contentType string, body []byte) (*Session, error) {
+	return a.admitWireOperation(ctx, credential, task, id, WireOperation{ID: legacyWireOperation(operation)}, contentType, body)
+}
+func (a *Adapter) admitWireOperation(ctx context.Context, credential, task, id string, wire WireOperation, contentType string, body []byte, prepare ...KnowledgePreparation) (*Session, error) {
+	if nativeHistoryWire(wire.ID) && strings.HasPrefix(credential, "uh_key_") {
+		task = "task_" + id
+		if len(task) > 128 {
+			task = "task_" + nativeDigest([]byte(id))
+		}
+	}
+	operation := wireBillingOperation(wire.ID)
+	if operation == "" {
+		return nil, ErrInvalid
+	}
+	if wire.ID == "gemini.generate" || wire.ID == "gemini.images.generate" {
+		if wire.PathModel == "" || (wire.Mode != "generateContent" && wire.Mode != "streamGenerateContent") {
+			return nil, ErrInvalid
+		}
+	} else if (wire.ID == "rerank.create" || wire.ID == "multimodal.embeddings.create") && wire.PathModel == "" && (wire.Mode == "" || wire.Mode == "knowledge-native-v1") {
+	} else if wire.ID == "ocr.jobs.create" && wire.PathModel == "" && (wire.Mode == "" || wire.Mode == "paddle-native-v1") {
+	} else if wire.PathModel != "" || wire.Mode != "" {
+		return nil, ErrInvalid
+	}
+
 	if !a.Enabled() || !stableID.MatchString(id) || !stableID.MatchString(task) || !IsModelCredential(credential) || int64(len(body)) > a.OperationBodyLimit(operation) {
 		return nil, ErrInvalid
 	}
-	req, err := parseOperation(a.config, operation, contentType, body)
+	if nativeHistoryWire(wire.ID) {
+		if exists, e := a.NativeHistoryReplay(ctx, credential, task, id, wire, body); exists || e != nil {
+			return nil, e
+		}
+	}
+	if wire.ID == "ocr.jobs.create" || wire.ID == "dashscope.ocr.recognitions.create" {
+		if exists, e := a.OCRReplay(ctx, credential, task, id, wire, contentType, body); exists || e != nil {
+			return nil, e
+		}
+	}
+	if IsImageWire(wire.ID) {
+		if exists, e := a.ImageReplay(ctx, credential, task, id, wire, contentType, body); exists || e != nil {
+			return nil, e
+		}
+	}
+	if IsAudioWire(wire.ID) {
+		if exists, e := a.AudioReplay(ctx, credential, task, id, wire.ID, contentType, body); exists || e != nil {
+			return nil, e
+		}
+	}
+	if wire.ID == "videos.create" {
+		if exists, e := a.VideoReplay(ctx, credential, task, id, wire, contentType, body); exists || e != nil {
+			return nil, e
+		}
+	}
+	var req operationRequest
+	var err error
+	switch wire.ID {
+	case "images.generations.create", "images.edits.create", "dashscope.images.generate", "gemini.images.generate":
+		model, e := a.ImageRequestModel(wire, contentType, body)
+		if e != nil {
+			return nil, e
+		}
+		p, ok := a.ImagePolicy(model, wire.ID)
+		if !ok {
+			return nil, ErrInvalid
+		}
+		req, err = parseImageOperation(p, wire, contentType, body)
+	case "dashscope.ocr.recognitions.create":
+		req, err = parseQwenOCR(a.config, contentType, body)
+	case "ocr.jobs.create":
+		req, err = parseOperation(a.config, operation, contentType, body)
+		p := a.config.OCRPolicies[wire.ID][req.Model]
+		if err != nil || !p.valid(req.Model, wire.ID) {
+			return nil, ErrInvalid
+		}
+		snapshot, _ := common.Marshal(frozenOCR{p})
+		req.MediaSnapshot = string(snapshot)
+	case "audio.speech.create", "audio.transcriptions.create", "dashscope.audio.transcriptions.create", "bailian.audio.speech.create", "elevenlabs.audio.speech.create":
+		model, e := audioRequestModel(wire.ID, contentType, body, a.config)
+		if e != nil {
+			return nil, e
+		}
+		p, ok := a.config.AudioPolicies[wire.ID][model]
+		if !ok {
+			return nil, ErrInvalid
+		}
+		req, err = parseAudioOperation(a.config, p, contentType, body)
+	case "embeddings.create":
+		if contentType != "application/json" {
+			return nil, ErrInvalid
+		}
+		var request map[string]any
+		if common.UnmarshalUnique(body, &request) != nil {
+			return nil, ErrInvalid
+		}
+		model, _ := request["model"].(string)
+		req, err = parseKnowledgeEmbedding(a.config, a.config.KnowledgePolicies[wire.ID][model], body)
+	case "rerank.create", "multimodal.embeddings.create":
+		if contentType != "application/json" {
+			return nil, ErrInvalid
+		}
+		var request map[string]any
+		if common.UnmarshalUnique(body, &request) != nil {
+			return nil, ErrInvalid
+		}
+		model, _ := request["model"].(string)
+		p := a.config.KnowledgePolicies[wire.ID][model]
+		if wire.ID == "rerank.create" {
+			req, err = parseKnowledgeRerank(a.config, p, body, wire.Mode == "knowledge-native-v1")
+		} else {
+			req, err = parseKnowledgeMultimodal(a.config, p, body, wire.Mode == "knowledge-native-v1")
+		}
+	case "responses.compact":
+		if contentType != "application/json" {
+			return nil, ErrInvalid
+		}
+		var request map[string]any
+		if common.UnmarshalUnique(body, &request) != nil {
+			return nil, ErrInvalid
+		}
+		model, _ := request["model"].(string)
+		policy, ok := a.config.CompactPolicies[model]
+		if !ok || !policy.valid(a.config, model) {
+			return nil, ErrInvalid
+		}
+		req, err = parseCompactOperation(a.config, policy, body)
+
+	case "claude.messages.create":
+		if contentType != "application/json" {
+			return nil, ErrInvalid
+		}
+		req, err = parseClaudeOperation(a.config, body)
+	case "gemini.generate":
+		if contentType != "application/json" {
+			return nil, ErrInvalid
+		}
+		req, err = parseGeminiOperation(a.config, wire.PathModel, body)
+	default:
+		req, err = parseOperation(a.config, operation, contentType, body)
+	}
+	if err == nil && operation == "video" {
+		if p, ok := a.config.VideoPolicies["videos.create"][req.Model]; ok {
+			req, err = parseVideoOperation(p, contentType, body)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
 	var grant Claims
-	if err = a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": req.Model, "instance_id": a.config.InstanceID}, &grant); err != nil {
+	if err = a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": req.Model, "instance_id": a.config.InstanceID, "wire_operation": wire.ID}, &grant); err != nil {
 		return nil, err
 	}
-	if a.validateModelCredential(credential, task, req.Model, grant) != nil {
+	if a.validateModelCredential(credential, task, req.Model, grant) != nil || !allowsWire(grant, req.Model, wire.ID) {
 		return nil, ErrInvalid
+	}
+	continuity := ""
+	if nativeHistoryWire(wire.ID) {
+		task, continuity, err = a.admitNativeContinuity(ctx, grant, task, req.Model, wire.ID, req.Canonical)
+		if err != nil {
+			return nil, err
+		}
 	}
 	asset, mode, err := normalizeFunding(grant.Asset, grant.FundingMode)
 	if err != nil || grant.BillingProfileVersion < 0 {
+		return nil, ErrInvalid
+	}
+	if wire.ID == "multimodal.embeddings.create" {
+		var old Call
+		existing := a.db.WithContext(ctx).First(&old, "call_id = ?", id).Error
+		if existing == nil {
+			// Never refetch original media for a duplicate, including UNKNOWN. Original
+			// body and all identity fields are compared below using the saved freeze.
+			req.MediaSnapshot = old.MediaSnapshot
+		} else if !errors.Is(existing, gorm.ErrRecordNotFound) {
+			return nil, existing
+		} else {
+			if len(prepare) != 1 || prepare[0] == nil {
+				return nil, ErrInvalid
+			}
+			var frozen frozenKnowledge
+			if common.UnmarshalUnique([]byte(req.MediaSnapshot), &frozen) != nil {
+				return nil, ErrInvalid
+			}
+			effective, facts, e := prepare[0](ctx, frozen.Body, frozen.Policy)
+			if e != nil {
+				return nil, e
+			}
+			frozen.Body = effective
+			frozen.Facts = facts
+			snapshot, e := common.Marshal(frozen)
+			if e != nil {
+				return nil, e
+			}
+			req.MediaSnapshot = string(snapshot)
+		}
+	}
+	if len(req.MediaSnapshot) > 160<<20 {
 		return nil, ErrInvalid
 	}
 	digestData, _ := common.Marshal(struct {
@@ -42,12 +220,45 @@ func (a *Adapter) AdmitOperation(ctx context.Context, credential, task, id, oper
 		Profile                                                          int
 		Body                                                             string
 	}{"platform-metered-v2", operation, task, grant.ActorID, grant.AccountID, grant.OriginProductID, asset, mode, grant.BillingProfileVersion, string(req.Canonical)})
+	if req.MediaSnapshot != "" {
+		digestData, _ = common.Marshal(struct {
+			Request string
+			Media   string
+		}{string(digestData), req.MediaSnapshot})
+	}
+	legacySum := sha256.Sum256(digestData)
+	legacyDigest := hex.EncodeToString(legacySum[:])
+	if grant.Operations != nil || wire.ID != legacyWireOperation(operation) {
+		digestData, _ = common.Marshal(struct {
+			Version string
+			Wire    WireOperation
+			Scope   string
+		}{"platform-wire-v3", wire, string(digestData)})
+	}
+	if continuity != "" {
+		digestData, _ = common.Marshal(struct{ Version, Request, Continuity string }{"platform-native-history-v1", string(digestData), continuity})
+	}
 	sum := sha256.Sum256(digestData)
-	row := Call{CallID: id, Operation: operation, ActorID: grant.ActorID, AccountID: grant.AccountID, OriginProductID: grant.OriginProductID, CredentialID: grant.ID, TaskID: task, Model: req.Model, Digest: hex.EncodeToString(sum[:]), Asset: asset, FundingMode: mode, FundingProductID: "llmrouter", BillingProfileVersion: grant.BillingProfileVersion, Status: "RESERVING"}
+	kind := grant.CredentialKind
+	if kind == "" {
+		kind = "task"
+	}
+	row := Call{CredentialKind: kind, CallID: id, Operation: operation, ActorID: grant.ActorID, AccountID: grant.AccountID, OriginProductID: grant.OriginProductID, CredentialID: grant.ID, TaskID: task, Model: req.Model, Digest: hex.EncodeToString(sum[:]), Asset: asset, FundingMode: mode, FundingProductID: "llmrouter", BillingProfileVersion: grant.BillingProfileVersion, Status: "RESERVING"}
 	row.InstanceID = a.config.InstanceID
+	if grant.Operations != nil || wire.ID != legacyWireOperation(operation) {
+		row.WireOperation = wire.ID
+		row.WirePathModel = wire.PathModel
+		row.WireMode = wire.Mode
+		row.DigestVersion = "platform-wire-v3"
+	}
+	if continuity != "" {
+		row.ContinuitySnapshot = continuity
+		row.NativeRequestDigest = nativeDigest(req.Canonical)
+		row.DigestVersion = "platform-native-history-v1"
+	}
 	var old Call
 	if err = a.db.WithContext(ctx).First(&old, "call_id = ?", id).Error; err == nil {
-		return nil, compareCall(old, row)
+		return nil, compareWireCall(old, row, legacyDigest)
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
@@ -56,6 +267,7 @@ func (a *Adapter) AdmitOperation(ctx context.Context, credential, task, id, oper
 		return nil, err
 	}
 	var chosen *Rate
+	candidates := 0
 	for i := range rates {
 		r := &rates[i]
 		if r.Model != req.Model || r.Semantics != "metered_v2" || r.Status != "published" || r.Metered == nil || r.Metered.Operation != operation {
@@ -68,6 +280,10 @@ func (a *Adapter) AdmitOperation(ctx context.Context, credential, task, id, oper
 		if ra != asset {
 			continue
 		}
+		candidates++
+		if candidates > 1 {
+			return nil, ErrInvalid
+		}
 		pin := a.config.OperationRateIDs[operation][asset][req.Model]
 		if pin != "" && pin != r.ID {
 			continue
@@ -77,14 +293,79 @@ func (a *Adapter) AdmitOperation(ctx context.Context, credential, task, id, oper
 		}
 		chosen = r
 	}
+	if chosen != nil && wire.ID == "responses.compact" && a.config.CompactPolicies[req.Model].RateIDs[asset] != chosen.ID {
+		return nil, ErrInvalid
+	}
+	if wire.ID == "embeddings.create" || wire.ID == "rerank.create" || wire.ID == "multimodal.embeddings.create" {
+		p := a.config.KnowledgePolicies[wire.ID][req.Model]
+		if chosen == nil || chosen.Metered.Policy != "provider_reported_v1" || p.RateIDs[asset] != chosen.ID {
+			return nil, ErrInvalid
+		}
+	}
 	if chosen == nil {
 		return nil, ErrInvalid
+	}
+	if wire.ID == "ocr.jobs.create" || wire.ID == "dashscope.ocr.recognitions.create" {
+		p := a.config.OCRPolicies[wire.ID][req.Model]
+		if p.UsagePolicy == "provider_tokens_v1" && (p.MaxInputTokens > a.config.MaxInputTokens || p.MaxOutputTokens > a.config.MaxOutputTokens) {
+			return nil, ErrInvalid
+		}
+		if chosen.Metered.Policy != p.UsagePolicy || p.RateIDs[asset] != chosen.ID {
+			return nil, ErrInvalid
+		}
+		if p.UsagePolicy == "success_request" {
+			if len(chosen.Metered.Terms) != 1 || chosen.Metered.Terms[0].Key != "requests" || chosen.Metered.Terms[0].Unit != "request" {
+				return nil, ErrInvalid
+			}
+		} else {
+			limit := a.config.OperationLimits[operation][req.Model]
+			terms := map[string]metering.Term{}
+			for _, term := range chosen.Metered.Terms {
+				terms[term.Key] = term
+			}
+			if len(terms) != 2 || terms["input"].Unit != "token" || terms["output"].Unit != "token" || limit.Policy != p.UsagePolicy || limit.MaxQuantity != p.MaxInputTokens {
+				return nil, ErrInvalid
+			}
+		}
+	}
+	if IsAudioWire(wire.ID) {
+		p := a.config.AudioPolicies[wire.ID][req.Model]
+		if chosen.Metered.Policy != p.UsagePolicy || p.RateIDs[asset] != chosen.ID || len(chosen.Metered.Terms) != 1 {
+			return nil, ErrInvalid
+		}
 	}
 	if err = metering.ValidatePrice(*chosen.Metered); err != nil {
 		return nil, ErrInvalid
 	}
+	if IsAudioWire(wire.ID) {
+		p := a.config.AudioPolicies[wire.ID][req.Model]
+		limit := a.config.OperationLimits[operation][req.Model]
+		unit := "character"
+		if operation == "transcription" {
+			unit = "audio_second"
+		}
+		if wire.ID == "elevenlabs.audio.speech.create" {
+			unit = "provider_unit"
+		}
+		if chosen.Metered.Terms[0].Unit != unit || (unit != "provider_unit" && limit.MaxQuantity != p.MaxQuantity && p.UsagePolicy != "unicode_scalar_v1") {
+			return nil, ErrInvalid
+		}
+	}
 	if operation == "video" && billing_setting.ValidateNativeVideoPrice(*chosen.Metered) != nil {
 		return nil, ErrInvalid
+	}
+	if operation == "video" {
+		if p, ok := a.config.VideoPolicies["videos.create"][req.Model]; ok {
+			if !p.valid(req.Model, "videos.create") || !validWanVideoPrice(*chosen.Metered) || p.RateIDs[asset] != chosen.ID {
+				return nil, ErrInvalid
+			}
+		}
+	}
+	if IsImageWire(wire.ID) {
+		p := a.config.ImagePolicies[wire.ID][req.Model]
+		if chosen.Metered.Policy != "successful_outputs_v1" || p.RateIDs[asset] != chosen.ID {
+			return nil, ErrInvalid
+		}
 	}
 	if operation == "image_generation" || operation == "image_edit" {
 		if billing_setting.ValidateNativeImageTiers(*chosen.Metered) != nil {
@@ -94,7 +375,7 @@ func (a *Adapter) AdmitOperation(ctx context.Context, credential, task, id, oper
 	if limits, ok := a.config.OperationLimits[operation][req.Model]; ok && limits.Policy != "" && limits.Policy != chosen.Metered.Policy {
 		return nil, ErrInvalid
 	}
-	if operation == "video" && chosen.Metered.Terms[0].Unit == "provider_unit" {
+	if (operation == "video" || operation == "speech") && chosen.Metered.Terms[0].Unit == "provider_unit" {
 		limit := a.config.OperationLimits[operation][req.Model]
 		capValue, ok := new(big.Int).SetString(limit.ProviderUnitCap, 10)
 		if !ok || capValue.Sign() <= 0 || capValue.BitLen() > 31 || limit.ProviderUnit != chosen.Metered.Terms[0].ProviderUnit || limit.Policy != chosen.Metered.Policy {
@@ -109,6 +390,7 @@ func (a *Adapter) AdmitOperation(ctx context.Context, credential, task, id, oper
 		}
 		req.Quantity = limit.MaxQuantity
 	}
+	row.MediaSnapshot = req.MediaSnapshot
 	row.ReservationQuantity = int64(req.Quantity)
 	row.ReservationOutput = int64(req.Output)
 	amount, err := meteredReserve(*chosen.Metered, req)
@@ -130,10 +412,10 @@ func (a *Adapter) AdmitOperation(ctx context.Context, credential, task, id, oper
 		if err = a.db.WithContext(ctx).First(&old, "call_id = ?", id).Error; err != nil {
 			return nil, err
 		}
-		return nil, compareCall(old, row)
+		return nil, compareWireCall(old, row, legacyDigest)
 	}
 	var remote RemoteCall
-	err = a.client.do(ctx, http.MethodPost, "/internal/v1/calls/reserve", id, map[string]string{"credential": credential, "task_id": task, "call_id": id, "request_digest": row.Digest, "rate_id": row.RateID, "amount": amount, "instance_id": a.config.InstanceID}, &remote)
+	err = a.client.do(ctx, http.MethodPost, "/internal/v1/calls/reserve", id, map[string]string{"credential": credential, "task_id": task, "call_id": id, "request_digest": row.Digest, "rate_id": row.RateID, "amount": amount, "instance_id": a.config.InstanceID, "wire_operation": row.WireOperation}, &remote)
 	if err != nil || !remote.matches(row) || remote.Status != "RESERVED" || (strings.HasPrefix(credential, "uh_key_") && (remote.InstanceID != a.config.InstanceID || remote.CredentialID != grant.ID)) {
 		_ = a.db.WithContext(ctx).Model(&Call{}).Where("call_id = ?", id).Update("status", "RESERVE_UNKNOWN").Error
 		if err != nil {
@@ -150,7 +432,7 @@ func (a *Adapter) AdmitOperation(ctx context.Context, credential, task, id, oper
 		return nil, ErrPending
 	}
 	row.Status = "RESERVED"
-	return &Session{adapter: a, call: row, safeFailure: true}, nil
+	return &Session{adapter: a, call: row, safeFailure: true, canonical: req.Canonical}, nil
 }
 
 func meteredReserve(price metering.Price, req operationRequest) (string, error) {
@@ -158,8 +440,11 @@ func meteredReserve(price metering.Price, req operationRequest) (string, error) 
 	// Sum every tariff dimension at its maximum. This intentionally over-reserves
 	// overlapping token dimensions and image tiers, so no rate choice under-reserves.
 	for _, term := range price.Terms {
+		if price.Policy == "ali_wan26_t2v_billable_duration_v1" && term.Key != req.MeasurementKey {
+			continue
+		}
 		n := req.Quantity
-		if term.Key == "output" || term.Key == "reasoning" {
+		if term.Key == "output" || term.Key == "reasoning" || (price.Operation == "multimodal_embedding" && term.Key == "visual") {
 			n = req.Output
 		}
 		if n < 0 {
@@ -212,7 +497,7 @@ func (s *Session) ObserveMetering(ctx context.Context, u metering.Usage) error {
 		}
 		for _, measurement := range u.Measurements {
 			cap := s.call.ReservationQuantity
-			if measurement.Key == "output" || measurement.Key == "reasoning" {
+			if measurement.Key == "output" || measurement.Key == "reasoning" || (price.Operation == "multimodal_embedding" && measurement.Key == "visual") {
 				cap = s.call.ReservationOutput
 			}
 			value, _ := new(big.Int).SetString(measurement.Quantity.Value, 10)
@@ -221,6 +506,27 @@ func (s *Session) ObserveMetering(ctx context.Context, u metering.Usage) error {
 				u.State = "incomplete"
 				break
 			}
+		}
+	}
+	if u.State == "confirmed" && nativeHistoryWire(s.WireOperation().ID) {
+		input, output := new(big.Int), new(big.Int)
+		for _, m := range u.Measurements {
+			n, ok := new(big.Int).SetString(m.Quantity.Value, 10)
+			if !ok || m.Quantity.Scale != 0 || m.Unit != "token" {
+				u.State = "incomplete"
+				break
+			}
+			switch m.Key {
+			case "input", "cache_read", "cache_write":
+				input.Add(input, n)
+			case "output", "reasoning":
+				output.Add(output, n)
+			default:
+				u.State = "incomplete"
+			}
+		}
+		if input.Cmp(big.NewInt(s.call.ReservationQuantity)) > 0 || output.Cmp(big.NewInt(s.call.ReservationOutput)) > 0 {
+			u.State = "incomplete"
 		}
 	}
 	b, err := common.Marshal(u)
@@ -427,17 +733,26 @@ func (a *Adapter) BindTask(ctx context.Context, callID, providerTaskID string) e
 
 // BindTaskTransaction atomically stores the provider binding and the durable
 // business task; an insert failure cannot leave a bound but unpollable job.
+func (s *Session) BindTaskOn(ctx context.Context, tx *gorm.DB, providerTaskID string) error {
+	if providerTaskID == "" || len(providerTaskID) > 255 || tx == nil {
+		return ErrInvalid
+	}
+	result := tx.WithContext(ctx).Model(&Call{}).Where("call_id = ? AND status = ? AND provider_task_id = ?", s.call.CallID, "UNKNOWN", "").Update("provider_task_id", providerTaskID)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrConflict
+	}
+	return nil
+}
 func (s *Session) BindTaskTransaction(ctx context.Context, providerTaskID string, persist func(*gorm.DB) error) error {
-	if providerTaskID == "" || len(providerTaskID) > 255 || persist == nil {
+	if persist == nil {
 		return ErrInvalid
 	}
 	return s.adapter.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		result := tx.Model(&Call{}).Where("call_id = ? AND status = ? AND provider_task_id = ?", s.call.CallID, "UNKNOWN", "").Update("provider_task_id", providerTaskID)
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return ErrConflict
+		if e := s.BindTaskOn(ctx, tx, providerTaskID); e != nil {
+			return e
 		}
 		return persist(tx)
 	})

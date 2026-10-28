@@ -20,6 +20,9 @@ func NormalizeModelCapabilities(raw string) (dto.ModelCapabilities, error) {
 }
 
 func normalizeCapabilities(m *dto.ModelCapabilities) error {
+	if m.MaxOutputTokens != nil && (*m.MaxOutputTokens <= 0 || *m.MaxOutputTokens > 1<<20) {
+		return fmt.Errorf("max_output_tokens must be positive and bounded")
+	}
 	for _, values := range []*[]string{&m.InputModalities, &m.OutputModalities, &m.Operations} {
 		if *values == nil {
 			continue

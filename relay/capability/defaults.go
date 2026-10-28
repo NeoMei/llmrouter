@@ -40,6 +40,9 @@ func defaultDeclarations() []Declaration {
 	}
 
 	support([]int{constant.ChannelTypePaddleOCR, constant.ChannelTypeGateway}, OperationOCRCreate, OperationOCRRetrieve, OperationOCRResource)
+	support([]int{constant.ChannelTypeAli}, OperationBailianSpeech, OperationQwenOCR, OperationQwenImage, OperationDashScopeAudioTranscription)
+	support([]int{constant.ChannelTypeGemini}, OperationGeminiImage)
+	support([]int{constant.ChannelTypeCustom}, OperationElevenSpeech)
 	allChannels := constant.AllChannelTypes()
 	support(allChannels, OperationModelList, OperationModelRetrieve, OperationModelDelete)
 
@@ -135,6 +138,7 @@ func defaultDeclarations() []Declaration {
 		OperationImageGeneration, OperationImageEdit,
 	)
 	support([]int{constant.ChannelTypeOpenAI}, OperationImageVariation)
+	support([]int{constant.ChannelTypeVolcEngine}, OperationImageGeneration)
 	support([]int{constant.ChannelTypeAli}, OperationAudioTranscription, OperationImageGeneration, OperationImageEdit)
 	support([]int{constant.ChannelTypeMiniMax}, OperationAudioSpeech)
 
@@ -142,6 +146,7 @@ func defaultDeclarations() []Declaration {
 	support([]int{constant.ChannelTypeCohere, constant.ChannelTypeJina, constant.ChannelTypeSiliconFlow, constant.ChannelTypeAli}, OperationRerankCreate)
 
 	support([]int{
+		constant.ChannelTypeAli,
 		constant.ChannelTypeKling,
 		constant.ChannelTypeJimeng,
 		constant.ChannelTypeVidu,

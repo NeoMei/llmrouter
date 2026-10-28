@@ -432,7 +432,12 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 		}
 		defer file.Close()
 
-		part, err := writer.CreateFormFile("file", fileHeader.Filename)
+		var part io.Writer
+		if info.PlatformMode {
+			part, err = writer.CreatePart(fileHeader.Header)
+		} else {
+			part, err = writer.CreateFormFile("file", fileHeader.Filename)
+		}
 		if err != nil {
 			return nil, errors.New("create form file failed")
 		}
@@ -716,7 +721,7 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 			usage, err = OaiResponsesHandler(c, info, resp)
 		}
 	case relayconstant.RelayModeResponsesCompact:
-		usage, err = OaiResponsesCompactionHandler(c, resp)
+		usage, err = OaiResponsesCompactionHandler(c, resp, info)
 	default:
 		if info.IsStream {
 			usage, err = OaiStreamHandler(c, info, resp)

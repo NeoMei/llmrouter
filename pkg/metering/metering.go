@@ -44,7 +44,7 @@ type Usage struct {
 }
 
 var units = map[string]bool{"token": true, "character": true, "audio_second": true, "image": true, "request": true, "video_second": true, "provider_unit": true}
-var ops = map[string]bool{"chat": true, "responses": true, "embedding": true, "speech": true, "transcription": true, "image_generation": true, "image_edit": true, "ocr": true, "video": true}
+var ops = map[string]bool{"chat": true, "responses": true, "embedding": true, "rerank": true, "multimodal_embedding": true, "speech": true, "transcription": true, "image_generation": true, "image_edit": true, "ocr": true, "video": true}
 
 func parseQuantity(v Quantity) (*big.Rat, error) {
 	if v.Scale < 0 || v.Scale > 9 || v.Value == "" || (len(v.Value) > 1 && v.Value[0] == '0') || strings.Trim(v.Value, "0123456789") != "" || len(v.Value) > 38 {
@@ -69,23 +69,34 @@ func ValidatePrice(p Price) error {
 		}
 		compatible := false
 		switch p.Operation {
-		case "chat", "responses", "embedding":
+		case "chat", "responses", "embedding", "rerank", "multimodal_embedding":
 			compatible = t.Unit == "token"
 		case "speech":
-			compatible = t.Unit == "character"
+			compatible = t.Unit == "character" || (t.Unit == "provider_unit" && p.Policy == "elevenlabs_character_cost_v1" && t.ProviderUnit == "elevenlabs.character_cost.multilingual_v2.v1")
 		case "transcription":
 			compatible = t.Unit == "audio_second"
 		case "image_generation", "image_edit":
 			compatible = t.Unit == "image"
 		case "ocr":
-			compatible = t.Unit == "request"
+			compatible = (p.Policy == "success_request" && t.Unit == "request") || (p.Policy == "provider_tokens_v1" && t.Unit == "token")
 		case "video":
 			compatible = t.Unit == "video_second" || t.Unit == "provider_unit"
 		}
 		if !compatible {
 			return errors.New("operation/unit mismatch")
 		}
-		if (t.Unit == "token" && t.Key != "input" && t.Key != "output" && t.Key != "cache_read" && t.Key != "cache_write" && t.Key != "reasoning") || (t.Unit == "character" && t.Key != "characters") || (t.Unit == "audio_second" && t.Key != "audio") || (t.Unit == "request" && t.Key != "requests") || (t.Unit == "video_second" && t.Key != "video") || (t.Unit == "provider_unit" && t.Key != "provider") {
+		tokenDimension := t.Key == "input" || t.Key == "output" || t.Key == "cache_read" || t.Key == "cache_write" || t.Key == "reasoning"
+		switch p.Operation {
+		case "rerank":
+			tokenDimension = t.Key == "input"
+		case "multimodal_embedding":
+			tokenDimension = t.Key == "text" || t.Key == "visual"
+		}
+		videoKey := t.Key == "video"
+		if p.Operation == "video" && p.Policy == "ali_wan26_t2v_billable_duration_v1" {
+			videoKey = t.Key == "video_720p" || t.Key == "video_1080p"
+		}
+		if (t.Unit == "token" && !tokenDimension) || (t.Unit == "character" && t.Key != "characters") || (t.Unit == "audio_second" && t.Key != "audio") || (t.Unit == "request" && t.Key != "requests") || (t.Unit == "video_second" && !videoKey) || (t.Unit == "provider_unit" && t.Key != "provider") {
 			return errors.New("unknown token dimension")
 		}
 
@@ -123,6 +134,22 @@ func ValidatePrice(p Price) error {
 			}
 		}
 	}
+	if p.Operation == "multimodal_embedding" && (!seen["text"] || !seen["visual"]) {
+		return errors.New("missing multimodal token dimension")
+	}
+	if p.Operation == "ocr" {
+		if p.Policy == "success_request" && (!seen["requests"] || len(p.Terms) != 1) {
+			return errors.New("invalid request tariff")
+		}
+		if p.Policy == "provider_tokens_v1" && (!seen["input"] || !seen["output"] || len(p.Terms) != 2) {
+			return errors.New("invalid provider token tariff")
+		}
+	}
+	if p.Operation == "video" && p.Policy == "ali_wan26_t2v_billable_duration_v1" {
+		if len(p.Terms) != 2 || !seen["video_720p"] || !seen["video_1080p"] {
+			return errors.New("missing Wan resolution tier")
+		}
+	}
 	return nil
 }
 func ValidateUsage(p Price, u Usage) error {
@@ -153,7 +180,11 @@ func ValidateUsage(p Price, u Usage) error {
 		}
 		seen[m.Key] = true
 	}
-	if len(seen) != len(terms) {
+	selectedTier := p.Operation == "video" && p.Policy == "ali_wan26_t2v_billable_duration_v1"
+	if selectedTier && (len(seen) != 1 || (!seen["video_720p"] && !seen["video_1080p"])) {
+		return errors.New("missing selected video resolution")
+	}
+	if !selectedTier && len(seen) != len(terms) {
 		return errors.New("missing measurement")
 	}
 	return nil

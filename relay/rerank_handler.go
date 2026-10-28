@@ -94,6 +94,14 @@ func RerankHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		requestBody = body
 	}
 
+	if info.PlatformMode {
+		if info.PlatformBilling == nil || info.NativeBilling == nil {
+			return types.NewError(fmt.Errorf("platform metering context required"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		if err := info.PlatformBilling.Dispatch(c.Request.Context(), info.ChannelId); err != nil {
+			return types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+	}
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
 		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)

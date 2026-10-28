@@ -119,7 +119,7 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	}
 
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact {
-		return openai.OaiResponsesCompactionHandler(c, resp)
+		return openai.OaiResponsesCompactionHandler(c, resp, info)
 	}
 
 	if info.IsStream {

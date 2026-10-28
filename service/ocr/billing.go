@@ -21,8 +21,10 @@ import (
 type AuthorizedAdmission struct {
 	PlatformCallID                                  string
 	PlatformPrice                                   *metering.Price
+	ValidateTarget                                  func(int, int, string, string, string) error
 	Dispatch                                        func(context.Context) error
 	BindTask                                        func(context.Context, string) error
+	BindTaskTx                                      func(context.Context, *gorm.DB, string) error
 	IdempotencyKey                                  string
 	UserID, TokenID, ChannelID                      int
 	Model, UserGroup, UsingGroup, BillingPreference string

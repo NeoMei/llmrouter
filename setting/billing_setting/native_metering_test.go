@@ -58,3 +58,16 @@ func TestNativeVideoRequiresImplementedReceiptPolicyAndUnit(t *testing.T) {
 	p.Terms[0].Key, p.Terms[0].Unit, p.Terms[0].ProviderUnit = "provider", "provider_unit", "kling.final_unit_deduction"
 	require.NoError(t, ValidateNativeVideoPrice(p))
 }
+
+func TestNativeWanVideoOriginalPriceTiersAreClosed(t *testing.T) {
+	p := metering.Price{Version: "metered_v2", Operation: "video", Policy: "ali_wan26_t2v_billable_duration_v1", Terms: []metering.Term{
+		{Key: "video_720p", Unit: "video_second", Price: metering.Rational{Numerator: "3", Denominator: "5"}},
+		{Key: "video_1080p", Unit: "video_second", Price: metering.Rational{Numerator: "1", Denominator: "1"}},
+	}}
+	require.NoError(t, ValidateNativeVideoPrice(p))
+	p.Terms[0].Price = metering.Rational{Numerator: "1", Denominator: "1"}
+	require.Error(t, ValidateNativeVideoPrice(p))
+	p.Terms[0].Price = metering.Rational{Numerator: "3", Denominator: "5"}
+	p.Terms = p.Terms[:1]
+	require.Error(t, ValidateNativeVideoPrice(p))
+}

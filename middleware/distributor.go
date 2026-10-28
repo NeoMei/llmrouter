@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/capability"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -36,6 +37,14 @@ func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		var channel *model.Channel
 		channelId, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId)
+		if v, exists := c.Get("platform_billing"); exists {
+			if session, yes := v.(*platformbilling.Session); yes {
+				if target, bound := session.NativeHistoryTarget(); bound {
+					channelId = strconv.FormatInt(target.ChannelID, 10)
+					ok = true
+				}
+			}
+		}
 		modelRequest, shouldSelectChannel, err := getModelRequest(c)
 		if err != nil {
 			abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
@@ -50,7 +59,7 @@ func Distribute() func(c *gin.Context) {
 		// fail closed rather than reusing a legacy ability with the same name.
 		canDefer := false
 		switch operation {
-		case capability.OperationChatCreate, capability.OperationCompletionCreate, capability.OperationResponseCreate, capability.OperationResponseCompact, capability.OperationClaudeMessageCreate, capability.OperationEmbeddingCreate, capability.OperationMultimodalEmbedding, capability.OperationAudioTranscription, capability.OperationAudioTranslation, capability.OperationAudioSpeech, capability.OperationImageGeneration, capability.OperationImageEdit, capability.OperationImageVariation, capability.OperationRerankCreate, capability.OperationGeminiGenerate, capability.OperationGeminiEmbed:
+		case capability.OperationChatCreate, capability.OperationCompletionCreate, capability.OperationResponseCreate, capability.OperationResponseCompact, capability.OperationClaudeMessageCreate, capability.OperationEmbeddingCreate, capability.OperationMultimodalEmbedding, capability.OperationAudioTranscription, capability.OperationAudioTranslation, capability.OperationAudioSpeech, capability.OperationImageGeneration, capability.OperationImageEdit, capability.OperationImageVariation, capability.OperationRerankCreate, capability.OperationGeminiGenerate, capability.OperationGeminiEmbed, capability.OperationVideoCreate:
 			canDefer = true
 		}
 		recognized, routeErr := false, error(nil)
@@ -60,6 +69,14 @@ func Distribute() func(c *gin.Context) {
 		if routeErr != nil {
 			abortWithOpenAiMessage(c, http.StatusInternalServerError, routeErr.Error(), types.ErrorCodeQueryDataError)
 			return
+		}
+		if recognized && operation == capability.OperationVideoCreate {
+			videoRoute, videoErr := modelcatalog.PublicModelSupportsOperation(c.Request.Context(), model.DB, modelRequest.Model, string(operation))
+			if videoErr != nil {
+				abortWithOpenAiMessage(c, http.StatusInternalServerError, videoErr.Error(), types.ErrorCodeQueryDataError)
+				return
+			}
+			canDefer = videoRoute
 		}
 		if recognized && !canDefer {
 			abortWithOpenAiMessage(c, http.StatusBadRequest, "configured public model requires a supported catalog relay handler", types.ErrorCodeUnsupportedOperation)
@@ -540,11 +557,16 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	common.SetContextKey(c, constant.ContextKeyChannelModelMapping, channel.GetModelMapping())
 	common.SetContextKey(c, constant.ContextKeyChannelStatusCodeMapping, channel.GetStatusCodeMapping())
 
-	if !channel.ChannelInfo.IsMultiKey {
+	var nativeSession *platformbilling.Session
+	if v, ok := c.Get("platform_billing"); ok {
+		nativeSession, _ = v.(*platformbilling.Session)
+	}
+	nativePinned := nativeSession != nil && nativeSession.NativeHistoryEnabled()
+	if !channel.ChannelInfo.IsMultiKey && !nativePinned {
 		accountpool.ResetSelection(c)
 	}
 	key, index, newAPIError := channel.Key, 0, (*types.NewAPIError)(nil)
-	if channel.ChannelInfo.IsMultiKey {
+	if channel.ChannelInfo.IsMultiKey && !nativePinned {
 		_, operation, _ := capability.ResolveRequest(c.Request.Method, c.Request.URL.Path)
 		if operation == capability.OperationRealtimeConnect {
 			return types.NewErrorWithStatusCode(errors.New("pooled realtime transport is not supported"), types.ErrorCodeUnsupportedOperation, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
@@ -562,6 +584,33 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 		newAPIError = nil
 		if err != nil {
 			newAPIError = types.NewErrorWithStatusCode(err, types.ErrorCodeChannelNoAvailableKey, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+		}
+	}
+	if nativePinned {
+		target, _ := nativeSession.NativeHistoryTarget()
+		if int64(channel.Id) != target.ChannelID {
+			return types.NewError(platformbilling.ErrNativeHistory, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		refs, keys, err := model.ChannelAccountRefs(c.Request.Context(), model.DB, channel)
+		found := false
+		if err == nil {
+			for _, ref := range refs {
+				if ref.MemberID == target.MemberID && ref.PoolID == target.PoolID {
+					key, index = keys[ref.KeyIndex], ref.KeyIndex
+					scope := accountpool.RequestScope(c, nativeSession.NativeHistoryUpstream())
+					selected, e := model.SelectUpstreamAccount(c.Request.Context(), model.DB, []model.UpstreamAccountRef{ref}, scope, nil, time.Now())
+					if e != nil {
+						return types.NewError(platformbilling.ErrNativeHistory, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+					}
+					accountpool.Prepare(c, model.DB, selected, scope)
+					accountpool.State(c).MaxSends = 1
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			return types.NewError(platformbilling.ErrNativeHistory, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		}
 	}
 	if newAPIError != nil {

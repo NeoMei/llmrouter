@@ -11,6 +11,9 @@ import (
 // PersistResponsesTurn is the provider-neutral completed-turn persistence
 // boundary. Providers call it only after protocol and tool-policy validation.
 func PersistResponsesTurn(c *gin.Context, info *RelayInfo, response *dto.OpenAIResponsesResponse) {
+	if info != nil && info.PlatformMode {
+		return
+	}
 	if c == nil || c.Request == nil || c.Request.Context().Err() != nil || !responsesstate.Enabled() || info == nil || !responsesstate.EligibleCompletedResponse(response) {
 		return
 	}

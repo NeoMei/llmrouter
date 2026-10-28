@@ -121,10 +121,14 @@ func (m Properties) Value() (driver.Value, error) {
 }
 
 type TaskPrivateData struct {
-	Account        *UpstreamAccountRef `json:"account,omitempty"`
-	Key            string              `json:"key,omitempty"`
-	UpstreamTaskID string              `json:"upstream_task_id,omitempty"` // 上游真实 task ID
-	ResultURL      string              `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
+	Account           *UpstreamAccountRef `json:"account,omitempty"`
+	Key               string              `json:"key,omitempty"`
+	UpstreamTaskID    string              `json:"upstream_task_id,omitempty"` // 上游真实 task ID
+	ResultURL         string              `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
+	ResultResourceID  string              `json:"result_resource_id,omitempty"`
+	ResultSHA256      string              `json:"result_sha256,omitempty"`
+	ResultSize        int64               `json:"result_size,omitempty"`
+	ResultContentType string              `json:"result_content_type,omitempty"`
 	// 计费上下文：用于异步退款/差额结算（轮询阶段读取）
 	BillingSource  string              `json:"billing_source,omitempty"`  // "wallet" 或 "subscription"
 	SubscriptionId int                 `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
@@ -135,15 +139,18 @@ type TaskPrivateData struct {
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
 type TaskBillingContext struct {
-	NativePrice     *metering.Price    `json:"native_price,omitempty"`
-	NativeCallID    string             `json:"native_call_id,omitempty"`
-	PlatformCallID  string             `json:"platform_call_id,omitempty"`
-	ModelPrice      float64            `json:"model_price,omitempty"`       // 模型单价
-	GroupRatio      float64            `json:"group_ratio,omitempty"`       // 分组倍率
-	ModelRatio      float64            `json:"model_ratio,omitempty"`       // 模型倍率
-	OtherRatios     map[string]float64 `json:"other_ratios,omitempty"`      // 附加倍率（时长、分辨率等）
-	OriginModelName string             `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
-	PerCallBilling  bool               `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
+	NativePrice                *metering.Price    `json:"native_price,omitempty"`
+	NativeCallID               string             `json:"native_call_id,omitempty"`
+	PlatformCallID             string             `json:"platform_call_id,omitempty"`
+	ModelPrice                 float64            `json:"model_price,omitempty"`      // 模型单价
+	GroupRatio                 float64            `json:"group_ratio,omitempty"`      // 分组倍率
+	ModelRatio                 float64            `json:"model_ratio,omitempty"`      // 模型倍率
+	OtherRatios                map[string]float64 `json:"other_ratios,omitempty"`     // 附加倍率（时长、分辨率等）
+	VideoResolution            string             `json:"video_resolution,omitempty"` // Wan 分层原价选定时点
+	VideoResourceOrigins       []string           `json:"video_resource_origins,omitempty"`
+	VideoResourceAllowLoopback bool               `json:"video_resource_allow_loopback,omitempty"`
+	OriginModelName            string             `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
+	PerCallBilling             bool               `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
 }
 
 // GetUpstreamTaskID 获取上游真实 task ID（用于与 provider 通信）
@@ -241,7 +248,7 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 	if relayInfo.NativeBilling != nil {
 		n := relayInfo.NativeBilling
 		p := n.Price
-		t.PrivateData.BillingContext = &TaskBillingContext{NativePrice: &p, NativeCallID: n.CallID}
+		t.PrivateData.BillingContext = &TaskBillingContext{NativePrice: &p, NativeCallID: n.CallID, VideoResolution: n.VideoResolution, VideoResourceOrigins: n.VideoResourceOrigins, VideoResourceAllowLoopback: n.VideoResourceAllowLoopback}
 		t.FundingOwner = "native"
 		if n.Platform {
 			t.FundingOwner = "platform"

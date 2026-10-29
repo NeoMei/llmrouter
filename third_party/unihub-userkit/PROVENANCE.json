@@ -1,5 +1,5 @@
 {
-  "commit": "8e0178bda8795134bffcdbfd24004c9629eab44a",
+  "commit": "0c1ee378780cf1950c7212efa609dcca62effb63",
   "distribution": "unpublished source snapshot; no declared upstream license",
   "module": "packages/userkit-go",
   "sha256": {
@@ -13,11 +13,11 @@
     "go.sum": "21a2a449644379d3f95fcfa857f00d91e0e672bf3d2153a1daa35b9f82ee263c",
     "product_auth.go": "3fc48e73b4d0d0d400c03367bd0f1a2b5a9d1cf91bf1e038a95452ba64cd6de5",
     "product_auth_test.go": "b6bef7a2a9b6319ad9c10a7d59331e21e806eec7feff6a3c0bf682f437b3c61c",
-    "product_browser.go": "d2ba57b1bdbdf951d8681af87c5e7e1286ef8f31ff83db5f1c618c2cf9780405",
-    "product_browser_test.go": "79e3da59beaf72c082a4539088e47b0dc2c7e5aa2523782e09ff8e95be14f763",
+    "product_browser.go": "888c26ad8a7c20b4b9d56941be87baad75271db8b32a062d0a6fd89c72c1b665",
+    "product_browser_test.go": "93ee12506f7333f6dd5d3ca027056b602cba0d8bb9a4ffe1b7b34a408dcfc28e",
     "product_finance.go": "2c88056a06060da635e0570017a697dd08c518adb2d0384958f933707f0d4bac",
     "product_finance_test.go": "64bdf6c1b86f888e44547715a49330c3618d03d13548edef02bc1bfaebae4862",
-    "runtime.go": "9c522dc6e99f5c9524ed3cc8d5a3117515075bf9a20e4dcbd9cb46ff066b37d7",
+    "runtime.go": "1bad65a4e36803e3633b93d6901f176575752ed52419ca6e7b07954775bf0354",
     "runtime_refund.go": "36075e97098e17be5bf60bb7e89ca7916f0fe31cfdd172d7575012da3df0287b",
     "runtime_scope.go": "b146b538d3a51df800abe644db91af6878dbf52c9c59e62b0651c0dbcd65b103",
     "runtime_test.go": "6b066195552b87162147b9faafb856b8e55abe020c21aaf80e7d8bf77fa6b8f2",

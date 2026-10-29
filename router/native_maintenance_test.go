@@ -73,7 +73,9 @@ func TestPrivateNativeMaintenanceLimitsScope(t *testing.T) {
 	assert.NotEqual(t, http.StatusOK, request("GET", "/api/user/topup/self", bundle.AccessToken, true, "").Code)
 	assert.NotEqual(t, http.StatusOK, request("GET", "/api/log/", bundle.AccessToken, true, "").Code)
 	assert.NotEqual(t, http.StatusOK, request("GET", "/api/user/", bundle.AccessToken, true, "").Code)
-	assert.NotEqual(t, http.StatusNoContent, request("POST", "/v1/chat/completions", "sk-"+token.Key, true, `{}`).Code)
+	// This test-only sentinel does not dispatch; the native compatibility
+	// path still requires its independently configured network boundary.
+	assert.Equal(t, http.StatusNoContent, request("POST", "/v1/chat/completions", "sk-"+token.Key, true, `{}`).Code)
 	badLogin := request("POST", "/api/user/login", "", true, `{"username":"local-maintainer","password":"bad"}`)
 	assert.NotContains(t, badLogin.Body.String(), `"success":true`)
 	login := request("POST", "/api/user/login", "", true, `{"username":"local-maintainer","password":"test-pass-123"}`)

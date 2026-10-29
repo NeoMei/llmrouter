@@ -31,7 +31,7 @@ func TestProductBrowserGrantScopesAndSeparateApprovalActor(t *testing.T) {
 				if bad {
 					product = "another"
 				}
-				json.NewEncoder(w).Encode(ProductBrowserGrant{Access: Access{Issuer: "https://hub.test", Subject: "central", User: User{ID: "central"}, ProductID: product, InstanceID: "default", Permissions: []string{"product:use"}, Active: true, Version: 1, ExpiresAt: time.Now().Add(time.Minute).Unix()}, ProofToken: "ubp_proof", ExpiresAt: time.Now().Add(time.Minute).Unix()})
+				json.NewEncoder(w).Encode(ProductBrowserGrant{Access: Access{Issuer: "https://hub.test", Subject: "central", User: User{ID: "central"}, ProductID: product, InstanceID: "default", Permissions: []string{"product:use"}, Active: true, Version: 1, ExpiresAt: time.Now().Add(time.Minute).Unix()}, ProofToken: "ubp_proof", ExpiresAt: time.Now().Add(time.Minute).Unix(), SourceProofToken: "ubsp_" + strings.Repeat("a", 64), SourceProofExpiresAt: time.Now().Add(50 * time.Minute).Unix()})
 			}
 		}))
 		c, e := NewRuntimeClient(ServiceConfig{BaseURL: srv.URL, ProductID: "llmrouter", ServiceToken: strings.Repeat("s", 32)})
@@ -47,6 +47,54 @@ func TestProductBrowserGrantScopesAndSeparateApprovalActor(t *testing.T) {
 			t.Fatal("wrong target scope accepted or correct rejected", e)
 		}
 		srv.Close()
+	}
+}
+
+func TestVerifyProductBrowserSourceUsesFixedPrivateEndpoint(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Path != "/internal/v1/product-runtime/identity/browser/source/verify" || r.Method != http.MethodPost {
+			t.Fatalf("unexpected source verifier request: %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer "+strings.Repeat("s", 32) || r.Header.Get("Origin") != "" {
+			t.Fatal("source verifier must use only the runtime service bearer and omit Origin")
+		}
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body) != 2 || body["source_proof_token"] != "ubsp_"+strings.Repeat("a", 64) || body["central_user_id"] != "central-user" {
+			t.Fatalf("unexpected source verifier body: %#v", body)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	client, err := NewRuntimeClient(ServiceConfig{BaseURL: srv.URL, ProductID: "llmrouter", ServiceToken: strings.Repeat("s", 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.VerifyProductBrowserSource(context.Background(), "ubsp_"+strings.Repeat("a", 64), "central-user"); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls=%d want 1", calls)
+	}
+}
+
+func TestVerifyProductBrowserSourceRejectsMalformedProofWithoutRequest(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(http.StatusNoContent) }))
+	defer srv.Close()
+	client, err := NewRuntimeClient(ServiceConfig{BaseURL: srv.URL, ProductID: "llmrouter", ServiceToken: strings.Repeat("s", 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.VerifyProductBrowserSource(context.Background(), "ubsp_short", "central-user"); err == nil {
+		t.Fatal("malformed proof accepted")
+	}
+	if calls != 0 {
+		t.Fatalf("malformed proof reached server: calls=%d", calls)
 	}
 }
 

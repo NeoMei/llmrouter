@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -82,21 +83,17 @@ func shouldChargeViolationFee(err *types.NewAPIError) bool {
 }
 
 func calcViolationFeeQuota(amount, groupRatio float64) int {
-	if amount <= 0 {
-		return 0
+	quota, _ := calcViolationFeeQuotaChecked(amount, groupRatio)
+	return quota
+}
+
+func calcViolationFeeQuotaChecked(amount, groupRatio float64) (int, *common.QuotaClamp) {
+	if amount <= 0 || groupRatio <= 0 || math.IsNaN(amount) || math.IsInf(amount, 0) || math.IsNaN(groupRatio) || math.IsInf(groupRatio, 0) || math.IsNaN(common.QuotaPerUnit) || math.IsInf(common.QuotaPerUnit, 0) || common.QuotaPerUnit <= 0 {
+		return 0, nil
 	}
-	if groupRatio <= 0 {
-		return 0
-	}
-	quota := decimal.NewFromFloat(amount).
+	return common.QuotaFromDecimalChecked(decimal.NewFromFloat(amount).
 		Mul(decimal.NewFromFloat(common.QuotaPerUnit)).
-		Mul(decimal.NewFromFloat(groupRatio)).
-		Round(0).
-		IntPart()
-	if quota <= 0 {
-		return 0
-	}
-	return int(quota)
+		Mul(decimal.NewFromFloat(groupRatio)))
 }
 
 // ChargeViolationFeeIfNeeded charges an additional fee after the normal flow finishes (including refund).
@@ -118,14 +115,41 @@ func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 	}
 
 	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
-	feeQuota := calcViolationFeeQuota(settings.ViolationDeductionAmount, groupRatio)
+	feeQuota, clamp := calcViolationFeeQuotaChecked(settings.ViolationDeductionAmount, groupRatio)
+	if clamp != nil {
+		relayInfo.QuotaClamp = clamp
+	}
 	if feeQuota <= 0 {
 		return false
 	}
 
-	if err := PostConsumeQuota(relayInfo, feeQuota, 0, true); err != nil {
+	var nativeSession *BillingSession
+	if relayInfo.NativeLocalLegacy {
+		var ok bool
+		nativeSession, ok = relayInfo.Billing.(*BillingSession)
+		if !ok || nativeSession == nil {
+			logger.LogError(ctx, "local native violation fee has no active reservation")
+			return false
+		}
+		nativeSession.violationMu.Lock()
+		defer nativeSession.violationMu.Unlock()
+		if nativeSession.violationAttempted {
+			return nativeSession.violationSucceeded
+		}
+		nativeSession.violationAttempted = true
+	}
+	var err error
+	if nativeSession != nil {
+		err = nativeSession.settleViolationFee(feeQuota)
+	} else {
+		err = PostConsumeQuota(relayInfo, feeQuota, 0, true)
+	}
+	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("failed to charge violation fee: %s", err.Error()))
 		return false
+	}
+	if nativeSession != nil {
+		checkAndSendQuotaNotify(relayInfo, feeQuota, 0)
 	}
 
 	model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, feeQuota)
@@ -147,6 +171,7 @@ func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 		"violation_fee_marker": CSAMViolationMarker,
 	}
 
+	attachQuotaSaturation(ctx, relayInfo, other)
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
 		ChannelId:      relayInfo.ChannelId,
 		ModelName:      relayInfo.OriginModelName,
@@ -160,5 +185,18 @@ func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 		Other:          other,
 	})
 
+	if nativeSession != nil {
+		nativeSession.violationSucceeded = true
+	}
 	return true
+}
+
+// NativeLocalViolationFeeApplies allows the controller to keep the existing
+// reservation until the violation charge has been settled through it.
+func NativeLocalViolationFeeApplies(info *relaycommon.RelayInfo, apiErr *types.NewAPIError) bool {
+	if info == nil || !info.NativeLocalLegacy || !shouldChargeViolationFee(apiErr) {
+		return false
+	}
+	settings := model_setting.GetGrokSettings()
+	return settings != nil && settings.ViolationDeductionEnabled && calcViolationFeeQuota(settings.ViolationDeductionAmount, info.PriceData.GroupRatioInfo.GroupRatio) > 0
 }

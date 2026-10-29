@@ -32,6 +32,24 @@ func RefreshAuth(c *gin.Context) {
 		writeAuthSessionError(c, err)
 		return
 	}
+	identity, err := service.ParseAccessToken(bundle.AccessToken)
+	if err != nil {
+		writeAuthSessionError(c, err)
+		return
+	}
+	if err = service.VerifyBrokerSource(c.Request.Context(), identity); err != nil {
+		if errors.Is(err, service.ErrLoginSessionRevoked) {
+			_, _ = model.RevokeUserSession(identity.UserID, identity.SessionID, "broker_source_revoked")
+			service.ClearRefreshCookie(c)
+			writeAuthSessionError(c, service.ErrLoginSessionRevoked)
+		} else {
+			// Rotation already occurred; retain the new HttpOnly cookie so a
+			// temporary authority outage does not strand the local session.
+			service.WriteRefreshCookie(c, bundle.RefreshToken)
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"success": false, "code": "UNIHUB_SOURCE_UNAVAILABLE"})
+		}
+		return
+	}
 	service.WriteRefreshCookie(c, bundle.RefreshToken)
 	if platformaccount.RuntimeEnabled() && !middleware.NativePrivateMaintenanceIdentity(c, user.Id) {
 		if e := applyCurrentProductIdentity(c, user, false); e != nil {

@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -80,18 +81,37 @@ func registerUniHubBFF(r *gin.Engine, config platformaccount.Config) {
 			proof, proofErr := runtimeFinanceActor(c.Request.Context(), identity, p, config)
 			client, clientErr := platformaccount.FinanceClient(config)
 			if proofErr == nil && clientErr == nil {
-				result, readErr := client.Do(c.Request.Context(), http.MethodGet, "/me", nil, proof.ActorToken, nil, "")
-				var central struct {
-					ID string `json:"id"`
+				expires := min(proof.ActorExpiresAt, proof.Access.ExpiresAt, p.Access.ExpiresAt, current.ExpiresAt)
+				if current.LoginMethod == "product_broker" {
+					bound, _, sourceErr := model.OpenBrokerSourceProof(identity.SessionID, identity.UserID, p.Access.Subject, config)
+					if sourceErr != nil {
+						proofErr = sourceErr
+					} else {
+						expires = min(expires, bound.ExpiresAt)
+					}
 				}
-				_, _, sessionErr := service.ValidateLoginSession(identity)
-				if readErr == nil && result.StatusCode == http.StatusOK && common.UnmarshalUnique(result.Body, &central) == nil && central.ID == p.Access.Subject && proof.ActorExpiresAt > time.Now().Unix() && proof.Access.ExpiresAt > time.Now().Unix() && sessionErr == nil {
-					financeAccess = gin.H{"available": true, "transport": "runtime_actor", "central_user_id": central.ID, "expires_at": min(proof.ActorExpiresAt, proof.Access.ExpiresAt, p.Access.ExpiresAt, current.ExpiresAt)}
+				if proofErr == nil {
+					result, readErr := client.Do(c.Request.Context(), http.MethodGet, "/me", nil, proof.ActorToken, nil, "")
+					var central struct {
+						ID string `json:"id"`
+					}
+					_, _, sessionErr := service.ValidateLoginSession(identity)
+					if readErr == nil && result.StatusCode == http.StatusOK && common.UnmarshalUnique(result.Body, &central) == nil && central.ID == p.Access.Subject && expires > time.Now().Unix() && sessionErr == nil {
+						financeAccess = gin.H{"available": true, "transport": "runtime_actor", "central_user_id": central.ID, "expires_at": expires}
+					}
 				}
 			}
 		}
 		if _, _, err := service.ValidateLoginSession(identity); err != nil || p.Access.ExpiresAt <= time.Now().Unix() {
 			c.Status(http.StatusUnauthorized)
+			return
+		}
+		if err := service.VerifyBrokerSource(c.Request.Context(), identity); err != nil {
+			if errors.Is(err, service.ErrLoginSessionRevoked) {
+				c.Status(http.StatusUnauthorized)
+			} else {
+				c.Status(http.StatusServiceUnavailable)
+			}
 			return
 		}
 		c.JSON(200, gin.H{"user": userData, "access": p.Access, "permissions": gin.H{"admin_permissions": authz.RequestCapabilities(c)}, "csrf_token": uniHubCSRF(identity.SessionID), "finance_access": financeAccess})
@@ -174,9 +194,15 @@ func registerUniHubBFF(r *gin.Engine, config platformaccount.Config) {
 				c.Status(http.StatusBadGateway)
 				return
 			}
-			if _, _, e = service.ValidateLoginSession(identity); e != nil || proof.ActorExpiresAt <= time.Now().Unix() || proof.Access.ExpiresAt <= time.Now().Unix() || model.VerifyUniHubIdentityBinding(identity.UserID, proof.Access.Issuer, proof.Access.Subject) != nil {
+			_, _, sessionErr := service.ValidateLoginSession(identity)
+			sourceErr := service.VerifyBrokerSource(c.Request.Context(), identity)
+			if sessionErr != nil || sourceErr != nil || proof.ActorExpiresAt <= time.Now().Unix() || proof.Access.ExpiresAt <= time.Now().Unix() || model.VerifyUniHubIdentityBinding(identity.UserID, proof.Access.Issuer, proof.Access.Subject) != nil {
 				if c.Request.Method == http.MethodGet {
-					c.Status(http.StatusUnauthorized)
+					if sourceErr != nil && !errors.Is(sourceErr, service.ErrLoginSessionRevoked) {
+						c.Status(http.StatusServiceUnavailable)
+					} else {
+						c.Status(http.StatusUnauthorized)
+					}
 				} else {
 					// The central operation may already have committed. Never claim
 					// it failed or expose a secret after the session was revoked.

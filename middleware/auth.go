@@ -248,6 +248,9 @@ func classifyDashboardCredential(c *gin.Context) (*model.UserBase, service.AuthI
 		if err != nil {
 			return nil, service.AuthIdentity{}, dashboardCredentialInternal, err
 		}
+		if err := service.VerifyBrokerSource(c.Request.Context(), identity); err != nil {
+			return nil, service.AuthIdentity{}, dashboardCredentialInternal, err
+		}
 		if err := validateProjectionCredential(user); err != nil {
 			return nil, service.AuthIdentity{}, dashboardCredentialInternal, err
 		}
@@ -311,6 +314,10 @@ func setDashboardAuthContext(c *gin.Context, user *model.UserBase, identity serv
 }
 
 func writeDashboardAuthError(c *gin.Context, err error) {
+	if errors.Is(err, service.ErrBrokerSourceUnavailable) {
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"success": false, "code": "UNIHUB_SOURCE_UNAVAILABLE"})
+		return
+	}
 	if errors.Is(err, service.ErrAuthTokenExpired) {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "AUTH_TOKEN_EXPIRED", "message": common.TranslateMessage(c, i18n.MsgAuthNotLoggedIn)})
 		return
@@ -366,6 +373,10 @@ func TokenOrUserAuth() func(c *gin.Context) {
 			}
 			_, user, err := service.ValidateLoginSession(identity)
 			if err != nil {
+				writeDashboardAuthError(c, err)
+				return
+			}
+			if err := service.VerifyBrokerSource(c.Request.Context(), identity); err != nil {
 				writeDashboardAuthError(c, err)
 				return
 			}
@@ -614,7 +625,9 @@ func tokenAuth(ownedJobRead bool) func(c *gin.Context) {
 			writeDashboardAuthError(c, err)
 			return
 		}
-		if platformaccount.RuntimeEnabled() || userCache.IdentitySource == model.UniHubIdentitySource {
+		if nativeLocalLegacyToken(c, userCache.Id) {
+			common.SetContextKey(c, constant.ContextKeyNativeLocalLegacy, true)
+		} else if platformaccount.RuntimeEnabled() || userCache.IdentitySource == model.UniHubIdentitySource {
 			if !LoadRuntimeAuthority(c, userCache.Id, userCache.AuthVersion) {
 				return
 			}

@@ -267,6 +267,12 @@ func (c *RuntimeClient) request(ctx context.Context, method, path, actor string,
 		}
 		return &RuntimeError{response.StatusCode, v.Error}
 	}
+	if target == nil {
+		if response.StatusCode != http.StatusNoContent || len(data) != 0 {
+			return ErrInvalid
+		}
+		return nil
+	}
 	if e = json.Unmarshal(data, target); e != nil {
 		return ErrInvalid
 	}

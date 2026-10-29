@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"errors"
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/internal/platformaccount"
 	"gorm.io/gorm"
 	"time"
@@ -18,6 +19,17 @@ type ProductLegacyFundingLease struct {
 // The user-row lock is also held by Import. A legacy call either obtains its
 // durable lease before cutover, or is rejected before taking any local funds.
 func BeginProductLegacyFundingLease(ctx context.Context, id string, userID int) error {
+	return beginProductLegacyFundingLease(ctx, id, userID, false)
+}
+
+// BeginUnboundNativeFundingLease fences local native spending against identity
+// binding and funding cutover. The verified unbound state is rechecked under
+// the same user row lock used by the funding importer, before any debit.
+func BeginUnboundNativeFundingLease(ctx context.Context, id string, userID int) error {
+	return beginProductLegacyFundingLease(ctx, id, userID, true)
+}
+
+func beginProductLegacyFundingLease(ctx context.Context, id string, userID int, requireUnbound bool) error {
 	if DB == nil {
 		return ErrProductFundingPending
 	}
@@ -34,6 +46,21 @@ func BeginProductLegacyFundingLease(ctx context.Context, id string, userID int) 
 		var user User
 		if e := lockForUpdate(tx).First(&user, userID).Error; e != nil {
 			return e
+		}
+		if requireUnbound {
+			if user.Status != common.UserStatusEnabled || user.IdentitySource != "" || user.UniHubUserID != "" || user.ProductRegistrationPending || user.ProductJITPending {
+				return ErrProductFundingPending
+			}
+			var bindings, pending int64
+			if e := tx.Model(&UniHubIdentityMapping{}).Where("user_id = ?", userID).Count(&bindings).Error; e != nil {
+				return e
+			}
+			if e := tx.Model(&ProductAuthLifecycle{}).Where("user_id = ? AND delivered = ?", userID, false).Count(&pending).Error; e != nil {
+				return e
+			}
+			if bindings != 0 || pending != 0 {
+				return ErrProductFundingPending
+			}
 		}
 		var account ProductFundingAccount
 		e := tx.First(&account, "user_id = ?", userID).Error

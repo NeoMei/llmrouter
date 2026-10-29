@@ -22,7 +22,7 @@ import (
 
 func TestBrokerFinanceBFFUsesFreshActorAndScopedRoutes(t *testing.T) {
 	f := newUniHubRegressionFixture(t)
-	require.NoError(t, f.db.AutoMigrate(&model.ProductAuthLifecycle{}, &model.ProductFundingAccount{}, &model.Token{}, &model.Log{}))
+	require.NoError(t, f.db.AutoMigrate(&model.ProductAuthLifecycle{}, &model.ProductFundingAccount{}, &model.ProductBrokerSessionProof{}, &model.Token{}, &model.Log{}))
 	t.Setenv("UNIHUB_PRODUCT_RUNTIME_ENABLED", "true")
 	t.Setenv("UNIHUB_PRODUCT_FINANCE_ENABLED", "true")
 	t.Setenv("UNIHUB_PRODUCT_RUNTIME_TOKEN", strings.Repeat("s", 32))
@@ -42,11 +42,21 @@ func TestBrokerFinanceBFFUsesFreshActorAndScopedRoutes(t *testing.T) {
 	actorCalls, financeCalls := 0, 0
 	token := "upa_" + strings.Repeat("a", 64)
 	revoked := false
+	sourceRevoked := false
 	revokeDuringFinance := false
+	revokeSourceDuringFinance := false
 	var sentKey string
 	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+strings.Repeat("s", 32) {
 			w.WriteHeader(403)
+			return
+		}
+		if r.URL.Path == "/internal/v1/product-runtime/identity/browser/source/verify" {
+			if sourceRevoked {
+				w.WriteHeader(http.StatusForbidden)
+			} else {
+				w.WriteHeader(http.StatusNoContent)
+			}
 			return
 		}
 		if r.URL.Path == "/internal/v1/product-runtime/identity/"+strconv.Itoa(user.Id) || r.URL.Path == "/internal/v1/product-runtime/identity/authenticate" {
@@ -71,6 +81,9 @@ func TestBrokerFinanceBFFUsesFreshActorAndScopedRoutes(t *testing.T) {
 			return
 		}
 		financeCalls++
+		if revokeSourceDuringFinance {
+			sourceRevoked = true
+		}
 		sentKey = r.Header.Get("Idempotency-Key")
 		if revokeDuringFinance {
 			if _, revokeErr := model.RevokeUserSession(user.Id, bundle.Session.SID, "test"); revokeErr != nil {
@@ -143,10 +156,43 @@ func TestBrokerFinanceBFFUsesFreshActorAndScopedRoutes(t *testing.T) {
 	bundle = brokerBundle
 	beforeBroker := financeCalls
 	brokerAccess := request("GET", "/api/unihub/access", "", "", "", nil)
-	require.Equal(t, 200, brokerAccess.Code)
-	assert.Contains(t, brokerAccess.Body.String(), `"available":false`)
+	require.Equal(t, http.StatusUnauthorized, brokerAccess.Code)
 	assert.NotEqual(t, 200, request("GET", "/api/unihub/bff/v1/accounts", "", "", "", nil).Code)
 	assert.Equal(t, beforeBroker, financeCalls, "unproven broker source cannot reach finance")
+	brokerAccessProof := userkit.Access{Issuer: cfg.PublicOrigin, Subject: "member", User: userkit.User{ID: "member"}, ProductID: cfg.ProductID, InstanceID: cfg.InstanceID, Active: true, ExpiresAt: time.Now().Add(time.Minute).Unix()}
+	sourceExpiry := time.Now().Add(20 * time.Second).Unix()
+	require.NoError(t, model.BindBrokerSourceProof(brokerBundle.Session.SID, user.Id, brokerAccessProof, cfg, "ubsp_"+strings.Repeat("b", 64), sourceExpiry))
+	brokerAccess = request("GET", "/api/unihub/access", "", "", "", nil)
+	require.Equal(t, http.StatusOK, brokerAccess.Code, brokerAccess.Body.String())
+	assert.Contains(t, brokerAccess.Body.String(), `"available":true`)
+	var brokerFinance struct {
+		Finance struct {
+			Expires int64 `json:"expires_at"`
+		} `json:"finance_access"`
+	}
+	require.NoError(t, common.Unmarshal(brokerAccess.Body.Bytes(), &brokerFinance))
+	assert.LessOrEqual(t, brokerFinance.Finance.Expires, sourceExpiry)
+	assert.Equal(t, http.StatusOK, request("GET", "/api/unihub/bff/v1/accounts", "", "", "", nil).Code)
+	sourceRevoked = true
+	beforeBroker = financeCalls
+	assert.Equal(t, http.StatusServiceUnavailable, request("GET", "/api/unihub/bff/v1/accounts", "", "", "", nil).Code)
+	assert.Equal(t, beforeBroker, financeCalls, "revoked central source cannot reach finance")
+	sourceRevoked = false
+	revokeSourceDuringFinance = true
+	result := request("GET", "/api/unihub/bff/v1/accounts", "", "", "", nil)
+	assert.Equal(t, http.StatusServiceUnavailable, result.Code)
+	assert.NotContains(t, result.Body.String(), "payer")
+	sourceRevoked = false
+	brokerData := struct {
+		CSRF string `json:"csrf_token"`
+	}{}
+	require.NoError(t, common.Unmarshal(brokerAccess.Body.Bytes(), &brokerData))
+	result = request("POST", "/api/unihub/bff/v1/accounts/payer/recharges", `{}`, brokerData.CSRF, "https://dashboard.test", http.Header{"Idempotency-Key": []string{"broker-uncertain"}})
+	assert.Equal(t, http.StatusServiceUnavailable, result.Code)
+	assert.Contains(t, result.Body.String(), "finance_result_unavailable")
+	assert.NotContains(t, result.Body.String(), "order")
+	revokeSourceDuringFinance = false
+	sourceRevoked = false
 	bundle = nativeBundle
 	before := financeCalls
 	assert.Equal(t, 403, request("POST", "/api/unihub/bff/v1/accounts/payer/recharges", `{}`, "wrong", "https://dashboard.test", nil).Code)

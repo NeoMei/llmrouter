@@ -14,6 +14,7 @@ import (
 	userkit "github.com/NeoMei/UniHub/packages/userkit-go"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/internal/platformaccount"
+	"gorm.io/gorm"
 )
 
 var brokerSourceProofPattern = regexp.MustCompile(`^ubsp_[0-9a-f]{64}$`)
@@ -80,15 +81,33 @@ func BindBrokerSourceProof(sid string, userID int, access userkit.Access, config
 
 func OpenBrokerSourceProof(sid string, userID int, subject string, config platformaccount.Config) (ProductBrokerSessionProof, string, error) {
 	var b ProductBrokerSessionProof
-	if DB == nil || DB.First(&b, "sid = ? AND user_id = ?", sid, userID).Error != nil {
-		return b, "", userkit.ErrDenied
+	if DB == nil {
+		return b, "", errors.New("broker source database unavailable")
+	}
+	if err := DB.First(&b, "sid = ? AND user_id = ?", sid, userID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return b, "", userkit.ErrDenied
+		}
+		return b, "", err
 	}
 	var session UserSession
-	if DB.First(&session, "sid = ? AND user_id = ?", sid, userID).Error != nil || session.LoginMethod != "product_broker" || session.Status != UserSessionStatusActive || session.RevokedAt != 0 || session.ExpiresAt <= time.Now().Unix() {
+	if err := DB.First(&session, "sid = ? AND user_id = ?", sid, userID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return b, "", userkit.ErrDenied
+		}
+		return b, "", err
+	}
+	if session.LoginMethod != "product_broker" || session.Status != UserSessionStatusActive || session.RevokedAt != 0 || session.ExpiresAt <= time.Now().Unix() {
 		return b, "", userkit.ErrDenied
 	}
-	if b.ExpiresAt <= time.Now().Unix() || b.Issuer != config.PublicOrigin || b.ProductID != config.ProductID || b.InstanceID != config.InstanceID || b.ClientID != config.ClientID || b.Subject != subject || VerifyUniHubIdentityBinding(userID, b.Issuer, b.Subject) != nil {
+	if b.ExpiresAt <= time.Now().Unix() || b.Issuer != config.PublicOrigin || b.ProductID != config.ProductID || b.InstanceID != config.InstanceID || b.ClientID != config.ClientID || b.Subject != subject {
 		return b, "", userkit.ErrDenied
+	}
+	if err := VerifyUniHubIdentityBinding(userID, b.Issuer, b.Subject); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) || errors.Is(err, ErrUniHubProjectionInvalid) {
+			return b, "", userkit.ErrDenied
+		}
+		return b, "", err
 	}
 	aead, err := brokerProofAEAD()
 	if err != nil {

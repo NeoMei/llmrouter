@@ -22,7 +22,7 @@ import (
 
 func TestPrivateRuntimeBrokerSessionRequiresBoundCurrentAuthority(t *testing.T) {
 	f := newUniHubRegressionFixture(t)
-	require.NoError(t, f.db.AutoMigrate(&model.ProductAuthLifecycle{}, &model.ProductFundingAccount{}, &platformbilling.Call{}, &platformbilling.Attempt{}))
+	require.NoError(t, f.db.AutoMigrate(&model.ProductAuthLifecycle{}, &model.ProductFundingAccount{}, &model.ProductBrokerSessionProof{}, &platformbilling.Call{}, &platformbilling.Attempt{}))
 	t.Setenv("UNIHUB_PRODUCT_RUNTIME_ENABLED", "true")
 	t.Setenv("UNIHUB_PRODUCT_RUNTIME_TOKEN", strings.Repeat("s", 32))
 	cfg, err := platformaccount.Current()
@@ -33,10 +33,28 @@ func TestPrivateRuntimeBrokerSessionRequiresBoundCurrentAuthority(t *testing.T) 
 	require.NoError(t, err)
 	broker, err := service.CreateLoginSession(user.Id, "product_broker", "", "")
 	require.NoError(t, err)
+	access := userkit.Access{Issuer: cfg.PublicOrigin, Subject: "member", User: userkit.User{ID: "member"}, ProductID: cfg.ProductID, InstanceID: cfg.InstanceID, Active: true, ExpiresAt: time.Now().Add(time.Minute).Unix()}
+	require.NoError(t, model.BindBrokerSourceProof(broker.Session.SID, user.Id, access, cfg, "ubsp_"+strings.Repeat("a", 64), time.Now().Add(time.Hour).Unix()))
 	native, err := service.CreateLoginSession(user.Id, "password", "", "")
 	require.NoError(t, err)
 	enabled := true
+	sourceStatus := http.StatusNoContent
+	removeDuringVerify := false
 	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/internal/v1/product-runtime/identity/browser/source/verify" {
+			if removeDuringVerify {
+				if err := f.db.Where("sid = ?", broker.Session.SID).Delete(&model.ProductBrokerSessionProof{}).Error; err != nil {
+					w.WriteHeader(500)
+					return
+				}
+			}
+			if enabled {
+				w.WriteHeader(sourceStatus)
+			} else {
+				w.WriteHeader(http.StatusForbidden)
+			}
+			return
+		}
 		if !enabled || (r.URL.Path != "/internal/v1/product-runtime/identity/"+strconv.Itoa(user.Id) && r.URL.Path != "/internal/v1/product-runtime/identity/authenticate") {
 			w.WriteHeader(http.StatusForbidden)
 			return
@@ -65,8 +83,58 @@ func TestPrivateRuntimeBrokerSessionRequiresBoundCurrentAuthority(t *testing.T) 
 	assert.NotContains(t, refreshed.Body.String(), "UNIHUB_SESSION_REQUIRED")
 	nativeRefresh := &http.Cookie{Name: service.RefreshCookieName, Value: native.RefreshToken}
 	assert.Equal(t, http.StatusUnauthorized, f.request("POST", "/api/user/auth/refresh", "", nativeRefresh).Code)
+	var rotated *http.Cookie
+	for _, cookie := range refreshed.Result().Cookies() {
+		if cookie.Name == service.RefreshCookieName {
+			rotated = cookie
+		}
+	}
+	require.NotNil(t, rotated)
+	t.Setenv("NATIVE_PUBLIC_ACCESS", "true")
+	t.Setenv("UNIHUB_PRODUCT_RUNTIME_ENABLED", "false")
+	disabled := f.request("POST", "/api/user/auth/refresh", "", rotated)
+	require.Equal(t, http.StatusServiceUnavailable, disabled.Code, disabled.Body.String())
+	for _, cookie := range disabled.Result().Cookies() {
+		if cookie.Name == service.RefreshCookieName {
+			rotated = cookie
+		}
+	}
+	t.Setenv("UNIHUB_PRODUCT_RUNTIME_ENABLED", "true")
+	t.Setenv("NATIVE_PUBLIC_ACCESS", "false")
+	resumed := f.request("POST", "/api/user/auth/refresh", "", rotated)
+	require.Equal(t, http.StatusOK, resumed.Code, resumed.Body.String())
+	for _, cookie := range resumed.Result().Cookies() {
+		if cookie.Name == service.RefreshCookieName {
+			rotated = cookie
+		}
+	}
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError} {
+		sourceStatus = status
+		outage := f.request("POST", "/api/user/auth/refresh", "", rotated)
+		require.Equal(t, http.StatusServiceUnavailable, outage.Code, "source status %d: %s", status, outage.Body.String())
+		assert.NotContains(t, outage.Body.String(), "access_token")
+		for _, cookie := range outage.Result().Cookies() {
+			if cookie.Name == service.RefreshCookieName {
+				rotated = cookie
+			}
+		}
+	}
+	sourceStatus = http.StatusNoContent
+	recovered := f.request("POST", "/api/user/auth/refresh", "", rotated)
+	require.Equal(t, http.StatusOK, recovered.Code, recovered.Body.String())
+	for _, cookie := range recovered.Result().Cookies() {
+		if cookie.Name == service.RefreshCookieName {
+			rotated = cookie
+		}
+	}
 	enabled = false
-	assert.Equal(t, http.StatusUnauthorized, f.request("GET", "/api/log/self", broker.AccessToken, nil).Code)
+	assert.Equal(t, http.StatusServiceUnavailable, f.request("GET", "/api/log/self", broker.AccessToken, nil).Code)
+	revokedRefresh := f.request("POST", "/api/user/auth/refresh", "", rotated)
+	assert.Equal(t, http.StatusServiceUnavailable, revokedRefresh.Code)
+	assert.NotContains(t, revokedRefresh.Body.String(), "access_token")
+	enabled = true
+	removeDuringVerify = true
+	assert.Equal(t, http.StatusUnauthorized, f.request("GET", "/api/log/self", broker.AccessToken, nil).Code, "proof removed during verification must not authorize")
 }
 
 func TestPrivateRuntimeServesOnlyProductShell(t *testing.T) {

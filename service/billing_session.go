@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	userkit "github.com/NeoMei/UniHub/packages/userkit-go"
@@ -27,17 +28,21 @@ import (
 // BillingSession 封装单次请求的预扣费/结算/退款生命周期。
 // 实现 relaycommon.BillingSettler 接口。
 type BillingSession struct {
-	legacyLeaseID    string
-	relayInfo        *relaycommon.RelayInfo
-	funding          FundingSource
-	preConsumedQuota int  // 实际预扣额度（信任用户可能为 0）
-	tokenConsumed    int  // 令牌额度实际扣减量
-	extraReserved    int  // 发送前补充预扣的额度（订阅退款时需要单独回滚）
-	trusted          bool // 是否命中信任额度旁路
-	fundingSettled   bool // funding.Settle 已成功，资金来源已提交
-	settled          bool // Settle 全部完成（资金 + 令牌）
-	refunded         bool // Refund 已调用
-	mu               sync.Mutex
+	legacyLeaseID         string
+	relayInfo             *relaycommon.RelayInfo
+	funding               FundingSource
+	preConsumedQuota      int  // 实际预扣额度（信任用户可能为 0）
+	tokenConsumed         int  // 令牌额度实际扣减量
+	extraReserved         int  // 发送前补充预扣的额度（订阅退款时需要单独回滚）
+	trusted               bool // 是否命中信任额度旁路
+	fundingSettled        bool // funding.Settle 已成功，资金来源已提交
+	settled               bool // Settle 全部完成（资金 + 令牌）
+	refunded              bool // Refund 已调用
+	mu                    sync.Mutex
+	violationMu           sync.Mutex
+	violationAttempted    bool
+	violationSucceeded    bool
+	reconciliationPending bool
 }
 
 // Settle 根据实际消耗额度进行结算。
@@ -49,8 +54,30 @@ func (s *BillingSession) Settle(actualQuota int) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.settleLocked(actualQuota)
+}
+
+func (s *BillingSession) settleViolationFee(actualQuota int) error {
+	if s.relayInfo != nil && s.relayInfo.PlatformMode {
+		return errors.New("platform calls cannot use local billing session")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.settled || s.refunded || s.fundingSettled {
+		return errors.New("violation fee reservation is no longer active")
+	}
+	return s.settleLocked(actualQuota)
+}
+
+func (s *BillingSession) settleLocked(actualQuota int) error {
+	if s.reconciliationPending {
+		return errors.New("billing reservation requires reconciliation")
+	}
 	if s.settled {
 		return nil
+	}
+	if s.refunded {
+		return errors.New("billing reservation has been refunded")
 	}
 	delta := actualQuota - s.preConsumedQuota
 	if delta == 0 {
@@ -95,7 +122,7 @@ func (s *BillingSession) Refund(c *gin.Context) {
 		return
 	}
 	s.mu.Lock()
-	if s.settled || s.refunded || s.fundingSettled {
+	if s.settled || s.refunded || s.fundingSettled || s.reconciliationPending {
 		s.mu.Unlock()
 		return
 	}
@@ -134,9 +161,11 @@ func (s *BillingSession) Refund(c *gin.Context) {
 			common.SysLog("error refunding billing source: " + err.Error())
 			return
 		}
+		extraRefundFailed := false
 		if extraReserved > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
 			if err := model.PostConsumeUserSubscriptionDelta(subscriptionId, -int64(extraReserved)); err != nil {
 				common.SysLog("error refunding subscription extra reserved quota: " + err.Error())
+				extraRefundFailed = true
 			}
 		}
 		// 2) 退还令牌额度
@@ -146,7 +175,7 @@ func (s *BillingSession) Refund(c *gin.Context) {
 				return
 			}
 		}
-		if leaseID != "" {
+		if leaseID != "" && !extraRefundFailed {
 			if err := model.FinishProductLegacyFundingLease(context.Background(), leaseID, "refunded"); err != nil {
 				common.SysError("legacy funding refund receipt pending")
 			}
@@ -188,6 +217,9 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.reconciliationPending {
+		return errors.New("billing reservation requires reconciliation")
+	}
 	if s.settled || s.refunded || targetQuota <= s.preConsumedQuota {
 		return nil
 	}
@@ -201,7 +233,18 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 		return err
 	}
 	if err := s.reserveToken(delta); err != nil {
-		s.rollbackFundingReserve(delta)
+		if rollbackErr := s.rollbackFundingReserve(delta); rollbackErr != nil {
+			if platformaccount.RuntimeEnabled() {
+				s.reconciliationPending = true
+			} else {
+				// The failed rollback has an uncertain outcome. Refund only the
+				// previously confirmed hold; never credit the uncertain delta.
+				if wallet, ok := s.funding.(*WalletFunding); ok {
+					wallet.consumed -= delta
+				}
+			}
+			return fmt.Errorf("funding reserve rollback requires reconciliation: %w", rollbackErr)
+		}
 		return err
 	}
 
@@ -219,12 +262,22 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 // preConsume 执行预扣费：信任检查 -> 令牌预扣 -> 资金来源预扣。
 // 任一步骤失败时原子回滚已完成的步骤。
 func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIError {
-	if platformaccount.RuntimeEnabled() && s.funding.Source() == BillingSourceWallet && s.legacyLeaseID == "" {
+	if platformaccount.RuntimeEnabled() && (s.funding.Source() == BillingSourceWallet || s.relayInfo.NativeLocalLegacy) && s.legacyLeaseID == "" {
 		id := s.relayInfo.RequestId
 		if id == "" {
 			id = common.GetUUID()
 		}
-		if err := model.BeginProductLegacyFundingLease(context.Background(), id, s.relayInfo.UserId); err != nil {
+		if s.relayInfo.NativeLocalLegacy {
+			digest := sha256.Sum256([]byte(id))
+			id = fmt.Sprintf("native:%x:%s", digest, s.funding.Source())
+		}
+		var err error
+		if s.relayInfo.NativeLocalLegacy {
+			err = model.BeginUnboundNativeFundingLease(context.Background(), id, s.relayInfo.UserId)
+		} else {
+			err = model.BeginProductLegacyFundingLease(context.Background(), id, s.relayInfo.UserId)
+		}
+		if err != nil {
 			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 		}
 		s.legacyLeaseID = id
@@ -275,6 +328,9 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 		}
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "no active subscription") || strings.Contains(errMsg, "subscription quota insufficient") {
+			if receiptErr := s.finishLegacyLease("refunded"); receiptErr != nil {
+				return types.NewError(receiptErr, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+			}
 			return types.NewErrorWithStatusCode(fmt.Errorf("订阅额度不足或未配置订阅: %s", errMsg), types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 		}
 		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
@@ -330,19 +386,22 @@ func insufficientWalletQuotaError(userId int) *types.NewAPIError {
 	)
 }
 
-func (s *BillingSession) rollbackFundingReserve(delta int) {
+func (s *BillingSession) rollbackFundingReserve(delta int) error {
 	switch funding := s.funding.(type) {
 	case *WalletFunding:
 		if err := model.IncreaseUserQuota(funding.userId, delta, false); err != nil {
 			common.SysLog("error rolling back wallet funding reserve: " + err.Error())
+			return err
 		} else {
 			funding.consumed -= delta
 		}
 	case *SubscriptionFunding:
 		if err := model.PostConsumeUserSubscriptionDelta(funding.subscriptionId, -int64(delta)); err != nil {
 			common.SysLog("error rolling back subscription funding reserve: " + err.Error())
+			return err
 		}
 	}
+	return nil
 }
 
 func (s *BillingSession) reserveToken(delta int) error {
@@ -429,16 +488,18 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		if c != nil && c.Request != nil {
 			ctx = c.Request.Context()
 		}
-		central, managed, e := newProductFundingSession(ctx, relayInfo, preConsumedQuota)
-		if e != nil {
-			var failure *userkit.RuntimeError
-			if errors.As(e, &failure) && failure.Status == 402 {
-				return nil, types.NewErrorWithStatusCode(e, types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry())
+		if !relayInfo.NativeLocalLegacy {
+			central, managed, e := newProductFundingSession(ctx, relayInfo, preConsumedQuota)
+			if e != nil {
+				var failure *userkit.RuntimeError
+				if errors.As(e, &failure) && failure.Status == 402 {
+					return nil, types.NewErrorWithStatusCode(e, types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry())
+				}
+				return nil, types.NewError(e, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 			}
-			return nil, types.NewError(e, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
-		}
-		if managed {
-			return central, nil
+			if managed {
+				return central, nil
+			}
 		}
 
 		userQuota, err := model.GetUserQuota(relayInfo.UserId, false)

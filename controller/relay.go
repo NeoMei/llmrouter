@@ -246,6 +246,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				return
 			}
 			newAPIError = service.NormalizeViolationFeeError(newAPIError)
+			if service.NativeLocalViolationFeeApplies(relayInfo, newAPIError) {
+				if !service.ChargeViolationFeeIfNeeded(c, relayInfo, newAPIError) {
+					newAPIError = types.NewErrorWithStatusCode(errors.New("local native violation fee settlement requires reconciliation"), types.ErrorCodeUpdateDataError, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+				}
+				return
+			}
 			if relayInfo.Billing != nil {
 				relayInfo.Billing.Refund(c)
 			}
@@ -583,6 +589,12 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 }
 
 func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) *types.NewAPIError {
+	// Existing non-runtime native billing remains unchanged. The runtime-only
+	// compatibility path stays closed until local funding and token mutations
+	// have durable, idempotent recovery across process and database failures.
+	if info.NativeLocalLegacy {
+		return types.NewErrorWithStatusCode(errors.New("local native billing recovery is unavailable"), types.ErrorCodeUpdateDataError, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+	}
 	if info.PlatformMode {
 		if info.PlatformBilling == nil {
 			return types.NewError(errors.New("platform billing missing"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
@@ -646,6 +658,9 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 		return types.NewError(errors.New("native dispatch cannot be retried without final evidence"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
 	if price, configured := billing_setting.ResolveModelNativePrice(info.BillingModelNameOrOrigin(), operation); configured {
+		if info.NativeLocalLegacy {
+			return types.NewError(errors.New("local native metered billing is not available during product runtime"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
 		var reservation metering.Usage
 		var err error
 		if operation != "chat" && operation != "responses" && operation != "embedding" {
@@ -694,6 +709,9 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 	}
 	if priceData.FreeModel {
+		if info.NativeLocalLegacy {
+			return types.NewError(errors.New("local native free models are not available during product runtime"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
 		logger.LogInfo(c, fmt.Sprintf("模型 %s 免费，跳过预扣费", info.OriginModelName))
 		return nil
 	}

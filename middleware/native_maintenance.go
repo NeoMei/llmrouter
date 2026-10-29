@@ -20,6 +20,13 @@ func NativePrivateMaintenanceIdentity(c *gin.Context, id int) bool {
 	if err != nil || !policy.IsPrivateManagementRequest(c.Request) {
 		return false
 	}
+	return nativeUnboundLocalIdentity(c, id)
+}
+
+func nativeUnboundLocalIdentity(c *gin.Context, id int) bool {
+	if id <= 0 || model.DB == nil {
+		return false
+	}
 	var user model.User
 	if err := model.DB.WithContext(c.Request.Context()).First(&user, id).Error; err != nil {
 		return false
@@ -40,6 +47,16 @@ func NativePrivateMaintenanceIdentity(c *gin.Context, id int) bool {
 		return false
 	}
 	return true
+}
+
+// Permit only legacy chat under the already configured native network boundary.
+// Billing independently reacquires identity and funding under the migration lock.
+func nativeLocalLegacyToken(c *gin.Context, id int) bool {
+	if !platformaccount.RuntimeEnabled() || c.Request.Method != "POST" || c.FullPath() != "/v1/chat/completions" {
+		return false
+	}
+	policy, err := unihubaccess.FromEnv()
+	return err == nil && (policy.NativePublicEnabled || policy.IsPrivateManagementRequest(c.Request)) && nativeUnboundLocalIdentity(c, id)
 }
 
 // The maintenance exception never permits token secrets, mutations or model

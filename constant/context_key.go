@@ -26,6 +26,8 @@ const (
 	ContextKeyTokenModelLimitEnabled ContextKey = "token_model_limit_enabled"
 	ContextKeyTokenModelLimit        ContextKey = "token_model_limit"
 	ContextKeyTokenCrossGroupRetry   ContextKey = "token_cross_group_retry"
+	// Set only after authenticating a native key under the configured native boundary.
+	ContextKeyNativeLocalLegacy ContextKey = "native_local_legacy"
 
 	/* channel related keys */
 	ContextKeyChannelId                ContextKey = "channel_id"

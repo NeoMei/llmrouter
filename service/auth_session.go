@@ -147,7 +147,7 @@ func ValidateLoginSession(identity AuthIdentity) (*model.UserSession, *model.Use
 
 // ValidateSessionReference validates a server-side flow bound to an existing
 // dashboard session without requiring an access token on the callback request.
-func ValidateSessionReference(userID int, sid string) (AuthIdentity, error) {
+func ValidateSessionReference(ctx context.Context, userID int, sid string) (AuthIdentity, error) {
 	if userID <= 0 || strings.TrimSpace(sid) == "" {
 		return AuthIdentity{}, ErrLoginSessionInvalid
 	}
@@ -162,6 +162,9 @@ func ValidateSessionReference(userID int, sid string) (AuthIdentity, error) {
 		SessionVersion:  session.Version,
 	}
 	if _, _, err := ValidateLoginSession(identity); err != nil {
+		return AuthIdentity{}, err
+	}
+	if err := VerifyBrokerSource(ctx, identity); err != nil {
 		return AuthIdentity{}, err
 	}
 	return identity, nil

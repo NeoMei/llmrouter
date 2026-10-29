@@ -147,6 +147,22 @@ func (b *productBrowserBridge) startHandoff(c *gin.Context) {
 		c.Status(401)
 		return
 	}
+	identity, e := service.ParseAccessToken(bundle.AccessToken)
+	if e != nil {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+	if e = service.VerifyBrokerSource(c.Request.Context(), identity); e != nil {
+		if errors.Is(e, service.ErrLoginSessionRevoked) {
+			_, _ = model.RevokeUserSession(identity.UserID, identity.SessionID, "broker_source_revoked")
+			service.ClearRefreshCookie(c)
+			c.Status(http.StatusUnauthorized)
+		} else {
+			service.WriteRefreshCookie(c, bundle.RefreshToken)
+			c.Status(http.StatusServiceUnavailable)
+		}
+		return
+	}
 	service.WriteRefreshCookie(c, bundle.RefreshToken)
 	if e = model.SyncProductAuthVersions(c.Request.Context(), user.Id); e != nil {
 		c.Status(503)
@@ -248,7 +264,7 @@ func (b *productBrowserBridge) callback(c *gin.Context) bool {
 		c.Status(401)
 		return true
 	}
-	if _, e = service.ValidateSessionReference(flow.UserId, flow.SessionId); e != nil {
+	if _, e = service.ValidateSessionReference(c.Request.Context(), flow.UserId, flow.SessionId); e != nil {
 		c.Status(401)
 		return true
 	}
@@ -365,6 +381,11 @@ func (b *productBrowserBridge) completeBroker(c *gin.Context) {
 	}
 	bundle, e := service.CreateLoginSession(userID, "product_broker", c.ClientIP(), c.Request.UserAgent())
 	if e != nil {
+		productBrowserFailure(c, state.ReturnTo, state.Silent == nil || *state.Silent)
+		return
+	}
+	if e = model.BindBrokerSourceProof(bundle.Session.SID, userID, grant.Access, b.config, grant.SourceProofToken, grant.SourceProofExpiresAt); e != nil {
+		_, _ = model.RevokeUserSession(userID, bundle.Session.SID, "broker_source_binding_failed")
 		productBrowserFailure(c, state.ReturnTo, state.Silent == nil || *state.Silent)
 		return
 	}

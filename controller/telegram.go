@@ -107,7 +107,7 @@ func TelegramBind(c *gin.Context) {
 		telegramBindFailure(c, telegramBindErrorFlowInvalid)
 		return
 	}
-	if _, err := service.ValidateSessionReference(pendingFlow.UserId, pendingFlow.SessionId); err != nil {
+	if _, err := service.ValidateSessionReference(c.Request.Context(), pendingFlow.UserId, pendingFlow.SessionId); err != nil {
 		if !errors.Is(err, service.ErrLoginSessionInvalid) &&
 			!errors.Is(err, service.ErrLoginSessionRevoked) &&
 			!errors.Is(err, model.ErrUserSessionInactive) &&

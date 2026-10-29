@@ -114,7 +114,7 @@ func BindUniHubIdentity(identity platformaccount.Identity, localID int) (*User, 
 	key := hex.EncodeToString(sum[:])
 	var user User
 	e := DB.Transaction(func(tx *gorm.DB) error {
-		if e := tx.First(&user, localID).Error; e != nil {
+		if e := lockForUpdate(tx).First(&user, localID).Error; e != nil {
 			return e
 		}
 		if user.DeletedAt.Valid {
@@ -140,6 +140,15 @@ func BindUniHubIdentity(identity platformaccount.Identity, localID int) (*User, 
 			return ErrUniHubProjectionInvalid
 		}
 		if errors.Is(e, gorm.ErrRecordNotFound) {
+			if platformaccount.RuntimeEnabled() && tx.Migrator().HasTable(&ProductLegacyFundingLease{}) {
+				var active int64
+				if e = tx.Model(&ProductLegacyFundingLease{}).Where("user_id = ? AND state NOT IN ?", localID, []string{"settled", "refunded"}).Count(&active).Error; e != nil {
+					return e
+				}
+				if active != 0 {
+					return ErrProductFundingPending
+				}
+			}
 			if e = tx.Create(&UniHubIdentityMapping{Issuer: issuer, Subject: subject, IdentityKey: key, UserID: localID}).Error; e != nil {
 				return e
 			}

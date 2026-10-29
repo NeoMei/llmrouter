@@ -64,6 +64,8 @@ export class ProductSession {
   account = ''
   epoch = 0
   csrfToken = ''
+  financeExpiresAt = 0
+  financeTransport: '' | 'oidc' | 'runtime_actor' = ''
   restorePromise: Promise<void> | null = null
   readonly client: UniHubClient
   private controller = new AbortController()
@@ -89,6 +91,8 @@ export class ProductSession {
     this.user = null
     this.accounts = []
     this.csrfToken = ''
+    this.financeExpiresAt = 0
+    this.financeTransport = ''
     this.restorePromise = null
     this.select('')
     this.onClear()
@@ -96,6 +100,58 @@ export class ProductSession {
   expire(seconds: number): void {
     clearTimeout(this.timer)
     this.timer = setTimeout(() => this.clear(), seconds * 1000)
+  }
+  get canWrite(): boolean {
+    return (
+      this.financeTransport === 'oidc' &&
+      useAuthStore.getState().auth.session?.login_method === 'unihub' &&
+      (this.financeExpiresAt === 0 || this.financeExpiresAt > Date.now() / 1000)
+    )
+  }
+  acceptFinanceAccess(data: ProductAccessSnapshot): void {
+    const auth = useAuthStore.getState().auth
+    const proof = data.finance_access
+    if (!proof && auth.session?.login_method === 'unihub') {
+      // Older deployments already validate the OIDC-bound session on every BFF request.
+      this.financeTransport = 'oidc'
+      this.financeExpiresAt = 0
+      return
+    }
+    const now = Date.now() / 1000
+    if (
+      !proof ||
+      proof.available !== true ||
+      (proof.transport !== 'runtime_actor' && proof.transport !== 'oidc') ||
+      (proof.transport === 'oidc' && auth.session?.login_method !== 'unihub') ||
+      proof.central_user_id !== auth.user?.unihub_user_id ||
+      proof.central_user_id !== data.access.subject ||
+      proof.central_user_id !== data.access.user.id ||
+      typeof proof.expires_at !== 'number' ||
+      !Number.isFinite(proof.expires_at) ||
+      proof.expires_at <= now
+    ) {
+      this.clear()
+      throw new Error(
+        'UniHub account access is unavailable for this browser session. Contact the administrator.'
+      )
+    }
+    this.financeTransport = proof.transport
+    this.financeExpiresAt = proof.expires_at
+    clearTimeout(this.timer)
+    this.timer = setTimeout(
+      () => {
+        this.intents.clear()
+        this.csrfToken = ''
+        this.financeExpiresAt = 0
+        this.financeTransport = ''
+        this.accounts = []
+        this.select('')
+        this.onForbidden(
+          'UniHub account access has expired. Refresh accounts and roles.'
+        )
+      },
+      Math.max(0, (proof.expires_at - now) * 1000)
+    )
   }
   async bound<T>(work: () => Promise<T>): Promise<T> {
     const epoch = this.epoch
@@ -205,6 +261,17 @@ export function createProductSession(config: ProductConfig): ProductSession {
         throw new Error('Cross-origin product request')
       }
       const headers = new Headers(init?.headers)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (!session.canWrite && method !== 'GET') {
+        throw new Error(
+          'UniHub account access is read only for this browser session.'
+        )
+      }
+      if (!session.canWrite && session.financeExpiresAt <= Date.now() / 1000) {
+        throw new Error(
+          'UniHub account access is unavailable for this browser session. Contact the administrator.'
+        )
+      }
       const native = await getFreshAuthHeaders()
       if (epoch !== session.epoch) {
         throw new Error('UniHub session or payer changed')
@@ -272,6 +339,12 @@ export interface ProductAccessSnapshot {
   >['permissions']
   user?: AuthUser
   csrf_token: string
+  finance_access?: {
+    available: boolean
+    transport?: string
+    central_user_id?: string
+    expires_at?: number
+  }
 }
 export async function refreshProductAccess(): Promise<ProductAccessSnapshot> {
   const auth = useAuthStore.getState().auth
@@ -338,9 +411,17 @@ async function restoreProductSessionOnce(
 ): Promise<void> {
   if (useAuthStore.getState().auth.user?.identity_source !== 'unihub') return
   const epoch = session.epoch
-  const data = await refreshProductAccess()
-  if (epoch !== session.epoch)
+  let data: ProductAccessSnapshot
+  try {
+    data = await refreshProductAccess()
+  } catch (error) {
+    if (!session.canWrite && epoch === session.epoch) session.clear()
+    throw error
+  }
+  if (epoch !== session.epoch) {
     throw new Error('UniHub session or payer changed')
+  }
+  session.acceptFinanceAccess(data)
   const accounts = await session.bound(() => session.client.accounts())
   if (epoch !== session.epoch) {
     throw new Error('UniHub session or payer changed')

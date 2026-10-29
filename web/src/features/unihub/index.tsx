@@ -137,10 +137,21 @@ function ProductShellContent(props: {
   }, [session])
   async function refresh() {
     const epoch = session.epoch
-    const access = await refreshProductAccess()
+    let access
+    try {
+      access = await refreshProductAccess()
+      if (epoch !== session.epoch) {
+        throw new Error('UniHub session or payer changed')
+      }
+      session.acceptFinanceAccess(access)
+    } catch (error) {
+      if (!session.canWrite && epoch === session.epoch) session.clear()
+      throw error
+    }
     const result = await session.bound(() => session.client.accounts())
-    if (epoch !== session.epoch)
+    if (epoch !== session.epoch) {
       throw new Error('UniHub session or payer changed')
+    }
     const current = accounts.find((item) => item.id === payer)
     const fresh = result.find((item) => item.id === payer)
     if (current?.role !== fresh?.role) {
@@ -299,6 +310,19 @@ function ProductShellContent(props: {
                 account={account}
                 config={props.config}
               />
+            ) : !session.canWrite ? (
+              <>
+                <BillingPanel
+                  session={session}
+                  account={account}
+                  config={props.config}
+                />
+                <UsagePanel
+                  session={session}
+                  account={account}
+                  config={props.config}
+                />
+              </>
             ) : (
               <>
                 <TeamPanel
@@ -341,8 +365,11 @@ export function ProductConsoleView(props: {
   page: 'keys' | 'wallet' | 'overview' | 'usage'
 }) {
   const { t } = useTranslation()
-  const brokerSession = useAuthStore(
-    (state) => state.auth.session?.login_method === 'product_broker'
+  const runtimeSession = useAuthStore(
+    (state) =>
+      state.auth.user?.identity_source === 'unihub' &&
+      !!state.auth.session &&
+      state.auth.session.login_method !== 'unihub'
   )
   const config = useQuery({
     queryKey: ['unihub-public-config'],
@@ -352,7 +379,7 @@ export function ProductConsoleView(props: {
       })
       if (!response.ok) throw new Error('UniHub configuration unavailable')
       const value = (await response.json()) as ProductConfig
-      if (value.enabled) {
+      if (value.enabled || value.browser_sso_enabled) {
         new UniHubClient({
           baseUrl: value.public_origin,
           clientId: value.client_id,
@@ -369,8 +396,9 @@ export function ProductConsoleView(props: {
   if (config.isPending) return <p>{t('Loading')}</p>
   if (config.error) return <p role='alert'>{message(config.error)}</p>
   if (
-    brokerSession ||
-    (!config.data?.enabled && config.data?.browser_sso_enabled)
+    !runtimeSession &&
+    !config.data?.enabled &&
+    config.data?.browser_sso_enabled
   ) {
     return (
       <p role='alert'>
@@ -380,7 +408,10 @@ export function ProductConsoleView(props: {
       </p>
     )
   }
-  if (!config.data?.enabled) {
+  if (
+    !config.data?.enabled &&
+    !(runtimeSession && config.data?.browser_sso_enabled)
+  ) {
     return (
       <p role='alert'>
         {t('UniHub product integration is disabled by this deployment.')}
@@ -402,8 +433,11 @@ export function UniHub() {
   const projected = useAuthStore(
     (state) => state.auth.user?.identity_source === 'unihub'
   )
-  const brokerSession = useAuthStore(
-    (state) => state.auth.session?.login_method === 'product_broker'
+  const runtimeSession = useAuthStore(
+    (state) =>
+      state.auth.user?.identity_source === 'unihub' &&
+      !!state.auth.session &&
+      state.auth.session.login_method !== 'unihub'
   )
   const config = useQuery({
     queryKey: ['unihub-public-config'],
@@ -432,17 +466,14 @@ export function UniHub() {
       </header>
       {config.isPending ? <p>{t('Loading')}</p> : null}
       {config.error ? <p role='alert'>{message(config.error)}</p> : null}
-      {config.data?.enabled && !brokerSession ? (
+      {config.data &&
+      (config.data.enabled ||
+        (runtimeSession && config.data.browser_sso_enabled)) ? (
         <ProductShell config={config.data} />
       ) : null}
-      {config.data?.enabled && brokerSession ? (
-        <p role='alert'>
-          {t(
-            'UniHub account access is unavailable for this browser session. Contact the administrator.'
-          )}
-        </p>
-      ) : null}
-      {config.data && !config.data.enabled ? (
+      {config.data &&
+      !config.data.enabled &&
+      !(runtimeSession && config.data.browser_sso_enabled) ? (
         <p role='alert'>
           {config.data.browser_sso_enabled
             ? t(

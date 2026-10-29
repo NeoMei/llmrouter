@@ -157,7 +157,9 @@ async function fixture(
       })
     }
     if (path === '/api/user/self') {
-      return route.fulfill({ json: { success: true, data: nativeBundle.user } })
+      return route.fulfill({
+        json: { success: true, data: nativeBundle.user },
+      })
     }
     if (path === '/api/token/') {
       return route.fulfill({
@@ -726,7 +728,10 @@ for (const rejection of [
       const response =
         writes.length === 1
           ? { status: rejection.status, json: { error: rejection.code } }
-          : { status: 201, json: { registration_id: 'new', status: 'CREATED' } }
+          : {
+              status: 201,
+              json: { registration_id: 'new', status: 'CREATED' },
+            }
       return route.fulfill({
         headers: { 'Access-Control-Allow-Origin': 'http://127.0.0.1:58004' },
         ...response,
@@ -2433,4 +2438,553 @@ test('sandbox settlement stays hidden when server payment mode is not sandbox', 
   await expect(
     page.getByRole('button', { name: 'Settle sandbox recharge' })
   ).toHaveCount(0)
+})
+
+for (const failedEndpoint of [
+  'resources',
+  'catalog',
+  'orders',
+  'operations',
+] as const) {
+  test(`wallet hides ${failedEndpoint} data after a background refresh fails`, async ({
+    page,
+  }) => {
+    await fixture(page)
+    let failed = false
+    await page.route('**/api/unihub/bff/v1/**', async (route) => {
+      const path = new URL(route.request().url()).pathname
+      if (failed && path.endsWith(`/${failedEndpoint}`)) {
+        return route.fulfill({ status: 503 })
+      }
+      if (path.endsWith('/resources')) {
+        return route.fulfill({
+          json: {
+            account_id: 'personal-a',
+            product_id: 'llmrouter',
+            subscriptions: [],
+            wallets: [
+              { product_id: 'llmrouter', asset: 'CNY/6', amount: '1234567' },
+            ],
+            payments: { mode: 'sandbox', real_payments_configured: false },
+            billing_profile: {
+              addons: { enabled: true },
+              subscription: { enabled: false },
+            },
+          },
+        })
+      }
+      if (path.endsWith('/catalog')) {
+        return route.fulfill({
+          json: [
+            {
+              id: 'addon',
+              name: 'Published plan',
+              account_kind: 'both',
+              product_id: 'llmrouter',
+              status: 'published',
+              kind: 'addon',
+              price: '1000000',
+              monthly_credit: '1000000',
+            },
+          ],
+        })
+      }
+      if (path.endsWith('/orders')) {
+        return route.fulfill({
+          json: [
+            {
+              id: 'order-visible',
+              amount: '1000000',
+              payment_status: 'PENDING',
+              fulfillment_status: 'PENDING',
+            },
+          ],
+        })
+      }
+      if (path.endsWith('/operations')) {
+        return route.fulfill({
+          json: [
+            { id: 'operation-visible', kind: 'recharge', status: 'PENDING' },
+          ],
+        })
+      }
+      return route.fallback()
+    })
+    await login(page)
+    await page.goto('/wallet')
+    await expect(page.getByText('1.234567 CNY', { exact: false })).toBeVisible()
+    await expect(
+      page.getByText('Published plan', { exact: true })
+    ).toBeVisible()
+    await expect(page.getByText(/order-visible/)).toBeVisible()
+    await expect(page.getByText(/operation-visible/)).toBeVisible()
+    failed = true
+    await page
+      .getByRole('button', { name: 'Refresh accounts and roles' })
+      .click()
+    await expect(page.getByRole('alert').first()).toBeVisible()
+    if (failedEndpoint === 'resources') {
+      await expect(
+        page.getByText('1.234567 CNY', { exact: false })
+      ).toHaveCount(0)
+      await expect(
+        page.getByRole('button', { name: 'Purchase addon' })
+      ).toHaveCount(0)
+    }
+    if (failedEndpoint === 'catalog') {
+      await expect(
+        page.getByText('Published plan', { exact: true })
+      ).toHaveCount(0)
+      await expect(
+        page.getByRole('button', { name: 'Purchase addon' })
+      ).toHaveCount(0)
+    }
+    if (failedEndpoint === 'orders') {
+      await expect(page.getByText(/order-visible/)).toHaveCount(0)
+    }
+    if (failedEndpoint === 'operations') {
+      await expect(page.getByText(/operation-visible/)).toHaveCount(0)
+    }
+  })
+}
+
+for (const failedEndpoint of [
+  'resources',
+  'billing-profile',
+  'usage-budget',
+  'api-keys',
+] as const) {
+  test(`key settings hide ${failedEndpoint} data and prevent unsafe changes after refresh fails`, async ({
+    page,
+  }) => {
+    await fixture(page, { models: ['verified-chat'] })
+    let failed = false
+    await page.route('**/api/unihub/bff/v1/**', async (route) => {
+      const path = new URL(route.request().url()).pathname
+      if (failed && path.endsWith(`/${failedEndpoint}`)) {
+        return route.fulfill({ status: 503 })
+      }
+      if (path.endsWith('/resources')) {
+        return route.fulfill({
+          json: {
+            account_id: 'personal-a',
+            product_id: 'llmrouter',
+            subscriptions: [],
+            wallets: [
+              { product_id: 'llmrouter', asset: 'CNY/6', amount: '7654321' },
+            ],
+            payments: { mode: 'sandbox', real_payments_configured: false },
+          },
+        })
+      }
+      if (path.endsWith('/billing-profile')) {
+        return route.fulfill({
+          json: {
+            usage: {
+              enabled: true,
+              default_funding_mode: 'prepaid_cash',
+              funding_modes: ['prepaid_cash'],
+            },
+          },
+        })
+      }
+      if (path.endsWith('/usage-budget')) {
+        return route.fulfill({
+          json: {
+            account_id: 'personal-a',
+            origin_product_id: 'llmrouter',
+            instance_id: 'default',
+            funding_mode: 'prepaid_cash',
+            asset: 'CNY/6',
+            version: 1,
+            max_total: '5000000',
+            max_per_call: '',
+            held: '0',
+            used: '1234567',
+          },
+        })
+      }
+      if (path.endsWith('/api-keys')) {
+        return route.fulfill({
+          json: [
+            {
+              id: 'key-visible',
+              name: 'Visible managed key',
+              actor_id: 'immutable-user',
+              account_id: 'personal-a',
+              origin_product_id: 'llmrouter',
+              instance_id: 'default',
+              models: ['verified-chat'],
+              funding_mode: 'prepaid_cash',
+              asset: 'CNY/6',
+              created_at: '2026-01-01T00:00:00Z',
+              max_total: '',
+              max_per_call: '',
+              held: '0',
+              used: '0',
+            },
+          ],
+        })
+      }
+      return route.fallback()
+    })
+    await login(page)
+    await page.goto('/keys')
+    await page.getByLabel('verified-chat').check()
+    await expect(
+      page.getByRole('button', { name: 'Create API key' })
+    ).toBeEnabled()
+    await expect(
+      page.getByText('Visible managed key', { exact: true })
+    ).toBeVisible()
+    await expect(page.getByText(/7\.654321 CNY/)).toBeVisible()
+    await expect(
+      page.getByRole('button', { name: 'Save account budget' })
+    ).toBeVisible()
+    failed = true
+    await page
+      .getByRole('button', { name: 'Refresh accounts and roles' })
+      .click()
+    await expect(page.getByRole('alert').first()).toBeVisible()
+    await expect(
+      page.getByRole('button', { name: 'Create API key' })
+    ).toBeDisabled()
+    if (failedEndpoint === 'resources') {
+      await expect(page.getByText(/7\.654321 CNY/)).toHaveCount(0)
+    }
+    if (failedEndpoint === 'api-keys') {
+      await expect(
+        page.getByText('Visible managed key', { exact: true })
+      ).toHaveCount(0)
+    }
+    if (failedEndpoint === 'usage-budget') {
+      await expect(
+        page.getByRole('button', { name: 'Save account budget' })
+      ).toHaveCount(0)
+    }
+  })
+}
+
+test('a failed offer refresh discards a previously quoted upgrade', async ({
+  page,
+}) => {
+  await fixture(page)
+  let failCatalog = false
+  const offer = (id: string, rank: number) => ({
+    id,
+    name: id,
+    rank,
+    period: 'month',
+    kind: 'membership',
+    account_kind: 'both',
+    product_id: 'llmrouter',
+    status: 'published',
+    price: '1000000',
+    monthly_credit: '1000000',
+  })
+  const current = offer('current-plan', 1)
+  const next = offer('higher-plan', 2)
+  await page.route('**/api/unihub/bff/v1/catalog', (route) =>
+    failCatalog
+      ? route.fulfill({ status: 503 })
+      : route.fulfill({ json: [current, next] })
+  )
+  await page.route(
+    '**/api/unihub/bff/v1/accounts/personal-a/resources',
+    (route) =>
+      route.fulfill({
+        json: {
+          account_id: 'personal-a',
+          product_id: 'llmrouter',
+          subscriptions: [
+            {
+              id: 'current-sub',
+              product_id: 'llmrouter',
+              status: 'active',
+              offer: current,
+            },
+          ],
+          payments: { real_payments_configured: false },
+          billing_profile: {
+            addons: { enabled: true },
+            subscription: { enabled: true },
+          },
+        },
+      })
+  )
+  await page.route('**/api/unihub/bff/v1/accounts/personal-a/quotes', (route) =>
+    route.fulfill({
+      json: {
+        id: 'old-quote',
+        account_id: 'personal-a',
+        subscription_id: 'current-sub',
+        offer: next,
+        amount: '1000000',
+        expires_at: '2099-01-01T00:00:00Z',
+      },
+    })
+  )
+  await login(page)
+  await page.getByRole('button', { name: 'Quote upgrade' }).click()
+  await expect(
+    page.getByText('Upgrade quote: old-quote', { exact: false })
+  ).toBeVisible()
+  failCatalog = true
+  await page.getByRole('button', { name: 'Refresh accounts and roles' }).click()
+  await expect(page.getByRole('alert').first()).toBeVisible()
+  await expect(
+    page.getByText('Upgrade quote: old-quote', { exact: false })
+  ).toHaveCount(0)
+  failCatalog = false
+  await page.getByRole('button', { name: 'Refresh accounts and roles' }).click()
+  await expect(page.getByRole('heading', { name: 'higher-plan' })).toBeVisible()
+  await expect(
+    page.getByText('Upgrade quote: old-quote', { exact: false })
+  ).toHaveCount(0)
+})
+
+test('broker finance is read-only with a current server proof; no write request is sent', async ({
+  page,
+}) => {
+  await fixture(page, { models: ['synthetic'] })
+  const now = Math.floor(Date.now() / 1000)
+  await page.route('**/api/user/auth/refresh', (route) =>
+    route.fulfill({
+      json: {
+        success: true,
+        data: {
+          access_token: 'broker-test-token',
+          token_type: 'Bearer',
+          access_expires_at: now + 300,
+          user: {
+            id: 42,
+            username: 'product-user',
+            role: 1,
+            identity_source: 'unihub',
+            unihub_user_id: 'immutable-user',
+            permissions: { admin_permissions: { product: { use: true } } },
+          },
+          session: {
+            sid: 'sid-broker-proof',
+            current: true,
+            login_method: 'product_broker',
+            ip: '',
+            user_agent: 'fixture',
+            created_at: now,
+            last_active_at: now,
+            expires_at: now + 300,
+          },
+        },
+      },
+    })
+  )
+  await page.route('**/api/unihub/access', (route) =>
+    route.fulfill({
+      json: {
+        access: {
+          subject: 'immutable-user',
+          user: { id: 'immutable-user', name: 'Product user', email: '' },
+          roles: ['member'],
+          permissions: ['product:use'],
+          expires_at: now + 300,
+        },
+        permissions: { admin_permissions: { product: { use: true } } },
+        csrf_token: 'csrf',
+        finance_access: {
+          available: true,
+          transport: 'runtime_actor',
+          central_user_id: 'immutable-user',
+          expires_at: now + 120,
+        },
+      },
+    })
+  )
+  await page.route('**/api/unihub/bff/v1/accounts/*/api-keys*', (route) =>
+    route.fulfill({
+      json: [
+        {
+          id: 'broker-key',
+          name: 'Read-only broker key',
+          credential_kind: 'api_key',
+          actor_id: 'immutable-user',
+          account_id: 'personal-a',
+          origin_product_id: 'llmrouter',
+          instance_id: 'default',
+          models: ['synthetic'],
+          funding_mode: 'prepaid_cash',
+          asset: 'CNY/6',
+          created_at: '2026-01-01T00:00:00Z',
+          max_total: '',
+          max_per_call: '',
+          held: '0',
+          used: '0',
+        },
+      ],
+    })
+  )
+  const writes: string[] = []
+  page.on('request', (request) => {
+    if (
+      request.url().includes('/api/unihub/bff/') &&
+      request.method() !== 'GET'
+    ) {
+      writes.push(request.method())
+    }
+  })
+  await page.goto('/api/unihub/login?return_to=%2Fkeys')
+  await expect(
+    page.getByText('Read-only broker key', { exact: true })
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Create API key' })
+  ).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Revoke' })).toHaveCount(0)
+  await expect(
+    page.getByRole('button', { name: 'Save account budget' })
+  ).toHaveCount(0)
+  await page.goto('/wallet')
+  await expect(page.getByText(/9007199254740\.993123 CNY/)).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Create recharge' })
+  ).toHaveCount(0)
+  await expect(
+    page.getByRole('button', { name: 'Purchase addon' })
+  ).toHaveCount(0)
+  expect(writes).toEqual([])
+})
+
+for (const sessionKind of ['product_broker', 'password'] as const) {
+  for (const failure of ['unavailable', 'expired', 'mismatch'] as const) {
+    test(`${sessionKind} refuses financial reads when readiness is ${failure}`, async ({
+      page,
+    }) => {
+      await fixture(page)
+      const now = Math.floor(Date.now() / 1000)
+      await page.route('**/api/user/auth/refresh', (route) =>
+        route.fulfill({
+          json: {
+            success: true,
+            data: {
+              access_token: 'runtime-test-token',
+              token_type: 'Bearer',
+              access_expires_at: now + 300,
+              user: {
+                id: 42,
+                username: 'product-user',
+                role: 1,
+                identity_source: 'unihub',
+                unihub_user_id: 'immutable-user',
+                permissions: { admin_permissions: { product: { use: true } } },
+              },
+              session: {
+                sid: 'sid-runtime',
+                current: true,
+                login_method: sessionKind,
+                ip: '',
+                user_agent: 'fixture',
+                created_at: now,
+                last_active_at: now,
+                expires_at: now + 300,
+              },
+            },
+          },
+        })
+      )
+      await page.route('**/api/unihub/access', (route) =>
+        route.fulfill({
+          json: {
+            access: {
+              subject: 'immutable-user',
+              user: { id: 'immutable-user', name: 'Product user', email: '' },
+              roles: ['member'],
+              permissions: ['product:use'],
+              expires_at: now + 300,
+            },
+            permissions: { admin_permissions: { product: { use: true } } },
+            csrf_token: 'csrf',
+            finance_access: {
+              available: failure !== 'unavailable',
+              transport: 'runtime_actor',
+              central_user_id:
+                failure === 'mismatch' ? 'wrong-user' : 'immutable-user',
+              expires_at: failure === 'expired' ? now - 1 : now + 120,
+            },
+          },
+        })
+      )
+      let bffCalls = 0
+      page.on('request', (request) => {
+        if (request.url().includes('/api/unihub/bff/')) bffCalls++
+      })
+      await page.goto('/api/unihub/login?return_to=%2Fkeys')
+      await expect(
+        page.getByText(
+          'UniHub account access is unavailable for this browser session. Contact the administrator.'
+        )
+      ).toBeVisible()
+      expect(bffCalls).toBe(0)
+      await expect(
+        page.getByRole('button', { name: 'Create API key' })
+      ).toHaveCount(0)
+      await expect(page).toHaveURL(/\/keys$/)
+    })
+  }
+}
+
+test('sandbox settlement stays unavailable while payment configuration refresh is pending', async ({
+  page,
+}) => {
+  await fixture(page)
+  let delay = false
+  let release: () => void = () => {}
+  let started: () => void = () => {}
+  const pending = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const requested = new Promise<void>((resolve) => {
+    started = resolve
+  })
+  await page.route('**/personal-a/resources', async (route) => {
+    if (delay) {
+      started()
+      await pending
+    }
+    return route.fulfill({
+      json: {
+        account_id: 'personal-a',
+        product_id: 'llmrouter',
+        subscriptions: [],
+        wallets: [],
+        payments: { mode: 'sandbox', real_payments_configured: false },
+      },
+    })
+  })
+  await page.route('**/personal-a/recharges', (route) =>
+    route.fulfill({
+      json: {
+        id: 'sandbox-refresh',
+        account_id: 'personal-a',
+        product_id: 'llmrouter',
+        amount: '1000000',
+        currency: 'CNY',
+        merchant: 'sandbox',
+      },
+    })
+  )
+  await login(page)
+  await page.getByLabel('Recharge amount (CNY)').fill('1')
+  await page
+    .getByRole('button', { name: 'Create recharge', exact: true })
+    .click()
+  const settle = page.getByRole('button', {
+    name: 'Settle sandbox recharge',
+    exact: true,
+  })
+  await expect(settle).toBeVisible()
+  delay = true
+  await page.getByRole('button', { name: 'Refresh accounts and roles' }).click()
+  await requested
+  await expect(settle).toHaveCount(0)
+  release()
+  await expect(settle).toBeVisible()
 })

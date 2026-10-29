@@ -41,7 +41,7 @@ export function UsagePanel(props: PanelProps) {
         let summary
         let calls
         let pool = false
-        if (finance) {
+        if (finance && props.session.canWrite) {
           try {
             ;[summary, calls] = await Promise.all([
               sdk.modelPoolUsage(props.account.id),

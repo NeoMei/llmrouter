@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
@@ -48,6 +48,7 @@ export function BillingPanel(props: PanelProps) {
   const [busy, setBusy] = useState(false)
   const [quote, setQuote] = useState<Quote | null>(null)
   const finance = ['owner', 'billing_admin'].includes(props.account.role)
+  const financeWrite = finance && props.session.canWrite
   const resources = useQuery({
     queryKey: ['resources', props.account.id],
     queryFn: () =>
@@ -77,7 +78,20 @@ export function BillingPanel(props: PanelProps) {
     enabled: finance,
     retry: false,
   })
+  const resourcesReady = resources.isSuccess && !resources.isFetching
+  const commercialReady =
+    resourcesReady && catalog.isSuccess && !catalog.isFetching
+  useEffect(() => {
+    if (!commercialReady) setQuote(null)
+  }, [commercialReady])
   async function perform(original: FinancialIntent) {
+    if (
+      !financeWrite ||
+      !resourcesReady ||
+      (original.kind !== 'recharge' && !commercialReady)
+    ) {
+      return
+    }
     setBusy(true)
     setError('')
     setIntent(original)
@@ -129,6 +143,7 @@ export function BillingPanel(props: PanelProps) {
     }
   }
   async function upgrade(offer: Offer) {
+    if (!financeWrite || !commercialReady) return
     setBusy(true)
     setError('')
     try {
@@ -212,13 +227,14 @@ export function BillingPanel(props: PanelProps) {
   }
   async function settleSandbox(recharge: Recharge) {
     if (
-      !finance ||
-      resources.isError ||
+      !financeWrite ||
+      !resourcesReady ||
       resources.data?.payments.mode !== 'sandbox' ||
       recharge.account_id !== props.account.id ||
       recharge.product_id !== props.config.product_id
-    )
+    ) {
       return
+    }
     setBusy(true)
     setError('')
     try {
@@ -241,17 +257,18 @@ export function BillingPanel(props: PanelProps) {
       setBusy(false)
     }
   }
-  const offers =
-    catalog.data?.filter(
-      (offer) =>
-        offer.product_id === 'llmrouter' &&
-        (offer.account_kind === props.account.kind ||
-          offer.account_kind === 'both') &&
-        offer.status === 'published' &&
-        (offer.kind === 'addon'
-          ? resources.data?.billing_profile?.addons.enabled
-          : resources.data?.billing_profile?.subscription.enabled)
-    ) ?? []
+  const offers = commercialReady
+    ? (catalog.data?.filter(
+        (offer) =>
+          offer.product_id === 'llmrouter' &&
+          (offer.account_kind === props.account.kind ||
+            offer.account_kind === 'both') &&
+          offer.status === 'published' &&
+          (offer.kind === 'addon'
+            ? resources.data?.billing_profile?.addons.enabled
+            : resources.data?.billing_profile?.subscription.enabled)
+      ) ?? [])
+    : []
   return (
     <Panel title='Resources and billing'>
       <p className='text-sm'>
@@ -259,7 +276,7 @@ export function BillingPanel(props: PanelProps) {
         {props.account.role}
       </p>
       {resources.error ? <p role='alert'>{message(resources.error)}</p> : null}
-      {resources.data ? (
+      {resourcesReady ? (
         <>
           <p>
             {resources.data.payments.real_payments_configured
@@ -316,7 +333,7 @@ export function BillingPanel(props: PanelProps) {
               {offer.upgrade_rule} · {offer.refund_rule}
             </p>
             {offer.sandbox ? <p>{t('Sandbox offer')}</p> : null}
-            {finance ? (
+            {financeWrite ? (
               <div className='flex gap-2'>
                 <Button
                   disabled={busy || intent !== null}
@@ -351,7 +368,7 @@ export function BillingPanel(props: PanelProps) {
           </article>
         ))}
       </div>
-      {quote ? (
+      {quote && commercialReady && financeWrite ? (
         <div className='space-y-2 rounded border p-3'>
           <p>
             {t('Upgrade quote')}: {quote.id} ·{' '}
@@ -362,7 +379,9 @@ export function BillingPanel(props: PanelProps) {
             disabled={busy || intent !== null}
             onClick={() =>
               void perform(
-                new FinancialIntent(props.account.id, 'quote', { id: quote.id })
+                new FinancialIntent(props.account.id, 'quote', {
+                  id: quote.id,
+                })
               )
             }
           >
@@ -372,26 +391,31 @@ export function BillingPanel(props: PanelProps) {
       ) : null}
       {finance ? (
         <>
-          <form
-            className='flex flex-wrap items-end gap-2'
-            onSubmit={(e) => {
-              e.preventDefault()
-              const data = new FormData(e.currentTarget)
-              try {
-                void perform(
-                  new FinancialIntent(props.account.id, 'recharge', {
-                    amount: cnyMillionths(String(data.get('amount'))),
-                  })
-                )
-              } catch (error) {
-                setError(message(error))
-              }
-            }}
-          >
-            <Field name='amount' label='Recharge amount (CNY)' required />
-            <Submit busy={busy || intent !== null} text='Create recharge' />
-          </form>
-          {intent ? (
+          {financeWrite ? (
+            <form
+              className='flex flex-wrap items-end gap-2'
+              onSubmit={(e) => {
+                e.preventDefault()
+                const data = new FormData(e.currentTarget)
+                try {
+                  void perform(
+                    new FinancialIntent(props.account.id, 'recharge', {
+                      amount: cnyMillionths(String(data.get('amount'))),
+                    })
+                  )
+                } catch (error) {
+                  setError(message(error))
+                }
+              }}
+            >
+              <Field name='amount' label='Recharge amount (CNY)' required />
+              <Submit
+                busy={busy || intent !== null || !resourcesReady}
+                text='Create recharge'
+              />
+            </form>
+          ) : null}
+          {financeWrite && intent ? (
             <div role='status' className='space-y-2 rounded border p-3'>
               <p>
                 {t(
@@ -401,7 +425,14 @@ export function BillingPanel(props: PanelProps) {
               <p>
                 {intent.account} · {intent.kind} · {intent.key}
               </p>
-              <Button disabled={busy} onClick={() => void perform(intent)}>
+              <Button
+                disabled={
+                  busy ||
+                  !resourcesReady ||
+                  (intent.kind !== 'recharge' && !commercialReady)
+                }
+                onClick={() => void perform(intent)}
+              >
                 {t('Retry original operation')}
               </Button>
             </div>
@@ -422,12 +453,14 @@ export function BillingPanel(props: PanelProps) {
           </form>
           <h3>{t('Orders')}</h3>
           {orders.error ? <p role='alert'>{message(orders.error)}</p> : null}
-          {orders.data?.map((order) => (
-            <div key={order.id} className='rounded border p-3'>
-              {order.id} · {exactAmount(order.amount, 'CNY/6')} ·{' '}
-              {order.payment_status} · {order.fulfillment_status}
-            </div>
-          ))}
+          {(orders.isSuccess && !orders.isFetching ? orders.data : [])?.map(
+            (order) => (
+              <div key={order.id} className='rounded border p-3'>
+                {order.id} · {exactAmount(order.amount, 'CNY/6')} ·{' '}
+                {order.payment_status} · {order.fulfillment_status}
+              </div>
+            )
+          )}
           <Button
             variant='outline'
             disabled={busy}
@@ -443,7 +476,10 @@ export function BillingPanel(props: PanelProps) {
           {operations.error ? (
             <p role='alert'>{message(operations.error)}</p>
           ) : null}
-          {operations.data?.map((operation) => (
+          {(operations.isSuccess && !operations.isFetching
+            ? operations.data
+            : []
+          )?.map((operation) => (
             <p key={operation.id}>
               {operation.id} · {operation.kind} · {operation.status} ·{' '}
               {operation.error_code}
@@ -460,8 +496,8 @@ export function BillingPanel(props: PanelProps) {
             busy={busy}
             read={() => void queryResult(result)}
           />
-          {finance &&
-          !resources.isError &&
+          {financeWrite &&
+          resourcesReady &&
           resources.data?.payments.mode === 'sandbox' &&
           isRecharge(result) &&
           result.account_id === props.account.id &&

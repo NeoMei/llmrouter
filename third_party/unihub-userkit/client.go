@@ -17,6 +17,18 @@ type Config struct {
 	BaseURL, Issuer, ClientID, ProductID, InstanceID string
 	HTTPClient                                       *http.Client
 }
+
+// ResolveError identifies a fixed verification phase without exposing a token,
+// user identity, upstream body or URL. The original category remains available
+// via errors.Is to existing callers.
+type ResolveError struct {
+	Stage string
+	Err   error
+}
+
+func (e *ResolveError) Error() string { return "central identity verification failed" }
+func (e *ResolveError) Unwrap() error { return e.Err }
+
 type Client struct {
 	config Config
 	http   *http.Client
@@ -94,20 +106,20 @@ func (c *Client) Resolve(ctx context.Context, bearer string) (Access, error) {
 		Scopes     []string `json:"scopes"`
 	}
 	if e := c.get(ctx, bearer, "/v1/capabilities", &proof); e != nil {
-		return Access{}, e
+		return Access{}, &ResolveError{Stage: "capabilities", Err: e}
 	}
 	if proof.Kind != "product" || proof.ClientID != c.config.ClientID || proof.ProductID != c.config.ProductID || proof.InstanceID != c.config.InstanceID || !slices.Contains(proof.Scopes, "access:read") {
-		return Access{}, ErrDenied
+		return Access{}, &ResolveError{Stage: "capabilities", Err: ErrDenied}
 	}
 	var a Access
 	if e := c.get(ctx, bearer, "/v1/me/product-access", &a); e != nil {
-		return Access{}, e
+		return Access{}, &ResolveError{Stage: "product_access", Err: e}
 	}
 	if e := validate(a); e != nil {
-		return Access{}, e
+		return Access{}, &ResolveError{Stage: "product_access", Err: e}
 	}
 	if a.Issuer != c.config.Issuer || a.ProductID != c.config.ProductID || a.InstanceID != c.config.InstanceID {
-		return Access{}, ErrDenied
+		return Access{}, &ResolveError{Stage: "product_access", Err: ErrDenied}
 	}
 	return a, nil
 }

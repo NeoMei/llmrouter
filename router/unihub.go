@@ -1,10 +1,12 @@
 package router
 
 import (
+	"errors"
 	userkit "github.com/NeoMei/UniHub/packages/userkit-go"
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/internal/platformaccount"
 	"github.com/QuantumNous/new-api/internal/unihubaccess"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
@@ -69,6 +71,17 @@ func SetUniHubRouter(r *gin.Engine, c platformaccount.Config) {
 		}
 		access, err := c.Resolve(ctx.Request.Context(), strings.TrimPrefix(h, "Bearer "))
 		if err != nil {
+			stage := "resolve"
+			var failed *userkit.ResolveError
+			if errors.As(err, &failed) {
+				switch failed.Stage {
+				case "capabilities":
+					stage = "capabilities"
+				case "product_access":
+					stage = "product_access"
+				}
+			}
+			logger.LogWarn(ctx.Request.Context(), "unihub_session_failure stage="+stage)
 			ctx.Status(http.StatusUnauthorized)
 			return
 		}
@@ -79,6 +92,7 @@ func SetUniHubRouter(r *gin.Engine, c platformaccount.Config) {
 		}
 		local, err := model.ResolveUniHubProjection(platformaccount.Identity{Issuer: access.Issuer, User: platformaccount.User{ID: access.Subject, Name: access.User.Name, Email: access.User.Email}})
 		if err != nil {
+			logger.LogWarn(ctx.Request.Context(), "unihub_session_failure stage=projection")
 			ctx.Status(401)
 			return
 		}

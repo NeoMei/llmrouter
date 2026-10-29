@@ -8,6 +8,7 @@ import (
 	userkit "github.com/NeoMei/UniHub/packages/userkit-go"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/internal/platformaccount"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
@@ -203,32 +204,40 @@ func registerUniHubSSO(r *gin.Engine, config platformaccount.Config) {
 func createUniHubSession(c *gin.Context, a userkit.Access, bearer string) (*service.AuthBundle, error) {
 	local, e := (model.UniHubProvisioner{}).Ensure(c.Request.Context(), a)
 	if e != nil {
+		logger.LogWarn(c.Request.Context(), "unihub_session_failure stage=projection")
 		return nil, e
 	}
 	userID, e := strconv.Atoi(local.ID)
 	if e != nil {
+		logger.LogWarn(c.Request.Context(), "unihub_session_failure stage=projection")
 		return nil, e
 	}
 	if platformaccount.RuntimeEnabled() {
 		client, err := platformaccount.RuntimeClient()
 		if err != nil {
+			logger.LogWarn(c.Request.Context(), "unihub_session_failure stage=runtime_config")
 			return nil, err
 		}
 		if _, err = client.Bind(c.Request.Context(), bearer, userkit.BindRequest{LocalUserID: local.ID, BindingKey: "oidc:" + local.ID}); err != nil {
+			logger.LogWarn(c.Request.Context(), "unihub_session_failure stage=runtime_bind")
 			return nil, err
 		}
 		if err = reconcileSSOUser(c, userID); err != nil {
+			logger.LogWarn(c.Request.Context(), "unihub_session_failure stage=runtime_identity")
 			return nil, err
 		}
 		if err = model.EnsureProductFunding(c.Request.Context(), userID); err != nil && !errors.Is(err, model.ErrProductFundingMigration) {
+			logger.LogWarn(c.Request.Context(), "unihub_session_failure stage=runtime_funding")
 			return nil, err
 		}
 	}
 	bundle, e := service.CreateUniHubLoginSession(userID, a.ExpiresAt, c.ClientIP(), c.Request.UserAgent())
 	if e != nil {
+		logger.LogWarn(c.Request.Context(), "unihub_session_failure stage=session_create")
 		return nil, e
 	}
 	if e = model.BindUniHubSession(bundle.Session.SID, userID, a, bearer, a.ExpiresAt); e != nil {
+		logger.LogWarn(c.Request.Context(), "unihub_session_failure stage=session_bind")
 		_, _ = model.RevokeUserSession(userID, bundle.Session.SID, "unihub_binding_failed")
 		return nil, e
 	}

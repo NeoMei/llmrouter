@@ -429,11 +429,14 @@ func updateSunoAccountTasks(ctx context.Context, ch *model.Channel, taskIds []st
 		common.SysLog(fmt.Sprintf("Get Task Do req error: %v", err))
 		return err
 	}
+	if resp == nil || resp.Body == nil {
+		return errors.New("suno provider response missing body")
+	}
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		logger.LogError(ctx, fmt.Sprintf("Get Task status code: %d", resp.StatusCode))
 		return fmt.Errorf("Get Task status code: %d", resp.StatusCode)
 	}
-	defer resp.Body.Close()
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("Get Suno Task parse body error: %v", err))
@@ -590,6 +593,13 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 	if len(taskIds) == 0 {
 		return nil
 	}
+	// Requeue any retry-pending task whose batch exited before confirming it.
+	// The conditional update cannot overwrite a concurrent terminal result.
+	defer func() {
+		for _, taskID := range taskIds {
+			requeuePendingTaskRead(ctx, taskM[taskID])
+		}
+	}()
 	cacheGetChannel, err := model.CacheGetChannel(channelId)
 	if err != nil {
 		// Collect DB primary key IDs for bulk update (taskIds are upstream IDs, not task_id column values)
@@ -737,8 +747,8 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 			if openaiError != nil {
 				// 返回规范的 OpenAI 错误格式，提取错误信息，判断错误是否为任务失败
 				if openaiError.Code == "429" {
-					// 429 错误通常表示请求过多或速率限制，暂时不认为是任务失败，保持原状态等待下一轮轮询
-					return nil
+					// A rate-limited retry is unconfirmed; the batch will back off.
+					return fmt.Errorf("provider rate limited task %s", taskId)
 				}
 
 				// 其他错误认为是任务失败，记录错误信息并更新任务状态
@@ -826,17 +836,18 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		}
 		won, err := task.UpdateWithStatus(snap.Status)
 		if err != nil {
-			logger.LogError(ctx, fmt.Sprintf("UpdateWithStatus failed for task %s: %s", task.TaskID, err.Error()))
-			shouldRefund = false
-			shouldSettle = false
-		} else if !won {
-			logger.LogWarn(ctx, fmt.Sprintf("Task %s CAS lost or no-op update, skip billing", task.TaskID))
-			shouldRefund = false
-			shouldSettle = false
+			return fmt.Errorf("task %s terminal update failed: %w", task.TaskID, err)
+		}
+		if !won {
+			return fmt.Errorf("task %s terminal update lost race", task.TaskID)
 		}
 	} else if !snap.Equal(task.Snapshot()) {
-		if _, err := task.UpdateWithStatus(snap.Status); err != nil {
-			logger.LogError(ctx, fmt.Sprintf("Failed to update task %s: %s", task.TaskID, err.Error()))
+		won, err := task.UpdateWithStatus(snap.Status)
+		if err != nil {
+			return fmt.Errorf("task %s update failed: %w", task.TaskID, err)
+		}
+		if !won {
+			return fmt.Errorf("task %s update lost race", task.TaskID)
 		}
 	} else {
 		// No changes, skip update

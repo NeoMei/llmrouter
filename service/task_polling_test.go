@@ -21,6 +21,7 @@ import (
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 type taskPollingFetchAdaptor struct {
@@ -883,4 +884,117 @@ func TestSunoRetriesBackoffUnconfirmedResultsIndividually(t *testing.T) {
 			}
 		})
 	}
+}
+
+type errorVideoPollAdaptor struct{}
+
+func (*errorVideoPollAdaptor) Init(*relaycommon.RelayInfo) {}
+func (*errorVideoPollAdaptor) FetchTask(string, string, map[string]any, string) (*http.Response, error) {
+	return &http.Response{StatusCode: 429, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"rate limited","code":"429"}}`))}, nil
+}
+func (*errorVideoPollAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskInfo, error) {
+	return &relaycommon.TaskInfo{}, nil
+}
+func (*errorVideoPollAdaptor) AdjustBillingOnComplete(*model.Task, *relaycommon.TaskInfo) int {
+	return 0
+}
+
+type closeObservedBody struct {
+	io.Reader
+	closed bool
+}
+
+func (b *closeObservedBody) Close() error { b.closed = true; return nil }
+
+type sunoErrorBodyAdaptor struct{ body *closeObservedBody }
+
+func (*sunoErrorBodyAdaptor) Init(*relaycommon.RelayInfo) {}
+func (a *sunoErrorBodyAdaptor) FetchTask(string, string, map[string]any, string) (*http.Response, error) {
+	return &http.Response{StatusCode: 503, Body: a.body}, nil
+}
+func (*sunoErrorBodyAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskInfo, error) { return nil, nil }
+func (*sunoErrorBodyAdaptor) AdjustBillingOnComplete(*model.Task, *relaycommon.TaskInfo) int {
+	return 0
+}
+
+func TestPendingVideoPollBacksOffOnMissingAdaptorOrRateLimit(t *testing.T) {
+	for _, name := range []string{"missing_adaptor", "rate_limit"} {
+		t.Run(name, func(t *testing.T) {
+			truncate(t)
+			oldLimit := constant.TaskQueryLimit
+			constant.TaskQueryLimit = 100
+			t.Cleanup(func() { constant.TaskQueryLimit = oldLimit })
+			seedTaskPollingChannel(t, 980, true)
+			task := seedPollingTask(t, 980, "pending-"+name, "provider-"+name)
+			task.FundingOwner = "native"
+			task.SubmitTime = time.Now().Unix()
+			task.FailReason = model.TaskReconcileRetryPending
+			require.NoError(t, model.DB.Save(task).Error)
+			old := GetTaskAdaptorFunc
+			GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor {
+				if name == "missing_adaptor" {
+					return nil
+				}
+				return &errorVideoPollAdaptor{}
+			}
+			t.Cleanup(func() { GetTaskAdaptorFunc = old })
+			RunTaskPollingOnce(context.Background(), nil)
+			var got model.Task
+			require.NoError(t, model.DB.First(&got, task.ID).Error)
+			assert.Equal(t, model.TaskStatus(model.TaskStatusReconcile), got.Status)
+			assert.Equal(t, model.TaskReconcileChannelReason, got.FailReason)
+		})
+	}
+}
+
+func TestPendingVideoPollBacksOffWhenPersistenceFails(t *testing.T) {
+	truncate(t)
+	oldLimit := constant.TaskQueryLimit
+	constant.TaskQueryLimit = 100
+	t.Cleanup(func() { constant.TaskQueryLimit = oldLimit })
+	seedTaskPollingChannel(t, 981, true)
+	task := seedPollingTask(t, 981, "pending-db-error", "provider-db-error")
+	task.FundingOwner = "native"
+	task.SubmitTime = time.Now().Unix()
+	task.FailReason = model.TaskReconcileRetryPending
+	require.NoError(t, model.DB.Save(task).Error)
+	injected := false
+	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register("test_fail_pending_task_once", func(tx *gorm.DB) {
+		if !injected && tx.Statement.Table == "tasks" {
+			injected = true
+			tx.AddError(errors.New("simulated update failure"))
+		}
+	}))
+	t.Cleanup(func() { model.DB.Callback().Update().Remove("test_fail_pending_task_once") })
+	old := GetTaskAdaptorFunc
+	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return &taskPollingFetchAdaptor{} }
+	t.Cleanup(func() { GetTaskAdaptorFunc = old })
+	RunTaskPollingOnce(context.Background(), nil)
+	require.True(t, injected)
+	var got model.Task
+	require.NoError(t, model.DB.First(&got, task.ID).Error)
+	assert.Equal(t, model.TaskStatus(model.TaskStatusReconcile), got.Status)
+	assert.Equal(t, model.TaskReconcileChannelReason, got.FailReason)
+}
+
+func TestRequeuePendingTaskDoesNotOverwriteConcurrentTerminalState(t *testing.T) {
+	truncate(t)
+	task := seedPollingTask(t, 982, "stale-task", "stale-provider")
+	task.FailReason = model.TaskReconcileRetryPending
+	require.NoError(t, model.DB.Save(task).Error)
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Updates(map[string]any{"status": model.TaskStatusSuccess, "fail_reason": ""}).Error)
+	requeuePendingTaskRead(context.Background(), task)
+	var got model.Task
+	require.NoError(t, model.DB.First(&got, task.ID).Error)
+	assert.Equal(t, model.TaskStatus(model.TaskStatusSuccess), got.Status)
+}
+
+func TestSunoErrorResponseBodyIsClosed(t *testing.T) {
+	body := &closeObservedBody{Reader: strings.NewReader("provider unavailable")}
+	old := GetTaskAdaptorFunc
+	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return &sunoErrorBodyAdaptor{body: body} }
+	t.Cleanup(func() { GetTaskAdaptorFunc = old })
+	base := "https://suno.invalid"
+	assert.Error(t, updateSunoAccountTasks(context.Background(), &model.Channel{BaseURL: &base}, []string{"provider"}, map[string]*model.Task{}))
+	assert.True(t, body.closed)
 }

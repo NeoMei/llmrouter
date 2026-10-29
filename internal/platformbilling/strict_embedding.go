@@ -19,6 +19,27 @@ func parseKnowledgeEmbedding(c Config, p KnowledgePolicy, body []byte) (operatio
 	if common.UnmarshalUnique(body, &request) != nil {
 		return operationRequest{}, ErrInvalid
 	}
+	if p.Version == "knowledge_ali_text_v1" {
+		// The certified compatible endpoint accepts text, not OpenAI token IDs.
+		if _, exists := request["user"]; exists {
+			return operationRequest{}, ErrInvalid
+		}
+		switch input := request["input"].(type) {
+		case string:
+			if input == "" {
+				return operationRequest{}, ErrInvalid
+			}
+		case []any:
+			for _, item := range input {
+				text, ok := item.(string)
+				if !ok || text == "" {
+					return operationRequest{}, ErrInvalid
+				}
+			}
+		default:
+			return operationRequest{}, ErrInvalid
+		}
+	}
 	count, e := (&dto.EmbeddingRequest{Input: request["input"]}).InputCount()
 	if e != nil || count > p.MaxBatch {
 		return operationRequest{}, ErrInvalid

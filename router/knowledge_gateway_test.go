@@ -3,7 +3,9 @@ package router
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -29,6 +31,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -36,13 +39,19 @@ import (
 )
 
 func TestKnowledgeEmbeddingManagedGateway(t *testing.T)  { knowledgeManagedGateway(t, "embedding") }
+func TestAliEmbeddingV4ManagedGateway(t *testing.T)      { knowledgeManagedGateway(t, "ali-embedding") }
 func TestKnowledgeRerankManagedGateway(t *testing.T)     { knowledgeManagedGateway(t, "rerank") }
 func TestKnowledgeMultimodalManagedGateway(t *testing.T) { knowledgeManagedGateway(t, "multimodal") }
 func knowledgeManagedGateway(t *testing.T, kind string) {
 	enableUniHubBoundary(t)
+	aliEmbedding := kind == "ali-embedding"
+	isEmbedding := kind == "embedding" || aliEmbedding
 	variants := []string{"canonical", "native", "zero", "missing", "duplicate", "bad-index", "wrong-grant", "unknown-native", "wrong-policy", "wrong-channel", "text-overcap", "visual-overcap", "video", "remote-image", "multi-key", "key-drift", "space-drift", "crosswire", "changed-body"}
-	if kind == "embedding" {
+	if isEmbedding {
 		variants = []string{"canonical", "token-flat", "token-batch", "zero", "missing", "duplicate", "bad-index", "wrong-grant", "wrong-policy", "wrong-channel", "multi-key", "key-drift", "space-drift", "changed-body"}
+	}
+	if aliEmbedding {
+		variants = []string{"canonical", "zero", "missing", "duplicate", "bad-index", "changed-body", "text-overcap", "settle-unavailable", "receipt-usage", "receipt-digest", "receipt-charged", "receipt-consistent-wrong-charge"}
 	}
 	if kind == "multimodal" {
 		variants = append(variants, "frozen-image-canonical-oversize", "frozen-image-native-oversize", "frozen-image-canonical-boundary", "frozen-image-native-boundary", "frozen-image-canonical-one-over", "frozen-image-native-one-over")
@@ -81,8 +90,11 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 				require.NoError(t, png.Encode(&imageBytes, image.NewRGBA(image.Rect(0, 0, 2, 3))))
 			}
 			imageURI := "data:image/png;base64," + base64.StdEncoding.EncodeToString(imageBytes.Bytes())
-			if kind == "embedding" {
+			if isEmbedding {
 				wire, bill, upstreamModel = "embeddings.create", "embedding", "upstream-embed"
+				if aliEmbedding {
+					upstreamModel = "text-embedding-v4"
+				}
 			}
 			if kind == "multimodal" {
 				wire, bill, upstreamModel = "multimodal.embeddings.create", "multimodal_embedding", "qwen3-vl-embedding"
@@ -151,8 +163,12 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 				if kind == "rerank" {
 					assert.Contains(t, string(raw), `"return_documents":false`)
 					assert.Equal(t, "/api/v1/services/rerank/text-rerank/text-rerank", r.URL.Path)
-				} else if kind == "embedding" {
-					assert.Equal(t, "/v1/embeddings", r.URL.Path)
+				} else if isEmbedding {
+					if aliEmbedding {
+						assert.Equal(t, "/compatible-mode/v1/embeddings", r.URL.Path)
+					} else {
+						assert.Equal(t, "/v1/embeddings", r.URL.Path)
+					}
 				} else {
 					if variant == "video" {
 						var req dto.QwenMultimodalEmbeddingRequest
@@ -187,7 +203,7 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 				if variant == "bad-index" {
 					results = `[{"index":2,"relevance_score":0.9}]`
 				}
-				if kind == "embedding" {
+				if isEmbedding {
 					usage = `{"prompt_tokens":3,"total_tokens":3}`
 					if variant == "zero" {
 						usage = `{"prompt_tokens":0,"total_tokens":0}`
@@ -205,7 +221,26 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 					if variant == "bad-index" {
 						data = `[{"index":0,"embedding":[0.1,0.2,0.3]},{"index":0,"embedding":[0.4,0.5,0.6]}]`
 					}
-					_, _ = w.Write([]byte(`{"object":"list","model":"upstream-embed","data":` + data + `,"usage":` + usage + `}`))
+					if aliEmbedding {
+						vector := "[" + strings.TrimSuffix(strings.Repeat("0.1,", 1024), ",") + "]"
+						second := 1
+						if variant == "bad-index" {
+							second = 0
+						}
+						data = fmt.Sprintf(`[{"index":0,"embedding":%s},{"index":%d,"embedding":%s}]`, vector, second, vector)
+						usage = `{"total_tokens":3}`
+						switch variant {
+						case "zero":
+							usage = `{"total_tokens":0}`
+						case "missing":
+							usage = `{}`
+						case "duplicate":
+							usage = `{"total_tokens":3,"total_tokens":3}`
+						case "text-overcap":
+							usage = `{"total_tokens":1001}`
+						}
+					}
+					_, _ = w.Write([]byte(`{"object":"list","model":"` + upstreamModel + `","data":` + data + `,"usage":` + usage + `}`))
 					return
 				}
 				if kind == "multimodal" {
@@ -242,6 +277,8 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 			}
 			rate := platformbilling.Rate{ID: "rate", Model: "rank", Asset: "CREDIT/6", Status: "published", Semantics: "metered_v2", Metered: &price}
 			var remote platformbilling.RemoteCall
+			var settledUsage platformbilling.Usage
+			var finalDigest string
 			hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var out any
 				switch r.URL.Path {
@@ -261,6 +298,16 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 					out = remote
 				case "/internal/v1/calls/call/settle":
 					settles++
+					if aliEmbedding {
+						var saved struct{ Ciphertext []byte }
+						require.NoError(t, db.Table("platform_knowledge_results").Where("call_id = ?", "call").Take(&saved).Error)
+						assert.NotEmpty(t, saved.Ciphertext)
+						assert.NotContains(t, string(saved.Ciphertext), `"embedding"`)
+						if variant == "settle-unavailable" {
+							w.WriteHeader(http.StatusServiceUnavailable)
+							return
+						}
+					}
 					var in struct {
 						Usage platformbilling.Usage `json:"usage"`
 					}
@@ -276,7 +323,48 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 					}
 					assert.Equal(t, want, in.Usage.Metered.Measurements[0].Quantity.Value)
 					remote.Status = "SETTLED"
+					if aliEmbedding {
+						remote.Charged = "2"
+						if variant == "receipt-consistent-wrong-charge" {
+							remote.Charged = "1"
+						}
+						settledUsage = in.Usage
+						digestInput, err := common.Marshal(struct {
+							CallID       string                 `json:"call_id"`
+							Usage        *platformbilling.Usage `json:"usage"`
+							ProviderCost string                 `json:"provider_cost"`
+						}{"call", &settledUsage, ""})
+						require.NoError(t, err)
+						digest := sha256.Sum256(digestInput)
+						finalDigest = hex.EncodeToString(digest[:])
+					}
 					out = remote
+				case "/internal/v1/calls/call":
+					if !aliEmbedding {
+						t.Error("unexpected call receipt")
+						w.WriteHeader(404)
+						return
+					}
+					receiptUsage := settledUsage
+					receiptDigest := finalDigest
+					receiptCall := remote
+					if variant == "receipt-usage" {
+						receiptUsage = platformbilling.Usage{}
+					}
+					if variant == "receipt-digest" {
+						receiptDigest = strings.Repeat("0", 64)
+					}
+					if variant == "receipt-charged" {
+						receiptCall.Charged = "1"
+					}
+					out = struct {
+						platformbilling.RemoteCall
+						ServiceID    string                 `json:"service_id"`
+						TaskID       string                 `json:"task_id"`
+						Usage        *platformbilling.Usage `json:"usage"`
+						FinalDigest  string                 `json:"final_digest"`
+						ProviderCost string                 `json:"provider_cost"`
+					}{receiptCall, "llmrouter", "task", &receiptUsage, receiptDigest, ""}
 				case "/internal/v1/calls/call/release":
 					remote.Status = "RELEASED"
 					out = remote
@@ -296,11 +384,17 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 				channelType = constant.ChannelTypeOpenAI
 			}
 			base := up.URL
+			if aliEmbedding {
+				base = "https://dashscope.aliyuncs.com"
+			}
 			require.NoError(t, db.Create(&model.Channel{Id: 1, Type: channelType, Key: "key", Status: common.ChannelStatusEnabled, BaseURL: &base, Models: upstreamModel, Group: "platform"}).Error)
 			require.NoError(t, db.Create(&model.Ability{Group: "platform", Model: upstreamModel, ChannelId: 1, Enabled: true}).Error)
 			meta := `{"operations":["rerank.create"],"input_modalities":["text"]}`
-			if kind == "embedding" {
+			if isEmbedding {
 				meta = `{"operations":["embeddings.create"],"input_modalities":["text"],"embedding_space":{"provider":"openai","model":"upstream-embed","version":"v1","dimensions":3,"input_semantics":"text"}}`
+			}
+			if aliEmbedding {
+				meta = `{"operations":["embeddings.create"],"input_modalities":["text"],"embedding_space":{"provider":"aliyun","model":"text-embedding-v4","version":"v4","dimensions":1024,"input_semantics":"text"}}`
 			}
 			if kind == "multimodal" {
 				meta = `{"operations":["multimodal.embeddings.create"],"input_modalities":["text","image","video"],"output_modalities":["embedding"],"embedding_space":{"provider":"aliyun","model":"qwen3-vl-embedding","version":"v1","dimensions":256,"input_semantics":"` + dto.QwenMultimodalInputSemantics + `"},"media_limits":{"max_images":5,"max_pixels":16000000,"max_request_bytes":65536,"max_video_seconds":30,"formats":["png","mp4"]}}`
@@ -320,10 +414,20 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 			t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(oldRatio)) })
 			model.InitChannelCache()
 			service.InitHttpClient()
+			if aliEmbedding {
+				client := service.GetHttpClient()
+				baseTransport := client.Transport
+				client.Transport = aliEmbeddingFixtureTransport{target: up.URL, next: baseTransport}
+				t.Cleanup(func() { client.Transport = baseTransport })
+			}
 			service.InitTokenEncoders()
 			p := platformbilling.KnowledgePolicy{ChannelKeySHA256: "2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683", Version: "knowledge_v1", ProviderReference: "https://fixture.test/policy", PublicModel: "rank", WireOperation: wire, ChannelID: 1, ChannelType: channelType, UpstreamModel: upstreamModel, HardInputTokens: 1000, MaxItemTokens: 100, MaxBatch: 10, RateIDs: map[string]string{"CREDIT/6": "rate"}}
-			if kind == "embedding" {
+			if isEmbedding {
 				p.Space = &dto.EmbeddingSpace{Provider: "openai", Model: upstreamModel, Version: "v1", Dimensions: 3, InputSemantics: "text"}
+			}
+			if aliEmbedding {
+				p.Version, p.Origin = "knowledge_ali_text_v1", base
+				p.Space = &dto.EmbeddingSpace{Provider: "aliyun", Model: upstreamModel, Version: "v4", Dimensions: 1024, InputSemantics: "text"}
 			}
 			if kind == "multimodal" {
 				p.VisualTokens = 2000
@@ -344,6 +448,10 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 				model.InitChannelCache()
 			}
 			cfg := platformbilling.Config{Enabled: true, Origin: hub.URL, ServiceToken: "service-service-service-service-token", PrincipalID: 1, Group: "platform", MaxInputTokens: 1000, MaxOutputTokens: 100, MaxBodyBytes: bodyLimit, KnowledgePolicies: map[string]map[string]platformbilling.KnowledgePolicy{wire: {"rank": p}}, OperationLimits: map[string]map[string]platformbilling.OperationLimits{bill: {"rank": {Policy: "provider_reported_v1"}}}, OperationRateIDs: map[string]map[string]map[string]string{bill: {"CREDIT/6": {"rank": "rate"}}}}
+			cfg.AllowAliEmbeddingV4 = aliEmbedding
+			if aliEmbedding {
+				cfg.AliEmbeddingResultKey = bytes.Repeat([]byte{11}, 32)
+			}
 			a, e := platformbilling.New(db, cfg)
 			require.NoError(t, e)
 			catalog, e := readTechnicalCatalog(context.Background(), a, "superwagie")
@@ -382,7 +490,7 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 					body = `{"model":"rank","input":{"contents":[{"text":"a"},{"image":"` + imageURI + `"}]},"parameters":{"dimension":256}}`
 				}
 			}
-			if kind == "embedding" {
+			if isEmbedding {
 				path = "/platform/v1/embeddings"
 				input := `["a","b"]`
 				if variant == "token-flat" {
@@ -392,6 +500,9 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 					input = `[[0,1],[2,3]]`
 				}
 				body = `{"model":"rank","input":` + input + `,"dimensions":3}`
+				if aliEmbedding {
+					body = `{"model":"rank","input":` + input + `,"dimensions":1024}`
+				}
 			}
 			if variant == "video" {
 				body = `{"model":"rank","input":[{"text":"a"},{"video":"` + source.URL + `"}],"dimensions":256}`
@@ -437,19 +548,36 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 				assert.Equal(t, 1, sends)
 				var row platformbilling.Call
 				require.NoError(t, db.First(&row, "call_id = ?", "call").Error)
-				if variant == "missing" || variant == "duplicate" || variant == "bad-index" || strings.HasSuffix(variant, "overcap") {
+				if variant == "missing" || variant == "duplicate" || variant == "bad-index" || (aliEmbedding && variant == "zero") || strings.HasSuffix(variant, "overcap") {
 					assert.Equal(t, "UNKNOWN", row.Status)
 					assert.Equal(t, 0, settles)
+					if aliEmbedding {
+						assert.GreaterOrEqual(t, w.Code, 400)
+						assert.NotContains(t, w.Body.String(), `"embedding"`)
+					}
+				} else if strings.HasPrefix(variant, "receipt-") {
+					assert.Equal(t, "SETTLED", row.Status)
+					assert.GreaterOrEqual(t, w.Code, 400)
+					assert.NotContains(t, w.Body.String(), `"embedding"`)
+				} else if variant == "settle-unavailable" {
+					assert.Equal(t, "SETTLE_PENDING", row.Status)
+					assert.GreaterOrEqual(t, w.Code, 400)
+					assert.NotContains(t, w.Body.String(), `"embedding"`)
 				} else {
 					assert.Equal(t, 200, w.Code, w.Body.String())
 					assert.Equal(t, "SETTLED", row.Status)
+					if aliEmbedding {
+						var usage metering.Usage
+						require.NoError(t, common.UnmarshalUnique([]byte(row.Evidence), &usage))
+						assert.Equal(t, dto.BillingUsageSourceAliEmbeddingV4, usage.Source)
+					}
 					assert.Equal(t, 1, settles)
 					var result map[string]any
 					require.NoError(t, common.UnmarshalUnique(w.Body.Bytes(), &result))
 					if nativeEnvelope {
 						assert.Contains(t, result, "output")
 					} else {
-						if kind == "multimodal" || kind == "embedding" {
+						if kind == "multimodal" || isEmbedding {
 							assert.Contains(t, result, "data")
 						} else {
 							assert.Contains(t, result, "results")
@@ -457,7 +585,7 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 					}
 				}
 				if variant == "changed-body" {
-					if kind == "embedding" {
+					if isEmbedding {
 						body = strings.Replace(body, `"a"`, `"changed"`, 1)
 					} else if kind == "rerank" {
 						body = strings.Replace(body, `"query":"q"`, `"query":"changed"`, 1)
@@ -491,4 +619,26 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 			assert.Equal(t, 3, user.RequestCount)
 		})
 	}
+}
+
+// The fixture preserves the verified destination on the real request while
+// replacing only the network transport with a controlled local supplier.
+type aliEmbeddingFixtureTransport struct {
+	target string
+	next   http.RoundTripper
+}
+
+func (f aliEmbeddingFixtureTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.URL.Host != "dashscope.aliyuncs.com" {
+		return f.next.RoundTrip(r)
+	}
+	u, err := url.Parse(f.target)
+	if err != nil {
+		return nil, err
+	}
+	copy := r.Clone(r.Context())
+	u.Path = r.URL.Path
+	copy.URL = u
+	copy.Host = u.Host
+	return f.next.RoundTrip(copy)
 }

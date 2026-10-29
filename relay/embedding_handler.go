@@ -83,7 +83,9 @@ func EmbeddingHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			return types.NewErrorWithStatusCode(fmt.Errorf("parameter override violates fixed embedding_space"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
 	}
-	logger.LogDebug(c, "converted embedding request body: %s", jsonData)
+	if !info.PlatformMode {
+		logger.LogDebug(c, "converted embedding request body: %s", jsonData)
+	}
 	body, size, getBody, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
@@ -127,6 +129,16 @@ func EmbeddingHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		httpResp.Body.Close()
 		if readErr != nil || len(raw) > maxContractEmbeddingResponseBytes {
 			return types.NewErrorWithStatusCode(fmt.Errorf("embedding response unreadable or exceeds size limit"), types.ErrorCodeBadResponseBody, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+		}
+		if info.PlatformMode && info.PlatformBilling != nil && info.PlatformBilling.AliEmbeddingV4() {
+			result, err := info.PlatformBilling.CaptureAliEmbeddingResult(c.Request.Context(), info.ChannelId, info.ResolvedModelNameOrOrigin(), info.ApiKey, raw)
+			if err != nil {
+				return types.NewErrorWithStatusCode(fmt.Errorf("embedding result pending verification or settlement"), types.ErrorCodeBadResponseBody, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+			}
+			c.Header("Content-Type", "application/json")
+			c.Header("Cache-Control", "no-store")
+			c.Data(http.StatusOK, "application/json", result)
+			return nil
 		}
 		if info.PlatformMode {
 			count, e := request.InputCount()

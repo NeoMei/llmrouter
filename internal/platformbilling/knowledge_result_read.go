@@ -63,6 +63,77 @@ func readKnowledgeAuthority(ctx context.Context, c *client, method, path string,
 	return nil
 }
 
+// verifyKnowledgeSettlement checks the frozen intent against the authoritative
+// settled receipt; it does not authorize the caller or expose stored content.
+func (a *Adapter) verifyKnowledgeSettlement(ctx context.Context, original Call) error {
+	if a == nil || a.client == nil || original.Status != "SETTLED" || original.EvidenceConflict || !stableID.MatchString(original.CallID) {
+		return ErrInvalid
+	}
+	var remote knowledgeSettledReceipt
+	if err := readKnowledgeAuthority(ctx, a.client, http.MethodGet, "/internal/v1/calls/"+original.CallID, nil, &remote); err != nil {
+		return ErrPending
+	}
+	if remote.Status != "SETTLED" || remote.ServiceID != "llmrouter" || remote.TaskID != original.TaskID || original.FundingSnapshot == "" || remote.fundingSnapshot() != original.FundingSnapshot || !remote.RemoteCall.matches(original) || remote.Charged != original.Charged || remote.Usage == nil {
+		return ErrInvalid
+	}
+	charged, ok := new(big.Int).SetString(remote.Charged, 10)
+	if !ok || charged.Sign() < 0 || charged.String() != remote.Charged {
+		return ErrInvalid
+	}
+	var evidence metering.Usage
+	var intent struct {
+		Usage        Usage  `json:"usage"`
+		ProviderCost string `json:"provider_cost"`
+	}
+	if common.UnmarshalUnique([]byte(original.Evidence), &evidence) != nil || common.UnmarshalUnique([]byte(original.Intent), &intent) != nil || intent.Usage.Metered == nil || remote.Usage.Metered == nil || !reflect.DeepEqual(*intent.Usage.Metered, evidence) || !reflect.DeepEqual(*remote.Usage, intent.Usage) || remote.ProviderCost != intent.ProviderCost {
+		return ErrInvalid
+	}
+	digestInput, err := common.Marshal(struct {
+		CallID       string `json:"call_id"`
+		Usage        *Usage `json:"usage"`
+		ProviderCost string `json:"provider_cost"`
+	}{original.CallID, &intent.Usage, intent.ProviderCost})
+	if err != nil {
+		return ErrInvalid
+	}
+	digest := sha256.Sum256(digestInput)
+	if remote.FinalDigest != hex.EncodeToString(digest[:]) {
+		return ErrInvalid
+	}
+	// The authority may cap the charge at the reserved hold. Recompute this
+	// certified embedding's exact rounded charge as a separate invariant.
+	var frozen frozenKnowledge
+	if common.UnmarshalUnique([]byte(original.MediaSnapshot), &frozen) != nil {
+		return ErrInvalid
+	}
+	if frozen.Policy.Version == "knowledge_ali_text_v1" {
+		var rate Rate
+		if common.UnmarshalUnique([]byte(original.RateSnapshot), &rate) != nil || rate.Metered == nil || intent.Usage.Metered == nil {
+			return ErrInvalid
+		}
+		price, err := metering.Calculate(*rate.Metered, *intent.Usage.Metered)
+		if err != nil || price.Sign() < 0 {
+			return ErrInvalid
+		}
+		amount, remainder := new(big.Int), new(big.Int)
+		amount.QuoRem(price.Num(), price.Denom(), remainder)
+		if remainder.Sign() > 0 {
+			amount.Add(amount, big.NewInt(1))
+		}
+		held, ok := new(big.Int).SetString(original.Amount, 10)
+		if !ok || held.Sign() < 0 || held.String() != original.Amount {
+			return ErrInvalid
+		}
+		if amount.Cmp(held) > 0 {
+			amount.Set(held)
+		}
+		if amount.String() != remote.Charged {
+			return ErrInvalid
+		}
+	}
+	return nil
+}
+
 // authorizedResult verifies a task capability, an authoritative UniHub call,
 // and the original v2 result binding. It never dispatches or settles a call.
 func (v *knowledgeResultVault) authorizedResult(ctx context.Context, a *Adapter, credential, task, id string) ([]byte, error) {
@@ -102,36 +173,8 @@ func (v *knowledgeResultVault) authorizedResult(ctx context.Context, a *Adapter,
 	if err != nil {
 		return nil, ErrInvalid
 	}
-	var remote knowledgeSettledReceipt
-	if err = readKnowledgeAuthority(ctx, a.client, http.MethodGet, "/internal/v1/calls/"+id, nil, &remote); err != nil {
-		return nil, ErrPending
-	}
-	if remote.Status != "SETTLED" || remote.ServiceID != "llmrouter" || remote.TaskID != task || original.FundingSnapshot == "" || remote.fundingSnapshot() != original.FundingSnapshot || !remote.RemoteCall.matches(original) || remote.Charged != original.Charged || remote.Usage == nil {
-		return nil, ErrInvalid
-	}
-	charged, ok := new(big.Int).SetString(remote.Charged, 10)
-	if !ok || charged.Sign() < 0 || charged.String() != remote.Charged {
-		return nil, ErrInvalid
-	}
-	var evidence metering.Usage
-	var intent struct {
-		Usage        Usage  `json:"usage"`
-		ProviderCost string `json:"provider_cost"`
-	}
-	if common.UnmarshalUnique([]byte(original.Evidence), &evidence) != nil || common.UnmarshalUnique([]byte(original.Intent), &intent) != nil || intent.Usage.Metered == nil || remote.Usage.Metered == nil || !reflect.DeepEqual(*intent.Usage.Metered, evidence) || !reflect.DeepEqual(*remote.Usage, intent.Usage) || remote.ProviderCost != intent.ProviderCost {
-		return nil, ErrInvalid
-	}
-	digestInput, err := common.Marshal(struct {
-		CallID       string `json:"call_id"`
-		Usage        *Usage `json:"usage"`
-		ProviderCost string `json:"provider_cost"`
-	}{id, &intent.Usage, intent.ProviderCost})
-	if err != nil {
-		return nil, ErrInvalid
-	}
-	digest := sha256.Sum256(digestInput)
-	if remote.FinalDigest != hex.EncodeToString(digest[:]) {
-		return nil, ErrInvalid
+	if err := a.verifyKnowledgeSettlement(ctx, original); err != nil {
+		return nil, err
 	}
 	second, err := verify()
 	if err != nil || !reflect.DeepEqual(first, second) {

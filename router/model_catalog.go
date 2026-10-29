@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/internal/platformbilling"
@@ -89,6 +90,10 @@ func readTechnicalCatalog(ctx context.Context, adapter *platformbilling.Adapter,
 				}
 			}
 			for _, operation := range m.Operations {
+				knowledgeOrigin := channel.GetBaseURL()
+				if knowledgeOrigin == "" {
+					knowledgeOrigin = constant.ChannelBaseURLs[channel.Type]
+				}
 				presetTargets[operation] = presetTargets[operation] && !channel.ChannelInfo.IsMultiKey && adapter.NativePresetTarget(m.PublicID, operation, candidate.ChannelID, channel.Type, candidate.UpstreamModel, channel.Key, channel.GetBaseURL())
 				if (operation == "ocr.jobs.create" || operation == "dashscope.ocr.recognitions.create") && (channel.ChannelInfo.IsMultiKey || !adapter.OCRTarget(m.PublicID, operation, candidate.ChannelID, channel.Type, candidate.UpstreamModel, channel.Key, channel.GetBaseURL())) {
 					blocked[operation] = "certified_ocr_target_unavailable"
@@ -99,7 +104,7 @@ func readTechnicalCatalog(ctx context.Context, adapter *platformbilling.Adapter,
 				if platformbilling.IsAudioWire(operation) && (channel.ChannelInfo.IsMultiKey || !adapter.AudioTarget(m.PublicID, operation, candidate.ChannelID, channel.Type, candidate.UpstreamModel, channel.Key, channel.GetBaseURL())) {
 					blocked[operation] = "certified_audio_target_unavailable"
 				}
-				if (operation == "embeddings.create" || operation == "rerank.create" || operation == "multimodal.embeddings.create") && (channel.ChannelInfo.IsMultiKey || !adapter.KnowledgeTarget(m.PublicID, operation, candidate.ChannelID, channel.Type, candidate.UpstreamModel, channel.Key)) {
+				if (operation == "embeddings.create" || operation == "rerank.create" || operation == "multimodal.embeddings.create") && (channel.ChannelInfo.IsMultiKey || !adapter.KnowledgeTarget(m.PublicID, operation, candidate.ChannelID, channel.Type, candidate.UpstreamModel, channel.Key, knowledgeOrigin)) {
 					blocked[operation] = "certified_knowledge_target_unavailable"
 				}
 

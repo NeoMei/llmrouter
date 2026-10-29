@@ -145,7 +145,11 @@ func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, ups
 				return knowledgeResponse{}, ErrInvalid
 			}
 		}
-		evidence := dto.NativeTokenEvidence{Source: dto.BillingUsageSourceOAIChat}
+		source := dto.BillingUsageSourceOAIChat
+		if frozen.Policy.Version == "knowledge_ali_text_v1" {
+			source = dto.BillingUsageSourceAliEmbeddingV4
+		}
+		evidence := dto.NativeTokenEvidence{Source: source}
 		evidence.Observe(raw, false)
 		result.usage = evidence.Usage(*rate.Metered)
 	case "rerank.create":

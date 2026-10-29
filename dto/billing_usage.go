@@ -5,6 +5,7 @@ const (
 	BillingUsageSourceGeminiChat     = "gemini_chat"
 	BillingUsageSourceOAIChat        = "oai_chat"
 	BillingUsageSourceOAIResponses   = "oai_responses"
+	BillingUsageSourceAliEmbeddingV4 = "ali_text_embedding_v4"
 
 	BillingUsageSemanticAnthropic = "anthropic"
 	BillingUsageSemanticGemini    = "gemini"

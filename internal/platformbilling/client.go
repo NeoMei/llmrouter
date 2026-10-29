@@ -100,6 +100,12 @@ type RemoteCall struct {
 	BillingProfileVersion int          `json:"billing_profile_version"`
 }
 type Config struct {
+	// Programmatic test gate only. ConfigFromEnv intentionally never enables
+	// this while private-result authorization and recovery remain unfinished.
+	AllowAliEmbeddingV4 bool
+	// Test-only key, never loaded from the environment. Production activation
+	// requires shared, versioned secrets and authenticated recovery.
+	AliEmbeddingResultKey           []byte
 	NativeHistory                   *NativeHistoryConfig
 	ImagePolicies                   map[string]map[string]ImagePolicy
 	NativePresetPolicies            map[string]map[string]NativePresetPolicy

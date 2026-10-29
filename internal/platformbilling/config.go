@@ -159,7 +159,7 @@ func ConfigFromEnv(get func(string) string) (Config, error) {
 		}
 		for _, models := range policies {
 			for _, p := range models {
-				if !protocolKeys(p, "channel_key_sha256 version provider_reference public_model wire_operation channel_id channel_type upstream_model hard_input_tokens visual_tokens max_item_tokens max_batch embedding_space rate_ids") {
+				if !protocolKeys(p, "channel_key_sha256 version provider_reference public_model wire_operation channel_id channel_type origin upstream_model hard_input_tokens visual_tokens max_item_tokens max_batch embedding_space rate_ids") {
 					return c, ErrInvalid
 				}
 				if raw, exists := p["embedding_space"]; exists {

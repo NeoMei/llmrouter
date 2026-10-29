@@ -72,3 +72,16 @@ func (s *Session) validateKnowledgeOutbound(channel int, upstream, key string, r
 	req.ContentLength = int64(len(raw))
 	return nil
 }
+
+// ValidateAliEmbeddingOutbound binds the bytes and destination of this one
+// certified managed operation immediately before opening the supplier socket.
+func (s *Session) ValidateAliEmbeddingOutbound(channel int, upstream, key string, req *http.Request) error {
+	if !s.AliEmbeddingV4() || req == nil || req.URL == nil || req.Host != req.URL.Host || req.Header.Get("X-DashScope-Plugin") != "" {
+		return ErrInvalid
+	}
+	var frozen frozenKnowledge
+	if common.UnmarshalUnique([]byte(s.call.MediaSnapshot), &frozen) != nil || req.URL.String() != frozen.Policy.Origin+"/compatible-mode/v1/embeddings" {
+		return ErrInvalid
+	}
+	return s.validateKnowledgeOutbound(channel, upstream, key, req)
+}

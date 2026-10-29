@@ -4,6 +4,7 @@ package platformbilling
 // actual supplier connection to this session and preserve usage on failure.
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -14,11 +15,53 @@ import (
 	"math/big"
 	"net/http"
 	"reflect"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/metering"
 	"gorm.io/gorm"
 )
+
+// CaptureAliEmbeddingResult is enabled only by the programmatic test gate. The
+// caller must pass the exact response read from the certified supplier request.
+// It never redispatches, and no public recovery endpoint is registered.
+func (s *Session) CaptureAliEmbeddingResult(ctx context.Context, channel int, upstream, key string, raw []byte) ([]byte, error) {
+	if !s.AliEmbeddingV4() || s.adapter.knowledgeResults == nil || len(raw) == 0 || len(raw) > knowledgeResultMaxBytes {
+		return nil, ErrInvalid
+	}
+	work, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+	defer cancel()
+	vault := s.adapter.knowledgeResults
+	sealed, err := vault.validateForCapture(work, s, channel, upstream, key, &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(raw))})
+	if err != nil {
+		return nil, err
+	}
+	if err = vault.captureValidated(work, s, sealed); err != nil {
+		return nil, err
+	}
+	if err = s.Finish(work); err != nil {
+		return nil, err
+	}
+	var settled Call
+	if err = s.adapter.db.WithContext(work).First(&settled, "call_id = ?", s.call.CallID).Error; err != nil || settled.Status != "SETTLED" || settled.EvidenceConflict || !sameKnowledgeCallBinding(settled, s.call) {
+		return nil, ErrPending
+	}
+	if err = s.adapter.verifyKnowledgeSettlement(work, settled); err != nil {
+		return nil, err
+	}
+	result, err := vault.readSettled(work, s.call.CallID)
+	if err != nil {
+		return nil, err
+	}
+	var current Call
+	if err = s.adapter.db.WithContext(work).First(&current, "call_id = ?", s.call.CallID).Error; err != nil || current.Status != "SETTLED" || current.EvidenceConflict || !sameKnowledgeCallBinding(current, settled) || current.Evidence != settled.Evidence || current.Intent != settled.Intent || current.Charged != settled.Charged {
+		return nil, ErrPending
+	}
+	if ctx.Err() != nil {
+		return nil, ErrPending
+	}
+	return result, nil
+}
 
 // The staged artifact contains only immutable values; copies cannot share a
 // mutable output or measurement slice with a concurrent caller.
@@ -129,7 +172,11 @@ func (v *knowledgeResultVault) captureValidated(ctx context.Context, s *Session,
 		if err != nil || !certified || rate.ID != row.RateID || rate.Model != row.Model || rate.Asset != asset || rate.Status != "published" || rate.Semantics != "metered_v2" || frozen.Policy.RateIDs[asset] != rate.ID || rate.Metered.Operation != row.Operation || metering.ValidateUsage(*rate.Metered, usage) != nil {
 			return ErrInvalid
 		}
-		if (row.Operation == "embedding" && usage.Source != "oai_chat") || (row.Operation == "rerank" && usage.Source != "ali_rerank_actual_v1") || (row.Operation != "embedding" && row.Operation != "rerank") {
+		embeddingSource := "oai_chat"
+		if frozen.Policy.Version == "knowledge_ali_text_v1" {
+			embeddingSource = "ali_text_embedding_v4"
+		}
+		if (row.Operation == "embedding" && usage.Source != embeddingSource) || (row.Operation == "rerank" && usage.Source != "ali_rerank_actual_v1") || (row.Operation != "embedding" && row.Operation != "rerank") {
 			return ErrInvalid
 		}
 		total := new(big.Int)

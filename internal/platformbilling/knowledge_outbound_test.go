@@ -7,6 +7,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -79,4 +82,48 @@ func TestKnowledgeOutboundControlledHTTPSend(t *testing.T) {
 	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 	assert.Equal(t, want, string(received))
+}
+
+func TestAliEmbeddingV4OutboundBindsDestinationAndBytes(t *testing.T) {
+	s, key, _ := responseFixture(t, "embedding")
+	s.adapter.config.AllowAliEmbeddingV4 = true
+	var frozen frozenKnowledge
+	require.NoError(t, common.UnmarshalUnique([]byte(s.call.MediaSnapshot), &frozen))
+	frozen.Policy.Version = "knowledge_ali_text_v1"
+	frozen.Policy.Origin = "https://dashscope.aliyuncs.com"
+	frozen.Policy.ChannelType = constant.ChannelTypeAli
+	frozen.Policy.UpstreamModel = "text-embedding-v4"
+	frozen.Policy.Space = &dto.EmbeddingSpace{Provider: "aliyun", Model: "text-embedding-v4", Version: "v4", Dimensions: 1024, InputSemantics: "text"}
+	frozen.Body = []byte(`{"model":"public","input":["first","second"],"dimensions":1024}`)
+	snapshot, err := common.Marshal(frozen)
+	require.NoError(t, err)
+	s.call.MediaSnapshot = string(snapshot)
+	makeReq := func(raw string) *http.Request {
+		r, err := http.NewRequest(http.MethodPost, "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings", bytes.NewBufferString(raw))
+		require.NoError(t, err)
+		r.Header.Set("Authorization", "Bearer "+key)
+		return r
+	}
+	body := `{"model":"text-embedding-v4","input":["first","second"],"dimensions":1024}`
+	req := makeReq(body)
+	require.NoError(t, s.ValidateAliEmbeddingOutbound(1, "text-embedding-v4", key, req))
+	actual, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+	assert.Equal(t, body, string(actual))
+	for _, bad := range []func(*http.Request){
+		func(r *http.Request) { r.URL.Host = "attacker.example" },
+		func(r *http.Request) { r.URL.RawQuery = "other=1" },
+		func(r *http.Request) { r.Host = "attacker.example" },
+		func(r *http.Request) { r.Header.Set("X-DashScope-Plugin", "override") },
+		func(r *http.Request) { r.Header.Set("Authorization", "Bearer wrong") },
+		func(r *http.Request) {
+			r.Body = io.NopCloser(bytes.NewBufferString(`{"model":"text-embedding-v4","input":["foreign"],"dimensions":1024}`))
+		},
+	} {
+		r := makeReq(body)
+		bad(r)
+		assert.Error(t, s.ValidateAliEmbeddingOutbound(1, "text-embedding-v4", key, r))
+	}
+	s.adapter.config.AllowAliEmbeddingV4 = false
+	assert.Error(t, s.ValidateAliEmbeddingOutbound(1, "text-embedding-v4", key, makeReq(body)))
 }

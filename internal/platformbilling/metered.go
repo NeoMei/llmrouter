@@ -301,6 +301,9 @@ func (a *Adapter) admitWireOperation(ctx context.Context, credential, task, id s
 		if chosen == nil || chosen.Metered.Policy != "provider_reported_v1" || p.RateIDs[asset] != chosen.ID {
 			return nil, ErrInvalid
 		}
+		if p.Version == "knowledge_ali_text_v1" && (len(chosen.Metered.Terms) != 1 || chosen.Metered.Terms[0].Key != "input" || chosen.Metered.Terms[0].Unit != "token") {
+			return nil, ErrInvalid
+		}
 	}
 	if chosen == nil {
 		return nil, ErrInvalid

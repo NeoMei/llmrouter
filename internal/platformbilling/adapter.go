@@ -86,11 +86,12 @@ type Attempt struct {
 func (Attempt) TableName() string { return "platform_model_attempts" }
 
 type Adapter struct {
-	history         *ci.Index
-	historyResolver NativeHistoryResolver
-	db              *gorm.DB
-	config          Config
-	client          *client
+	knowledgeResults *knowledgeResultVault
+	history          *ci.Index
+	historyResolver  NativeHistoryResolver
+	db               *gorm.DB
+	config           Config
+	client           *client
 }
 type Session struct {
 	nativeSend    string
@@ -168,6 +169,12 @@ func New(db *gorm.DB, c Config) (*Adapter, error) {
 	}
 	if err = db.AutoMigrate(&Call{}, &Attempt{}); err != nil {
 		return nil, err
+	}
+	if c.AllowAliEmbeddingV4 {
+		a.knowledgeResults, err = newKnowledgeResultVault(db, c.AliEmbeddingResultKey, time.Hour)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err = a.initNativeHistory(context.Background()); err != nil {
 		return nil, err

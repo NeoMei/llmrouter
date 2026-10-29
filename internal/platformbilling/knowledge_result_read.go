@@ -31,7 +31,7 @@ type knowledgeSettledReceipt struct {
 }
 
 // This read-only client rejects redirect and duplicate-key authority replies.
-func readKnowledgeAuthority(ctx context.Context, c *client, method, path string, in, out any) error {
+func readKnowledgeAuthority(ctx context.Context, c *client, method, path string, in, out any, actorAccess string) error {
 	if c == nil || c.http == nil {
 		return ErrPending
 	}
@@ -49,6 +49,9 @@ func readKnowledgeAuthority(ctx context.Context, c *client, method, path string,
 	}
 	request.Header.Set("Authorization", "Bearer "+c.token)
 	request.Header.Set("Content-Type", "application/json")
+	if actorAccess != "" {
+		request.Header.Set("X-UniHub-Actor-Authorization", "Bearer "+actorAccess)
+	}
 	h := *c.http
 	h.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	response, err := h.Do(request)
@@ -70,7 +73,7 @@ func (a *Adapter) verifyKnowledgeSettlement(ctx context.Context, original Call) 
 		return ErrInvalid
 	}
 	var remote knowledgeSettledReceipt
-	if err := readKnowledgeAuthority(ctx, a.client, http.MethodGet, "/internal/v1/calls/"+original.CallID, nil, &remote); err != nil {
+	if err := readKnowledgeAuthority(ctx, a.client, http.MethodGet, "/internal/v1/calls/"+original.CallID, nil, &remote, ""); err != nil {
 		return ErrPending
 	}
 	if remote.Status != "SETTLED" || remote.ServiceID != "llmrouter" || remote.TaskID != original.TaskID || original.FundingSnapshot == "" || remote.fundingSnapshot() != original.FundingSnapshot || !remote.RemoteCall.matches(original) || remote.Charged != original.Charged || remote.Usage == nil {
@@ -106,7 +109,7 @@ func (a *Adapter) verifyKnowledgeSettlement(ctx context.Context, original Call) 
 	if common.UnmarshalUnique([]byte(original.MediaSnapshot), &frozen) != nil {
 		return ErrInvalid
 	}
-	if frozen.Policy.Version == "knowledge_ali_text_v1" {
+	if frozen.Policy.Version == "knowledge_ali_text_v1" || original.WireOperation == "rerank.create" {
 		var rate Rate
 		if common.UnmarshalUnique([]byte(original.RateSnapshot), &rate) != nil || rate.Metered == nil || intent.Usage.Metered == nil {
 			return ErrInvalid
@@ -136,8 +139,8 @@ func (a *Adapter) verifyKnowledgeSettlement(ctx context.Context, original Call) 
 
 // authorizedResult verifies a task capability, an authoritative UniHub call,
 // and the original v2 result binding. It never dispatches or settles a call.
-func (v *knowledgeResultVault) authorizedResult(ctx context.Context, a *Adapter, credential, task, id string) ([]byte, error) {
-	if v == nil || a == nil || a.db == nil || !a.Enabled() || a.client == nil || !stableID.MatchString(id) || !stableID.MatchString(task) || !strings.HasPrefix(credential, "uh_model_") || !IsModelCredential(credential) {
+func (v *knowledgeResultVault) authorizedResult(ctx context.Context, a *Adapter, actorAccess, credential, task, id string) ([]byte, error) {
+	if v == nil || a == nil || a.db == nil || !a.Enabled() || a.client == nil || actorAccess == "" || len(actorAccess) > 8192 || strings.ContainsAny(actorAccess, " \t\r\n") || !stableID.MatchString(id) || !stableID.MatchString(task) || !strings.HasPrefix(credential, "uh_model_") || !IsModelCredential(credential) {
 		return nil, ErrInvalid
 	}
 	left, err := v.db.DB()
@@ -157,7 +160,7 @@ func (v *knowledgeResultVault) authorizedResult(ctx context.Context, a *Adapter,
 	}
 	verify := func() (Claims, error) {
 		var grant Claims
-		if err := readKnowledgeAuthority(ctx, a.client, http.MethodPost, "/internal/v1/model-credentials/verify", map[string]string{"token": credential, "model": original.Model, "wire_operation": original.WireOperation, "purpose": "result_read", "instance_id": a.config.InstanceID}, &grant); err != nil {
+		if err := readKnowledgeAuthority(ctx, a.client, http.MethodPost, "/internal/v1/model-credentials/verify", map[string]string{"token": credential, "model": original.Model, "wire_operation": original.WireOperation, "purpose": "result_read", "instance_id": a.config.InstanceID}, &grant, actorAccess); err != nil {
 			return Claims{}, err
 		}
 		instance := original.InstanceID

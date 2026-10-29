@@ -82,7 +82,9 @@ func RerankHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 			}
 		}
 
-		logger.LogDebug(c, "Rerank request body: %s", jsonData)
+		if !info.PlatformMode {
+			logger.LogDebug(c, "Rerank request body: %s", jsonData)
+		}
 		body, size, getBody, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
@@ -117,6 +119,24 @@ func RerankHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 			return newAPIError
 		}
+	}
+	if info.PlatformMode && info.PlatformBilling != nil && info.PlatformBilling.AliRerank() {
+		if httpResp == nil || httpResp.Body == nil {
+			return types.NewErrorWithStatusCode(fmt.Errorf("missing rerank response"), types.ErrorCodeBadResponseBody, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+		}
+		raw, err := io.ReadAll(io.LimitReader(httpResp.Body, maxNativeRerankResponseBytes+1))
+		httpResp.Body.Close()
+		if err != nil || len(raw) > maxNativeRerankResponseBytes {
+			return types.NewErrorWithStatusCode(fmt.Errorf("rerank response unreadable or exceeds size limit"), types.ErrorCodeBadResponseBody, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+		}
+		result, err := info.PlatformBilling.CaptureKnowledgeResult(c.Request.Context(), info.ChannelId, info.ResolvedModelNameOrOrigin(), info.ApiKey, raw)
+		if err != nil {
+			return types.NewErrorWithStatusCode(fmt.Errorf("rerank result pending verification or settlement"), types.ErrorCodeBadResponseBody, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+		}
+		c.Header("Content-Type", "application/json")
+		c.Header("Cache-Control", "no-store")
+		c.Data(http.StatusOK, "application/json", result)
+		return nil
 	}
 
 	var nativeWriter *nativeRerankResponseWriter

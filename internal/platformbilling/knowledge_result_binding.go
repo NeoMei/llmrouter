@@ -25,8 +25,8 @@ import (
 // CaptureAliEmbeddingResult is enabled only by the programmatic test gate. The
 // caller must pass the exact response read from the certified supplier request.
 // It never redispatches, and no public recovery endpoint is registered.
-func (s *Session) CaptureAliEmbeddingResult(ctx context.Context, channel int, upstream, key string, raw []byte) ([]byte, error) {
-	if !s.AliEmbeddingV4() || s.adapter.knowledgeResults == nil || len(raw) == 0 || len(raw) > knowledgeResultMaxBytes {
+func (s *Session) CaptureKnowledgeResult(ctx context.Context, channel int, upstream, key string, raw []byte) ([]byte, error) {
+	if (!s.AliEmbeddingV4() && !s.AliRerank()) || s.adapter.knowledgeResults == nil || len(raw) == 0 || len(raw) > knowledgeResultMaxBytes {
 		return nil, ErrInvalid
 	}
 	work, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)

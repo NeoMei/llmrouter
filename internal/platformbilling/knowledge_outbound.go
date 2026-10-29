@@ -85,3 +85,10 @@ func (s *Session) ValidateAliEmbeddingOutbound(channel int, upstream, key string
 	}
 	return s.validateKnowledgeOutbound(channel, upstream, key, req)
 }
+
+func (s *Session) ValidateAliRerankOutbound(channel int, upstream, key string, req *http.Request) error {
+	if !s.AliRerank() || req == nil || req.URL == nil || req.Host != req.URL.Host || req.URL.String() != "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank" || req.Header.Get("X-DashScope-Plugin") != "" {
+		return ErrInvalid
+	}
+	return s.validateKnowledgeOutbound(channel, upstream, key, req)
+}

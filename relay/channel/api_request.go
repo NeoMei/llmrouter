@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	ci "github.com/QuantumNous/new-api/internal/platformbilling/continuityindex"
@@ -25,6 +26,19 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
+
+// boundedSupplierBody keeps the supplier request alive through body capture,
+// while bounding its lifetime independently of a disconnected caller.
+type boundedSupplierBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b *boundedSupplierBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.cancel()
+	return err
+}
 
 // ApplyUpstreamBodyMetadata restores metadata that net/http cannot infer when
 // a BodyStorage is exposed through a type-erased reader.
@@ -438,6 +452,12 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 			return nil, errors.New("certified Ali embedding request did not match its reservation")
 		}
 	}
+	if info.PlatformMode && info.PlatformBilling != nil && info.PlatformBilling.AliRerank() {
+		if err := info.PlatformBilling.ValidateAliRerankOutbound(info.ChannelId, info.ResolvedModelNameOrOrigin(), info.ApiKey, req); err != nil || common2.TLSInsecureSkipVerify {
+			info.PlatformBilling.Rejected()
+			return nil, errors.New("certified Ali rerank request did not match its reservation")
+		}
+	}
 	var client *http.Client
 	var err error
 	if info.ChannelSetting.Proxy != "" {
@@ -503,7 +523,19 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 			return nil, e
 		}
 	}
-	resp, err := client.Do(req.WithContext(c.Request.Context()))
+	sendContext := c.Request.Context()
+	var cancelSend context.CancelFunc
+	if info.PlatformMode && info.PlatformBilling != nil && (info.PlatformBilling.AliEmbeddingV4() || info.PlatformBilling.AliRerank()) {
+		sendContext, cancelSend = context.WithTimeout(context.WithoutCancel(sendContext), 2*time.Minute)
+	}
+	resp, err := client.Do(req.WithContext(sendContext))
+	if cancelSend != nil {
+		if resp != nil && resp.Body != nil {
+			resp.Body = &boundedSupplierBody{ReadCloser: resp.Body, cancel: cancelSend}
+		} else {
+			cancelSend()
+		}
+	}
 	if observeErr := accountpool.Observe(c, resp, err); observeErr != nil {
 		if resp != nil && resp.Body != nil {
 			resp.Body.Close()

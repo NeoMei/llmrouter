@@ -170,7 +170,7 @@ func New(db *gorm.DB, c Config) (*Adapter, error) {
 	if err = db.AutoMigrate(&Call{}, &Attempt{}); err != nil {
 		return nil, err
 	}
-	if c.AllowAliEmbeddingV4 {
+	if c.AllowAliEmbeddingV4 || c.AllowAliRerank {
 		if c.AliEmbeddingResultKeys != nil || c.AliEmbeddingResultActiveKey != "" {
 			if len(c.AliEmbeddingResultKey) != 0 {
 				return nil, ErrInvalid

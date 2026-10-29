@@ -62,7 +62,7 @@ func TestKnowledgeResultReadRequiresBoundGrantAndRemoteSettlement(t *testing.T) 
 				switch r.URL.Path {
 				case "/internal/v1/model-credentials/verify":
 					var request map[string]string
-					if common.DecodeJson(r.Body, &request) != nil || request["purpose"] != "result_read" {
+					if common.DecodeJson(r.Body, &request) != nil || request["purpose"] != "result_read" || r.Header.Get("X-UniHub-Actor-Authorization") != "Bearer actor-access-token" {
 						w.WriteHeader(http.StatusForbidden)
 						return
 					}
@@ -84,7 +84,11 @@ func TestKnowledgeResultReadRequiresBoundGrantAndRemoteSettlement(t *testing.T) 
 			}))
 			defer server.Close()
 			s.adapter.client = &client{origin: server.URL, token: "service", http: server.Client()}
-			got, err := v.authorizedResult(context.Background(), s.adapter, "uh_model_original", row.TaskID, row.CallID)
+			_, err = v.authorizedResult(context.Background(), s.adapter, "", "uh_model_original", row.TaskID, row.CallID)
+			assert.Error(t, err)
+			_, err = v.authorizedResult(context.Background(), s.adapter, "wrong-access-token", "uh_model_original", row.TaskID, row.CallID)
+			assert.Error(t, err)
+			got, err := v.authorizedResult(context.Background(), s.adapter, "actor-access-token", "uh_model_original", row.TaskID, row.CallID)
 			require.NoError(t, err)
 			assert.Equal(t, staged.body, string(got))
 			var stored knowledgeResultRow
@@ -103,7 +107,7 @@ func TestKnowledgeResultReadRequiresBoundGrantAndRemoteSettlement(t *testing.T) 
 			legacyBody, err := v.readSettled(context.Background(), row.CallID)
 			require.NoError(t, err)
 			assert.Equal(t, staged.body, string(legacyBody))
-			_, err = v.authorizedResult(context.Background(), s.adapter, "uh_model_original", row.TaskID, row.CallID)
+			_, err = v.authorizedResult(context.Background(), s.adapter, "actor-access-token", "uh_model_original", row.TaskID, row.CallID)
 			assert.Error(t, err)
 			v.now = func() time.Time { return time.UnixMilli(legacy.ExpiresAt) }
 			purged, _, err := v.purgeExpired(context.Background(), 1, "")
@@ -122,60 +126,60 @@ func TestKnowledgeResultReadRequiresBoundGrantAndRemoteSettlement(t *testing.T) 
 				}
 				return time.UnixMilli(stored.ExpiresAt)
 			}
-			_, err = v.authorizedResult(context.Background(), s.adapter, "uh_model_original", row.TaskID, row.CallID)
+			_, err = v.authorizedResult(context.Background(), s.adapter, "actor-access-token", "uh_model_original", row.TaskID, row.CallID)
 			assert.Error(t, err)
 			v.now = time.Now
 			require.NoError(t, s.adapter.db.Model(&Call{}).Where("call_id = ?", row.CallID).Update("funding_snapshot", "").Error)
-			_, err = v.authorizedResult(context.Background(), s.adapter, "uh_model_original", row.TaskID, row.CallID)
+			_, err = v.authorizedResult(context.Background(), s.adapter, "actor-access-token", "uh_model_original", row.TaskID, row.CallID)
 			assert.Error(t, err)
 			require.NoError(t, s.adapter.db.Model(&Call{}).Where("call_id = ?", row.CallID).Update("funding_snapshot", row.FundingSnapshot).Error)
 			duplicate = true
-			_, err = v.authorizedResult(context.Background(), s.adapter, "uh_model_original", row.TaskID, row.CallID)
+			_, err = v.authorizedResult(context.Background(), s.adapter, "actor-access-token", "uh_model_original", row.TaskID, row.CallID)
 			assert.Error(t, err)
 			duplicate = false
 			var mutationErr error
 			duringGet = func() {
 				mutationErr = s.adapter.db.Model(&Call{}).Where("call_id = ?", row.CallID).Update("credential_id", "modified").Error
 			}
-			_, err = v.authorizedResult(context.Background(), s.adapter, "uh_model_original", row.TaskID, row.CallID)
+			_, err = v.authorizedResult(context.Background(), s.adapter, "actor-access-token", "uh_model_original", row.TaskID, row.CallID)
 			assert.Error(t, err)
 			require.NoError(t, mutationErr)
 			duringGet = nil
 			require.NoError(t, s.adapter.db.Model(&Call{}).Where("call_id = ?", row.CallID).Update("credential_id", row.CredentialID).Error)
-			_, err = v.authorizedResult(context.Background(), s.adapter, "uh_model_original", "other", row.CallID)
+			_, err = v.authorizedResult(context.Background(), s.adapter, "actor-access-token", "uh_model_original", "other", row.CallID)
 			assert.Error(t, err)
-			_, missingErr := v.authorizedResult(context.Background(), s.adapter, "uh_model_invalid", "other", "missing")
-			_, existingErr := v.authorizedResult(context.Background(), s.adapter, "uh_model_invalid", "other", row.CallID)
+			_, missingErr := v.authorizedResult(context.Background(), s.adapter, "actor-access-token", "uh_model_invalid", "other", "missing")
+			_, existingErr := v.authorizedResult(context.Background(), s.adapter, "actor-access-token", "uh_model_invalid", "other", row.CallID)
 			assert.ErrorIs(t, missingErr, ErrInvalid)
 			assert.ErrorIs(t, existingErr, ErrInvalid)
 			grant.AccountID = "other"
-			_, err = v.authorizedResult(context.Background(), s.adapter, "uh_model_original", row.TaskID, row.CallID)
+			_, err = v.authorizedResult(context.Background(), s.adapter, "actor-access-token", "uh_model_original", row.TaskID, row.CallID)
 			assert.Error(t, err)
 			grant.AccountID = row.AccountID
 			remote.TaskID = "other"
-			_, err = v.authorizedResult(context.Background(), s.adapter, "uh_model_original", row.TaskID, row.CallID)
+			_, err = v.authorizedResult(context.Background(), s.adapter, "actor-access-token", "uh_model_original", row.TaskID, row.CallID)
 			assert.Error(t, err)
 			remote.TaskID = row.TaskID
 			remote.FinalDigest = strings.Repeat("0", 64)
-			_, err = v.authorizedResult(context.Background(), s.adapter, "uh_model_original", row.TaskID, row.CallID)
+			_, err = v.authorizedResult(context.Background(), s.adapter, "actor-access-token", "uh_model_original", row.TaskID, row.CallID)
 			assert.Error(t, err)
 			remote.FinalDigest = hex.EncodeToString(digest[:])
 			remote.Status = "RESERVED"
-			_, err = v.authorizedResult(context.Background(), s.adapter, "uh_model_original", row.TaskID, row.CallID)
+			_, err = v.authorizedResult(context.Background(), s.adapter, "actor-access-token", "uh_model_original", row.TaskID, row.CallID)
 			assert.Error(t, err)
 			remote.Status = "SETTLED"
 			remote.Usage = nil
-			_, err = v.authorizedResult(context.Background(), s.adapter, "uh_model_original", row.TaskID, row.CallID)
+			_, err = v.authorizedResult(context.Background(), s.adapter, "actor-access-token", "uh_model_original", row.TaskID, row.CallID)
 			assert.Error(t, err)
 			remote.Usage = &intent.Usage
-			_, err = v.authorizedResult(context.Background(), s.adapter, "uh_key_original", row.TaskID, row.CallID)
+			_, err = v.authorizedResult(context.Background(), s.adapter, "actor-access-token", "uh_key_original", row.TaskID, row.CallID)
 			assert.Error(t, err)
 			// A valid v0 ciphertext must remain unreadable through the new boundary.
 			require.NoError(t, s.adapter.db.Where("call_id = ?", row.CallID).Delete(&knowledgeResultRow{}).Error)
 			require.NoError(t, s.adapter.db.Model(&Call{}).Where("call_id = ?", row.CallID).Update("status", "UNKNOWN").Error)
 			require.NoError(t, v.capture(context.Background(), row.CallID, []byte("legacy")))
 			require.NoError(t, s.adapter.db.Model(&Call{}).Where("call_id = ?", row.CallID).Update("status", "SETTLED").Error)
-			_, err = v.authorizedResult(context.Background(), s.adapter, "uh_model_original", row.TaskID, row.CallID)
+			_, err = v.authorizedResult(context.Background(), s.adapter, "actor-access-token", "uh_model_original", row.TaskID, row.CallID)
 			assert.Error(t, err)
 		})
 	}

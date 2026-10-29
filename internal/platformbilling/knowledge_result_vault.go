@@ -53,13 +53,14 @@ type knowledgeResultActive struct {
 func (knowledgeResultActive) TableName() string { return "platform_knowledge_result_active" }
 
 type knowledgeResultVault struct {
-	db      *gorm.DB
-	active  string
-	keys    map[string]cipher.AEAD
-	aead    cipher.AEAD
-	sealKey []byte
-	ttl     time.Duration
-	now     func() time.Time
+	db         *gorm.DB
+	active     string
+	keys       map[string]cipher.AEAD
+	digestKeys map[string][]byte
+	aead       cipher.AEAD
+	sealKey    []byte
+	ttl        time.Duration
+	now        func() time.Time
 }
 
 var knowledgeKeyID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,32}$`)
@@ -77,6 +78,7 @@ func newKnowledgeResultVaultWithKeys(db *gorm.DB, keys map[string][]byte, active
 	}
 	db = db.Session(&gorm.Session{Logger: logger.Discard})
 	aeads := make(map[string]cipher.AEAD, len(keys))
+	digests := make(map[string][]byte, len(keys))
 	verifiers := make(map[string]string, len(keys))
 	seen := make(map[string]bool, len(keys))
 	for id, key := range keys {
@@ -91,6 +93,9 @@ func newKnowledgeResultVaultWithKeys(db *gorm.DB, keys map[string][]byte, active
 		}
 		seen[fingerprint] = true
 		verifiers[id] = fingerprint
+		digestMAC := hmac.New(sha256.New, key)
+		_, _ = digestMAC.Write([]byte("platform-knowledge-request-digest-key-v1"))
+		digests[id] = digestMAC.Sum(nil)
 		block, err := aes.NewCipher(key)
 		if err != nil {
 			return nil, err
@@ -188,7 +193,7 @@ func newKnowledgeResultVaultWithKeys(db *gorm.DB, keys map[string][]byte, active
 	}
 	seal := hmac.New(sha256.New, keys[active])
 	_, _ = seal.Write([]byte("platform-knowledge-response-seal-v1"))
-	return &knowledgeResultVault{db: db, active: active, keys: aeads, aead: selected, sealKey: seal.Sum(nil), ttl: ttl, now: time.Now}, nil
+	return &knowledgeResultVault{db: db, active: active, keys: aeads, digestKeys: digests, aead: selected, sealKey: seal.Sum(nil), ttl: ttl, now: time.Now}, nil
 }
 
 // activateKey is an explicit administrative transition. Before invoking it,

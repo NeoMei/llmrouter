@@ -79,9 +79,9 @@ func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, ups
 	if row.Status != "UNKNOWN" || row.EvidenceConflict || !sameKnowledgeCallBinding(row, s.call) {
 		return knowledgeResponse{}, ErrPending
 	}
-	var frozen frozenKnowledge
+	frozen, err := s.adapter.knowledgeSnapshot(row)
 	var rate Rate
-	if common.UnmarshalUnique([]byte(row.MediaSnapshot), &frozen) != nil || !frozen.Policy.valid(s.adapter.config, row.Model, row.WireOperation) || common.UnmarshalUnique([]byte(row.RateSnapshot), &rate) != nil || rate.Metered == nil {
+	if err != nil || !frozen.Policy.valid(s.adapter.config, row.Model, row.WireOperation) || common.UnmarshalUnique([]byte(row.RateSnapshot), &rate) != nil || rate.Metered == nil {
 		return knowledgeResponse{}, ErrInvalid
 	}
 	asset, err := normalizeAsset(row.Asset)

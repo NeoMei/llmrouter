@@ -94,9 +94,6 @@ func (p ImagePolicy) valid(model, wire string) bool {
 	case "dashscope.images.generate":
 		return p.ChannelType == constant.ChannelTypeAli && p.Origin == "https://dashscope.aliyuncs.com" && p.APIVersion == "v1" && (p.UpstreamModel == "qwen-image-2.0" || p.UpstreamModel == "qwen-image-2.0-pro")
 	case "images.edits.create":
-		if p.ChannelType == constant.ChannelTypeAli {
-			return p.Origin == "https://dashscope.aliyuncs.com" && p.APIVersion == "v1" && strings.HasPrefix(p.UpstreamModel, "wan")
-		}
 		return p.ChannelType == constant.ChannelTypeOpenAI && p.Origin == "https://api.openai.com" && p.APIVersion == "v1"
 	default:
 		if p.ChannelType == constant.ChannelTypeAli {
@@ -413,7 +410,7 @@ func parseImageOperation(p ImagePolicy, wire WireOperation, ct string, body []by
 		} else {
 			fields := "model prompt n size quality style response_format background output_format output_compression moderation user image mask"
 			if p.ChannelType == constant.ChannelTypeAli {
-				fields = "model prompt n size response_format seed watermark prompt_extend stream image mask"
+				fields = "model prompt n size response_format seed watermark prompt_extend stream"
 				text, ok := req["prompt"].(string)
 				if !ok || len(text) > 1300 || req["stream"] == true || !protocolBools(req, "prompt_extend") || !protocolEnum(req, "response_format", "url") {
 					return bad, ErrInvalid

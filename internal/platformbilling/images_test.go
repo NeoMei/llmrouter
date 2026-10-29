@@ -11,8 +11,6 @@ import (
 	"image"
 	"image/jpeg"
 	"image/png"
-	"mime/multipart"
-	"net/textproto"
 	"testing"
 )
 
@@ -31,30 +29,6 @@ func imageFixtureBytes(t *testing.T) []byte {
 	var b bytes.Buffer
 	require.NoError(t, png.Encode(&b, image.NewRGBA(image.Rect(0, 0, 2, 2))))
 	return b.Bytes()
-}
-
-func TestWanMaskedEditPolicyAcceptsCertifiedMultipart(t *testing.T) {
-	p := imagePolicyFixture("images.edits.create")
-	p.PublicModel = "wanx2.1-imageedit"
-	p.UpstreamModel = "wanx2.1-imageedit"
-	p.ChannelType = constant.ChannelTypeAli
-	p.Origin = "https://dashscope.aliyuncs.com"
-	p.MaxInputImages = 1
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	require.NoError(t, writer.WriteField("model", p.PublicModel))
-	require.NoError(t, writer.WriteField("prompt", "replace the object"))
-	for _, name := range []string{"image", "mask"} {
-		header := textproto.MIMEHeader{"Content-Disposition": {`form-data; name="` + name + `"; filename="` + name + `.png"`}, "Content-Type": {"image/png"}}
-		part, err := writer.CreatePart(header)
-		require.NoError(t, err)
-		_, err = part.Write(imageFixtureBytes(t))
-		require.NoError(t, err)
-	}
-	require.NoError(t, writer.Close())
-	parsed, err := parseImageOperation(p, WireOperation{ID: p.WireOperation}, writer.FormDataContentType(), body.Bytes())
-	require.NoError(t, err)
-	assert.Equal(t, 1, parsed.Quantity)
 }
 func TestImageNativePolicyAdmission(t *testing.T) {
 	p := imagePolicyFixture("gemini.images.generate")

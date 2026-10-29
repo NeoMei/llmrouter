@@ -60,6 +60,11 @@ func TestKnowledgeResultReadRequiresBoundGrantAndRemoteSettlement(t *testing.T) 
 				var data []byte
 				switch r.URL.Path {
 				case "/internal/v1/model-credentials/verify":
+					var request map[string]string
+					if common.DecodeJson(r.Body, &request) != nil || request["purpose"] != "result_read" {
+						w.WriteHeader(http.StatusForbidden)
+						return
+					}
 					if duplicate {
 						_, _ = w.Write([]byte(`{"actor_id":"one","actor_id":"two"}`))
 						return

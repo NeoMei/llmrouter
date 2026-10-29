@@ -86,7 +86,7 @@ func (v *knowledgeResultVault) authorizedResult(ctx context.Context, a *Adapter,
 	}
 	verify := func() (Claims, error) {
 		var grant Claims
-		if err := readKnowledgeAuthority(ctx, a.client, http.MethodPost, "/internal/v1/model-credentials/verify", map[string]string{"token": credential, "model": original.Model, "wire_operation": original.WireOperation, "purpose": "receipt", "instance_id": a.config.InstanceID}, &grant); err != nil {
+		if err := readKnowledgeAuthority(ctx, a.client, http.MethodPost, "/internal/v1/model-credentials/verify", map[string]string{"token": credential, "model": original.Model, "wire_operation": original.WireOperation, "purpose": "result_read", "instance_id": a.config.InstanceID}, &grant); err != nil {
 			return Claims{}, err
 		}
 		instance := original.InstanceID

@@ -278,7 +278,8 @@ func (a *Adapter) ProjectCatalog(product string, models []CatalogSourceModel) (T
 					case constant.ChannelTypeSora, constant.ChannelTypeOpenAI:
 						supported = op.Policy == "sora_completed_seconds_v1"
 					case constant.ChannelTypeAli:
-						supported = op.Policy == "ali_wan26_t2v_billable_duration_v1"
+						p, configured := a.config.VideoPolicies["videos.create"][m.ID]
+						supported = configured && p.valid(m.ID, id) && p.UsagePolicy == "ali_wan26_t2v_cny6_v2" && op.Policy == p.UsagePolicy
 					case constant.ChannelTypeKling:
 						supported = op.Policy == "kling_final_units_v1"
 					case constant.ChannelTypeDoubaoVideo, constant.ChannelTypeVolcEngine:

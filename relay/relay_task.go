@@ -193,7 +193,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if info.PublicTaskID == "" {
 		info.PublicTaskID = model.GenerateTaskID()
 	}
-	if info.PlatformMode && info.NativeBilling != nil && info.NativeBilling.Price.Policy == "ali_wan26_t2v_billable_duration_v1" {
+	if info.PlatformMode && info.NativeBilling != nil && (info.NativeBilling.Price.Policy == "ali_wan26_t2v_billable_duration_v1" || info.NativeBilling.Price.Policy == "ali_wan26_t2v_cny6_v2") {
 		resolution, resolutionErr := NativeVideoResolution(c)
 		if resolutionErr != nil {
 			return nil, service.TaskErrorWrapperLocal(resolutionErr, "invalid_native_video_resolution", http.StatusBadRequest)

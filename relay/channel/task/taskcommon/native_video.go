@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/metering"
+	"strconv"
 	"strings"
 )
 
@@ -31,10 +32,12 @@ func VideoNativeUsage(price metering.Price, body []byte, providerID, resolution 
 			} `json:"results"`
 		} `json:"output"`
 		Usage struct {
-			Tokens        json.RawMessage `json:"completion_tokens"`
-			VideoDuration json.RawMessage `json:"video_duration"`
-			Duration      json.RawMessage `json:"duration"`
-			VideoCount    json.RawMessage `json:"video_count"`
+			Tokens              json.RawMessage `json:"completion_tokens"`
+			VideoDuration       json.RawMessage `json:"video_duration"`
+			Duration            json.RawMessage `json:"duration"`
+			VideoCount          json.RawMessage `json:"video_count"`
+			OutputVideoDuration json.RawMessage `json:"output_video_duration"`
+			SR                  json.RawMessage `json:"SR"`
 		} `json:"usage"`
 	}
 	if common.UnmarshalUnique(body, &r) != nil {
@@ -47,7 +50,7 @@ func VideoNativeUsage(price metering.Price, body []byte, providerID, resolution 
 	if price.Policy == "kling_final_units_v1" {
 		outputs = r.Data.Result.Videos
 	}
-	if price.Policy != "ali_wan26_t2v_billable_duration_v1" && (r.Status == "failed" || r.Data.Status == "failed" || r.Output.Status == "FAILED") && string(outputs) == "[]" {
+	if price.Policy != "ali_wan26_t2v_billable_duration_v1" && !metering.WanCashTierPolicy(price.Policy) && (r.Status == "failed" || r.Data.Status == "failed" || r.Output.Status == "FAILED") && string(outputs) == "[]" {
 		u.State = "incomplete"
 		u.Source = "provider_confirmed_no_output"
 		return u
@@ -79,7 +82,7 @@ func VideoNativeUsage(price metering.Price, body []byte, providerID, resolution 
 		raw = r.Usage.VideoDuration
 	// This policy is explicitly provider billable duration for Wan 2.6 t2v,
 	// not independent measured output seconds or a generic Wan schema.
-	case "ali_wan26_t2v_billable_duration_v1":
+	case "ali_wan26_t2v_billable_duration_v1", "ali_wan26_t2v_cny6_v2", "ali_wan27_t2v_cny6_v1":
 		if providerID == "" || r.Output.TaskID != providerID {
 			u.State = "invalid"
 			return u
@@ -91,14 +94,37 @@ func VideoNativeUsage(price metering.Price, body []byte, providerID, resolution 
 			// Failure/cancellation cannot prove no output when the provider's
 			// usage contradicts it or contains malformed values. UNKNOWN is
 			// not terminal evidence: a completed task can have expired.
-			for _, value := range []json.RawMessage{r.Usage.VideoCount, r.Usage.Duration, r.Usage.VideoDuration} {
-				if len(value) == 0 {
-					continue
-				}
-				q, ok := videoDecimalQuantity(string(value))
-				if !ok || q.Value != "0" {
+			var envelope struct {
+				Usage json.RawMessage `json:"usage"`
+			}
+			if common.UnmarshalUnique(body, &envelope) != nil {
+				u.State = "invalid"
+				return u
+			}
+			if len(envelope.Usage) != 0 {
+				var fields map[string]json.RawMessage
+				if common.UnmarshalUnique(envelope.Usage, &fields) != nil || fields == nil {
 					u.State = "invalid"
 					return u
+				}
+				for key, value := range fields {
+					switch key {
+					case "duration", "video_duration", "input_video_duration", "output_video_duration", "video_count", "SR":
+						q, ok := videoDecimalQuantity(string(value))
+						if !ok || q.Value != "0" {
+							u.State = "invalid"
+							return u
+						}
+					case "ratio", "video_ratio", "size":
+						var field string
+						if common.Unmarshal(value, &field) != nil || field != "" {
+							u.State = "invalid"
+							return u
+						}
+					default:
+						u.State = "invalid"
+						return u
+					}
 				}
 			}
 			u.State = "incomplete"
@@ -123,6 +149,63 @@ func VideoNativeUsage(price metering.Price, body []byte, providerID, resolution 
 		if len(r.Usage.VideoCount) == 0 || string(r.Usage.VideoCount) == "null" || r.Usage.VideoCount[0] == '"' || common.Unmarshal(r.Usage.VideoCount, &count) != nil || count != 1 || outputs != 1 {
 			u.State = "incomplete"
 			return u
+		}
+		if metering.WanCashTierPolicy(price.Policy) {
+			var envelope struct {
+				Usage json.RawMessage `json:"usage"`
+			}
+			var fields map[string]json.RawMessage
+			if common.UnmarshalUnique(body, &envelope) != nil || common.UnmarshalUnique(envelope.Usage, &fields) != nil || len(fields) != 6 {
+				u.State = "invalid"
+				return u
+			}
+			dimension := "size"
+			if price.Policy == "ali_wan27_t2v_cny6_v1" {
+				dimension = "ratio"
+			}
+			for _, field := range []string{"duration", "input_video_duration", "output_video_duration", "video_count", "SR", dimension} {
+				if _, exists := fields[field]; !exists {
+					u.State = "invalid"
+					return u
+				}
+			}
+			input, ok := videoDecimalQuantity(string(fields["input_video_duration"]))
+			if !ok || input.Value != "0" {
+				u.State = "invalid"
+				return u
+			}
+			var actualDimension string
+			if common.Unmarshal(fields[dimension], &actualDimension) != nil {
+				u.State = "invalid"
+				return u
+			}
+			expectedDimension := "1280*720"
+			if resolution == "video_1080p" {
+				expectedDimension = "1920*1080"
+			}
+			if dimension == "ratio" {
+				expectedDimension = "16:9"
+			}
+			if actualDimension != expectedDimension {
+				u.State = "invalid"
+				return u
+			}
+			var sr int
+			if common.Unmarshal(r.Usage.SR, &sr) != nil || (resolution == "video_720p" && sr != 720) || (resolution == "video_1080p" && sr != 1080) {
+				u.State = "invalid"
+				return u
+			}
+			actual, ok := videoDecimalQuantity(string(r.Usage.Duration))
+			seconds, err := strconv.Atoi(actual.Value)
+			if !ok || err != nil || actual.Scale != 0 || seconds < 2 || seconds > 15 {
+				u.State = "invalid"
+				return u
+			}
+			output, ok := videoDecimalQuantity(string(r.Usage.OutputVideoDuration))
+			if !ok || output != actual {
+				u.State = "invalid"
+				return u
+			}
 		}
 		raw = r.Usage.Duration
 		key = resolution

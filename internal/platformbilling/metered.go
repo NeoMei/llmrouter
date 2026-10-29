@@ -351,12 +351,18 @@ func (a *Adapter) admitWireOperation(ctx context.Context, credential, task, id s
 			return nil, ErrInvalid
 		}
 	}
-	if operation == "video" && billing_setting.ValidateNativeVideoPrice(*chosen.Metered) != nil {
+	// Legacy Wan prices were expressed as yuan, but the platform ledger uses
+	// micro-yuan. Keep old snapshots readable, never reserve new platform calls.
+	if operation == "video" && chosen.Metered.Policy == "ali_wan26_t2v_billable_duration_v1" {
+		return nil, ErrInvalid
+	}
+	if operation == "video" && !metering.WanCashTierPolicy(chosen.Metered.Policy) && billing_setting.ValidateNativeVideoPrice(*chosen.Metered) != nil {
 		return nil, ErrInvalid
 	}
 	if operation == "video" {
-		if p, ok := a.config.VideoPolicies["videos.create"][req.Model]; ok {
-			if !p.valid(req.Model, "videos.create") || !validWanVideoPrice(*chosen.Metered) || p.RateIDs[asset] != chosen.ID {
+		p, configured := a.config.VideoPolicies["videos.create"][req.Model]
+		if metering.WanCashTierPolicy(chosen.Metered.Policy) || configured {
+			if !configured || !p.valid(req.Model, "videos.create") || asset != "CNY/6" || p.UsagePolicy != chosen.Metered.Policy || !validWanVideoPrice(*chosen.Metered) || p.RateIDs[asset] != chosen.ID {
 				return nil, ErrInvalid
 			}
 		}
@@ -440,7 +446,7 @@ func meteredReserve(price metering.Price, req operationRequest) (string, error) 
 	// Sum every tariff dimension at its maximum. This intentionally over-reserves
 	// overlapping token dimensions and image tiers, so no rate choice under-reserves.
 	for _, term := range price.Terms {
-		if price.Policy == "ali_wan26_t2v_billable_duration_v1" && term.Key != req.MeasurementKey {
+		if (price.Policy == "ali_wan26_t2v_billable_duration_v1" || metering.WanCashTierPolicy(price.Policy)) && term.Key != req.MeasurementKey {
 			continue
 		}
 		n := req.Quantity
@@ -547,6 +553,23 @@ func (s *Session) ObserveMetering(ctx context.Context, u metering.Usage) error {
 		}
 		if row.EvidenceConflict {
 			return ErrConflict
+		}
+		if metering.WanCashTierPolicy(price.Policy) && u.State == "confirmed" {
+			var frozen frozenVideo
+			var storedRate Rate
+			if row.Asset != "CNY/6" || row.Operation != "video" || row.WireOperation != "videos.create" || row.ProviderTaskID == "" || row.ProviderTaskID != u.ProviderRequestID || u.Source != price.Policy || common.UnmarshalUnique([]byte(row.MediaSnapshot), &frozen) != nil || common.UnmarshalUnique([]byte(row.RateSnapshot), &storedRate) != nil || storedRate.Metered == nil || !reflect.DeepEqual(*storedRate.Metered, price) || !validWanVideoPrice(price) || len(u.Measurements) != 1 {
+				return ErrInvalid
+			}
+			key := "video_" + strings.ToLower(frozen.Resolution)
+			if (key != "video_720p" && key != "video_1080p") || u.Measurements[0].Key != key {
+				return ErrInvalid
+			}
+			quantity := u.Measurements[0].Quantity
+			value, ok := new(big.Int).SetString(quantity.Value, 10)
+			bound := new(big.Int).Mul(big.NewInt(row.ReservationQuantity), new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(quantity.Scale)), nil))
+			if !ok || row.ReservationQuantity < 1 || value.Sign() <= 0 || value.Cmp(bound) != 0 {
+				return ErrInvalid
+			}
 		}
 
 		if row.Evidence != "" {

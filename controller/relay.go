@@ -979,7 +979,7 @@ func RelayTask(c *gin.Context) {
 			return
 		}
 		relayInfo.NativeBilling = &relaycommon.NativeBillingContext{CallID: relayInfo.PlatformBilling.CallID(), Platform: true, Price: price, Observe: relayInfo.PlatformBilling.ObserveMetering}
-		if price.Policy == "ali_wan26_t2v_billable_duration_v1" {
+		if price.Policy == "ali_wan26_t2v_billable_duration_v1" || price.Policy == "ali_wan26_t2v_cny6_v2" {
 			if frozen, frozenErr := relayInfo.PlatformBilling.FrozenVideoPolicy(); frozenErr == nil {
 				relayInfo.NativeBilling.VideoResourceOrigins = frozen.Policy.ResourceOrigins
 				relayInfo.NativeBilling.VideoResourceAllowLoopback = frozen.Policy.AllowLoopbackHTTP

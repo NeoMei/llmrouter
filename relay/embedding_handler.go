@@ -84,15 +84,24 @@ func EmbeddingHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		}
 	}
 	if !info.PlatformMode {
-		if !info.PlatformMode {
-			logger.LogDebug(c, "converted embedding request body: %s", jsonData)
-		}
+		logger.LogDebug(c, "converted embedding request body: %s", jsonData)
 	}
-	body, size, getBody, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+	var body io.Reader
+	var size int64
+	var getBody func() (io.ReadCloser, error)
+	var closer io.Closer
+	if info.PlatformMode && info.PlatformBilling != nil && info.PlatformBilling.AliEmbeddingV4() {
+		body = bytes.NewReader(jsonData)
+		size = int64(len(jsonData))
+	} else {
+		body, size, getBody, closer, err = relaycommon.NewOutboundJSONBody(jsonData)
+	}
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
-	defer closer.Close()
+	if closer != nil {
+		defer closer.Close()
+	}
 	jsonData = nil
 	info.UpstreamRequestBodySize = size
 	info.UpstreamRequestGetBody = getBody

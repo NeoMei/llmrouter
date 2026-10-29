@@ -20,6 +20,10 @@ import (
 const KeyRequestBody = "key_request_body"
 const KeyBodyStorage = "key_body_storage"
 
+// KeyMemoryOnlyBody prevents sensitive, bounded relay inputs from entering
+// the optional plaintext disk cache.
+const KeyMemoryOnlyBody = "key_memory_only_body"
+
 var ErrRequestBodyTooLarge = errors.New("request body too large")
 
 func IsRequestBodyTooLargeError(err error) bool {
@@ -37,6 +41,9 @@ func GetRequestBody(c *gin.Context) (io.Seeker, error) {
 	// 首先检查是否有 BodyStorage 缓存
 	if storage, exists := c.Get(KeyBodyStorage); exists && storage != nil {
 		if bs, ok := storage.(BodyStorage); ok {
+			if c.GetBool(KeyMemoryOnlyBody) && bs.IsDisk() {
+				return nil, errors.New("sensitive request already has disk storage")
+			}
 			if _, err := bs.Seek(0, io.SeekStart); err != nil {
 				return nil, fmt.Errorf("failed to seek body storage: %w", err)
 			}
@@ -48,6 +55,11 @@ func GetRequestBody(c *gin.Context) (io.Seeker, error) {
 	cached, exists := c.Get(KeyRequestBody)
 	if exists && cached != nil {
 		if b, ok := cached.([]byte); ok {
+			if c.GetBool(KeyMemoryOnlyBody) {
+				bs := newMemoryStorage(b)
+				c.Set(KeyBodyStorage, bs)
+				return bs, nil
+			}
 			bs, err := CreateBodyStorage(b)
 			if err != nil {
 				return nil, err
@@ -64,6 +76,19 @@ func GetRequestBody(c *gin.Context) (io.Seeker, error) {
 	maxBytes := int64(maxMB) << 20
 
 	contentLength := c.Request.ContentLength
+	if c.GetBool(KeyMemoryOnlyBody) {
+		data, err := io.ReadAll(io.LimitReader(c.Request.Body, maxBytes+1))
+		_ = c.Request.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		if int64(len(data)) > maxBytes {
+			return nil, ErrRequestBodyTooLarge
+		}
+		storage := newMemoryStorage(data)
+		c.Set(KeyBodyStorage, storage)
+		return storage, nil
+	}
 
 	// 使用新的存储系统
 	storage, err := CreateBodyStorageFromReader(c.Request.Body, contentLength, maxBytes)

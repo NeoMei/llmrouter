@@ -51,10 +51,10 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 		variants = []string{"canonical", "token-flat", "token-batch", "zero", "missing", "duplicate", "bad-index", "wrong-grant", "wrong-policy", "wrong-channel", "multi-key", "key-drift", "space-drift", "changed-body"}
 	}
 	if aliEmbedding {
-		variants = []string{"canonical", "client-cancel", "rotate-key", "zero", "missing", "duplicate", "bad-index", "changed-body", "text-overcap", "settle-unavailable", "receipt-usage", "receipt-digest", "receipt-charged", "receipt-consistent-wrong-charge"}
+		variants = []string{"canonical", "disk-cache", "client-cancel", "rotate-key", "zero", "missing", "duplicate", "bad-index", "changed-body", "text-overcap", "settle-unavailable", "receipt-usage", "receipt-digest", "receipt-charged", "receipt-consistent-wrong-charge"}
 	}
 	if kind == "rerank" {
-		variants = append(variants, "gate-disabled", "client-cancel", "rotate-key", "settle-unavailable", "receipt-usage", "receipt-digest", "receipt-charged", "receipt-consistent-wrong-charge")
+		variants = append(variants, "native-omitted", "disk-cache", "native-disk-cache", "gate-disabled", "client-cancel", "rotate-key", "settle-unavailable", "receipt-usage", "receipt-digest", "receipt-charged", "receipt-consistent-wrong-charge")
 	}
 	if kind == "multimodal" {
 		variants = append(variants, "frozen-image-canonical-oversize", "frozen-image-native-oversize", "frozen-image-canonical-boundary", "frozen-image-native-boundary", "frozen-image-canonical-one-over", "frozen-image-native-one-over")
@@ -64,6 +64,11 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 			continue
 		}
 		t.Run(variant, func(t *testing.T) {
+			if strings.HasSuffix(variant, "disk-cache") {
+				previous := common.GetDiskCacheConfig()
+				common.SetDiskCacheConfig(common.DiskCacheConfig{Enabled: true, ThresholdMB: 0, MaxSizeMB: 100, Path: t.TempDir()})
+				t.Cleanup(func() { common.SetDiskCacheConfig(previous) })
+			}
 			gin.SetMode(gin.TestMode)
 			require.NoError(t, i18n.Init())
 			db, e := gorm.Open(sqlite.Open("file:"+t.TempDir()+"/db"), &gorm.Config{})
@@ -83,7 +88,7 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 			})
 			wire, bill, upstreamModel := "rerank.create", "rerank", "qwen3-rerank"
 			frozenBoundary := strings.HasPrefix(variant, "frozen-image-")
-			nativeEnvelope := variant == "native" || variant == "unknown-native" || strings.Contains(variant, "-native-")
+			nativeEnvelope := variant == "native" || variant == "native-omitted" || variant == "native-disk-cache" || variant == "unknown-native" || strings.Contains(variant, "-native-")
 			var imageBytes bytes.Buffer
 			if frozenBoundary {
 				encoder := png.Encoder{CompressionLevel: png.NoCompression}
@@ -151,6 +156,13 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 			var cancelClient context.CancelFunc
 			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				sends++
+				if strings.HasSuffix(variant, "disk-cache") {
+					files, err := os.ReadDir(common.GetDiskCacheDir())
+					if !os.IsNotExist(err) {
+						require.NoError(t, err)
+						assert.Empty(t, files, "managed input must not create disk cache files")
+					}
+				}
 				if variant == "client-cancel" && cancelClient != nil {
 					cancelClient()
 				}
@@ -498,6 +510,9 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 			if nativeEnvelope {
 				path = "/platform/api/v1/services/rerank/text-rerank/text-rerank"
 				body = `{"model":"rank","input":{"query":"q","documents":["a","b"]},"parameters":{"top_n":1,"return_documents":false}}`
+				if variant == "native-omitted" {
+					body = `{"model":"rank","input":{"query":"q","documents":["a","b"]},"parameters":{"top_n":1}}`
+				}
 			}
 			if kind == "multimodal" {
 				path = "/platform/v1/multimodal/embeddings"

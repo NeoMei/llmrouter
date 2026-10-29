@@ -68,7 +68,14 @@ func (s *Session) validateKnowledgeOutbound(channel int, upstream, key string, r
 		return ErrInvalid
 	}
 	req.Body = io.NopCloser(bytes.NewReader(raw))
-	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(raw)), nil }
+	// Go's transport may replay a POST after a stale connection when GetBody
+	// and an idempotency header coexist. One reservation permits one attempt.
+	req.GetBody = nil
+	for name := range req.Header {
+		if strings.EqualFold(name, "Idempotency-Key") || strings.EqualFold(name, "X-Idempotency-Key") {
+			delete(req.Header, name)
+		}
+	}
 	req.ContentLength = int64(len(raw))
 	return nil
 }

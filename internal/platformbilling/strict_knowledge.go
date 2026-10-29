@@ -117,6 +117,9 @@ func parseKnowledgeRerank(c Config, p KnowledgePolicy, body []byte, native bool)
 				request[k] = v
 			}
 		}
+		if _, exists := request["return_documents"]; !exists {
+			request["return_documents"] = false
+		}
 	}
 	if !protocolKeys(request, "model query documents top_n return_documents") || request["model"] != p.PublicModel {
 		return result, ErrInvalid

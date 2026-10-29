@@ -123,6 +123,9 @@ func (s *NativeBillingStore) Begin(ctx context.Context, a NativeAdmission) (Nati
 	n := NativeBilling{ID: uuid.NewString(), UserID: a.UserID, CallID: a.CallID, AttemptID: uuid.NewString(), Contract: string(raw), State: "reserving", Platform: a.Platform, ReservedQuota: q, CreatedAt: now, UpdatedAt: now}
 	err = s.ledger.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if !a.Platform {
+			if err := validateLocalFundingCredentialTx(tx, a.UserID, a.TokenID); err != nil {
+				return err
+			}
 			if err := lockProductFundingAdmission(tx, a.UserID); err != nil {
 				return err
 			}

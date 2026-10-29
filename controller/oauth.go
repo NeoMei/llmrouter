@@ -59,6 +59,9 @@ func GenerateOAuthCode(c *gin.Context) {
 			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "绑定操作需要登录"})
 			return
 		}
+		if !middleware.RequireNativeOwnerRealm(c, identity.UserID) {
+			return
+		}
 		userID = identity.UserID
 		sessionID = identity.SessionID
 	}
@@ -130,6 +133,9 @@ func HandleOAuth(c *gin.Context) {
 				"success": false,
 				"message": i18n.T(c, i18n.MsgOAuthStateInvalid),
 			})
+			return
+		}
+		if !middleware.RequireNativeOwnerRealm(c, identity.UserID) {
 			return
 		}
 		consumeMatch.UserId = identity.UserID
@@ -226,7 +232,18 @@ func HandleOAuth(c *gin.Context) {
 		return
 	}
 
-	// 9. Setup login
+	kind := provider.ProviderUserIDColumn()
+	if generic, ok := provider.(*oauth.GenericOAuthProvider); ok {
+		kind = "oauth:" + strconv.Itoa(generic.GetProviderId())
+	}
+	native, err := model.IsNativeLoginCredential(c.Request.Context(), user.Id, kind, oauthUser.ProviderUserID)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if native {
+		c.Set("native_password_authenticated", true)
+	}
 	setupLogin(user, c)
 }
 
@@ -276,7 +293,7 @@ func handleOAuthBind(c *gin.Context, provider oauth.Provider, pendingFlow *model
 	// Handle binding based on provider type
 	if genericProvider, ok := provider.(*oauth.GenericOAuthProvider); ok {
 		// Custom provider: use user_oauth_bindings table
-		err = model.UpdateUserOAuthBinding(userId, genericProvider.GetProviderId(), oauthUser.ProviderUserID)
+		err = model.UpdateUserOAuthBinding(userId, genericProvider.GetProviderId(), oauthUser.ProviderUserID, tokenRequestRealm(c))
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -284,7 +301,7 @@ func handleOAuthBind(c *gin.Context, provider oauth.Provider, pendingFlow *model
 	} else {
 		// Built-in provider: 只更新绑定列。完整快照的 user.Update 会把读取时刻的
 		// role/status/group 一并写回，覆盖并发发生的封禁、降权或分组变更。
-		err = model.UpdateUserBindColumn(userId, provider.ProviderUserIDColumn(), oauthUser.ProviderUserID)
+		err = model.UpdateUserBindColumn(userId, provider.ProviderUserIDColumn(), oauthUser.ProviderUserID, tokenRequestRealm(c))
 		if err != nil {
 			common.ApiError(c, err)
 			return

@@ -27,6 +27,9 @@ var commonFalseVal string
 var logKeyCol string
 var logGroupCol string
 
+// InitDatabaseColumns refreshes SQL dialect quoting after a database binding.
+func InitDatabaseColumns() { initCol() }
+
 func initCol() {
 	// init common column names
 	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
@@ -269,6 +272,7 @@ func migrateDB() error {
 		&UniHubSessionBinding{},
 		&ProductBrokerSessionProof{},
 		&PasskeyCredential{},
+		&NativeLoginCredential{},
 		&Option{},
 		&Redemption{},
 		&Ability{},
@@ -367,6 +371,7 @@ func migrateDBFast() error {
 		{&UniHubSessionBinding{}, "UniHubSessionBinding"},
 		{&ProductBrokerSessionProof{}, "ProductBrokerSessionProof"},
 		{&PasskeyCredential{}, "PasskeyCredential"},
+		{&NativeLoginCredential{}, "NativeLoginCredential"},
 		{&Option{}, "Option"},
 		{&Redemption{}, "Redemption"},
 		{&Ability{}, "Ability"},

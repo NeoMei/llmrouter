@@ -53,6 +53,10 @@ func addNewRecord(type_ int, id int, value int) {
 	}
 }
 
+// FlushBatchUpdates drains the current queue synchronously under its normal
+// writer fence. Callers must stop admissions first for a complete shutdown drain.
+func FlushBatchUpdates() { batchUpdate() }
+
 func batchUpdate() {
 	batchUpdateRunMu.Lock()
 	defer batchUpdateRunMu.Unlock()

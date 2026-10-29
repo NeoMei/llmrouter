@@ -49,10 +49,10 @@ func queueProductAuthVersion(tx *gorm.DB, userID int, previous, next int64) erro
 		return nil
 	}
 	var user User
-	if e := tx.Unscoped().Select("identity_source").First(&user, userID).Error; e != nil {
+	if e := tx.Unscoped().Select("identity_source", "funding_realm").First(&user, userID).Error; e != nil {
 		return e
 	}
-	if user.IdentitySource != UniHubIdentitySource {
+	if user.FundingRealm == NativeFundingLocalOnly || user.IdentitySource != UniHubIdentitySource {
 		return nil
 	}
 	return tx.Create(&ProductAuthLifecycle{ID: fmt.Sprintf("auth-version:%d:%d", userID, next), UserID: userID, PreviousVersion: previous, NextVersion: next}).Error

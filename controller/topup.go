@@ -598,11 +598,25 @@ func AdminCompleteTopUp(c *gin.Context) {
 		return
 	}
 
+	order, err := model.GetTopUpByTradeNoWithError(req.TradeNo)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	owner, err := model.GetUserById(order.UserId, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if !refreshManagedTarget(c, owner) {
+		return
+	}
+
 	// 订单级互斥，防止并发补单
 	LockOrder(req.TradeNo)
 	defer UnlockOrder(req.TradeNo)
 
-	if err := model.ManualCompleteTopUp(req.TradeNo, c.ClientIP()); err != nil {
+	if err := model.ManualCompleteTopUp(req.TradeNo, c.ClientIP(), tokenRequestRealm(c)); err != nil {
 		common.ApiError(c, err)
 		return
 	}

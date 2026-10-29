@@ -26,6 +26,7 @@ type Verify2FARequest struct {
 
 type twoFALoginFlowPayload struct {
 	AuthVersion int64 `json:"auth_version"`
+	NativeRealm bool  `json:"native_realm,omitempty"`
 }
 
 // Setup2FAResponse 设置2FA响应结构
@@ -530,6 +531,9 @@ func Verify2FALogin(c *gin.Context) {
 		return
 	}
 
+	if flowPayload.NativeRealm {
+		c.Set("native_password_authenticated", true)
+	}
 	setupLoginAtAuthVersion(user, flowPayload.AuthVersion, c)
 }
 

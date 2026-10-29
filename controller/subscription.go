@@ -36,6 +36,9 @@ func requireManageableSubscriptionUser(c *gin.Context, userID int) bool {
 		common.ApiError(c, err)
 		return false
 	}
+	if !refreshManagedTarget(c, user) {
+		return false
+	}
 	if !canManageTargetRole(c.GetInt("role"), user.Role) {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionSameLevel)
 		return false
@@ -403,7 +406,7 @@ func AdminBindSubscription(c *gin.Context) {
 	if !requireManageableSubscriptionUser(c, req.UserId) {
 		return
 	}
-	msg, err := model.AdminBindSubscription(req.UserId, req.PlanId, "")
+	msg, err := model.AdminBindSubscription(req.UserId, req.PlanId, "", tokenRequestRealm(c))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -479,7 +482,7 @@ func AdminCreateUserSubscription(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	msg, err := model.AdminBindSubscription(userId, req.PlanId, "")
+	msg, err := model.AdminBindSubscription(userId, req.PlanId, "", tokenRequestRealm(c))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -510,7 +513,7 @@ func AdminResetUserSubscriptionsByPlan(c *gin.Context) {
 		return
 	}
 	advanceResetTime := resolveAdvanceResetTime(req.AdvanceResetTime)
-	result, err := model.AdminResetUserSubscriptionsByPlan(userId, req.PlanId, advanceResetTime)
+	result, err := model.AdminResetUserSubscriptionsByPlan(userId, req.PlanId, advanceResetTime, tokenRequestRealm(c))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -542,7 +545,7 @@ func AdminResetPlanSubscriptions(c *gin.Context) {
 		return
 	}
 	advanceResetTime := resolveAdvanceResetTime(req.AdvanceResetTime)
-	result, err := model.AdminResetPlanSubscriptions(planId, advanceResetTime)
+	result, err := model.AdminResetPlanSubscriptions(planId, advanceResetTime, tokenRequestRealm(c))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -570,7 +573,7 @@ func AdminInvalidateUserSubscription(c *gin.Context) {
 	if !requireManageableUserSubscription(c, subId) {
 		return
 	}
-	msg, err := model.AdminInvalidateUserSubscription(subId)
+	msg, err := model.AdminInvalidateUserSubscription(subId, tokenRequestRealm(c))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -592,7 +595,7 @@ func AdminDeleteUserSubscription(c *gin.Context) {
 	if !requireManageableUserSubscription(c, subId) {
 		return
 	}
-	msg, err := model.AdminDeleteUserSubscription(subId)
+	msg, err := model.AdminDeleteUserSubscription(subId, tokenRequestRealm(c))
 	if err != nil {
 		common.ApiError(c, err)
 		return

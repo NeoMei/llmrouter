@@ -1,11 +1,18 @@
 package router
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"errors"
 	"fmt"
 	userkit "github.com/NeoMei/UniHub/packages/userkit-go"
 	"github.com/QuantumNous/new-api/internal/platformaccount"
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/bytedance/gopkg/util/gopool"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -16,6 +23,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestUniHubLiveChannelManagement(t *testing.T) {
@@ -150,7 +158,21 @@ func TestUniHubStandaloneNativeAdminStillManagesChannels(t *testing.T) {
 func TestUniHubExpiredProofAndLocalRevocationRejectAndPurge(t *testing.T) {
 	f := newUniHubRegressionFixture(t)
 	b, cookie := decodeUniHubBundle(t, f.request("POST", "/api/unihub/session", "viewer", nil))
-	require.NoError(t, f.db.Model(&model.UniHubSessionBinding{}).Where("sid = ?", b.Data.Session.SID).Update("expires_at", time.Now().Add(-time.Second).Unix()).Error)
+	var binding model.UniHubSessionBinding
+	require.NoError(t, f.db.First(&binding, "sid = ?", b.Data.Session.SID).Error)
+	binding.ExpiresAt = time.Now().Add(-time.Second).Unix()
+	key := hmac.New(sha256.New, []byte(common.SessionSecret))
+	_, err := key.Write([]byte("llmrouter/unihub/session-proof/aes-gcm/v1"))
+	require.NoError(t, err)
+	block, err := aes.NewCipher(key.Sum(nil))
+	require.NoError(t, err)
+	aead, err := cipher.NewGCM(block)
+	require.NoError(t, err)
+	aad, err := common.Marshal([]any{"unihub-session-binding/v1", binding.ProductID, binding.InstanceID, binding.Issuer, binding.Subject, binding.UserID, binding.SID, binding.ExpiresAt})
+	require.NoError(t, err)
+	nonce := make([]byte, aead.NonceSize())
+	binding.Ciphertext = base64.RawURLEncoding.EncodeToString(aead.Seal(nonce, nonce, []byte("viewer"), aad))
+	require.NoError(t, f.db.Model(&model.UniHubSessionBinding{}).Where("sid = ?", binding.SID).Updates(map[string]any{"expires_at": binding.ExpiresAt, "ciphertext": binding.Ciphertext}).Error)
 	assert.Equal(t, 401, f.request("GET", "/api/unihub/access", b.Data.AccessToken, nil).Code)
 	assert.Equal(t, 401, f.request("POST", "/api/user/auth/refresh", "", cookie).Code)
 	assert.Equal(t, 200, f.request("POST", "/api/user/auth/logout", b.Data.AccessToken, cookie).Code)
@@ -159,7 +181,116 @@ func TestUniHubExpiredProofAndLocalRevocationRejectAndPurge(t *testing.T) {
 	require.NoError(t, f.db.Model(&model.UniHubSessionBinding{}).Count(&count).Error)
 	assert.Zero(t, count)
 	other, _ := decodeUniHubBundle(t, f.request("POST", "/api/unihub/session", "viewer", nil))
-	_, err := model.RevokeUserSession(other.Data.User.Id, other.Data.Session.SID, "explicit-test-revoke")
+	_, err = model.RevokeUserSession(other.Data.User.Id, other.Data.Session.SID, "explicit-test-revoke")
 	require.NoError(t, err)
 	assert.Equal(t, 401, f.request("GET", "/api/channel/", other.Data.AccessToken, nil).Code)
+}
+
+func TestUniHubRefreshTamperedExpiryDoesNotRevoke(t *testing.T) {
+	f := newUniHubRegressionFixture(t)
+	b, cookie := decodeUniHubBundle(t, f.request("POST", "/api/unihub/session", "viewer", nil))
+	var binding model.UniHubSessionBinding
+	require.NoError(t, f.db.First(&binding, "sid = ?", b.Data.Session.SID).Error)
+	require.NoError(t, f.db.Model(&model.UniHubSessionBinding{}).Where("sid = ?", binding.SID).Update("expires_at", time.Now().Add(-time.Second).Unix()).Error)
+	failed := f.request("POST", "/api/user/auth/refresh", "", cookie)
+	require.Equal(t, http.StatusServiceUnavailable, failed.Code, failed.Body.String())
+	for _, c := range failed.Result().Cookies() {
+		require.NotEqual(t, service.RefreshCookieName, c.Name)
+	}
+	require.NoError(t, model.PurgeUniHubSessionBindings(time.Now().Unix()))
+	require.NoError(t, f.db.Model(&model.UniHubSessionBinding{}).Where("sid = ?", binding.SID).Update("expires_at", binding.ExpiresAt).Error)
+	resumed := f.request("POST", "/api/user/auth/refresh", "", cookie)
+	require.Equal(t, http.StatusOK, resumed.Code, resumed.Body.String())
+}
+
+func TestUniHubRefreshBindingStoreOutagePreservesCookie(t *testing.T) {
+	f := newUniHubRegressionFixture(t)
+	_, cookie := decodeUniHubBundle(t, f.request("POST", "/api/unihub/session", "viewer", nil))
+	callback := "test:binding_store_outage"
+	require.NoError(t, f.db.Callback().Query().Before("gorm:query").Register(callback, func(tx *gorm.DB) {
+		if tx.Statement.Table == "uni_hub_session_bindings" {
+			tx.AddError(errors.New("binding store unavailable"))
+		}
+	}))
+	t.Cleanup(func() { _ = f.db.Callback().Query().Remove(callback) })
+	failed := f.request("POST", "/api/user/auth/refresh", "", cookie)
+	require.Equal(t, http.StatusServiceUnavailable, failed.Code, failed.Body.String())
+	for _, c := range failed.Result().Cookies() {
+		require.NotEqual(t, service.RefreshCookieName, c.Name)
+	}
+	require.NoError(t, f.db.Callback().Query().Remove(callback))
+	resumed := f.request("POST", "/api/user/auth/refresh", "", cookie)
+	require.Equal(t, http.StatusOK, resumed.Code, resumed.Body.String())
+}
+
+func TestUniHubRefreshMissingBindingIsRejected(t *testing.T) {
+	f := newUniHubRegressionFixture(t)
+	b, cookie := decodeUniHubBundle(t, f.request("POST", "/api/unihub/session", "viewer", nil))
+	require.NoError(t, f.db.Delete(&model.UniHubSessionBinding{}, "sid = ?", b.Data.Session.SID).Error)
+	failed := f.request("POST", "/api/user/auth/refresh", "", cookie)
+	require.Equal(t, http.StatusUnauthorized, failed.Code, failed.Body.String())
+}
+
+func TestUniHubRefreshAuthorityOutagePreservesCookie(t *testing.T) {
+	f := newUniHubRegressionFixture(t)
+	_, cookie := decodeUniHubBundle(t, f.request("POST", "/api/unihub/session", "viewer", nil))
+	f.unavailable.Store(true)
+	failed := f.request("POST", "/api/user/auth/refresh", "", cookie)
+	require.Equal(t, http.StatusServiceUnavailable, failed.Code, failed.Body.String())
+	for _, c := range failed.Result().Cookies() {
+		require.NotEqual(t, service.RefreshCookieName, c.Name)
+	}
+	f.unavailable.Store(false)
+	resumed := f.request("POST", "/api/user/auth/refresh", "", cookie)
+	require.Equal(t, http.StatusOK, resumed.Code, resumed.Body.String())
+}
+
+func TestUniHubRefreshBindingKeyFailurePreservesCookie(t *testing.T) {
+	f := newUniHubRegressionFixture(t)
+	_, cookie := decodeUniHubBundle(t, f.request("POST", "/api/unihub/session", "viewer", nil))
+	secret := common.SessionSecret
+	common.SessionSecret = "unavailable"
+	failed := f.request("POST", "/api/user/auth/refresh", "", cookie)
+	require.Equal(t, http.StatusServiceUnavailable, failed.Code, failed.Body.String())
+	for _, c := range failed.Result().Cookies() {
+		require.NotEqual(t, service.RefreshCookieName, c.Name)
+	}
+	common.SessionSecret = secret
+	resumed := f.request("POST", "/api/user/auth/refresh", "", cookie)
+	require.Equal(t, http.StatusOK, resumed.Code, resumed.Body.String())
+}
+
+func TestUniHubRefreshFinalAuthorityOutageKeepsRotatedCookie(t *testing.T) {
+	f := newUniHubRegressionFixture(t)
+	_, cookie := decodeUniHubBundle(t, f.request("POST", "/api/unihub/session", "viewer", nil))
+	f.failAccessCall.Store(f.accessCalls.Load() + 2)
+	failed := f.request("POST", "/api/user/auth/refresh", "", cookie)
+	require.Equal(t, http.StatusServiceUnavailable, failed.Code, failed.Body.String())
+	var rotated *http.Cookie
+	for _, c := range failed.Result().Cookies() {
+		if c.Name == service.RefreshCookieName {
+			rotated = c
+		}
+	}
+	require.NotNil(t, rotated)
+	require.NotEmpty(t, rotated.Value)
+	require.NotEqual(t, cookie.Value, rotated.Value)
+	f.failAccessCall.Store(0)
+	resumed := f.request("POST", "/api/user/auth/refresh", "", rotated)
+	require.Equal(t, http.StatusOK, resumed.Code, resumed.Body.String())
+}
+
+func TestUniHubRefreshTamperedBindingOwnerPreservesSession(t *testing.T) {
+	f := newUniHubRegressionFixture(t)
+	b, cookie := decodeUniHubBundle(t, f.request("POST", "/api/unihub/session", "viewer", nil))
+	require.NoError(t, f.db.Model(&model.UniHubSessionBinding{}).Where("sid = ?", b.Data.Session.SID).Update("user_id", b.Data.User.Id+1000).Error)
+	failed := f.request("POST", "/api/user/auth/refresh", "", cookie)
+	require.Equal(t, http.StatusServiceUnavailable, failed.Code, failed.Body.String())
+	for _, c := range failed.Result().Cookies() {
+		require.NotEqual(t, service.RefreshCookieName, c.Name)
+	}
+	require.NoError(t, model.PurgeUniHubSessionBindings(time.Now().Unix()))
+	require.NoError(t, f.db.Model(&model.UniHubSessionBinding{}).Where("sid = ?", b.Data.Session.SID).Update("user_id", b.Data.User.Id).Error)
+	resumed := f.request("POST", "/api/user/auth/refresh", "", cookie)
+	require.Equal(t, http.StatusOK, resumed.Code, resumed.Body.String())
 }

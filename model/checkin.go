@@ -96,6 +96,11 @@ func UserCheckin(userId int) (*Checkin, error) {
 // userCheckinWithTransaction 使用事务执行签到（适用于 MySQL 和 PostgreSQL）
 func userCheckinWithTransaction(checkin *Checkin, userId int, quotaAwarded int) (*Checkin, error) {
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		// Match activation/import lock order: owner before receipt and funding account.
+		var owner User
+		if err := lockForUpdate(tx).First(&owner, userId).Error; err != nil {
+			return err
+		}
 		// 步骤1: 创建签到记录
 		// 数据库有唯一约束 (user_id, checkin_date)，可以防止并发重复签到
 		if err := tx.Create(checkin).Error; err != nil {

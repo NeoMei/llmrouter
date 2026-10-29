@@ -200,7 +200,7 @@ func PasskeyRegisterFinish(c *gin.Context) {
 		return
 	}
 
-	if err := model.UpsertPasskeyCredentialWithAuthVersion(passkeyCredential); err != nil {
+	if err := model.UpsertPasskeyCredentialWithAuthVersion(passkeyCredential, tokenRequestRealm(c)); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -237,7 +237,7 @@ func PasskeyDelete(c *gin.Context) {
 		common.ApiError(c, errors.New("当前认证方式不支持安全验证"))
 		return
 	}
-	if err := model.DeletePasskeyByUserIDWithAuthVersion(user.Id); err != nil {
+	if err := model.DeletePasskeyByUserIDWithAuthVersion(user.Id, tokenRequestRealm(c)); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -438,6 +438,19 @@ func PasskeyLoginFinish(c *gin.Context) {
 		return
 	}
 
+	stored, err := model.GetPasskeyByCredentialID(credential.ID)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	native, err := model.IsNativeLoginCredential(c.Request.Context(), modelUser.Id, "passkey", stored.CredentialID)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if native {
+		c.Set("native_password_authenticated", true)
+	}
 	setupLogin(modelUser, c)
 }
 
@@ -477,7 +490,7 @@ func AdminResetPasskey(c *gin.Context) {
 		return
 	}
 
-	if err := model.DeletePasskeyByUserIDWithAuthVersion(user.Id); err != nil {
+	if err := model.DeletePasskeyByUserIDWithAuthVersion(user.Id, tokenRequestRealm(c)); err != nil {
 		common.ApiError(c, err)
 		return
 	}

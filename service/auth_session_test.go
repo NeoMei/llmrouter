@@ -2,8 +2,11 @@ package service
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -428,4 +431,134 @@ func TestUserAuthVersionInvalidatesExistingSession(t *testing.T) {
 	assert.ErrorIs(t, err, ErrLoginSessionRevoked)
 	_, err = CreateLoginSessionAtAuthVersion(user.Id, identity.UserAuthVersion, "2fa", "127.0.0.1", "test-agent")
 	assert.ErrorIs(t, err, ErrLoginSessionRevoked, "a pending 2FA flow must not survive an auth-version change")
+}
+
+func TestRefreshProjectionDatabaseFailurePreservesSessionAndRecovers(t *testing.T) {
+	useTestSessionSecret(t)
+	user := setupAuthSessionTestDB(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.UniHubIdentityMapping{}))
+	bundle, err := CreateLoginSession(user.Id, "password", "", "")
+	require.NoError(t, err)
+	failure := errors.New("projection unavailable")
+	callback := "test:fail_projection_query"
+	require.NoError(t, model.DB.Callback().Query().Before("gorm:query").Register(callback, func(tx *gorm.DB) {
+		if tx.Statement.Table == "unihub_identity_mappings" {
+			tx.AddError(failure)
+		}
+	}))
+	t.Cleanup(func() { _ = model.DB.Callback().Query().Remove(callback) })
+	refreshed, _, err := RefreshLoginSession(bundle.RefreshToken, bundle.Session.SID, "", "")
+	require.Nil(t, refreshed)
+	require.ErrorIs(t, err, ErrProjectionUnavailable)
+	status, _ := AuthSessionErrorCode(err)
+	require.Equal(t, 503, status)
+	var sid model.UserSession
+	require.NoError(t, model.DB.First(&sid, "sid = ?", bundle.Session.SID).Error)
+	require.Equal(t, model.UserSessionStatusActive, sid.Status)
+	require.Equal(t, int64(1), sid.Version)
+	require.NoError(t, model.DB.Callback().Query().Remove(callback))
+	refreshed, _, err = RefreshLoginSession(bundle.RefreshToken, bundle.Session.SID, "", "")
+	require.NoError(t, err)
+	require.NotNil(t, refreshed)
+}
+
+func TestRefreshInvalidProjectionFailsClosedWithoutRevocation(t *testing.T) {
+	useTestSessionSecret(t)
+	user := setupAuthSessionTestDB(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.UniHubIdentityMapping{}))
+	bundle, err := CreateLoginSession(user.Id, "password", "", "")
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", user.Id).Updates(map[string]any{"identity_source": "unihub", "unihub_user_id": "orphan"}).Error)
+	refreshed, _, err := RefreshLoginSession(bundle.RefreshToken, bundle.Session.SID, "", "")
+	require.Nil(t, refreshed)
+	require.ErrorIs(t, err, ErrProjectionUnavailable)
+	var sid model.UserSession
+	require.NoError(t, model.DB.First(&sid, "sid = ?", bundle.Session.SID).Error)
+	require.Equal(t, model.UserSessionStatusActive, sid.Status)
+}
+
+func TestRefreshConfirmedRevokedSessionRemainsDenied(t *testing.T) {
+	useTestSessionSecret(t)
+	user := setupAuthSessionTestDB(t)
+	bundle, err := CreateLoginSession(user.Id, "password", "", "")
+	require.NoError(t, err)
+	_, err = model.RevokeUserSession(user.Id, bundle.Session.SID, "test")
+	require.NoError(t, err)
+	got, _, err := RefreshLoginSession(bundle.RefreshToken, bundle.Session.SID, "", "")
+	require.Nil(t, got)
+	require.ErrorIs(t, err, ErrLoginSessionRevoked)
+}
+
+func TestRefreshProjectionBindingInterleavingDoesNotRevoke(t *testing.T) {
+	useTestSessionSecret(t)
+	setupAuthSessionTestDB(t)
+	path := filepath.Join(t.TempDir(), "interleave.db")
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	require.NoError(t, err)
+	other, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	require.NoError(t, err)
+	for _, h := range []*gorm.DB{db, other} {
+		conn, e := h.DB()
+		require.NoError(t, e)
+		t.Cleanup(func() { _ = conn.Close() })
+	}
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.UniHubIdentityMapping{}))
+	model.DB = db
+	user := model.User{Username: "interleaved", Password: "unused", Status: common.UserStatusEnabled, AuthVersion: 1}
+	require.NoError(t, db.Create(&user).Error)
+	bundle, err := CreateLoginSession(user.Id, "password", "", "")
+	require.NoError(t, err)
+	callback := "test:interleave_binding"
+	inserted := false
+	require.NoError(t, db.Callback().Query().Before("gorm:query").Register(callback, func(tx *gorm.DB) {
+		if inserted || tx.Statement.Table != "unihub_identity_mappings" {
+			return
+		}
+		inserted = true
+		sum := sha256.Sum256([]byte("issuer\x00subject"))
+		e := other.Transaction(func(inner *gorm.DB) error {
+			if e := inner.Model(&model.User{}).Where("id = ?", user.Id).Updates(map[string]any{"identity_source": "unihub", "unihub_user_id": "subject"}).Error; e != nil {
+				return e
+			}
+			return inner.Create(&model.UniHubIdentityMapping{UserID: user.Id, Issuer: "issuer", Subject: "subject", IdentityKey: hex.EncodeToString(sum[:])}).Error
+		})
+		if e != nil {
+			tx.AddError(e)
+		}
+	}))
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callback) })
+	got, _, err := RefreshLoginSession(bundle.RefreshToken, bundle.Session.SID, "", "")
+	require.True(t, inserted)
+	require.Nil(t, got)
+	require.ErrorIs(t, err, ErrProjectionUnavailable)
+	var session model.UserSession
+	require.NoError(t, db.First(&session, "sid = ?", bundle.Session.SID).Error)
+	require.Equal(t, model.UserSessionStatusActive, session.Status)
+	require.NoError(t, db.Callback().Query().Remove(callback))
+	got, _, err = RefreshLoginSession(bundle.RefreshToken, bundle.Session.SID, "", "")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+}
+
+func TestRefreshSessionReadFailurePreservesCredentialAndRecovers(t *testing.T) {
+	useTestSessionSecret(t)
+	user := setupAuthSessionTestDB(t)
+	bundle, err := CreateLoginSession(user.Id, "password", "", "")
+	require.NoError(t, err)
+	callback := "test:fail_session_lookup"
+	require.NoError(t, model.DB.Callback().Query().Before("gorm:query").Register(callback, func(tx *gorm.DB) {
+		if tx.Statement.Table == "user_sessions" {
+			tx.AddError(errors.New("session database unavailable"))
+		}
+	}))
+	t.Cleanup(func() { _ = model.DB.Callback().Query().Remove(callback) })
+	got, _, err := RefreshLoginSession(bundle.RefreshToken, bundle.Session.SID, "", "")
+	require.Nil(t, got)
+	require.ErrorIs(t, err, ErrAuthStoreUnavailable)
+	status, _ := AuthSessionErrorCode(err)
+	require.Equal(t, 503, status)
+	require.NoError(t, model.DB.Callback().Query().Remove(callback))
+	got, _, err = RefreshLoginSession(bundle.RefreshToken, bundle.Session.SID, "", "")
+	require.NoError(t, err)
+	require.NotNil(t, got)
 }

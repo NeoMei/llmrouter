@@ -84,11 +84,29 @@ func OpenBrokerSourceProof(sid string, userID int, subject string, config platfo
 	if DB == nil {
 		return b, "", errors.New("broker source database unavailable")
 	}
-	if err := DB.First(&b, "sid = ? AND user_id = ?", sid, userID).Error; err != nil {
+	if err := DB.First(&b, "sid = ?", sid).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return b, "", userkit.ErrDenied
 		}
 		return b, "", err
+	}
+	aead, err := brokerProofAEAD()
+	if err != nil {
+		return b, "", err
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(b.Ciphertext)
+	if err != nil || len(raw) < aead.NonceSize() {
+		return b, "", errors.New("broker source proof unavailable")
+	}
+	plain, err := aead.Open(nil, raw[:aead.NonceSize()], raw[aead.NonceSize():], b.aad())
+	if err != nil || !brokerSourceProofPattern.Match(plain) {
+		return b, "", errors.New("broker source proof unavailable")
+	}
+	if b.SID != sid || b.UserID != userID || b.Issuer != config.PublicOrigin || b.ProductID != config.ProductID || b.InstanceID != config.InstanceID || b.ClientID != config.ClientID || b.Subject != subject {
+		return b, "", errors.New("broker source identity unavailable")
+	}
+	if b.ExpiresAt <= time.Now().Unix() {
+		return b, "", userkit.ErrDenied
 	}
 	var session UserSession
 	if err := DB.First(&session, "sid = ? AND user_id = ?", sid, userID).Error; err != nil {
@@ -100,30 +118,70 @@ func OpenBrokerSourceProof(sid string, userID int, subject string, config platfo
 	if session.LoginMethod != "product_broker" || session.Status != UserSessionStatusActive || session.RevokedAt != 0 || session.ExpiresAt <= time.Now().Unix() {
 		return b, "", userkit.ErrDenied
 	}
-	if b.ExpiresAt <= time.Now().Unix() || b.Issuer != config.PublicOrigin || b.ProductID != config.ProductID || b.InstanceID != config.InstanceID || b.ClientID != config.ClientID || b.Subject != subject {
-		return b, "", userkit.ErrDenied
-	}
 	if err := VerifyUniHubIdentityBinding(userID, b.Issuer, b.Subject); err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) || errors.Is(err, ErrUniHubProjectionInvalid) {
-			return b, "", userkit.ErrDenied
-		}
 		return b, "", err
-	}
-	aead, err := brokerProofAEAD()
-	if err != nil {
-		return b, "", err
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(b.Ciphertext)
-	if err != nil || len(raw) < aead.NonceSize() {
-		return b, "", userkit.ErrDenied
-	}
-	plain, err := aead.Open(nil, raw[:aead.NonceSize()], raw[aead.NonceSize():], b.aad())
-	if err != nil || !brokerSourceProofPattern.Match(plain) {
-		return b, "", userkit.ErrDenied
 	}
 	return b, string(plain), nil
 }
 
 func PurgeBrokerSourceProofs(now int64) error {
-	return DB.Where("expires_at <= ? OR sid NOT IN (?)", now, DB.Model(&UserSession{}).Select("sid").Where("status = ? AND expires_at > ?", UserSessionStatusActive, now)).Delete(&ProductBrokerSessionProof{}).Error
+	if DB == nil {
+		return errors.New("broker source database unavailable")
+	}
+	aead, err := brokerProofAEAD()
+	if err != nil {
+		return err
+	}
+	var candidates []ProductBrokerSessionProof
+	if err := DB.Where("expires_at <= ? OR sid NOT IN (?)", now, DB.Model(&UserSession{}).Select("sid").Where("status = ? AND expires_at > ?", UserSessionStatusActive, now)).Find(&candidates).Error; err != nil {
+		return err
+	}
+	for _, candidate := range candidates {
+		err := DB.Transaction(func(tx *gorm.DB) error {
+			// SQLite has no row-level FOR UPDATE. Acquire its writer lock before
+			// reading the proof so a replacement cannot race with deletion.
+			if tx.Dialector.Name() == "sqlite" {
+				if err := tx.Model(&ProductBrokerSessionProof{}).Where("sid = ?", candidate.SID).UpdateColumn("expires_at", gorm.Expr("expires_at")).Error; err != nil {
+					return err
+				}
+			}
+			// Match session lifecycle lock ordering before taking the proof lock.
+			var session UserSession
+			sessionErr := lockForUpdate(tx).First(&session, "sid = ?", candidate.SID).Error
+			if sessionErr != nil && !errors.Is(sessionErr, gorm.ErrRecordNotFound) {
+				return sessionErr
+			}
+			var current ProductBrokerSessionProof
+			if err := lockForUpdate(tx).First(&current, "sid = ?", candidate.SID).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return nil
+				}
+				return err
+			}
+			// Compare bytes in Go, avoiding case-insensitive MySQL collations.
+			if current != candidate {
+				return nil
+			}
+			raw, err := base64.RawURLEncoding.DecodeString(current.Ciphertext)
+			if err != nil || len(raw) < aead.NonceSize() {
+				return nil
+			}
+			plain, err := aead.Open(nil, raw[:aead.NonceSize()], raw[aead.NonceSize():], current.aad())
+			if err != nil || !brokerSourceProofPattern.Match(plain) {
+				return nil
+			}
+			if current.ExpiresAt > now {
+				// A missing row cannot be locked. Keep a live proof in case a
+				// session is concurrently being created with the same SID.
+				if sessionErr != nil || (session.Status == UserSessionStatusActive && session.RevokedAt == 0 && session.ExpiresAt > now) {
+					return nil
+				}
+			}
+			return tx.Delete(&current).Error
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

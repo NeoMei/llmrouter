@@ -79,6 +79,9 @@ func resolveUserSortOptions(sortOptions []UserSortOptions) UserSortOptions {
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
 // Otherwise, the sensitive information will be saved on local storage in plain text!
 type User struct {
+	NativePassword             bool                       `json:"-"`
+	FundingRealm               string                     `json:"-" gorm:"size:24"`
+	FundingRealmEvidence       string                     `json:"-" gorm:"type:text"`
 	ProductRegistrationPending bool                       `json:"-" gorm:"not null;default:false"`
 	ProductJITPending          bool                       `json:"-"`
 	Id                         int                        `json:"id"`
@@ -149,18 +152,20 @@ func (user *User) SetAccessToken(token string) {
 
 // UpdateUserAccessToken rotates a dashboard personal access token without
 // writing a stale user snapshot back over concurrently updated fields.
-func UpdateUserAccessToken(id int, token string) error {
-	if id == 0 {
+func UpdateUserAccessToken(id int, token string, realm ...string) error {
+	if id <= 0 {
 		return errors.New("id 为空！")
 	}
-	result := DB.Model(&User{}).Where("id = ?", id).Update("access_token", token)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
-	}
-	return nil
+	return DB.Transaction(func(tx *gorm.DB) error {
+		scope := ""
+		if len(realm) > 0 {
+			scope = realm[0]
+		}
+		if err := SetNativeLoginCredentialTx(tx, id, "pat", token, scope); err != nil {
+			return err
+		}
+		return tx.Model(&User{}).Where("id = ?", id).Update("access_token", token).Error
+	})
 }
 
 func (user *User) GetSetting() dto.UserSetting {
@@ -212,17 +217,27 @@ var userBindColumns = map[string]bool{
 // 绑定操作必须只写绑定列：若改为“读取完整用户 → 改一个字段 → 整体更新”，
 // 读快照期间并发发生的封禁、降权或分组变更会被旧快照覆盖恢复。
 // 角色、状态、分组只允许通过各自带锁/CAS 的专用方法修改。
-func UpdateUserBindColumn(userId int, column string, value string) error {
+func UpdateUserBindColumn(userId int, column string, value string, realm ...string) error {
 	if userId <= 0 {
 		return errors.New("id 为空！")
 	}
 	if !userBindColumns[column] {
 		return fmt.Errorf("invalid user bind column: %s", column)
 	}
-	if platformaccount.RuntimeEnabled() {
-		return ApplyManagedCredentialChange(userId, func(tx *gorm.DB) error { return tx.Model(&User{}).Where("id = ?", userId).Update(column, value).Error })
+	change := func(tx *gorm.DB) error {
+		scope := ""
+		if len(realm) > 0 {
+			scope = realm[0]
+		}
+		if err := SetNativeLoginCredentialTx(tx, userId, column, value, scope); err != nil {
+			return err
+		}
+		return tx.Model(&User{}).Where("id = ?", userId).Update(column, value).Error
 	}
-	return DB.Model(&User{}).Where("id = ?", userId).Update(column, value).Error
+	if platformaccount.RuntimeEnabled() {
+		return ApplyManagedCredentialChange(userId, change)
+	}
+	return DB.Transaction(change)
 }
 
 // 根据用户角色生成默认的边栏配置
@@ -823,6 +838,9 @@ func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 		"aff_quota",
 		"aff_history",
 		"auth_version",
+		"funding_realm",
+		"funding_realm_evidence",
+		"native_password",
 	).Updates(newUser).Error; err != nil {
 		return err
 	}
@@ -889,7 +907,7 @@ func (user *User) EditWithTx(tx *gorm.DB, updatePassword bool) error {
 	return tx.First(user, user.Id).Error
 }
 
-func (user *User) ClearBinding(bindingType string) error {
+func (user *User) ClearBinding(bindingType string, realm ...string) error {
 	if user.Id == 0 {
 		return errors.New("user id is empty")
 	}
@@ -910,6 +928,13 @@ func (user *User) ClearBinding(bindingType string) error {
 	}
 
 	if err := DB.Transaction(func(tx *gorm.DB) error {
+		scope := ""
+		if len(realm) > 0 {
+			scope = realm[0]
+		}
+		if err := SetNativeLoginCredentialTx(tx, user.Id, column, "", scope); err != nil {
+			return err
+		}
 		if err := tx.Model(&User{}).Where("id = ?", user.Id).Update(column, "").Error; err != nil {
 			return err
 		}

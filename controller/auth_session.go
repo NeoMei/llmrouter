@@ -51,7 +51,12 @@ func RefreshAuth(c *gin.Context) {
 		return
 	}
 	service.WriteRefreshCookie(c, bundle.RefreshToken)
-	if platformaccount.RuntimeEnabled() && !middleware.NativePrivateMaintenanceIdentity(c, user.Id) {
+	native, nativeErr := service.IsNativeLoginSession(c.Request.Context(), identity)
+	if nativeErr != nil {
+		writeAuthSessionError(c, nativeErr)
+		return
+	}
+	if platformaccount.RuntimeEnabled() && !native && !middleware.NativePrivateMaintenanceIdentity(c, user.Id) {
 		if e := applyCurrentProductIdentity(c, user, false); e != nil {
 			productIdentityError(c, e)
 			return
@@ -62,7 +67,7 @@ func RefreshAuth(c *gin.Context) {
 		}
 	}
 	data := productSelfData(c, user)
-	if !platformaccount.RuntimeEnabled() && user.IdentitySource == model.UniHubIdentitySource {
+	if !native && !platformaccount.RuntimeEnabled() && user.IdentitySource == model.UniHubIdentitySource {
 		identity, e := service.ParseAccessToken(bundle.AccessToken)
 		if e != nil {
 			writeAuthSessionError(c, e)
@@ -70,7 +75,11 @@ func RefreshAuth(c *gin.Context) {
 		}
 		p, _, e := service.ResolveUniHubSession(c.Request.Context(), identity)
 		if e != nil {
-			writeAuthSessionError(c, service.ErrLoginSessionRevoked)
+			if errors.Is(e, model.ErrUniHubSessionBindingAbsentOrExpired) {
+				writeAuthSessionError(c, service.ErrLoginSessionRevoked)
+			} else {
+				writeAuthSessionError(c, service.ErrProjectionUnavailable)
+			}
 			return
 		}
 		authz.SetProductPrincipal(c, p)
@@ -145,7 +154,7 @@ func GetLoginSessions(c *gin.Context) {
 	if !ok {
 		return
 	}
-	sessions, err := service.ListLoginSessions(identity.UserID, identity.SessionID)
+	sessions, err := service.ListLoginSessions(identity.UserID, identity.SessionID, tokenRequestRealm(c))
 	if err != nil {
 		writeAuthSessionError(c, err)
 		return
@@ -163,7 +172,7 @@ func DeleteLoginSession(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "code": "AUTH_SESSION_ID_REQUIRED", "message": "session id is required"})
 		return
 	}
-	revoked, err := model.RevokeUserSession(identity.UserID, sid, "user_revoked")
+	revoked, err := model.RevokeUserSession(identity.UserID, sid, "user_revoked", tokenRequestRealm(c))
 	if err != nil {
 		writeAuthSessionError(c, err)
 		return
@@ -186,7 +195,7 @@ func RevokeOtherLoginSessions(c *gin.Context) {
 	if !ok {
 		return
 	}
-	count, err := model.RevokeOtherUserSessions(identity.UserID, identity.SessionID, "user_revoked_others")
+	count, err := model.RevokeOtherUserSessions(identity.UserID, identity.SessionID, "user_revoked_others", tokenRequestRealm(c))
 	if err != nil {
 		writeAuthSessionError(c, err)
 		return

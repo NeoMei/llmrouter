@@ -116,6 +116,7 @@ type RelayInfo struct {
 	PlatformBilling *platformbilling.Session
 	// NativeLocalLegacy is established by native token authentication, never a request header.
 	NativeLocalLegacy bool
+	NativeRealm       bool
 	// NativeBilling is an immutable metering snapshot and evidence observer.
 	NativeBilling *NativeBillingContext
 
@@ -547,6 +548,7 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	info := &RelayInfo{
 		PlatformMode: platformMode, PlatformBilling: session,
 		NativeLocalLegacy: common.GetContextKeyBool(c, constant.ContextKeyNativeLocalLegacy),
+		NativeRealm:       common.GetContextKeyBool(c, constant.ContextKeyNativeRealm),
 		Request:           request,
 
 		RequestId:  reqId,

@@ -12,16 +12,19 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 const RefreshCookieName = "new_api_refresh"
 
 var (
-	ErrLoginSessionInvalid  = errors.New("login session is invalid")
-	ErrLoginSessionRevoked  = errors.New("login session is revoked")
-	ErrLoginSessionMismatch = errors.New("login session does not match the expected session")
-	ErrRefreshTokenInvalid  = errors.New("refresh token is invalid")
-	ErrRefreshRace          = errors.New("refresh token was already rotated")
+	ErrLoginSessionInvalid   = errors.New("login session is invalid")
+	ErrLoginSessionRevoked   = errors.New("login session is revoked")
+	ErrLoginSessionMismatch  = errors.New("login session does not match the expected session")
+	ErrRefreshTokenInvalid   = errors.New("refresh token is invalid")
+	ErrRefreshRace           = errors.New("refresh token was already rotated")
+	ErrProjectionUnavailable = errors.New("identity projection is temporarily unavailable")
+	ErrAuthStoreUnavailable  = errors.New("authentication store is temporarily unavailable")
 )
 
 type LoginSessionView struct {
@@ -44,17 +47,17 @@ type AuthBundle struct {
 }
 
 func CreateLoginSession(userID int, loginMethod, ip, userAgent string) (*AuthBundle, error) {
-	return createLoginSession(userID, 0, loginMethod, ip, userAgent, 0)
+	return createLoginSession(userID, 0, loginMethod, ip, userAgent, 0, "")
 }
 
 func CreateLoginSessionAtAuthVersion(userID int, expectedAuthVersion int64, loginMethod, ip, userAgent string) (*AuthBundle, error) {
 	if expectedAuthVersion <= 0 {
 		return nil, ErrLoginSessionInvalid
 	}
-	return createLoginSession(userID, expectedAuthVersion, loginMethod, ip, userAgent, 0)
+	return createLoginSession(userID, expectedAuthVersion, loginMethod, ip, userAgent, 0, "")
 }
 
-func createLoginSession(userID int, expectedAuthVersion int64, loginMethod, ip, userAgent string, expiresAt int64) (*AuthBundle, error) {
+func createLoginSession(userID int, expectedAuthVersion int64, loginMethod, ip, userAgent string, expiresAt int64, realm string) (*AuthBundle, error) {
 	user, err := model.GetUserCache(userID)
 	if err != nil {
 		return nil, err
@@ -62,7 +65,7 @@ func createLoginSession(userID int, expectedAuthVersion int64, loginMethod, ip, 
 	if user.Status != common.UserStatusEnabled || user.AuthVersion <= 0 {
 		return nil, ErrLoginSessionInvalid
 	}
-	if _, err := model.CheckUniHubProjection(userID); err != nil {
+	if _, err := model.CheckUniHubProjection(userID); realm == "" && err != nil {
 		return nil, ErrLoginSessionInvalid
 	}
 	if expectedAuthVersion > 0 && user.AuthVersion != expectedAuthVersion {
@@ -89,6 +92,7 @@ func createLoginSession(userID int, expectedAuthVersion int64, loginMethod, ip, 
 	}
 	session := &model.UserSession{
 		SID:             uuid.NewString(),
+		AuthRealm:       realm,
 		UserID:          userID,
 		Version:         1,
 		UserAuthVersion: user.AuthVersion,
@@ -226,7 +230,10 @@ func RefreshLoginSession(rawRefreshToken, expectedSID, ip, userAgent string) (*A
 		if errors.Is(err, model.ErrUserSessionInactive) {
 			return nil, nil, ErrLoginSessionRevoked
 		}
-		return nil, nil, ErrRefreshTokenInvalid
+		if errors.Is(err, gorm.ErrRecordNotFound) || errors.Is(err, model.ErrUserSessionInvalid) {
+			return nil, nil, ErrRefreshTokenInvalid
+		}
+		return nil, nil, ErrAuthStoreUnavailable
 	}
 	if session.Status != model.UserSessionStatusActive || session.RevokedAt != 0 || session.ExpiresAt <= time.Now().Unix() {
 		return nil, nil, ErrLoginSessionRevoked
@@ -239,9 +246,15 @@ func RefreshLoginSession(rawRefreshToken, expectedSID, ip, userAgent string) (*A
 	if err != nil {
 		return nil, nil, err
 	}
-	if _, err := model.CheckUniHubProjection(currentUser.Id); err != nil {
-		_, _ = model.RevokeUserSession(session.UserID, session.SID, "unihub_projection_invalid")
-		return nil, nil, ErrLoginSessionRevoked
+	native, nativeErr := IsNativeLoginSession(context.Background(), AuthIdentity{UserID: session.UserID, SessionID: session.SID, SessionVersion: session.Version, UserAuthVersion: session.UserAuthVersion})
+	if nativeErr != nil {
+		return nil, nil, nativeErr
+	}
+	if _, err := model.CheckUniHubProjection(currentUser.Id); !native && err != nil {
+		// The projection reads its user and mapping separately, so even a
+		// reported mismatch can be a concurrent binding in progress. Deny
+		// refresh without destroying credentials until an atomic check exists.
+		return nil, nil, ErrProjectionUnavailable
 	}
 	if userCache.Status != common.UserStatusEnabled || userCache.AuthVersion != session.UserAuthVersion ||
 		currentUser.Status != common.UserStatusEnabled || currentUser.AuthVersion != session.UserAuthVersion {
@@ -251,7 +264,12 @@ func RefreshLoginSession(rawRefreshToken, expectedSID, ip, userAgent string) (*A
 	if session.LoginMethod == "unihub" {
 		identity := AuthIdentity{UserID: session.UserID, SessionID: sid, SessionVersion: session.Version, UserAuthVersion: session.UserAuthVersion}
 		if _, _, e := ResolveUniHubSession(context.Background(), identity); e != nil {
-			return nil, nil, ErrLoginSessionRevoked
+			if errors.Is(e, model.ErrUniHubSessionBindingAbsentOrExpired) {
+				return nil, nil, ErrLoginSessionRevoked
+			}
+			// Its current error contract collapses authority denial, store
+			// failure and source outage. None proves permanent revocation.
+			return nil, nil, ErrProjectionUnavailable
 		}
 	}
 	nextSecret := deriveNextRefreshSecret(sid, secret)
@@ -294,8 +312,8 @@ func RefreshTokenSID(rawRefreshToken string) (string, bool) {
 	return sid, ok
 }
 
-func ListLoginSessions(userID int, currentSID string) ([]LoginSessionView, error) {
-	sessions, err := model.ListActiveUserSessions(userID, currentSID, time.Now().Unix())
+func ListLoginSessions(userID int, currentSID string, realm ...string) ([]LoginSessionView, error) {
+	sessions, err := model.ListActiveUserSessions(userID, currentSID, time.Now().Unix(), realm...)
 	if err != nil {
 		return nil, err
 	}
@@ -412,6 +430,10 @@ func authSessionErrorCode(err error) (int, string) {
 		return http.StatusConflict, "AUTH_SESSION_MISMATCH"
 	case errors.Is(err, ErrRefreshRace):
 		return http.StatusConflict, "AUTH_REFRESH_RACE"
+	case errors.Is(err, ErrProjectionUnavailable):
+		return http.StatusServiceUnavailable, "AUTH_PROJECTION_UNAVAILABLE"
+	case errors.Is(err, ErrAuthStoreUnavailable):
+		return http.StatusServiceUnavailable, "AUTH_STORE_UNAVAILABLE"
 	case errors.Is(err, ErrAuthTokenExpired):
 		return http.StatusUnauthorized, "AUTH_TOKEN_EXPIRED"
 	case errors.Is(err, ErrLoginSessionRevoked):
@@ -435,5 +457,5 @@ func FormatAuthError(err error) string {
 }
 
 func CreateUniHubLoginSession(userID int, expiresAt int64, ip, userAgent string) (*AuthBundle, error) {
-	return createLoginSession(userID, 0, "unihub", ip, userAgent, expiresAt)
+	return createLoginSession(userID, 0, "unihub", ip, userAgent, expiresAt, "")
 }

@@ -234,7 +234,7 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 	}
 	if err := s.reserveToken(delta); err != nil {
 		if rollbackErr := s.rollbackFundingReserve(delta); rollbackErr != nil {
-			if platformaccount.RuntimeEnabled() {
+			if platformaccount.RuntimeEnabled() && !s.relayInfo.NativeRealm {
 				s.reconciliationPending = true
 			} else {
 				// The failed rollback has an uncertain outcome. Refund only the
@@ -262,7 +262,7 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 // preConsume 执行预扣费：信任检查 -> 令牌预扣 -> 资金来源预扣。
 // 任一步骤失败时原子回滚已完成的步骤。
 func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIError {
-	if platformaccount.RuntimeEnabled() && (s.funding.Source() == BillingSourceWallet || s.relayInfo.NativeLocalLegacy) && s.legacyLeaseID == "" {
+	if platformaccount.RuntimeEnabled() && !s.relayInfo.NativeRealm && (s.funding.Source() == BillingSourceWallet || s.relayInfo.NativeLocalLegacy) && s.legacyLeaseID == "" {
 		id := s.relayInfo.RequestId
 		if id == "" {
 			id = common.GetUUID()
@@ -480,6 +480,19 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		return nil, types.NewError(fmt.Errorf("relayInfo is nil"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
 
+	if relayInfo.NativeRealm {
+		user, err := model.NativeRealmUser(c.Request.Context(), relayInfo.UserId)
+		if err != nil || user.Status != common.UserStatusEnabled {
+			return nil, types.NewError(model.ErrNativeCredentialUnverified, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+	}
+	ctx := context.Background()
+	if c != nil && c.Request != nil {
+		ctx = c.Request.Context()
+	}
+	if err := model.ValidateLocalFundingCredential(ctx, relayInfo.UserId, relayInfo.TokenId); err != nil {
+		return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
 	pref := common.NormalizeBillingPreference(relayInfo.UserSetting.BillingPreference)
 
 	// 钱包路径需要先检查用户额度
@@ -488,7 +501,7 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		if c != nil && c.Request != nil {
 			ctx = c.Request.Context()
 		}
-		if !relayInfo.NativeLocalLegacy {
+		if !relayInfo.NativeLocalLegacy && !relayInfo.NativeRealm {
 			central, managed, e := newProductFundingSession(ctx, relayInfo, preConsumedQuota)
 			if e != nil {
 				var failure *userkit.RuntimeError

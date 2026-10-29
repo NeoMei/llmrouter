@@ -147,11 +147,11 @@ func (s *ProductFundingStore) Import(ctx context.Context, id int, payer, batch s
 	}
 	var a ProductFundingAccount
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var user User
-		if err := lockForUpdate(tx).First(&user, id).Error; err != nil {
+		user, err := lockCentralFundingOwnerTx(tx, id)
+		if err != nil {
 			return err
 		}
-		err := lockForUpdate(tx).First(&a, "user_id = ?", id).Error
+		err = lockForUpdate(tx).First(&a, "user_id = ?", id).Error
 		if err == nil {
 			if a.ScopeDigest == "" || a.ScopeDigest != s.ScopeDigest() || a.AccountID != payer || a.BatchID != batch || a.CutoverEvidence != evidence {
 				return ErrProductFundingConflict
@@ -185,6 +185,9 @@ func (s *ProductFundingStore) Import(ctx context.Context, id int, payer, batch s
 		return ErrProductFundingPending
 	}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if _, err := lockCentralFundingOwnerTx(tx, id); err != nil {
+			return err
+		}
 		var current ProductFundingAccount
 		if err := lockForUpdate(tx).First(&current, "user_id = ?", id).Error; err != nil {
 			return err
@@ -216,12 +219,12 @@ func (s *ProductFundingStore) ActivateZero(ctx context.Context, id int, payer st
 		return ErrProductFundingConflict
 	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var u User
-		if err := lockForUpdate(tx).First(&u, id).Error; err != nil {
+		u, err := lockCentralFundingOwnerTx(tx, id)
+		if err != nil {
 			return err
 		}
 		var a ProductFundingAccount
-		err := tx.First(&a, "user_id = ?", id).Error
+		err = tx.First(&a, "user_id = ?", id).Error
 		if err == nil {
 			if a.ScopeDigest == "" || a.ScopeDigest != s.ScopeDigest() || a.AccountID != payer || a.State != "central" {
 				return ErrProductFundingConflict

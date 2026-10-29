@@ -537,7 +537,7 @@ func UnbindCustomOAuth(c *gin.Context) {
 		return
 	}
 
-	if err := model.DeleteUserOAuthBinding(userId, providerId); err != nil {
+	if err := model.DeleteUserOAuthBinding(userId, providerId, tokenRequestRealm(c)); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -581,7 +581,7 @@ func UnbindCustomOAuthByAdmin(c *gin.Context) {
 	if !authorizeProductIdentityWrite(c, userId, "oauth") {
 		return
 	}
-	if err := model.DeleteUserOAuthBinding(userId, providerId); err != nil {
+	if err := model.DeleteUserOAuthBinding(userId, providerId, tokenRequestRealm(c)); err != nil {
 		common.ApiError(c, err)
 		return
 	}

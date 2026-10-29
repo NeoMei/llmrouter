@@ -48,6 +48,7 @@ type UserSession struct {
 	RefreshHash         string `json:"-" gorm:"type:char(64);not null"`
 	PreviousRefreshHash string `json:"-" gorm:"type:varchar(64)"`
 	PreviousValidUntil  int64  `json:"-" gorm:"type:bigint;not null;default:0"`
+	AuthRealm           string `json:"-" gorm:"size:24"`
 	LoginMethod         string `json:"login_method" gorm:"type:varchar(32);not null"`
 	IP                  string `json:"ip" gorm:"type:varchar(64)"`
 	UserAgent           string `json:"user_agent" gorm:"type:text"`
@@ -151,7 +152,21 @@ func CreateUserSession(session *UserSession) error {
 		session.CreatedAt = now
 	}
 	cacheDeadline := userSessionCacheDeadline()
-	if err := DB.Create(session).Error; err != nil {
+	if session.AuthRealm != "" && session.AuthRealm != NativeFundingLocalOnly {
+		return ErrUserSessionInvalid
+	}
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		if session.AuthRealm == NativeFundingLocalOnly {
+			var owner User
+			if err := lockForUpdate(tx).First(&owner, session.UserID).Error; err != nil {
+				return err
+			}
+			if owner.FundingRealm != NativeFundingLocalOnly || !owner.NativePassword || owner.FundingRealmEvidence == "" || owner.Status != common.UserStatusEnabled || owner.AuthVersion != session.UserAuthVersion || owner.ProductRegistrationPending || owner.ProductJITPending {
+				return ErrUserSessionInvalid
+			}
+		}
+		return tx.Create(session).Error
+	}); err != nil {
 		return err
 	}
 	if err := writeUserSessionCache(session.cacheEntry(), cacheDeadline); err != nil {
@@ -392,7 +407,7 @@ func writeUserSessionDenyFence(session *UserSession, status string, now int64, r
 	return writeUserSessionCache(entry, time.Time{})
 }
 
-func ListActiveUserSessions(userID int, currentSID string, now int64) ([]UserSession, error) {
+func ListActiveUserSessions(userID int, currentSID string, now int64, realm ...string) ([]UserSession, error) {
 	if userID <= 0 {
 		return nil, ErrUserSessionInvalid
 	}
@@ -409,7 +424,7 @@ func ListActiveUserSessions(userID int, currentSID string, now int64) ([]UserSes
 	sessions := make([]UserSession, 0, userSessionListLimit)
 	if currentSID != "" {
 		var current []UserSession
-		if err := DB.Where(
+		if err := tokenRealmQuery(DB, realm).Where(
 			"user_id = ? AND user_auth_version = ? AND status = ? AND expires_at > ? AND sid = ?",
 			userID,
 			authVersion,
@@ -425,7 +440,7 @@ func ListActiveUserSessions(userID int, currentSID string, now int64) ([]UserSes
 	}
 	remainingLimit := userSessionListLimit - len(sessions)
 
-	otherQuery := DB.Where(
+	otherQuery := tokenRealmQuery(DB, realm).Where(
 		"user_id = ? AND user_auth_version = ? AND status = ? AND expires_at > ?",
 		userID,
 		authVersion,
@@ -541,13 +556,13 @@ func RotateUserSessionRefresh(userID int, sid, presentedHash, nextHash string, n
 	return nil, ErrUserSessionRefreshInvalid
 }
 
-func RevokeUserSession(userID int, sid, reason string) (bool, error) {
+func RevokeUserSession(userID int, sid, reason string, realm ...string) (bool, error) {
 	if userID <= 0 || sid == "" {
 		return false, ErrUserSessionInvalid
 	}
 	now := time.Now().Unix()
 	var candidate UserSession
-	if err := DB.Where("sid = ? AND user_id = ?", sid, userID).First(&candidate).Error; err != nil {
+	if err := tokenRealmQuery(DB, realm).Where("sid = ? AND user_id = ?", sid, userID).First(&candidate).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return false, nil
 		}
@@ -701,22 +716,22 @@ func AdvanceUserSessionAuthVersion(userID int, sid string, expectedSessionVersio
 	return &session, nil
 }
 
-func RevokeOtherUserSessions(userID int, currentSID, reason string) (int64, error) {
-	return revokeUserSessions(userID, currentSID, reason)
+func RevokeOtherUserSessions(userID int, currentSID, reason string, realm ...string) (int64, error) {
+	return revokeUserSessions(userID, currentSID, reason, realm...)
 }
 
 func RevokeAllUserSessions(userID int, reason string) (int64, error) {
 	return revokeUserSessions(userID, "", reason)
 }
 
-func revokeUserSessions(userID int, excludedSID, reason string) (int64, error) {
+func revokeUserSessions(userID int, excludedSID, reason string, realm ...string) (int64, error) {
 	if userID <= 0 {
 		return 0, ErrUserSessionInvalid
 	}
 	now := time.Now().Unix()
 	var totalAffected int64
 	for {
-		query := DB.Where("user_id = ? AND status = ? AND expires_at > ?", userID, UserSessionStatusActive, now)
+		query := tokenRealmQuery(DB, realm).Where("user_id = ? AND status = ? AND expires_at > ?", userID, UserSessionStatusActive, now)
 		if excludedSID != "" {
 			query = query.Where("sid <> ?", excludedSID)
 		}

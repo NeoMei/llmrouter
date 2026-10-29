@@ -96,7 +96,7 @@ func Login(c *gin.Context) {
 	}
 	if twoFAEnabled {
 		expiresAt := time.Now().Add(5 * time.Minute)
-		payload, err := common.Marshal(twoFALoginFlowPayload{AuthVersion: user.AuthVersion})
+		payload, err := common.Marshal(twoFALoginFlowPayload{AuthVersion: user.AuthVersion, NativeRealm: user.FundingRealm == model.NativeFundingLocalOnly && user.NativePassword})
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -124,6 +124,9 @@ func Login(c *gin.Context) {
 		return
 	}
 
+	if user.FundingRealm == model.NativeFundingLocalOnly && user.NativePassword {
+		c.Set("native_password_authenticated", true)
+	}
 	setupLogin(&user, c)
 }
 
@@ -191,7 +194,8 @@ func setupLoginAtAuthVersion(user *model.User, expectedAuthVersion int64, c *gin
 		return
 	}
 	maintenance := (c.FullPath() == "/api/user/login" || c.FullPath() == "/api/user/login/2fa") && middleware.NativePrivateMaintenanceIdentity(c, currentUser.Id)
-	if platformaccount.RuntimeEnabled() && !maintenance {
+	native := c.GetBool("native_password_authenticated")
+	if platformaccount.RuntimeEnabled() && !maintenance && !native {
 		if err = applyCurrentProductIdentity(c, currentUser, true); err != nil {
 			productIdentityError(c, err)
 			return
@@ -202,7 +206,13 @@ func setupLoginAtAuthVersion(user *model.User, expectedAuthVersion int64, c *gin
 		return
 	}
 	var bundle *service.AuthBundle
-	if expectedAuthVersion > 0 {
+	if native {
+		version := user.AuthVersion
+		if expectedAuthVersion > 0 {
+			version = expectedAuthVersion
+		}
+		bundle, err = service.CreateNativeLoginSessionAtAuthVersion(user.Id, version, loginMethodFromContext(c), c.ClientIP(), c.Request.UserAgent())
+	} else if expectedAuthVersion > 0 {
 		bundle, err = service.CreateLoginSessionAtAuthVersion(
 			user.Id,
 			expectedAuthVersion,
@@ -449,7 +459,7 @@ func GetUser(c *gin.Context) {
 		return
 	}
 	user.AdminPermissions = authz.Capabilities(user.Id, user.Role)
-	if platformaccount.RuntimeEnabled() {
+	if platformaccount.RuntimeEnabled() && user.FundingRealm != model.NativeFundingLocalOnly {
 		snapshot, e := platformaccount.IdentityForLocal(c.Request.Context(), strconv.Itoa(user.Id))
 		if e != nil {
 			productIdentityError(c, e)
@@ -490,7 +500,7 @@ func GenerateAccessToken(c *gin.Context) {
 		return
 	}
 
-	if err := model.UpdateUserAccessToken(id, key); err != nil {
+	if err := model.UpdateUserAccessToken(id, key, tokenRequestRealm(c)); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -797,13 +807,13 @@ func UpdateUser(c *gin.Context) {
 		updatedUser.Password = "" // rollback to what it should be
 	}
 	updatePassword := updatedUser.Password != ""
-	if platformaccount.RuntimeEnabled() {
+	if platformaccount.RuntimeEnabled() && originUser.FundingRealm != model.NativeFundingLocalOnly {
 		if _, e := mutateProductIdentity(c, originUser.Id, userkit.ProductIdentityMutation{Event: "profile"}); e != nil {
 			productIdentityError(c, e)
 			return
 		}
 	}
-	if platformaccount.RuntimeEnabled() && updatedUser.AdminPermissions != nil {
+	if platformaccount.RuntimeEnabled() && originUser.FundingRealm != model.NativeFundingLocalOnly && updatedUser.AdminPermissions != nil {
 		if _, e := mutateProductIdentity(c, originUser.Id, userkit.ProductIdentityMutation{Event: "authorization", PermissionOverrides: updatedUser.AdminPermissions}); e != nil {
 			productIdentityError(c, e)
 			return
@@ -884,7 +894,7 @@ func AdminClearUserBinding(c *gin.Context) {
 	if !authorizeProductIdentityWrite(c, id, "oauth") {
 		return
 	}
-	if err := user.ClearBinding(bindingType); err != nil {
+	if err := user.ClearBinding(bindingType, tokenRequestRealm(c)); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -1078,12 +1088,15 @@ func DeleteUser(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if !refreshManagedTarget(c, originUser) {
+		return
+	}
 	myRole := c.GetInt("role")
 	if myRole <= originUser.Role {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
 		return
 	}
-	if platformaccount.RuntimeEnabled() {
+	if platformaccount.RuntimeEnabled() && originUser.FundingRealm != model.NativeFundingLocalOnly {
 		handleCentralUserManagement(c, originUser, "delete")
 		return
 	}
@@ -1106,7 +1119,11 @@ func DeleteUser(c *gin.Context) {
 func DeleteSelf(c *gin.Context) {
 	id := c.GetInt("id")
 	user, _ := model.GetUserById(id, false)
-	if platformaccount.RuntimeEnabled() {
+	if user != nil && user.FundingRealm == model.NativeFundingLocalOnly && !middleware.NativeRealmAuthenticated(c) {
+		productIdentityError(c, model.ErrNativeCredentialUnverified)
+		return
+	}
+	if platformaccount.RuntimeEnabled() && user.FundingRealm != model.NativeFundingLocalOnly {
 		handleCentralUserManagement(c, user, "delete")
 		return
 	}
@@ -1157,7 +1174,11 @@ func CreateUser(c *gin.Context) {
 	}
 	authzTouched := false
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
-		if err := cleanUser.InsertWithTx(tx, 0); err != nil {
+		if middleware.NativeRealmAuthenticated(c) {
+			if err := model.CreateNativeUserWithTx(tx, c.GetInt("id"), &cleanUser); err != nil {
+				return err
+			}
+		} else if err := cleanUser.InsertWithTx(tx, 0); err != nil {
 			return err
 		}
 		touched, err := updateAdminPermissionsForUserInTx(c, tx, cleanUser.Id, cleanUser.Role, user.AdminPermissions)
@@ -1174,7 +1195,7 @@ func CreateUser(c *gin.Context) {
 		}
 	}
 	cleanUser.FinishInsert(0)
-	if platformaccount.RuntimeEnabled() {
+	if platformaccount.RuntimeEnabled() && !middleware.NativeRealmAuthenticated(c) {
 		desiredRole := cleanUser.Role
 		overrides := user.AdminPermissions
 		if e := completePendingProductIdentity(c, &cleanUser); e != nil {
@@ -1201,7 +1222,7 @@ func CreateUser(c *gin.Context) {
 }
 
 func updateAdminPermissionsForUserInTx(c *gin.Context, tx *gorm.DB, userID int, userRole int, permissions map[string]map[string]bool) (bool, error) {
-	if platformaccount.RuntimeEnabled() {
+	if platformaccount.RuntimeEnabled() && !middleware.NativeRealmAuthenticated(c) {
 		return false, nil
 	}
 	if permissions == nil {
@@ -1252,7 +1273,7 @@ func ManageUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
 		return
 	}
-	if platformaccount.RuntimeEnabled() && req.Action != "add_quota" {
+	if platformaccount.RuntimeEnabled() && user.FundingRealm != model.NativeFundingLocalOnly && req.Action != "add_quota" {
 		handleCentralUserManagement(c, &user, req.Action)
 		return
 	}

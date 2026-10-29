@@ -62,7 +62,7 @@ func VerifyBrokerSourceWithExpiry(ctx context.Context, identity AuthIdentity) (i
 		return 0, ErrBrokerSourceUnavailable
 	}
 	if current != bound || currentProof != proof {
-		return 0, ErrLoginSessionRevoked
+		return 0, ErrBrokerSourceUnavailable
 	}
 	return current.ExpiresAt, nil
 }

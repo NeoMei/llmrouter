@@ -197,6 +197,14 @@ func handleCentralUserManagement(c *gin.Context, user *model.User, action string
 }
 
 func authorizeProductIdentityWrite(c *gin.Context, target int, event string) bool {
+	if middleware.NativeRealmAuthenticated(c) {
+		_, err := model.NativeRealmUser(c.Request.Context(), target)
+		if err != nil {
+			productIdentityError(c, err)
+			return false
+		}
+		return true
+	}
 	if !platformaccount.RuntimeEnabled() {
 		return true
 	}
@@ -227,6 +235,17 @@ func refreshProductUserForRead(c *gin.Context, user *model.User) error {
 // refreshManagedTarget reads administrative metadata without requiring target
 // product access: disabled users still need enable/reset management.
 func refreshManagedTarget(c *gin.Context, u *model.User) bool {
+	if middleware.NativeRealmAuthenticated(c) && u.FundingRealm != model.NativeFundingLocalOnly {
+		productIdentityError(c, model.ErrNativeCredentialUnverified)
+		return false
+	}
+	if u.FundingRealm == model.NativeFundingLocalOnly {
+		if !middleware.NativeRealmAuthenticated(c) {
+			productIdentityError(c, model.ErrNativeCredentialUnverified)
+			return false
+		}
+		return true
+	}
 	if !platformaccount.RuntimeEnabled() {
 		return true
 	}

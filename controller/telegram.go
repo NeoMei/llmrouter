@@ -188,6 +188,9 @@ func TelegramBind(c *gin.Context) {
 			}
 			return err
 		}
+		if err := model.SetNativeLoginCredentialTx(tx, user.Id, "telegram_id", telegramId, session.AuthRealm); err != nil {
+			return err
+		}
 		result := tx.Model(&model.User{}).
 			Where("id = ? AND status = ? AND auth_version = ? AND telegram_id = ?", user.Id, common.UserStatusEnabled, user.AuthVersion, "").
 			Update("telegram_id", telegramId)
@@ -267,6 +270,14 @@ func TelegramLogin(c *gin.Context) {
 			"success": false,
 		})
 		return
+	}
+	native, err := model.IsNativeLoginCredential(c.Request.Context(), user.Id, "telegram_id", telegramId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if native {
+		c.Set("native_password_authenticated", true)
 	}
 	setupLogin(&user, c)
 }

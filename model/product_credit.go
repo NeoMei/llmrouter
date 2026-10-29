@@ -154,12 +154,12 @@ func ActivateRegisteredProductFunding(ctx context.Context, user *User) error {
 		return err
 	}
 	err = DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var current User
-		if err := lockForUpdate(tx).First(&current, user.Id).Error; err != nil {
+		current, err := lockCentralFundingOwnerTx(tx, user.Id)
+		if err != nil {
 			return err
 		}
 		var old ProductFundingAccount
-		err := tx.First(&old, "user_id = ?", user.Id).Error
+		err = tx.First(&old, "user_id = ?", user.Id).Error
 		if err == nil {
 			if old.ScopeDigest != NewProductFundingStore(DB, client).ScopeDigest() || old.State != "central" || old.AccountID != access.Binding.PersonalAccountID {
 				return ErrProductFundingConflict

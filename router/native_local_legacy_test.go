@@ -2,6 +2,8 @@ package router
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -19,10 +21,8 @@ import (
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
-	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 )
 
 func TestNativeLocalLegacyChatFailsClosedUntilBillingRecoveryExists(t *testing.T) {
@@ -31,8 +31,7 @@ func TestNativeLocalLegacyChatFailsClosedUntilBillingRecoveryExists(t *testing.T
 	t.Setenv("UNIHUB_ORIGIN", "http://127.0.0.1:1")
 	t.Setenv("UNIHUB_PRODUCT_RUNTIME_TOKEN", strings.Repeat("s", 32))
 	gin.SetMode(gin.TestMode)
-	db, err := gorm.Open(sqlite.Open(t.TempDir()+"/native.db"), &gorm.Config{})
-	require.NoError(t, err)
+	db := nativeRealmFixtureDB(t, t.TempDir()+"/native.db")
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
@@ -45,6 +44,7 @@ func TestNativeLocalLegacyChatFailsClosedUntilBillingRecoveryExists(t *testing.T
 	t.Setenv("LOG_SQL_DSN", "")
 	require.NoError(t, model.InitLogDB())
 	common.MemoryCacheEnabled, common.RedisEnabled, common.LogConsumeEnabled, common.RetryTimes = false, false, true, 0
+	nativeRealmFixtureCache(t)
 	grok := model_setting.GetGrokSettings()
 	oldViolation := grok.ViolationDeductionEnabled
 	grok.ViolationDeductionEnabled = false
@@ -109,10 +109,33 @@ func TestNativeLocalLegacyChatFailsClosedUntilBillingRecoveryExists(t *testing.T
 	assert.Equal(t, 100000, userAfter.Quota)
 	assert.Equal(t, 100000, tokenAfter.RemainQuota)
 
+	// An explicitly enrolled native key uses the original engine under runtime.
+	require.NoError(t, db.Model(&user).Updates(map[string]any{"password": "synthetic-hash", "role": 1}).Error)
+	passwordDigest := sha256.Sum256([]byte("synthetic-hash"))
+	keyDigest := sha256.Sum256([]byte(token.Key))
+	raw, err := common.Marshal(model.NativeRealmManifest{Version: 1, Users: []model.NativeRealmEnrollment{{UserID: user.Id, Role: 1, Status: 1, AuthVersion: 1, PasswordSHA256: hex.EncodeToString(passwordDigest[:]), Keys: []model.NativeKeyEnrollment{{ID: token.Id, SecretSHA256: hex.EncodeToString(keyDigest[:])}}}}})
+	require.NoError(t, err)
+	approved := sha256.Sum256(raw)
+	require.NoError(t, model.EnrollNativeRealm(context.Background(), db, raw, hex.EncodeToString(approved[:])))
+	enrolled := send(false, "203.0.113.9")
+	require.Equal(t, http.StatusOK, enrolled.Code, enrolled.Body.String())
+	assert.Contains(t, enrolled.Body.String(), "ready")
+	assert.EqualValues(t, 1, sends.Load())
+	require.Eventually(t, func() bool { return gopool.WorkerCount() == 0 }, 2*time.Second, time.Millisecond)
+	cached, err := model.GetUserCache(user.Id)
+	require.NoError(t, err)
+	assert.Less(t, cached.Quota, 100000)
+	model.FlushBatchUpdates()
+	require.NoError(t, db.First(&userAfter, user.Id).Error)
+	assert.Equal(t, cached.Quota, userAfter.Quota)
+	require.NoError(t, db.First(&tokenAfter, token.Id).Error)
+	assert.Less(t, tokenAfter.RemainQuota, 100000)
 	// The legacy non-runtime installation retains its original native behavior.
 	t.Setenv("UNIHUB_PRODUCT_RUNTIME_ENABLED", "false")
 	legacy := send(false, "203.0.113.9")
 	require.Equal(t, http.StatusOK, legacy.Code, legacy.Body.String())
 	assert.Contains(t, legacy.Body.String(), "ready")
-	assert.EqualValues(t, 1, sends.Load())
+	assert.EqualValues(t, 2, sends.Load())
+	require.Eventually(t, func() bool { return gopool.WorkerCount() == 0 }, 2*time.Second, time.Millisecond)
+	model.FlushBatchUpdates()
 }

@@ -28,6 +28,7 @@ type Token struct {
 	UsedQuota          int            `json:"used_quota" gorm:"default:0"` // used quota
 	Group              string         `json:"group" gorm:"default:''"`
 	CrossGroupRetry    bool           `json:"cross_group_retry"` // 跨分组重试，仅auto分组有效
+	AuthRealm          string         `json:"-" gorm:"size:24"`
 	FundingAccountID   string         `json:"-" gorm:"size:128"`
 	Purpose            string         `json:"-" gorm:"type:varchar(32);index"`
 	BoundOrigin        string         `json:"-" gorm:"type:varchar(512)"`
@@ -81,10 +82,10 @@ func (token *Token) GetIpLimits() []string {
 	return ipLimits
 }
 
-func GetAllUserTokens(userId int, startIdx int, num int) ([]*Token, error) {
+func GetAllUserTokens(userId int, startIdx int, num int, realm ...string) ([]*Token, error) {
 	var tokens []*Token
 	var err error
-	err = DB.Where("user_id = ?", userId).Order("id desc").Limit(num).Offset(startIdx).Find(&tokens).Error
+	err = tokenRealmQuery(DB, realm).Where("user_id = ?", userId).Order("id desc").Limit(num).Offset(startIdx).Find(&tokens).Error
 	return tokens, err
 }
 
@@ -134,7 +135,7 @@ func validateLikePattern(input string) error {
 
 const searchHardLimit = 100
 
-func SearchUserTokens(userId int, keyword string, token string, offset int, limit int) (tokens []*Token, total int64, err error) {
+func SearchUserTokens(userId int, keyword string, token string, offset int, limit int, realm ...string) (tokens []*Token, total int64, err error) {
 	// model 层强制截断
 	if limit <= 0 || limit > searchHardLimit {
 		limit = searchHardLimit
@@ -151,7 +152,7 @@ func SearchUserTokens(userId int, keyword string, token string, offset int, limi
 	maxTokens := operation_setting.GetMaxUserTokens()
 	hasFuzzy := strings.Contains(keyword, "%") || strings.Contains(token, "%")
 	if hasFuzzy {
-		count, err := CountUserTokens(userId)
+		count, err := CountUserTokens(userId, realm...)
 		if err != nil {
 			common.SysLog("failed to count user tokens: " + err.Error())
 			return nil, 0, errors.New("获取令牌数量失败")
@@ -161,7 +162,7 @@ func SearchUserTokens(userId int, keyword string, token string, offset int, limi
 		}
 	}
 
-	baseQuery := DB.Model(&Token{}).Where("user_id = ?", userId)
+	baseQuery := tokenRealmQuery(DB, realm).Model(&Token{}).Where("user_id = ?", userId)
 
 	// 非空才加 LIKE 条件，空则跳过（不过滤该字段）
 	if keyword != "" {
@@ -235,13 +236,13 @@ func ValidateUserToken(key string) (token *Token, err error) {
 	return nil, fmt.Errorf("%w: %v", ErrDatabase, err)
 }
 
-func GetTokenByIds(id int, userId int) (*Token, error) {
+func GetTokenByIds(id int, userId int, realm ...string) (*Token, error) {
 	if id == 0 || userId == 0 {
 		return nil, errors.New("id 或 userId 为空！")
 	}
 	token := Token{Id: id, UserId: userId}
 	var err error = nil
-	err = DB.First(&token, "id = ? and user_id = ?", id, userId).Error
+	err = tokenRealmQuery(DB, realm).First(&token, "id = ? and user_id = ?", id, userId).Error
 	return &token, err
 }
 
@@ -289,7 +290,23 @@ func DeleteExpiredChatCredentials(userID int, now int64) error {
 }
 
 // Update Make sure your token's fields is completed, because this will update non-zero values
-func (token *Token) Update() (err error) {
+func (token *Token) Update(realm ...string) (err error) {
+	if len(realm) > 0 {
+		return DB.Transaction(func(tx *gorm.DB) error {
+			var owner User
+			if err := lockForUpdate(tx).First(&owner, token.UserId).Error; err != nil {
+				return err
+			}
+			var current Token
+			if err := lockForUpdate(tokenRealmQuery(tx, realm)).First(&current, "id = ? AND user_id = ?", token.Id, token.UserId).Error; err != nil {
+				return err
+			}
+			if err := invalidateTokenCacheForMutation(current.Key); err != nil {
+				return err
+			}
+			return tx.Model(&current).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota", "model_limits_enabled", "model_limits", "allow_ips", "group", "cross_group_retry").Updates(token).Error
+		})
+	}
 	// 写库前失效缓存并设置 fence，防止并发读者把过期快照重新写回缓存。
 	if cacheErr := invalidateTokenCacheForMutation(token.Key); cacheErr != nil {
 		common.SysLog("failed to invalidate token cache before update: " + cacheErr.Error())
@@ -343,13 +360,21 @@ func DisableModelLimits(tokenId int) error {
 	return token.Update()
 }
 
-func DeleteTokenById(id int, userId int) (err error) {
-	// Why we need userId here? In case user want to delete other's token.
-	if id == 0 || userId == 0 {
-		return errors.New("id 或 userId 为空！")
+func DeleteTokenById(id int, userId int, realm ...string) error {
+	if id <= 0 || userId <= 0 {
+		return gorm.ErrRecordNotFound
 	}
-	token := Token{Id: id, UserId: userId}
-	err = DB.Where(token).First(&token).Error
+	if len(realm) > 0 {
+		count, err := BatchDeleteTokens([]int{id}, userId, realm...)
+		if err != nil {
+			return err
+		}
+		if count != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	}
+	token, err := GetTokenByIds(id, userId)
 	if err != nil {
 		return err
 	}
@@ -427,22 +452,29 @@ func decreaseTokenQuota(id int, quota int) (err error) {
 }
 
 // CountUserTokens returns total number of tokens for the given user, used for pagination
-func CountUserTokens(userId int) (int64, error) {
+func CountUserTokens(userId int, realm ...string) (int64, error) {
 	var total int64
-	err := DB.Model(&Token{}).Where("user_id = ?", userId).Count(&total).Error
+	err := tokenRealmQuery(DB, realm).Model(&Token{}).Where("user_id = ?", userId).Count(&total).Error
 	return total, err
 }
 
 // BatchDeleteTokens 删除指定用户的一组令牌，返回成功删除数量
-func BatchDeleteTokens(ids []int, userId int) (int, error) {
+func BatchDeleteTokens(ids []int, userId int, realm ...string) (int, error) {
 	if len(ids) == 0 {
 		return 0, errors.New("ids 不能为空！")
 	}
 
 	tx := DB.Begin()
+	if len(realm) > 0 {
+		var owner User
+		if err := lockForUpdate(tx).First(&owner, userId).Error; err != nil {
+			tx.Rollback()
+			return 0, err
+		}
+	}
 
 	var tokens []Token
-	if err := tx.Where("user_id = ? AND id IN (?)", userId, ids).Find(&tokens).Error; err != nil {
+	if err := tokenRealmQuery(tx, realm).Where("user_id = ? AND id IN (?)", userId, ids).Find(&tokens).Error; err != nil {
 		tx.Rollback()
 		return 0, err
 	}
@@ -450,7 +482,7 @@ func BatchDeleteTokens(ids []int, userId int) (int, error) {
 		common.SysLog("failed to invalidate token cache before batch delete: " + err.Error())
 	}
 
-	if err := tx.Where("user_id = ? AND id IN (?)", userId, ids).Delete(&Token{}).Error; err != nil {
+	if err := tokenRealmQuery(tx, realm).Where("user_id = ? AND id IN (?)", userId, ids).Delete(&Token{}).Error; err != nil {
 		tx.Rollback()
 		return 0, err
 	}
@@ -462,9 +494,9 @@ func BatchDeleteTokens(ids []int, userId int) (int, error) {
 	return len(tokens), nil
 }
 
-func GetTokenKeysByIds(ids []int, userId int) ([]Token, error) {
+func GetTokenKeysByIds(ids []int, userId int, realm ...string) ([]Token, error) {
 	var tokens []Token
-	err := DB.Select("id", commonKeyCol).
+	err := tokenRealmQuery(DB, realm).Select("id", commonKeyCol, "auth_realm").
 		Where("user_id = ? AND id IN (?)", userId, ids).
 		Find(&tokens).Error
 	return tokens, err
@@ -504,4 +536,15 @@ func invalidateTokensCache(tokens []Token) error {
 		}
 	}
 	return firstErr
+}
+
+// tokenRealmQuery scopes dashboard credential operations at SQL selection.
+func tokenRealmQuery(db *gorm.DB, realm []string) *gorm.DB {
+	if len(realm) == 0 {
+		return db
+	}
+	if realm[0] == NativeFundingLocalOnly {
+		return db.Where("auth_realm = ?", NativeFundingLocalOnly)
+	}
+	return db.Where("auth_realm IS NULL OR auth_realm = ?", "")
 }

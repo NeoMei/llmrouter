@@ -125,6 +125,14 @@ func WeChatAuth(c *gin.Context) {
 		})
 		return
 	}
+	native, err := model.IsNativeLoginCredential(c.Request.Context(), user.Id, "wechat_id", user.WeChatId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if native {
+		c.Set("native_password_authenticated", true)
+	}
 	setupLogin(&user, c)
 }
 
@@ -170,7 +178,7 @@ func WeChatBind(c *gin.Context) {
 		return
 	}
 	// 只更新绑定列，避免完整用户快照覆盖并发的封禁、降权或分组变更。
-	if err := model.UpdateUserBindColumn(userId, "wechat_id", wechatId); err != nil {
+	if err := model.UpdateUserBindColumn(userId, "wechat_id", wechatId, tokenRequestRealm(c)); err != nil {
 		common.ApiError(c, err)
 		return
 	}

@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"github.com/QuantumNous/new-api/internal/platformaccount"
+	"strconv"
 	"time"
 
 	"gorm.io/gorm"
@@ -109,41 +110,49 @@ func CreateUserOAuthBindingWithTx(tx *gorm.DB, binding *UserOAuthBinding) error 
 }
 
 // UpdateUserOAuthBinding updates an existing OAuth binding (e.g., rebind to different OAuth account)
-func UpdateUserOAuthBinding(userId, providerId int, newProviderUserId string) error {
-	// Check if the new provider user ID is already taken by another user
-	var existingBinding UserOAuthBinding
-	err := DB.Where("provider_id = ? AND provider_user_id = ?", providerId, newProviderUserId).First(&existingBinding).Error
-	if err == nil && existingBinding.UserId != userId {
-		return errors.New("this OAuth account is already bound to another user")
+func UpdateUserOAuthBinding(userId, providerId int, subject string, realm ...string) error {
+	if userId <= 0 || providerId <= 0 || subject == "" {
+		return ErrNativeCredentialUnverified
 	}
-
-	// Check if user already has a binding for this provider
-	var binding UserOAuthBinding
-	err = DB.Where("user_id = ? AND provider_id = ?", userId, providerId).First(&binding).Error
-	if err != nil {
-		// No existing binding, create new one
-		return CreateUserOAuthBinding(&UserOAuthBinding{
-			UserId:         userId,
-			ProviderId:     providerId,
-			ProviderUserId: newProviderUserId,
-		})
+	change := func(tx *gorm.DB) error {
+		scope := ""
+		if len(realm) > 0 {
+			scope = realm[0]
+		}
+		if err := SetNativeLoginCredentialTx(tx, userId, "oauth:"+strconv.Itoa(providerId), subject, scope); err != nil {
+			return err
+		}
+		var binding UserOAuthBinding
+		err := tx.Where("user_id = ? AND provider_id = ?", userId, providerId).First(&binding).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return CreateUserOAuthBindingWithTx(tx, &UserOAuthBinding{UserId: userId, ProviderId: providerId, ProviderUserId: subject})
+		}
+		if err != nil {
+			return err
+		}
+		return tx.Model(&binding).Update("provider_user_id", subject).Error
 	}
-
-	// Update existing binding
 	if platformaccount.RuntimeEnabled() {
-		return ApplyManagedCredentialChange(userId, func(tx *gorm.DB) error { return tx.Model(&binding).Update("provider_user_id", newProviderUserId).Error })
+		return ApplyManagedCredentialChange(userId, change)
 	}
-	return DB.Model(&binding).Update("provider_user_id", newProviderUserId).Error
+	return DB.Transaction(change)
 }
 
-// DeleteUserOAuthBinding deletes an OAuth binding
-func DeleteUserOAuthBinding(userId, providerId int) error {
-	if platformaccount.RuntimeEnabled() {
-		return ApplyManagedCredentialChange(userId, func(tx *gorm.DB) error {
-			return tx.Where("user_id = ? AND provider_id = ?", userId, providerId).Delete(&UserOAuthBinding{}).Error
-		})
+func DeleteUserOAuthBinding(userId, providerId int, realm ...string) error {
+	change := func(tx *gorm.DB) error {
+		scope := ""
+		if len(realm) > 0 {
+			scope = realm[0]
+		}
+		if err := SetNativeLoginCredentialTx(tx, userId, "oauth:"+strconv.Itoa(providerId), "", scope); err != nil {
+			return err
+		}
+		return tx.Where("user_id = ? AND provider_id = ?", userId, providerId).Delete(&UserOAuthBinding{}).Error
 	}
-	return DB.Where("user_id = ? AND provider_id = ?", userId, providerId).Delete(&UserOAuthBinding{}).Error
+	if platformaccount.RuntimeEnabled() {
+		return ApplyManagedCredentialChange(userId, change)
+	}
+	return DB.Transaction(change)
 }
 
 func deleteUserOAuthBindingsByUserId(tx *gorm.DB, userId int) error {

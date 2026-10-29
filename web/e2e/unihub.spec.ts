@@ -1189,3 +1189,29 @@ test('authenticated sign-in honors the original wallet and channel destinations'
     page.getByRole('heading', { name: 'Channels', exact: true })
   ).toBeVisible()
 })
+
+test('interactive sign-in failure returns to UniHub without an automatic redirect loop', async ({
+  page,
+}) => {
+  await fixture(page)
+  let attempts = 0
+  await page.route('**/api/unihub/login?*', async (route) => {
+    attempts++
+    return route.fulfill({
+      status: 303,
+      headers: { Location: '/unihub?sso_error=1&redirect=%2Fdashboard' },
+    })
+  })
+  await page.goto('/unihub?signed_out=1')
+  await page
+    .getByRole('button', { name: 'Sign in with UniHub', exact: true })
+    .click()
+  await expect(page).toHaveURL(/\/unihub\?.*sso_error=1/)
+  await expect(
+    page.getByText('UniHub sign in failed. Try again to continue.')
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Register UniHub account', exact: true })
+  ).toBeVisible()
+  expect(attempts).toBe(1)
+})

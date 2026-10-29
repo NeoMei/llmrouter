@@ -34,11 +34,7 @@ func registerUniHubSSO(r *gin.Engine, config platformaccount.Config) {
 	var returnsMu sync.Mutex
 	returns := map[string]loginReturn{}
 	fallback := func(c *gin.Context, record loginReturn) {
-		q := url.Values{"unihub_silent": {"done"}}
-		if userkit.SafeReturn(record.destination) {
-			q.Set("redirect", record.destination)
-		}
-		c.Redirect(303, "/sign-in?"+q.Encode())
+		productBrowserFailure(c, record.destination, record.silent)
 	}
 
 	r.GET("/api/unihub/login", func(c *gin.Context) {

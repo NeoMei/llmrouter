@@ -31,6 +31,11 @@ type knowledgeSettledReceipt struct {
 	ProviderCost string `json:"provider_cost"`
 }
 
+type knowledgeReadGrant struct {
+	Claims
+	ActorExpiresAt int64 `json:"actor_expires_at"`
+}
+
 // This read-only client rejects redirect and duplicate-key authority replies.
 func readKnowledgeAuthority(ctx context.Context, c *client, method, path string, in, out any, actorAccess string) error {
 	if c == nil || c.http == nil {
@@ -166,17 +171,20 @@ func (v *knowledgeResultVault) authorizedResult(ctx context.Context, a *Adapter,
 	if original.TaskID != task || original.Status != "SETTLED" || original.EvidenceConflict || !((original.Operation == "embedding" && original.WireOperation == "embeddings.create") || (original.Operation == "rerank" && original.WireOperation == "rerank.create")) {
 		return nil, ErrInvalid
 	}
-	verify := func() (Claims, error) {
-		var grant Claims
+	if (original.WireOperation == "embeddings.create" && !a.config.AllowAliEmbeddingV4) || (original.WireOperation == "rerank.create" && !a.config.AllowAliRerank) {
+		return nil, ErrInvalid
+	}
+	verify := func() (knowledgeReadGrant, error) {
+		var grant knowledgeReadGrant
 		if err := readKnowledgeAuthority(ctx, a.client, http.MethodPost, "/internal/v1/model-credentials/verify", map[string]string{"token": credential, "model": original.Model, "wire_operation": original.WireOperation, "purpose": "result_read", "instance_id": a.config.InstanceID}, &grant, actorAccess); err != nil {
-			return Claims{}, err
+			return knowledgeReadGrant{}, err
 		}
 		instance := original.InstanceID
 		if instance == "" {
 			instance = "default"
 		}
-		if a.validateModelCredential(credential, task, original.Model, grant) != nil || instance != a.config.InstanceID || original.CallID != id || grant.ActorID != original.ActorID || grant.AccountID != original.AccountID || grant.OriginProductID != original.OriginProductID || !allowsWire(grant, original.Model, original.WireOperation) {
-			return Claims{}, ErrInvalid
+		if a.validateModelCredential(credential, task, original.Model, grant.Claims) != nil || grant.ActorExpiresAt <= v.now().Unix() || instance != a.config.InstanceID || original.CallID != id || grant.ActorID != original.ActorID || grant.AccountID != original.AccountID || grant.OriginProductID != original.OriginProductID || !allowsWire(grant.Claims, original.Model, original.WireOperation) {
+			return knowledgeReadGrant{}, ErrInvalid
 		}
 		return grant, nil
 	}
@@ -222,7 +230,7 @@ func (v *knowledgeResultVault) authorizedResult(ctx context.Context, a *Adapter,
 		if stored.BindingVersion != 2 || stored.AttemptID != initial.AttemptID || stored.ExpiresAt <= v.now().UnixMilli() || len(stored.Ciphertext) < aead.NonceSize() {
 			return ErrPending
 		}
-		if !second.ExpiresAt.After(time.Now()) || ctx.Err() != nil {
+		if !second.ExpiresAt.After(time.Now()) || second.ActorExpiresAt <= v.now().Unix() || ctx.Err() != nil {
 			return ErrPending
 		}
 		resultExpires = stored.ExpiresAt
@@ -247,7 +255,7 @@ func (v *knowledgeResultVault) authorizedResult(ctx context.Context, a *Adapter,
 	if err != nil {
 		return nil, err
 	}
-	if ctx.Err() != nil || !second.ExpiresAt.After(time.Now()) || resultExpires <= v.now().UnixMilli() {
+	if ctx.Err() != nil || !second.ExpiresAt.After(time.Now()) || second.ActorExpiresAt <= v.now().Unix() || resultExpires <= v.now().UnixMilli() {
 		return nil, ErrPending
 	}
 	return output, nil

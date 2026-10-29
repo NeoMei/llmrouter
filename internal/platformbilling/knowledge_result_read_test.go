@@ -55,6 +55,7 @@ func TestKnowledgeResultReadRequiresBoundGrantAndRemoteSettlement(t *testing.T) 
 			digest := sha256.Sum256(payload)
 			remote := knowledgeSettledReceipt{RemoteCall: RemoteCall{CallID: row.CallID, ActorID: row.ActorID, AccountID: row.AccountID, OriginProductID: row.OriginProductID, CredentialID: row.CredentialID, RequestDigest: row.Digest, WireOperation: row.WireOperation, Rate: rate, Held: row.Amount, Allocations: funding.Allocations, ChargeAsset: row.Asset, FundingMode: row.FundingMode, FundingProductID: "llmrouter", Status: "SETTLED", Charged: "3"}, TaskID: row.TaskID, ServiceID: "llmrouter", Usage: &intent.Usage, FinalDigest: hex.EncodeToString(digest[:])}
 			grant := Claims{ID: "credential", Audience: "llmrouter", ActorID: row.ActorID, AccountID: row.AccountID, OriginProductID: row.OriginProductID, TaskID: row.TaskID, Models: []string{row.Model}, Operations: map[string][]string{row.Model: {row.WireOperation}}, ExpiresAt: time.Now().Add(time.Hour)}
+			actorExpiry := time.Now().Add(time.Hour).Unix()
 			var duplicate bool
 			var duringGet func()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -70,7 +71,10 @@ func TestKnowledgeResultReadRequiresBoundGrantAndRemoteSettlement(t *testing.T) 
 						_, _ = w.Write([]byte(`{"actor_id":"one","actor_id":"two"}`))
 						return
 					}
-					data, _ = common.Marshal(grant)
+					data, _ = common.Marshal(struct {
+						Claims
+						ActorExpiresAt int64 `json:"actor_expires_at,omitempty"`
+					}{grant, actorExpiry})
 				case "/internal/v1/calls/call":
 					if duringGet != nil {
 						duringGet()
@@ -84,6 +88,7 @@ func TestKnowledgeResultReadRequiresBoundGrantAndRemoteSettlement(t *testing.T) 
 			}))
 			defer server.Close()
 			s.adapter.client = &client{origin: server.URL, token: "service", http: server.Client()}
+			s.adapter.config.AllowAliRerank = true
 			_, err = v.authorizedResult(context.Background(), s.adapter, "", "uh_model_original", row.TaskID, row.CallID)
 			assert.Error(t, err)
 			_, err = v.authorizedResult(context.Background(), s.adapter, "wrong-access-token", "uh_model_original", row.TaskID, row.CallID)
@@ -91,6 +96,48 @@ func TestKnowledgeResultReadRequiresBoundGrantAndRemoteSettlement(t *testing.T) 
 			got, err := v.authorizedResult(context.Background(), s.adapter, "actor-access-token", "uh_model_original", row.TaskID, row.CallID)
 			require.NoError(t, err)
 			assert.Equal(t, staged.body, string(got))
+			// A newly issued task credential may recover an existing result only
+			// while its current actor, payer and operation scope still match.
+			grant.ID = "renewed-credential"
+			got, err = v.authorizedResult(context.Background(), s.adapter, "actor-access-token", "uh_model_renewed", row.TaskID, row.CallID)
+			require.NoError(t, err)
+			assert.Equal(t, staged.body, string(got))
+			grant.ID = "credential"
+			actorExpiry = 0
+			_, err = v.authorizedResult(context.Background(), s.adapter, "actor-access-token", "uh_model_original", row.TaskID, row.CallID)
+			assert.Error(t, err)
+			actorExpiry = time.Now().Add(-time.Second).Unix()
+			_, err = v.authorizedResult(context.Background(), s.adapter, "actor-access-token", "uh_model_original", row.TaskID, row.CallID)
+			assert.Error(t, err)
+			actorExpiry = time.Now().Add(time.Hour).Unix()
+			duringGet = func() { actorExpiry = time.Now().Add(-time.Second).Unix() }
+			_, err = v.authorizedResult(context.Background(), s.adapter, "actor-access-token", "uh_model_original", row.TaskID, row.CallID)
+			assert.Error(t, err)
+			duringGet = nil
+			actorExpiry = time.Now().Add(time.Hour).Unix()
+			// Simulate expiry after the second authority check and decryption,
+			// immediately before delivering the result.
+			base := time.Now()
+			actorExpiry = base.Unix() + 2
+			clockReadsBeforeDelivery := 0
+			v.now = func() time.Time {
+				clockReadsBeforeDelivery++
+				if clockReadsBeforeDelivery >= 5 {
+					return base.Add(3 * time.Second)
+				}
+				return base
+			}
+			_, err = v.authorizedResult(context.Background(), s.adapter, "actor-access-token", "uh_model_original", row.TaskID, row.CallID)
+			assert.Error(t, err)
+			v.now = time.Now
+			actorExpiry = time.Now().Add(time.Hour).Unix()
+			// Disabling this producer must also close access to its cached results,
+			// even if another knowledge producer remains enabled.
+			s.adapter.config.AllowAliRerank = false
+			s.adapter.config.AllowAliEmbeddingV4 = true
+			_, err = v.authorizedResult(context.Background(), s.adapter, "actor-access-token", "uh_model_original", row.TaskID, row.CallID)
+			assert.Error(t, err)
+			s.adapter.config.AllowAliRerank = true
 			var stored knowledgeResultRow
 			require.NoError(t, s.adapter.db.First(&stored, "call_id = ?", row.CallID).Error)
 			// A genuine legacy v1 ciphertext remains internally readable for

@@ -323,7 +323,11 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 					if variant == "wrong-grant" {
 						grantWire = "chat.completions.create"
 					}
-					out = platformbilling.Claims{Operations: map[string][]string{"rank": {grantWire}}, ID: grantID, Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: "origin", Models: []string{"rank"}, TaskID: "task", ExpiresAt: credentialExpiry}
+					grant := platformbilling.Claims{Operations: map[string][]string{"rank": {grantWire}}, ID: grantID, Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: "origin", Models: []string{"rank"}, TaskID: "task", ExpiresAt: credentialExpiry}
+					out = struct {
+						platformbilling.Claims
+						ActorExpiresAt int64 `json:"actor_expires_at,omitempty"`
+					}{grant, credentialExpiry.Unix()}
 				case "/internal/v1/rates":
 					out = []platformbilling.Rate{rate}
 				case "/internal/v1/calls/reserve":

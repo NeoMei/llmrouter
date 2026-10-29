@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"regexp"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -32,6 +33,7 @@ type knowledgeResultRow struct {
 	BindingVersion int
 	AttemptID      uint
 	ObservationTag string `gorm:"size:64"`
+	KeyID          string `gorm:"size:32"`
 }
 
 func (knowledgeResultRow) TableName() string { return "platform_knowledge_results" }
@@ -43,39 +45,110 @@ type knowledgeResultKey struct {
 
 func (knowledgeResultKey) TableName() string { return "platform_knowledge_result_keys" }
 
+type knowledgeResultActive struct {
+	ID    string `gorm:"primaryKey;size:32"`
+	KeyID string `gorm:"size:32"`
+}
+
+func (knowledgeResultActive) TableName() string { return "platform_knowledge_result_active" }
+
 type knowledgeResultVault struct {
 	db      *gorm.DB
+	active  string
+	keys    map[string]cipher.AEAD
 	aead    cipher.AEAD
 	sealKey []byte
 	ttl     time.Duration
 	now     func() time.Time
 }
 
+var knowledgeKeyID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,32}$`)
+
 func newKnowledgeResultVault(db *gorm.DB, key []byte, ttl time.Duration) (*knowledgeResultVault, error) {
-	if db == nil || len(key) != 32 || ttl <= 0 || ttl > 24*time.Hour {
+	return newKnowledgeResultVaultWithKeys(db, map[string][]byte{"v1": key}, "v1", ttl)
+}
+
+// Keys are deployment secrets shared by all nodes, never stored in the database.
+// Every recorded version must remain supplied; this deliberately does not offer
+// key retirement while old ciphertext, tombstones or backups may need it.
+func newKnowledgeResultVaultWithKeys(db *gorm.DB, keys map[string][]byte, active string, ttl time.Duration) (*knowledgeResultVault, error) {
+	if db == nil || ttl <= 0 || ttl > 24*time.Hour || !knowledgeKeyID.MatchString(active) || len(keys) == 0 || len(keys) > 32 {
 		return nil, ErrInvalid
 	}
-	// GORM can interpolate BLOB contents into SQL logs, including on errors.
-	// Suppress SQL logging for every operation on this sensitive store.
 	db = db.Session(&gorm.Session{Logger: logger.Discard})
-	block, err := aes.NewCipher(key)
-	if err != nil {
+	aeads := make(map[string]cipher.AEAD, len(keys))
+	verifiers := make(map[string]string, len(keys))
+	seen := make(map[string]bool, len(keys))
+	for id, key := range keys {
+		if !knowledgeKeyID.MatchString(id) || len(key) != 32 {
+			return nil, ErrInvalid
+		}
+		mac := hmac.New(sha256.New, key)
+		_, _ = mac.Write([]byte("platform-knowledge-result-key-v1"))
+		fingerprint := hex.EncodeToString(mac.Sum(nil))
+		if seen[fingerprint] {
+			return nil, ErrInvalid
+		}
+		seen[fingerprint] = true
+		verifiers[id] = fingerprint
+		block, err := aes.NewCipher(key)
+		if err != nil {
+			return nil, err
+		}
+		aead, err := cipher.NewGCM(block)
+		if err != nil {
+			return nil, err
+		}
+		aeads[id] = aead
+	}
+	selected, ok := aeads[active]
+	if !ok {
+		return nil, ErrInvalid
+	}
+	if err := db.AutoMigrate(&knowledgeResultKey{}, &knowledgeResultRow{}, &knowledgeResultActive{}); err != nil {
 		return nil, err
 	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	if err = db.AutoMigrate(&knowledgeResultKey{}, &knowledgeResultRow{}); err != nil {
-		return nil, err
-	}
-	mac := hmac.New(sha256.New, key)
-	_, _ = mac.Write([]byte("platform-knowledge-result-key-v1"))
-	want := hex.EncodeToString(mac.Sum(nil))
-	err = db.Transaction(func(tx *gorm.DB) error {
-		var existing knowledgeResultKey
-		err := tx.First(&existing, "id = ?", "v1").Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+	err := db.Transaction(func(tx *gorm.DB) error {
+		// Legacy rows without an active marker can only start with their original
+		// v1 writer. The existing fingerprint is verified below.
+		var marker knowledgeResultActive
+		markerErr := tx.First(&marker, "id = ?", "active").Error
+		if errors.Is(markerErr, gorm.ErrRecordNotFound) {
+			var count int64
+			if err := tx.Model(&knowledgeResultKey{}).Count(&count).Error; err != nil {
+				return err
+			}
+			if count > 0 && active != "v1" {
+				return ErrInvalid
+			}
+		} else if markerErr != nil {
+			return markerErr
+		}
+		// A single serialized row binds all nodes to one writer generation.
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&knowledgeResultActive{ID: "active", KeyID: active}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&knowledgeResultActive{}).Where("id = ?", "active").UpdateColumn("key_id", gorm.Expr("key_id")).Error; err != nil {
+			return err
+		}
+		var current knowledgeResultActive
+		if err := tx.First(&current, "id = ?", "active").Error; err != nil || current.KeyID != active {
+			return ErrInvalid
+		}
+		var registered []knowledgeResultKey
+		if err := tx.Find(&registered).Error; err != nil {
+			return err
+		}
+		known := make(map[string]bool, len(registered))
+		for _, existing := range registered {
+			known[existing.ID] = true
+			want, present := verifiers[existing.ID]
+			if !present || !hmac.Equal([]byte(existing.Verifier), []byte(want)) {
+				return ErrInvalid
+			}
+		}
+		// Existing data without its original key fingerprint must never be adopted.
+		if len(registered) == 0 {
 			var n int64
 			if err := tx.Model(&knowledgeResultRow{}).Count(&n).Error; err != nil {
 				return err
@@ -83,26 +156,78 @@ func newKnowledgeResultVault(db *gorm.DB, key []byte, ttl time.Duration) (*knowl
 			if n != 0 {
 				return ErrInvalid
 			}
-			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&knowledgeResultKey{ID: "v1", Verifier: want}).Error; err != nil {
-				return err
-			}
-			if err := tx.First(&existing, "id = ?", "v1").Error; err != nil {
-				return err
-			}
-		} else if err != nil {
+		}
+		var used []struct{ KeyID string }
+		if err := tx.Model(&knowledgeResultRow{}).Select("DISTINCT COALESCE(key_id, '') AS key_id").Scan(&used).Error; err != nil {
 			return err
 		}
-		if !hmac.Equal([]byte(existing.Verifier), []byte(want)) {
-			return ErrInvalid
+		for _, item := range used {
+			id := item.KeyID
+			if id == "" {
+				id = "v1"
+			}
+			// Never establish a fresh fingerprint for a version that already
+			// protects a result: a missing verifier cannot authenticate its key.
+			if !known[id] {
+				return ErrInvalid
+			}
+		}
+		for id, verifier := range verifiers {
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&knowledgeResultKey{ID: id, Verifier: verifier}).Error; err != nil {
+				return err
+			}
+			var saved knowledgeResultKey
+			if err := tx.First(&saved, "id = ?", id).Error; err != nil || !hmac.Equal([]byte(saved.Verifier), []byte(verifier)) {
+				return ErrInvalid
+			}
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	seal := hmac.New(sha256.New, key)
+	seal := hmac.New(sha256.New, keys[active])
 	_, _ = seal.Write([]byte("platform-knowledge-response-seal-v1"))
-	return &knowledgeResultVault{db: db, aead: aead, sealKey: seal.Sum(nil), ttl: ttl, now: time.Now}, nil
+	return &knowledgeResultVault{db: db, active: active, keys: aeads, aead: selected, sealKey: seal.Sum(nil), ttl: ttl, now: time.Now}, nil
+}
+
+// activateKey is an explicit administrative transition. Before invoking it,
+// operators must stop old binaries and ensure every live node has the full ring.
+func (v *knowledgeResultVault) activateKey(ctx context.Context, next string) error {
+	if v == nil || next == v.active || v.keys[next] == nil {
+		return ErrInvalid
+	}
+	return v.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		res := tx.Model(&knowledgeResultActive{}).Where("id = ? AND key_id = ?", "active", v.active).Update("key_id", next)
+		if res.Error != nil || res.RowsAffected != 1 {
+			return ErrInvalid
+		}
+		return nil
+	})
+}
+
+// checkWriter locks the generation row for the duration of the write transaction.
+func (v *knowledgeResultVault) checkWriter(tx *gorm.DB) error {
+	if err := tx.Model(&knowledgeResultActive{}).Where("id = ?", "active").UpdateColumn("key_id", gorm.Expr("key_id")).Error; err != nil {
+		return err
+	}
+	var current knowledgeResultActive
+	if err := tx.First(&current, "id = ?", "active").Error; err != nil || current.KeyID != v.active {
+		return ErrInvalid
+	}
+	return nil
+}
+
+func (v *knowledgeResultVault) resultAEAD(row knowledgeResultRow) (cipher.AEAD, error) {
+	id := row.KeyID
+	if id == "" {
+		id = "v1"
+	}
+	aead := v.keys[id]
+	if aead == nil {
+		return nil, ErrInvalid
+	}
+	return aead, nil
 }
 
 func knowledgeResultAAD(row Call, expires int64) ([]byte, error) {
@@ -138,6 +263,9 @@ func (v *knowledgeResultVault) capture(ctx context.Context, callID string, resul
 		return ErrInvalid
 	}
 	return v.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := v.checkWriter(tx); err != nil {
+			return err
+		}
 		if err := tx.Model(&Call{}).Where("call_id = ?", callID).UpdateColumn("updated_at", gorm.Expr("updated_at")).Error; err != nil {
 			return err
 		}
@@ -158,7 +286,7 @@ func (v *knowledgeResultVault) capture(ctx context.Context, callID string, resul
 		if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
 			return err
 		}
-		item := knowledgeResultRow{CallID: callID, ExpiresAt: expires, Ciphertext: v.aead.Seal(nonce, nonce, result, aad)}
+		item := knowledgeResultRow{CallID: callID, KeyID: v.active, ExpiresAt: expires, Ciphertext: v.aead.Seal(nonce, nonce, result, aad)}
 		return tx.Create(&item).Error
 	})
 }
@@ -183,14 +311,18 @@ func (v *knowledgeResultVault) readSettled(ctx context.Context, callID string) (
 		if err := tx.First(&stored, "call_id = ?", callID).Error; err != nil {
 			return err
 		}
-		if stored.ExpiresAt <= v.now().UnixMilli() || len(stored.Ciphertext) < v.aead.NonceSize() {
+		aead, err := v.resultAEAD(stored)
+		if err != nil {
+			return err
+		}
+		if stored.ExpiresAt <= v.now().UnixMilli() || len(stored.Ciphertext) < aead.NonceSize() {
 			return ErrPending
 		}
 		aad, err := knowledgeResultStoredAAD(row, stored)
 		if err != nil {
 			return err
 		}
-		result, err = v.aead.Open(nil, stored.Ciphertext[:v.aead.NonceSize()], stored.Ciphertext[v.aead.NonceSize():], aad)
+		result, err = aead.Open(nil, stored.Ciphertext[:aead.NonceSize()], stored.Ciphertext[aead.NonceSize():], aad)
 		if err != nil {
 			return ErrInvalid
 		}
@@ -230,17 +362,21 @@ func (v *knowledgeResultVault) purgeExpired(ctx context.Context, limit int, afte
 				return err
 			}
 			item = stored
-			if len(item.Ciphertext) < v.aead.NonceSize() {
+			aead, err := v.resultAEAD(item)
+			if err != nil {
+				return err
+			}
+			if len(item.Ciphertext) < aead.NonceSize() {
 				return ErrInvalid
 			}
 			aad, err := knowledgeResultStoredAAD(row, item)
 			if err != nil {
 				return err
 			}
-			if _, err = v.aead.Open(nil, item.Ciphertext[:v.aead.NonceSize()], item.Ciphertext[v.aead.NonceSize():], aad); err != nil {
+			if _, err = aead.Open(nil, item.Ciphertext[:aead.NonceSize()], item.Ciphertext[aead.NonceSize():], aad); err != nil {
 				return ErrInvalid
 			}
-			saved := tx.Model(&knowledgeResultRow{}).Where("call_id = ? AND expires_at = ? AND ciphertext = ? AND COALESCE(binding_version, 0) = ? AND COALESCE(attempt_id, 0) = ? AND COALESCE(observation_tag, '') = ?", item.CallID, item.ExpiresAt, item.Ciphertext, item.BindingVersion, item.AttemptID, item.ObservationTag).Update("ciphertext", nil)
+			saved := tx.Model(&knowledgeResultRow{}).Where("call_id = ? AND expires_at = ? AND ciphertext = ? AND COALESCE(binding_version, 0) = ? AND COALESCE(attempt_id, 0) = ? AND COALESCE(observation_tag, '') = ? AND COALESCE(key_id, '') = ?", item.CallID, item.ExpiresAt, item.Ciphertext, item.BindingVersion, item.AttemptID, item.ObservationTag, item.KeyID).Update("ciphertext", nil)
 			if saved.Error != nil {
 				return saved.Error
 			}

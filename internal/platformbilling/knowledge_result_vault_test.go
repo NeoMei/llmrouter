@@ -8,11 +8,13 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
+	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	mysqlgorm "gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -24,6 +26,28 @@ func knowledgeResultTestDB(t *testing.T, dialect, dsn string) *gorm.DB {
 	t.Helper()
 	if dialect == "sqlite" {
 		db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+		require.NoError(t, err)
+		pool, err := db.DB()
+		require.NoError(t, err)
+		t.Cleanup(func() { assert.NoError(t, pool.Close()) })
+		return db
+	}
+	if dialect == "mysql" {
+		cfg, err := mysqlDriver.ParseDSN(dsn)
+		require.NoError(t, err)
+		require.True(t, strings.HasPrefix(cfg.Addr, "127.0.0.1:"))
+		require.Equal(t, "mysql", cfg.DBName)
+		cfg.ParseTime = true
+		admin, err := gorm.Open(mysqlgorm.Open(cfg.FormatDSN()), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+		require.NoError(t, err)
+		adminPool, err := admin.DB()
+		require.NoError(t, err)
+		t.Cleanup(func() { assert.NoError(t, adminPool.Close()) })
+		schema := "knowledge_result_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+		require.NoError(t, admin.Exec("CREATE DATABASE `"+schema+"`").Error)
+		t.Cleanup(func() { assert.NoError(t, admin.Exec("DROP DATABASE `"+schema+"`").Error) })
+		cfg.DBName = schema
+		db, err := gorm.Open(mysqlgorm.Open(cfg.FormatDSN()), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 		require.NoError(t, err)
 		pool, err := db.DB()
 		require.NoError(t, err)

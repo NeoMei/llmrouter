@@ -204,7 +204,11 @@ func (v *knowledgeResultVault) authorizedResult(ctx context.Context, a *Adapter,
 		if err := tx.First(&stored, "call_id = ?", id).Error; err != nil {
 			return ErrPending
 		}
-		if stored.BindingVersion != 2 || stored.AttemptID != initial.AttemptID || stored.ExpiresAt <= v.now().UnixMilli() || len(stored.Ciphertext) < v.aead.NonceSize() {
+		aead, err := v.resultAEAD(stored)
+		if err != nil {
+			return err
+		}
+		if stored.BindingVersion != 2 || stored.AttemptID != initial.AttemptID || stored.ExpiresAt <= v.now().UnixMilli() || len(stored.Ciphertext) < aead.NonceSize() {
 			return ErrPending
 		}
 		if !second.ExpiresAt.After(time.Now()) || ctx.Err() != nil {
@@ -223,7 +227,7 @@ func (v *knowledgeResultVault) authorizedResult(ctx context.Context, a *Adapter,
 		if err != nil {
 			return ErrInvalid
 		}
-		output, err = v.aead.Open(nil, stored.Ciphertext[:v.aead.NonceSize()], stored.Ciphertext[v.aead.NonceSize():], aad)
+		output, err = aead.Open(nil, stored.Ciphertext[:aead.NonceSize()], stored.Ciphertext[aead.NonceSize():], aad)
 		if err != nil {
 			return ErrInvalid
 		}

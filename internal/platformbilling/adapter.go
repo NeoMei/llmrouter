@@ -171,7 +171,14 @@ func New(db *gorm.DB, c Config) (*Adapter, error) {
 		return nil, err
 	}
 	if c.AllowAliEmbeddingV4 {
-		a.knowledgeResults, err = newKnowledgeResultVault(db, c.AliEmbeddingResultKey, time.Hour)
+		if c.AliEmbeddingResultKeys != nil || c.AliEmbeddingResultActiveKey != "" {
+			if len(c.AliEmbeddingResultKey) != 0 {
+				return nil, ErrInvalid
+			}
+			a.knowledgeResults, err = newKnowledgeResultVaultWithKeys(db, c.AliEmbeddingResultKeys, c.AliEmbeddingResultActiveKey, time.Hour)
+		} else {
+			a.knowledgeResults, err = newKnowledgeResultVault(db, c.AliEmbeddingResultKey, time.Hour)
+		}
 		if err != nil {
 			return nil, err
 		}

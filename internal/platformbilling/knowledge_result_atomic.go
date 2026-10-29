@@ -22,6 +22,9 @@ func (v *knowledgeResultVault) captureAndPrepare(ctx context.Context, callID str
 		return ErrInvalid
 	}
 	return v.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := v.checkWriter(tx); err != nil {
+			return err
+		}
 		if err := tx.Model(&Call{}).Where("call_id = ?", callID).UpdateColumn("updated_at", gorm.Expr("updated_at")).Error; err != nil {
 			return ErrPending
 		}
@@ -67,7 +70,7 @@ func (v *knowledgeResultVault) captureAndPrepare(ctx context.Context, callID str
 		if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
 			return ErrPending
 		}
-		item := knowledgeResultRow{CallID: callID, ExpiresAt: expires, Ciphertext: v.aead.Seal(nonce, nonce, result, aad)}
+		item := knowledgeResultRow{CallID: callID, KeyID: v.active, ExpiresAt: expires, Ciphertext: v.aead.Seal(nonce, nonce, result, aad)}
 		if err = tx.Create(&item).Error; err != nil {
 			return ErrPending
 		}

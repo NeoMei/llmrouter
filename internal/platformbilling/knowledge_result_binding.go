@@ -146,6 +146,9 @@ func (v *knowledgeResultVault) captureValidated(ctx context.Context, s *Session,
 	}
 	var conflict bool
 	err = v.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := v.checkWriter(tx); err != nil {
+			return err
+		}
 		// Rejected locks Attempt before Call. Match its order so a pending
 		// rejection cannot leave a stale DISPATCHED observation in this commit.
 		if err := tx.Model(&Attempt{}).Where("id = ? AND call_id = ?", result.attemptID, result.callID).UpdateColumn("updated_at", gorm.Expr("updated_at")).Error; err != nil {
@@ -229,7 +232,7 @@ func (v *knowledgeResultVault) captureValidated(ctx context.Context, s *Session,
 		observation := hmac.New(sha256.New, v.sealKey)
 		_, _ = observation.Write([]byte("provider-response-digest-v1"))
 		_, _ = observation.Write(result.rawDigest[:])
-		item := knowledgeResultRow{CallID: row.CallID, ExpiresAt: expires, BindingVersion: 2, AttemptID: attempt.ID, ObservationTag: hex.EncodeToString(observation.Sum(nil))}
+		item := knowledgeResultRow{CallID: row.CallID, KeyID: v.active, ExpiresAt: expires, BindingVersion: 2, AttemptID: attempt.ID, ObservationTag: hex.EncodeToString(observation.Sum(nil))}
 		aad, err := knowledgeResultStoredAAD(row, item)
 		if err != nil {
 			return ErrInvalid

@@ -105,7 +105,10 @@ type Config struct {
 	AllowAliEmbeddingV4 bool
 	// Test-only key, never loaded from the environment. Production activation
 	// requires shared, versioned secrets and authenticated recovery.
-	AliEmbeddingResultKey           []byte
+	AliEmbeddingResultKey []byte
+	// Programmatic ring is test-only until recovery and snapshot protection exist.
+	AliEmbeddingResultKeys          map[string][]byte
+	AliEmbeddingResultActiveKey     string
 	NativeHistory                   *NativeHistoryConfig
 	ImagePolicies                   map[string]map[string]ImagePolicy
 	NativePresetPolicies            map[string]map[string]NativePresetPolicy

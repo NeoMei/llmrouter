@@ -54,7 +54,12 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 	modelsHandler := func(c *gin.Context) {
 		models, err := adapter.ManagedModels(c.Request.Context(), strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
 		if err != nil {
-			c.AbortWithStatusJSON(platformbilling.HTTPStatus(err), gin.H{"error": gin.H{"code": "model_credential_rejected"}})
+			status := platformbilling.HTTPStatus(err)
+			code := "model_credential_rejected"
+			if status == http.StatusServiceUnavailable {
+				code = "platform_billing_unavailable"
+			}
+			c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"code": code}})
 			return
 		}
 		// Discovery stays constrained to the verified key even if metadata is

@@ -18,15 +18,12 @@ import (
 // The authenticated product principal owns self scope. Query parameters can
 // narrow display filters but cannot substitute an actor or elevate to accounts.
 func productTelemetry(c *gin.Context, allActors bool) (service.PlatformTelemetry, bool, bool) {
-	if platformaccount.RuntimeEnabled() {
-		return service.PlatformTelemetry{}, false, false
-	}
 	p, projected := authz.ProductPrincipal(c)
 	if !projected {
 		return service.PlatformTelemetry{}, false, false
 	}
 	config, err := platformaccount.Current()
-	if err != nil || !config.Enabled || !p.Access.Active || p.Access.ExpiresAt <= time.Now().Unix() || p.Access.Subject == "" || p.Access.Issuer != config.PublicOrigin || p.Access.ProductID != config.ProductID || p.Access.InstanceID != config.InstanceID {
+	if err != nil || (!config.Enabled && !platformaccount.RuntimeEnabled()) || !p.Access.Active || p.Access.ExpiresAt <= time.Now().Unix() || p.Access.Subject == "" || p.Access.Issuer != config.PublicOrigin || p.Access.ProductID != config.ProductID || p.Access.InstanceID != config.InstanceID {
 		c.AbortWithStatus(http.StatusUnauthorized)
 		return service.PlatformTelemetry{}, true, false
 	}

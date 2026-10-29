@@ -703,7 +703,7 @@ test('definitive finance scope denial shows failure without retaining uncertain 
   ).toHaveCount(0)
   await expect(
     page.getByRole('button', { name: 'Create recharge', exact: true })
-  ).toBeEnabled()
+  ).toHaveCount(0)
   await expect(page.getByText('Original financial object')).toHaveCount(0)
 })
 
@@ -2205,6 +2205,7 @@ test('usage scopes require matching payer and actor; a failed refresh hides cach
   await expect(page.getByRole('alert')).toBeVisible()
   denied = false
   badMemberScope = true
+  await page.getByRole('button', { name: 'Refresh accounts and roles' }).click()
   await page.getByRole('combobox').first().selectOption('team-b')
   await expect(page.getByRole('alert')).toBeVisible()
   await expect(page.getByText(/team-b-call/)).toHaveCount(0)
@@ -2328,4 +2329,108 @@ test('runtime broker session is not cleared when legacy integration is also enab
   ).toBeVisible()
   expect(bffCalls).toBe(0)
   await expect(page).toHaveURL(/\/keys$/)
+})
+
+test('sandbox settlement requires explicit action and server reported sandbox mode', async ({
+  page,
+}) => {
+  await fixture(page)
+  let settlements = 0
+  await page.route('**/personal-a/resources', (route) =>
+    route.fulfill({
+      json: {
+        account_id: 'personal-a',
+        product_id: 'llmrouter',
+        subscriptions: [],
+        wallets: [],
+        payments: { mode: 'sandbox', real_payments_configured: false },
+      },
+    })
+  )
+  await page.route('**/personal-a/recharges', (route) =>
+    route.fulfill({
+      json: {
+        id: 'sandbox-recharge',
+        account_id: 'personal-a',
+        product_id: 'llmrouter',
+        amount: '1000000',
+        currency: 'CNY',
+        merchant: 'sandbox',
+      },
+    })
+  )
+  await page.route(
+    '**/personal-a/recharges/sandbox-recharge/sandbox-settle',
+    (route) => {
+      settlements++
+      return route.fulfill({
+        status: 202,
+        json: {
+          id: 'sandbox-operation',
+          account_id: 'personal-a',
+          kind: 'recharge',
+          status: 'APPLIED',
+        },
+      })
+    }
+  )
+  await login(page)
+  await page.getByLabel('Recharge amount (CNY)').fill('1')
+  await page
+    .getByRole('button', { name: 'Create recharge', exact: true })
+    .click()
+  await expect(
+    page.getByText('sandbox-recharge', { exact: true })
+  ).toBeVisible()
+  const settle = page.getByRole('button', {
+    name: 'Settle sandbox recharge',
+    exact: true,
+  })
+  await expect(settle).toBeVisible()
+  expect(settlements).toBe(0)
+  await settle.click()
+  await expect(
+    page.getByText('sandbox-operation', { exact: true })
+  ).toBeVisible()
+  expect(settlements).toBe(1)
+})
+
+test('sandbox settlement stays hidden when server payment mode is not sandbox', async ({
+  page,
+}) => {
+  await fixture(page)
+  await page.route('**/personal-a/resources', (route) =>
+    route.fulfill({
+      json: {
+        account_id: 'personal-a',
+        product_id: 'llmrouter',
+        subscriptions: [],
+        wallets: [],
+        payments: { mode: 'unconfigured', real_payments_configured: false },
+      },
+    })
+  )
+  await page.route('**/personal-a/recharges', (route) =>
+    route.fulfill({
+      json: {
+        id: 'unconfigured-recharge',
+        account_id: 'personal-a',
+        product_id: 'llmrouter',
+        amount: '1000000',
+        currency: 'CNY',
+        merchant: 'sandbox',
+      },
+    })
+  )
+  await login(page)
+  await page.getByLabel('Recharge amount (CNY)').fill('1')
+  await page
+    .getByRole('button', { name: 'Create recharge', exact: true })
+    .click()
+  await expect(
+    page.getByText('unconfigured-recharge', { exact: true })
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Settle sandbox recharge' })
+  ).toHaveCount(0)
 })

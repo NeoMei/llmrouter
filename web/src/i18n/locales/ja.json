@@ -1,5 +1,6 @@
 {
   "translation": {
+    "Settle sandbox recharge": "サンドボックス入金を確定",
     "UniHub account access is unavailable for this browser session. Contact the administrator.": "このブラウザーセッションでは UniHub アカウントにアクセスできません。管理者にお問い合わせください。",
     "For UniHub accounts, local log date ranges must not exceed 30 days.": "UniHub アカウントのローカルログの期間は 30 日以内にしてください。",
     "Reported capability restrictions": "報告された機能制限",

@@ -1,5 +1,6 @@
 {
   "translation": {
+    "Settle sandbox recharge": "結算沙箱儲值",
     "UniHub account access is unavailable for this browser session. Contact the administrator.": "目前瀏覽器工作階段無法存取 UniHub 帳戶，請聯絡管理員。",
     "For UniHub accounts, local log date ranges must not exceed 30 days.": "UniHub 帳戶的本機日誌日期範圍不得超過 30 天。",
     "Reported capability restrictions": "已回報的能力限制",

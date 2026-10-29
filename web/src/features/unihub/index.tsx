@@ -39,7 +39,9 @@ import { UniHubClient, type User, type Account } from './sdk'
 import {
   createProductSession,
   restoreProductSession,
+  refreshProductAccess,
   getActiveProductSession,
+  productAuthorityKey,
   type ProductConfig,
   type ProductSession,
   message,
@@ -52,9 +54,30 @@ export function ProductShell(props: {
   config: ProductConfig
   page?: 'keys' | 'wallet' | 'overview' | 'usage'
 }) {
+  const authority = useAuthStore((state) => productAuthorityKey(state.auth))
+  return (
+    <ProductShellContent
+      key={JSON.stringify([
+        authority,
+        props.config.public_origin,
+        props.config.client_id,
+        props.config.product_id,
+        props.config.instance_id ?? 'default',
+      ])}
+      {...props}
+    />
+  )
+}
+
+function ProductShellContent(props: {
+  config: ProductConfig
+  page?: 'keys' | 'wallet' | 'overview' | 'usage'
+}) {
   const { t } = useTranslation()
   const [session] = useState<ProductSession>(
-    () => getActiveProductSession() ?? createProductSession(props.config)
+    () =>
+      getActiveProductSession(props.config) ??
+      createProductSession(props.config)
   )
   const [cache] = useState(
     () =>
@@ -79,8 +102,16 @@ export function ProductShell(props: {
       setAccounts([])
       setPayer('')
     }
+    session.onForbidden = (reason) => {
+      void cache.cancelQueries()
+      cache.clear()
+      setAccounts([])
+      setPayer('')
+      setError(reason)
+    }
     return () => {
       session.onClear = () => {}
+      session.onForbidden = () => {}
       cache.clear()
     }
   }, [session, cache])
@@ -105,7 +136,11 @@ export function ProductShell(props: {
     }
   }, [session])
   async function refresh() {
+    const epoch = session.epoch
+    const access = await refreshProductAccess()
     const result = await session.bound(() => session.client.accounts())
+    if (epoch !== session.epoch)
+      throw new Error('UniHub session or payer changed')
     const current = accounts.find((item) => item.id === payer)
     const fresh = result.find((item) => item.id === payer)
     if (current?.role !== fresh?.role) {
@@ -115,6 +150,7 @@ export function ProductShell(props: {
       if (!fresh) setPayer('')
     }
     session.accounts = result
+    session.csrfToken = access.csrf_token
     setAccounts(result)
     await cache.invalidateQueries()
   }

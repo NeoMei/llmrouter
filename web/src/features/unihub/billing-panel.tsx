@@ -23,10 +23,19 @@ import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 
 import { FinancialReceipt, type FinancialResult } from './financial-receipt'
-import { UniHubError, type Quote, type Offer } from './sdk'
+import { UniHubError, type Quote, type Offer, type Recharge } from './sdk'
 import { message, cnyMillionths, exactAmount, FinancialIntent } from './session'
 import { Panel, Field, Submit, type PanelProps } from './ui'
 import { upgradeSubscription } from './upgrades'
+
+function isRecharge(value: FinancialResult): value is Recharge {
+  return (
+    !('offer' in value) &&
+    !('kind' in value) &&
+    'merchant' in value &&
+    'currency' in value
+  )
+}
 
 export function BillingPanel(props: PanelProps) {
   const { t } = useTranslation()
@@ -195,6 +204,37 @@ export function BillingPanel(props: PanelProps) {
         return recharge
       })
       setResult(value)
+    } catch (e) {
+      setError(message(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  async function settleSandbox(recharge: Recharge) {
+    if (
+      !finance ||
+      resources.isError ||
+      resources.data?.payments.mode !== 'sandbox' ||
+      recharge.account_id !== props.account.id ||
+      recharge.product_id !== props.config.product_id
+    )
+      return
+    setBusy(true)
+    setError('')
+    try {
+      const operation = await props.session.bound(() =>
+        props.session.client.sandboxSettleRecharge(
+          recharge.account_id,
+          recharge.id
+        )
+      )
+      setResult(operation)
+      await cache.invalidateQueries({
+        queryKey: ['resources', props.account.id],
+      })
+      await cache.invalidateQueries({
+        queryKey: ['operations', props.account.id],
+      })
     } catch (e) {
       setError(message(e))
     } finally {
@@ -414,11 +454,26 @@ export function BillingPanel(props: PanelProps) {
         <p>{t('Finance actions require owner or billing_admin role.')}</p>
       )}
       {result ? (
-        <FinancialReceipt
-          result={result}
-          busy={busy}
-          read={() => void queryResult(result)}
-        />
+        <>
+          <FinancialReceipt
+            result={result}
+            busy={busy}
+            read={() => void queryResult(result)}
+          />
+          {finance &&
+          !resources.isError &&
+          resources.data?.payments.mode === 'sandbox' &&
+          isRecharge(result) &&
+          result.account_id === props.account.id &&
+          result.product_id === props.config.product_id ? (
+            <Button
+              disabled={busy || intent !== null}
+              onClick={() => void settleSandbox(result)}
+            >
+              {t('Settle sandbox recharge')}
+            </Button>
+          ) : null}
+        </>
       ) : null}
       {error ? <p role='alert'>{error}</p> : null}
     </Panel>

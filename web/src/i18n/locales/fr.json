@@ -1,5 +1,6 @@
 {
   "translation": {
+    "Settle sandbox recharge": "Régler la recharge de test",
     "UniHub account access is unavailable for this browser session. Contact the administrator.": "L’accès au compte UniHub est indisponible pour cette session. Contactez l’administrateur.",
     "For UniHub accounts, local log date ranges must not exceed 30 days.": "Pour les comptes UniHub, la période des journaux locaux ne doit pas dépasser 30 jours.",
     "Reported capability restrictions": "Restrictions de capacité indiquées",

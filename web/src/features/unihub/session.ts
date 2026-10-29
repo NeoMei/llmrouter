@@ -69,6 +69,7 @@ export class ProductSession {
   private controller = new AbortController()
   private timer: ReturnType<typeof setTimeout> | undefined
   onClear = () => {}
+  onForbidden = (_reason: string) => {}
   constructor(client: UniHubClient) {
     this.client = client
   }
@@ -87,6 +88,8 @@ export class ProductSession {
     this.intents.clear()
     this.user = null
     this.accounts = []
+    this.csrfToken = ''
+    this.restorePromise = null
     this.select('')
     this.onClear()
   }
@@ -105,6 +108,17 @@ export class ProductSession {
     } catch (error) {
       if (
         error instanceof UniHubError &&
+        error.status === 403 &&
+        epoch === this.epoch
+      ) {
+        this.intents.clear()
+        this.accounts = []
+        this.csrfToken = ''
+        this.select('')
+        this.onForbidden(error.message)
+      }
+      if (
+        error instanceof UniHubError &&
         error.status === 401 &&
         epoch === this.epoch
       ) {
@@ -115,18 +129,64 @@ export class ProductSession {
   }
 }
 let activeProductSession: ProductSession | null = null
+let activeProductConfig = ''
+
+// These claims are used only to invalidate client state, never to authorize a
+// request. The server verifies each token and all financial permissions.
+function tokenGeneration(token: string | null): string {
+  if (!token) return ''
+  try {
+    const payload = token.split('.')[1]
+    const claims = JSON.parse(
+      atob(payload.replaceAll('-', '+').replaceAll('_', '/'))
+    ) as {
+      sv?: unknown
+      uv?: unknown
+    }
+    if (Number.isSafeInteger(claims.sv) && Number.isSafeInteger(claims.uv)) {
+      return `${claims.sv}:${claims.uv}`
+    }
+  } catch {
+    // Unknown token formats are conservatively invalidated on any rotation.
+  }
+  return token
+}
+
+export function productAuthorityKey(
+  auth: ReturnType<typeof useAuthStore.getState>['auth']
+): string {
+  return JSON.stringify([
+    auth.user?.id,
+    auth.user?.identity_source,
+    auth.user?.unihub_user_id,
+    auth.session?.sid,
+    auth.session?.login_method,
+    tokenGeneration(auth.accessToken),
+  ])
+}
+
+function productConfigKey(config: ProductConfig): string {
+  return JSON.stringify([
+    config.public_origin,
+    config.client_id,
+    config.product_id,
+    config.instance_id ?? 'default',
+  ])
+}
 
 useAuthStore.subscribe((state, previous) => {
-  const identityChanged =
-    state.auth.user?.id !== previous.auth.user?.id ||
-    state.auth.user?.identity_source !== previous.auth.user?.identity_source ||
-    state.auth.user?.unihub_user_id !== previous.auth.user?.unihub_user_id
-  if (identityChanged && activeProductSession?.user) {
-    activeProductSession.clear()
+  if (productAuthorityKey(state.auth) !== productAuthorityKey(previous.auth)) {
+    activeProductSession?.clear()
   }
 })
 
-export function getActiveProductSession(): ProductSession | null {
+export function getActiveProductSession(
+  config?: ProductConfig
+): ProductSession | null {
+  if (config && activeProductConfig !== productConfigKey(config)) {
+    activeProductSession?.clear()
+    activeProductSession = null
+  }
   return activeProductSession
 }
 
@@ -146,6 +206,9 @@ export function createProductSession(config: ProductConfig): ProductSession {
       }
       const headers = new Headers(init?.headers)
       const native = await getFreshAuthHeaders()
+      if (epoch !== session.epoch) {
+        throw new Error('UniHub session or payer changed')
+      }
       headers.set('Authorization', native.Authorization ?? '')
       if (init?.method !== 'GET') {
         headers.set('X-UniHub-CSRF', session.csrfToken)
@@ -179,6 +242,7 @@ export function createProductSession(config: ProductConfig): ProductSession {
     })
   )
   activeProductSession = session
+  activeProductConfig = productConfigKey(config)
   return session
 }
 
@@ -214,7 +278,7 @@ export async function refreshProductAccess(): Promise<ProductAccessSnapshot> {
   if (auth.user?.identity_source !== 'unihub') {
     throw new Error('Product identity proof rejected')
   }
-  const sid = auth.session?.sid
+  const authority = productAuthorityKey(auth)
   const response = await fetch('/api/unihub/access', {
     headers: await getFreshAuthHeaders(),
     credentials: 'same-origin',
@@ -222,13 +286,16 @@ export async function refreshProductAccess(): Promise<ProductAccessSnapshot> {
     redirect: 'error',
     signal: AbortSignal.timeout(10000),
   })
+  if (authority !== productAuthorityKey(useAuthStore.getState().auth)) {
+    throw new Error('UniHub session or payer changed')
+  }
   if (!response.ok) {
     if (response.status === 401 || response.status === 403) {
       clearAuthentication()
       throw new Error('Product identity proof rejected')
     }
     const current = useAuthStore.getState().auth
-    if (current.user?.id === auth.user.id) {
+    if (productAuthorityKey(current) === authority) {
       current.setUser({ ...auth.user, permissions: { admin_permissions: {} } })
     }
     throw new Error('Product identity proof rejected')
@@ -236,7 +303,7 @@ export async function refreshProductAccess(): Promise<ProductAccessSnapshot> {
   const data = (await response.json()) as ProductAccessSnapshot
   if (
     data.access.subject !== auth.user.unihub_user_id ||
-    sid !== useAuthStore.getState().auth.session?.sid
+    authority !== productAuthorityKey(useAuthStore.getState().auth)
   ) {
     throw new Error('UniHub session or payer changed')
   }
@@ -258,9 +325,12 @@ export async function refreshProductAccess(): Promise<ProductAccessSnapshot> {
 // Hydrate through the session-authenticated BFF. A restored identity cannot
 // silently replace an existing payer or a pending financial intent.
 export function restoreProductSession(session: ProductSession): Promise<void> {
-  session.restorePromise ??= restoreProductSessionOnce(session).finally(() => {
-    session.restorePromise = null
-  })
+  if (!session.restorePromise) {
+    const promise = restoreProductSessionOnce(session).finally(() => {
+      if (session.restorePromise === promise) session.restorePromise = null
+    })
+    session.restorePromise = promise
+  }
   return session.restorePromise
 }
 async function restoreProductSessionOnce(
@@ -269,6 +339,8 @@ async function restoreProductSessionOnce(
   if (useAuthStore.getState().auth.user?.identity_source !== 'unihub') return
   const epoch = session.epoch
   const data = await refreshProductAccess()
+  if (epoch !== session.epoch)
+    throw new Error('UniHub session or payer changed')
   const accounts = await session.bound(() => session.client.accounts())
   if (epoch !== session.epoch) {
     throw new Error('UniHub session or payer changed')

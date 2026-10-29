@@ -48,7 +48,7 @@ func TestUniHubSessionFailureLogsOnlySafeStage(t *testing.T) {
 			r.ServeHTTP(response, request)
 			require.Equal(t, http.StatusUnauthorized, response.Code)
 			require.Empty(t, strings.TrimSpace(response.Body.String()))
-			require.Contains(t, logs.String(), "unihub_session_failure stage="+stage)
+			require.Contains(t, logs.String(), "unihub_session_failure stage=resolve")
 			require.NotContains(t, logs.String(), secret)
 			require.NotContains(t, logs.String(), "private@example.test")
 		})

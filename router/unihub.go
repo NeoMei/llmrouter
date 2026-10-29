@@ -1,7 +1,6 @@
 package router
 
 import (
-	"errors"
 	userkit "github.com/NeoMei/UniHub/packages/userkit-go"
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/internal/platformaccount"
@@ -71,17 +70,7 @@ func SetUniHubRouter(r *gin.Engine, c platformaccount.Config) {
 		}
 		access, err := c.Resolve(ctx.Request.Context(), strings.TrimPrefix(h, "Bearer "))
 		if err != nil {
-			stage := "resolve"
-			var failed *userkit.ResolveError
-			if errors.As(err, &failed) {
-				switch failed.Stage {
-				case "capabilities":
-					stage = "capabilities"
-				case "product_access":
-					stage = "product_access"
-				}
-			}
-			logger.LogWarn(ctx.Request.Context(), "unihub_session_failure stage="+stage)
+			logger.LogWarn(ctx.Request.Context(), "unihub_session_failure stage=resolve")
 			ctx.Status(http.StatusUnauthorized)
 			return
 		}

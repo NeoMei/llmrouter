@@ -3,8 +3,8 @@ package router
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strconv"
-	"strings"
 	"time"
 
 	userkit "github.com/NeoMei/UniHub/packages/userkit-go"
@@ -14,6 +14,7 @@ import (
 )
 
 var errRuntimeFinanceAuthority = errors.New("runtime finance authority unavailable")
+var runtimeActorToken = regexp.MustCompile(`^upa_[0-9a-f]{64}$`)
 
 // runtimeFinanceActor derives a short-lived central actor from a current local
 // session. It never substitutes a service credential for user authority.
@@ -45,7 +46,7 @@ func runtimeFinanceActor(ctx context.Context, identity service.AuthIdentity, pri
 	if current.Access.Issuer != config.PublicOrigin || current.Access.ProductID != config.ProductID || current.Access.InstanceID != config.InstanceID || !(userkit.Principal{LocalUser: principal.LocalUser, Access: current.Access}).HasPermission("product:use") {
 		return userkit.ProductIdentity{}, errRuntimeFinanceAuthority
 	}
-	if !strings.HasPrefix(current.ActorToken, "upa_") || current.ActorExpiresAt <= now || current.ActorExpiresAt > now+130 {
+	if !runtimeActorToken.MatchString(current.ActorToken) || current.ActorExpiresAt <= now || current.ActorExpiresAt > now+130 {
 		return userkit.ProductIdentity{}, errRuntimeFinanceAuthority
 	}
 	if _, _, err := service.ValidateLoginSession(identity); err != nil {

@@ -37,7 +37,7 @@ func TestRuntimeFinanceActorRequiresCurrentBoundSession(t *testing.T) {
 	access := userkit.Access{Issuer: cfg.PublicOrigin, Subject: "central-member", User: userkit.User{ID: "central-member"}, ProductID: cfg.ProductID, InstanceID: cfg.InstanceID, Active: true, Permissions: []string{"product:use"}, ExpiresAt: time.Now().Add(time.Minute).Unix()}
 	principal := userkit.Principal{LocalUser: userkit.LocalUser{ID: strconv.Itoa(user.Id)}, Access: access}
 	actorSubject := "central-member"
-	actorToken := "upa_test"
+	actorToken := "upa_" + strings.Repeat("a", 64)
 	actorExpires := time.Now().Add(time.Minute).Unix()
 	calls := 0
 	revokeDuringAuth := false
@@ -66,7 +66,7 @@ func TestRuntimeFinanceActorRequiresCurrentBoundSession(t *testing.T) {
 	t.Setenv("UNIHUB_PRODUCT_API_ORIGIN", upstream.URL)
 	proof, err := runtimeFinanceActor(context.Background(), identity, principal, cfg)
 	require.NoError(t, err)
-	assert.Equal(t, "upa_test", proof.ActorToken)
+	assert.Equal(t, "upa_"+strings.Repeat("a", 64), proof.ActorToken)
 	actorSubject = "other"
 	_, err = runtimeFinanceActor(context.Background(), identity, principal, cfg)
 	require.Error(t, err)
@@ -78,7 +78,7 @@ func TestRuntimeFinanceActorRequiresCurrentBoundSession(t *testing.T) {
 	actorToken = ""
 	_, err = runtimeFinanceActor(context.Background(), identity, principal, cfg)
 	require.Error(t, err)
-	actorToken = "upa_test"
+	actorToken = "upa_" + strings.Repeat("a", 64)
 	actorExpires = time.Now().Add(3 * time.Minute).Unix()
 	_, err = runtimeFinanceActor(context.Background(), identity, principal, cfg)
 	require.Error(t, err, "excessively long actor lifetime must fail closed")

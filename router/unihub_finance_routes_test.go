@@ -13,6 +13,7 @@ func TestRuntimeFinanceRoutesAreLimitedToDelegatedActions(t *testing.T) {
 		allowed      bool
 	}{
 		{http.MethodGet, "/v1/me", true}, {http.MethodGet, "/v1/accounts", true},
+		{http.MethodGet, "/v1/billing-presets", true}, {http.MethodGet, "/v1/accounts/acct-1/subscriptions", true}, {http.MethodGet, "/v1/accounts/acct-1/orders", true},
 		{http.MethodGet, "/v1/products/llmrouter/model-consistency", true},
 		{http.MethodGet, "/v1/accounts/acct-1/resources", true}, {http.MethodGet, "/v1/accounts/acct-1/calls/call:1", true},
 		{http.MethodGet, "/v1/accounts/acct-1/recharges/order-1", true}, {http.MethodGet, "/v1/accounts/acct-1/recharges", false},

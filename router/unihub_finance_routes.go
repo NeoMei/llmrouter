@@ -11,9 +11,9 @@ var runtimeFinanceRoutes = []struct {
 	method string
 	path   *regexp.Regexp
 }{
-	{http.MethodGet, regexp.MustCompile(`^/v1/(me|accounts|capabilities|products|catalog)$`)},
+	{http.MethodGet, regexp.MustCompile(`^/v1/(me|accounts|capabilities|products|catalog|billing-presets)$`)},
 	{http.MethodGet, regexp.MustCompile(`^/v1/products/[A-Za-z0-9_-]+/(billing-profile|model-consistency)$`)},
-	{http.MethodGet, regexp.MustCompile(`^/v1/accounts/[A-Za-z0-9_-]+/(resources|wallets|usage-budget|api-keys|calls|usage/summary|operations)$`)},
+	{http.MethodGet, regexp.MustCompile(`^/v1/accounts/[A-Za-z0-9_-]+/(resources|wallets|subscriptions|orders|usage-budget|api-keys|calls|usage/summary|operations)$`)},
 	{http.MethodGet, regexp.MustCompile(`^/v1/accounts/[A-Za-z0-9_-]+/(calls|operations|recharges)/[A-Za-z0-9_.:-]+$`)},
 	{http.MethodPost, regexp.MustCompile(`^/v1/accounts/[A-Za-z0-9_-]+/(recharges|api-keys)$`)},
 	{http.MethodPost, regexp.MustCompile(`^/v1/accounts/[A-Za-z0-9_-]+/recharges/[A-Za-z0-9_-]+/sandbox-settle$`)},

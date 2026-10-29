@@ -51,7 +51,13 @@ func TestOCROutputGrantRejectsUnconfirmedAuthority(t *testing.T) {
 	require.NotEmpty(t, u.RawQuery)
 	f.denySettlementRead = true
 	deniedStatus := f.request(t, "GET", "/platform/api/v2/ocr/jobs/ocr-call", read, "", nil)
-	assert.NotEqual(t, http.StatusOK, deniedStatus.Code)
+	require.Equal(t, http.StatusOK, deniedStatus.Code, deniedStatus.Body.String())
+	var pending struct {
+		Data ocr.JobStatus `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(deniedStatus.Body.Bytes(), &pending))
+	assert.Equal(t, "pending", pending.Data.State)
+	assert.Empty(t, pending.Data.ResultURL.JSONURL)
 	denied := f.request(t, "GET", u.RequestURI(), "", "", nil)
 	assert.NotEqual(t, http.StatusOK, denied.Code)
 	assert.NotContains(t, denied.Body.String(), "recognized")

@@ -511,7 +511,7 @@ func (s *Service) project(ctx context.Context, j model.OCRJob) (JobStatus, error
 	}
 	if j.ResultResourceID != "" {
 		if j.Funding == "platform" && (base.PlatformTaskSettlementCheck == nil || base.PlatformTaskSettlementCheck(ctx, j.PlatformCallID) != nil) {
-			return out, errors.New("platform OCR settlement pending")
+			return out, nil
 		}
 		r, err := s.billing.OCRResource(ctx, j.ID, j.ResultResourceID)
 		// A nonempty publication ID is durable: successful retention cleanup

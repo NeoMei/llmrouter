@@ -25,7 +25,8 @@ backups; restarting with a different active version does not rotate it.
 
 The request snapshot and captured result are encrypted and bound to the call's
 identity and policy. Result payloads have an expiry, but encrypted input
-snapshots currently follow call-record retention. Result recovery is not yet
-registered as an API route. A task capability alone does not prove a current
+snapshots currently follow call-record retention. Result recovery is separately
+gated by `UNIHUB_KNOWLEDGE_RESULT_READ_ENABLED`, disabled by default, and requires
+an enabled producer and versioned keyring. A task capability alone does not prove a current
 logged-in user or account membership, and central authorization must also address
 the interval between result authorization and a concurrent revocation.

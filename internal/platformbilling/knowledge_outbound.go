@@ -10,10 +10,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 )
 
-// This private prototype is not wired into the existing relay. A future
-// integration must validate the destination and bind the response to this send.
-// It compares the body consumed at the send boundary to the frozen request,
-// then rebuilds replay bytes from the same validated body.
+// The certified relay calls this immediately before sending. It binds the
+// consumed body to the frozen request and disables transport-level replay.
 func (s *Session) validateKnowledgeOutbound(channel int, upstream, key string, req *http.Request) error {
 	if s == nil || s.adapter == nil || req == nil || req.Method != http.MethodPost || req.Body == nil || len(req.Header.Values("Authorization")) != 1 || req.Header.Get("Authorization") != "Bearer "+key {
 		return ErrInvalid

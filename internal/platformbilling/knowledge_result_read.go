@@ -1,8 +1,9 @@
 package platformbilling
 
-// Private, disabled result-read foundation. It is not registered as a route.
-// An active task credential proves capability scope but does not alone prove
-// a currently logged-in user or present account membership for that actor.
+// Result reads require both a task credential and a current actor access token.
+// The HTTP route is separately gated and disabled by default.
+// The central authority checks current membership at the time of verification;
+// revocation and delivery are not yet serialized.
 
 import (
 	"bytes"
@@ -139,6 +140,13 @@ func (a *Adapter) verifyKnowledgeSettlement(ctx context.Context, original Call) 
 
 // authorizedResult verifies a task capability, an authoritative UniHub call,
 // and the original v2 result binding. It never dispatches or settles a call.
+func (a *Adapter) KnowledgeResult(ctx context.Context, actorAccess, credential, task, id string) ([]byte, error) {
+	if a == nil || !a.config.EnableKnowledgeResultRead || a.knowledgeResults == nil {
+		return nil, ErrInvalid
+	}
+	return a.knowledgeResults.authorizedResult(ctx, a, actorAccess, credential, task, id)
+}
+
 func (v *knowledgeResultVault) authorizedResult(ctx context.Context, a *Adapter, actorAccess, credential, task, id string) ([]byte, error) {
 	if v == nil || a == nil || a.db == nil || !a.Enabled() || a.client == nil || actorAccess == "" || len(actorAccess) > 8192 || strings.ContainsAny(actorAccess, " \t\r\n") || !stableID.MatchString(id) || !stableID.MatchString(task) || !strings.HasPrefix(credential, "uh_model_") || !IsModelCredential(credential) {
 		return nil, ErrInvalid

@@ -51,10 +51,10 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 		variants = []string{"canonical", "token-flat", "token-batch", "zero", "missing", "duplicate", "bad-index", "wrong-grant", "wrong-policy", "wrong-channel", "multi-key", "key-drift", "space-drift", "changed-body"}
 	}
 	if aliEmbedding {
-		variants = []string{"canonical", "disk-cache", "client-cancel", "rotate-key", "zero", "missing", "duplicate", "bad-index", "changed-body", "text-overcap", "settle-unavailable", "receipt-usage", "receipt-digest", "receipt-charged", "receipt-consistent-wrong-charge"}
+		variants = []string{"canonical", "result-read", "result-read-disabled", "disk-cache", "client-cancel", "rotate-key", "zero", "missing", "duplicate", "bad-index", "changed-body", "text-overcap", "settle-unavailable", "receipt-usage", "receipt-digest", "receipt-charged", "receipt-consistent-wrong-charge"}
 	}
 	if kind == "rerank" {
-		variants = append(variants, "native-omitted", "disk-cache", "native-disk-cache", "gate-disabled", "client-cancel", "rotate-key", "settle-unavailable", "receipt-usage", "receipt-digest", "receipt-charged", "receipt-consistent-wrong-charge")
+		variants = append(variants, "result-read", "result-read-disabled", "native-omitted", "disk-cache", "native-disk-cache", "gate-disabled", "client-cancel", "rotate-key", "settle-unavailable", "receipt-usage", "receipt-digest", "receipt-charged", "receipt-consistent-wrong-charge")
 	}
 	if kind == "multimodal" {
 		variants = append(variants, "frozen-image-canonical-oversize", "frozen-image-native-oversize", "frozen-image-canonical-boundary", "frozen-image-native-boundary", "frozen-image-canonical-one-over", "frozen-image-native-one-over")
@@ -303,15 +303,27 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 			var remote platformbilling.RemoteCall
 			var settledUsage platformbilling.Usage
 			var finalDigest string
+			resultReadRevoked := false
+			credentialExpiry := time.Now().Add(time.Hour)
 			hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var out any
 				switch r.URL.Path {
 				case "/internal/v1/model-credentials/verify":
+					var input map[string]string
+					require.NoError(t, common.DecodeJson(r.Body, &input))
+					if input["purpose"] == "result_read" && (resultReadRevoked || r.Header.Get("X-UniHub-Actor-Authorization") != "Bearer fixture-actor") {
+						w.WriteHeader(http.StatusForbidden)
+						return
+					}
 					grantWire := wire
+					grantID := "credential"
+					if input["token"] == "uh_model_fresh" {
+						grantID = "fresh-credential"
+					}
 					if variant == "wrong-grant" {
 						grantWire = "chat.completions.create"
 					}
-					out = platformbilling.Claims{Operations: map[string][]string{"rank": {grantWire}}, ID: "credential", Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: "origin", Models: []string{"rank"}, TaskID: "task", ExpiresAt: time.Now().Add(time.Hour)}
+					out = platformbilling.Claims{Operations: map[string][]string{"rank": {grantWire}}, ID: grantID, Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: "origin", Models: []string{"rank"}, TaskID: "task", ExpiresAt: credentialExpiry}
 				case "/internal/v1/rates":
 					out = []platformbilling.Rate{rate}
 				case "/internal/v1/calls/reserve":
@@ -477,6 +489,7 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 			cfg := platformbilling.Config{Enabled: true, Origin: hub.URL, ServiceToken: "service-service-service-service-token", PrincipalID: 1, Group: "platform", MaxInputTokens: 1000, MaxOutputTokens: 100, MaxBodyBytes: bodyLimit, KnowledgePolicies: map[string]map[string]platformbilling.KnowledgePolicy{wire: {"rank": p}}, OperationLimits: map[string]map[string]platformbilling.OperationLimits{bill: {"rank": {Policy: "provider_reported_v1"}}}, OperationRateIDs: map[string]map[string]map[string]string{bill: {"CREDIT/6": {"rank": "rate"}}}}
 			cfg.AllowAliEmbeddingV4 = aliEmbedding
 			cfg.AllowAliRerank = kind == "rerank" && variant != "gate-disabled"
+			cfg.EnableKnowledgeResultRead = variant == "result-read" || variant == "client-cancel"
 			if aliEmbedding || kind == "rerank" {
 				cfg.AliEmbeddingResultKeys = map[string][]byte{"v1": bytes.Repeat([]byte{11}, 32), "v2": bytes.Repeat([]byte{12}, 32)}
 				cfg.AliEmbeddingResultActiveKey = "v1"
@@ -596,6 +609,32 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 					assert.Equal(t, "SETTLED", row.Status)
 					assert.Equal(t, 1, settles)
 					assert.NotContains(t, w.Body.String(), `"embedding"`)
+					restarted, err := platformbilling.New(db, cfg)
+					require.NoError(t, err)
+					recoveryEngine := gin.New()
+					SetPlatformRouter(recoveryEngine, restarted)
+					gateway := httptest.NewServer(recoveryEngine)
+					defer gateway.Close()
+					r, err := http.NewRequest(http.MethodPost, gateway.URL+"/platform/v1/knowledge/results/call", nil)
+					require.NoError(t, err)
+					r.Header.Set("Authorization", "Bearer uh_model_fresh")
+					r.Header.Set("X-UniHub-Task-ID", "task")
+					r.Header.Set("X-UniHub-Actor-Authorization", "Bearer fixture-actor")
+					recovered, err := gateway.Client().Do(r)
+					require.NoError(t, err)
+					recoveredBody, err := io.ReadAll(recovered.Body)
+					require.NoError(t, err)
+					require.NoError(t, recovered.Body.Close())
+					require.Equal(t, http.StatusOK, recovered.StatusCode, string(recoveredBody))
+					var output map[string]any
+					require.NoError(t, common.UnmarshalUnique(recoveredBody, &output))
+					if aliEmbedding {
+						assert.Contains(t, output, "data")
+					} else {
+						assert.Contains(t, output, "results")
+					}
+					assert.Equal(t, 1, sends)
+					assert.Equal(t, 1, settles)
 				} else if strings.HasPrefix(variant, "receipt-") {
 					assert.Equal(t, "SETTLED", row.Status)
 					assert.GreaterOrEqual(t, w.Code, 400)
@@ -622,6 +661,46 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 							assert.Contains(t, result, "data")
 						} else {
 							assert.Contains(t, result, "results")
+						}
+					}
+					if variant == "result-read" || variant == "result-read-disabled" {
+						read := func(actor, task string) *httptest.ResponseRecorder {
+							r := httptest.NewRequest(http.MethodPost, "/platform/v1/knowledge/results/call", nil)
+							r.Header.Set("Authorization", "Bearer uh_model_fixture")
+							r.Header.Set("X-UniHub-Task-ID", task)
+							r.Header.Set("X-UniHub-Actor-Authorization", "Bearer "+actor)
+							response := httptest.NewRecorder()
+							engine.ServeHTTP(response, r)
+							return response
+						}
+						valid := read("fixture-actor", "task")
+						if variant == "result-read-disabled" {
+							assert.Equal(t, http.StatusNotFound, valid.Code)
+						} else {
+							assert.Equal(t, http.StatusOK, valid.Code)
+							assert.JSONEq(t, w.Body.String(), valid.Body.String())
+							assert.Equal(t, "no-store", valid.Header().Get("Cache-Control"))
+							assert.Equal(t, http.StatusNotFound, read("wrong-actor", "task").Code)
+							assert.Equal(t, http.StatusNotFound, read("fixture-actor", "other").Code)
+							invalid := httptest.NewRequest(http.MethodPost, "/platform/v1/knowledge/results/call?x=1", nil)
+							invalid.Header.Set("Authorization", "Bearer uh_model_fixture")
+							invalid.Header.Set("X-UniHub-Task-ID", "task")
+							invalid.Header.Set("X-UniHub-Actor-Authorization", "Bearer fixture-actor")
+							bad := httptest.NewRecorder()
+							engine.ServeHTTP(bad, invalid)
+							assert.Equal(t, http.StatusNotFound, bad.Code)
+							invalid = httptest.NewRequest(http.MethodPost, "/platform/v1/knowledge/results/call", nil)
+							invalid.Header.Set("Authorization", "Bearer uh_model_fixture")
+							invalid.Header["authorization"] = []string{"Bearer attacker"}
+							invalid.Header.Set("X-UniHub-Task-ID", "task")
+							invalid.Header.Set("X-UniHub-Actor-Authorization", "Bearer fixture-actor")
+							bad = httptest.NewRecorder()
+							engine.ServeHTTP(bad, invalid)
+							assert.Equal(t, http.StatusNotFound, bad.Code)
+							resultReadRevoked = true
+							assert.Equal(t, http.StatusNotFound, read("fixture-actor", "task").Code)
+							assert.Equal(t, 1, sends)
+							assert.Equal(t, 1, settles)
 						}
 					}
 				}

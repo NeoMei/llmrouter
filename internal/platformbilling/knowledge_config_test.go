@@ -17,6 +17,11 @@ func TestAliKnowledgeConfigurationRequiresValidVersionedKeyring(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, c.AllowAliEmbeddingV4)
 	assert.False(t, c.AllowAliRerank)
+	assert.False(t, c.EnableKnowledgeResultRead)
+	base["UNIHUB_KNOWLEDGE_RESULT_READ_ENABLED"] = "true"
+	_, err = ConfigFromEnv(read)
+	assert.Error(t, err)
+	base["UNIHUB_KNOWLEDGE_RESULT_READ_ENABLED"] = "false"
 	base["UNIHUB_ALI_EMBEDDING_ENABLED"] = "true"
 	_, err = ConfigFromEnv(read)
 	assert.Error(t, err)
@@ -48,4 +53,8 @@ func TestAliKnowledgeConfigurationRequiresValidVersionedKeyring(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, c.AllowAliEmbeddingV4)
 	assert.True(t, c.AllowAliRerank)
+	base["UNIHUB_KNOWLEDGE_RESULT_READ_ENABLED"] = "true"
+	c, err = ConfigFromEnv(read)
+	require.NoError(t, err)
+	assert.True(t, c.EnableKnowledgeResultRead)
 }

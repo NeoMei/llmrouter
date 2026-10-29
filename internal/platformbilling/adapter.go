@@ -162,6 +162,9 @@ func New(db *gorm.DB, c Config) (*Adapter, error) {
 	if db == nil || !stableID.MatchString(c.InstanceID) || c.Group == "" || c.Group == "auto" || c.MaxInputTokens < 1 || c.MaxInputTokens > 1<<20 || c.MaxOutputTokens < 1 || c.MaxOutputTokens > 32768 || c.MaxBodyBytes < 1 || c.MaxBodyBytes > 1<<20 {
 		return nil, ErrInvalid
 	}
+	if c.EnableKnowledgeResultRead && !c.AllowAliEmbeddingV4 && !c.AllowAliRerank {
+		return nil, ErrInvalid
+	}
 	var err error
 	a.client, err = newClient(c)
 	if err != nil {

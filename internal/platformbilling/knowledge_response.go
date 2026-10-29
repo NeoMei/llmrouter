@@ -1,8 +1,7 @@
 package platformbilling
 
-// This validator is intentionally not connected to a relay or result vault.
-// A future integration must recheck its binding during atomic persistence and
-// preserve real usage even if response validation or delivery fails.
+// The certified embedding and rerank relay validates the supplier response
+// before atomically persisting its result and settlement intent.
 
 import (
 	"bytes"

@@ -1,8 +1,7 @@
 package platformbilling
 
-// This private vault is intentionally not connected to a production route.
-// A caller must first add bounded response capture and prove complete response
-// validation, atomic terminal intent, authorization and lifecycle cleanup.
+// The vault backs certified relay capture. Its result-read route remains
+// separately disabled by default and expiry cleanup is unscheduled.
 
 import (
 	"context"

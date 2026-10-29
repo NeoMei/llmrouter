@@ -18,13 +18,17 @@ func ConfigFromEnv(get func(string) string) (Config, error) {
 	if !c.Enabled {
 		return c, nil
 	}
-	for _, name := range []string{"UNIHUB_ALI_EMBEDDING_ENABLED", "UNIHUB_ALI_RERANK_ENABLED"} {
+	for _, name := range []string{"UNIHUB_ALI_EMBEDDING_ENABLED", "UNIHUB_ALI_RERANK_ENABLED", "UNIHUB_KNOWLEDGE_RESULT_READ_ENABLED"} {
 		if raw := get(name); raw != "" && raw != "false" && raw != "true" {
 			return c, ErrInvalid
 		}
 	}
 	c.AllowAliEmbeddingV4 = get("UNIHUB_ALI_EMBEDDING_ENABLED") == "true"
 	c.AllowAliRerank = get("UNIHUB_ALI_RERANK_ENABLED") == "true"
+	c.EnableKnowledgeResultRead = get("UNIHUB_KNOWLEDGE_RESULT_READ_ENABLED") == "true"
+	if c.EnableKnowledgeResultRead && !c.AllowAliEmbeddingV4 && !c.AllowAliRerank {
+		return c, ErrInvalid
+	}
 	if c.AllowAliEmbeddingV4 || c.AllowAliRerank {
 		var keys map[string]string
 		if common.UnmarshalUnique([]byte(get("UNIHUB_KNOWLEDGE_RESULT_KEYS")), &keys) != nil || len(keys) == 0 || len(keys) > 32 {

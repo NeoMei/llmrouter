@@ -1,7 +1,7 @@
 package platformbilling
 
-// Private experimental primitives. A future relay integration must bind the
-// actual supplier connection to this session and preserve usage on failure.
+// These primitives bind certified supplier responses to the dispatched attempt
+// before persisting the encrypted result and settlement intent.
 
 import (
 	"bytes"
@@ -22,9 +22,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// CaptureAliEmbeddingResult is enabled only by the programmatic test gate. The
-// caller must pass the exact response read from the certified supplier request.
-// It never redispatches, and no public recovery endpoint is registered.
+// CaptureKnowledgeResult consumes the exact response from the certified
+// supplier request. It never redispatches and returns only after settlement.
 func (s *Session) CaptureKnowledgeResult(ctx context.Context, channel int, upstream, key string, raw []byte) ([]byte, error) {
 	if (!s.AliEmbeddingV4() && !s.AliRerank()) || s.adapter.knowledgeResults == nil || len(raw) == 0 || len(raw) > knowledgeResultMaxBytes {
 		return nil, ErrInvalid

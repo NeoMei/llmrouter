@@ -54,7 +54,8 @@ func authHelper(c *gin.Context, minRole int) {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "AUTH_USER_DISABLED", "message": common.TranslateMessage(c, i18n.MsgAuthUserBanned)})
 		return
 	}
-	managed := platformaccount.RuntimeEnabled() || user.IdentitySource == model.UniHubIdentitySource
+	maintenance := !useAccessToken && nativePrivateMaintenanceRead(c, user.Id)
+	managed := (platformaccount.RuntimeEnabled() || user.IdentitySource == model.UniHubIdentitySource) && !maintenance
 	if managed {
 		if platformaccount.RuntimeEnabled() {
 			if !LoadRuntimeAuthority(c, user.Id, user.AuthVersion) {

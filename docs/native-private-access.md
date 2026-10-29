@@ -11,3 +11,11 @@ The boundary trusts only the socket address supplied by net/http. Origin, Refere
 Signed payment callbacks remain registered publicly so existing orders can settle through their existing signature checks. The boundary does not establish callback signature validity.
 
 The October 27 native-denial acceptance describes the previous policy and remains historical evidence. The [October 28 coexistence contract](superpowers/specs/2026-10-28-nonbreaking-unified-users-design.md) supersedes its blanket-denial requirement.
+
+### Restricted local maintenance
+
+An operator may explicitly set `NATIVE_PRIVATE_MAINTENANCE_ENABLED=true` to inspect an existing, unbound native account while product runtime is enabled. This is disabled by default and only accepts requests delivered to the exact configured loopback management listener. Forwarded addresses and browser headers never select the listener. Native password and session authentication, status, and native role checks still apply; the exception refuses accounts with a UniHub identity or pending identity lifecycle, or funding other than local.
+
+This exception only admits GET requests for the authenticated user's profile, existing session metadata, masked API key metadata, and personal logs or usage statistics. It does not allow key disclosure, account or balance changes, recharge, model requests, or administration of other users. A browser session still uses the ordinary refresh and origin protections. Keep the listener private; if the application is behind a proxy, do not forward public traffic to it. Disable the flag after maintenance. This facility does not migrate accounts and is not full native operation while runtime is enabled.
+
+Do not run account binding or funding migration concurrently with this maintenance mode. Identity and funding eligibility are checked for each request but are not serialized with a concurrent migration; disable the flag before starting a cutover.

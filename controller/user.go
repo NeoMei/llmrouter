@@ -190,7 +190,8 @@ func setupLoginAtAuthVersion(user *model.User, expectedAuthVersion int64, c *gin
 		common.ApiError(c, err)
 		return
 	}
-	if platformaccount.RuntimeEnabled() {
+	maintenance := (c.FullPath() == "/api/user/login" || c.FullPath() == "/api/user/login/2fa") && middleware.NativePrivateMaintenanceIdentity(c, currentUser.Id)
+	if platformaccount.RuntimeEnabled() && !maintenance {
 		if err = applyCurrentProductIdentity(c, currentUser, true); err != nil {
 			productIdentityError(c, err)
 			return

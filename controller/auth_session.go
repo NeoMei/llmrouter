@@ -33,7 +33,7 @@ func RefreshAuth(c *gin.Context) {
 		return
 	}
 	service.WriteRefreshCookie(c, bundle.RefreshToken)
-	if platformaccount.RuntimeEnabled() {
+	if platformaccount.RuntimeEnabled() && !middleware.NativePrivateMaintenanceIdentity(c, user.Id) {
 		if e := applyCurrentProductIdentity(c, user, false); e != nil {
 			productIdentityError(c, e)
 			return

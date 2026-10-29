@@ -34,6 +34,12 @@ func TestRuntimeFinanceActorRequiresCurrentBoundSession(t *testing.T) {
 	identity, internal, err := service.ParseDashboardAccessToken(bundle.AccessToken)
 	require.NoError(t, err)
 	require.True(t, internal)
+	brokerIdentity := identity
+	bundle, err = service.CreateLoginSession(user.Id, "password", "", "")
+	require.NoError(t, err)
+	identity, internal, err = service.ParseDashboardAccessToken(bundle.AccessToken)
+	require.NoError(t, err)
+	require.True(t, internal)
 	access := userkit.Access{Issuer: cfg.PublicOrigin, Subject: "central-member", User: userkit.User{ID: "central-member"}, ProductID: cfg.ProductID, InstanceID: cfg.InstanceID, Active: true, Permissions: []string{"product:use"}, ExpiresAt: time.Now().Add(time.Minute).Unix()}
 	principal := userkit.Principal{LocalUser: userkit.LocalUser{ID: strconv.Itoa(user.Id)}, Access: access}
 	actorSubject := "central-member"
@@ -64,6 +70,9 @@ func TestRuntimeFinanceActorRequiresCurrentBoundSession(t *testing.T) {
 	t.Cleanup(upstream.Close)
 	t.Setenv("UNIHUB_ORIGIN", upstream.URL)
 	t.Setenv("UNIHUB_PRODUCT_API_ORIGIN", upstream.URL)
+	_, err = runtimeFinanceActor(context.Background(), brokerIdentity, principal, cfg)
+	require.Error(t, err, "broker source session must be verifiable before finance authority")
+	assert.Zero(t, calls)
 	proof, err := runtimeFinanceActor(context.Background(), identity, principal, cfg)
 	require.NoError(t, err)
 	assert.Equal(t, "upa_"+strings.Repeat("a", 64), proof.ActorToken)

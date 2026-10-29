@@ -28,7 +28,14 @@ func runtimeFinanceActor(ctx context.Context, identity service.AuthIdentity, pri
 	if err := model.SyncProductAuthVersions(ctx, identity.UserID); err != nil {
 		return userkit.ProductIdentity{}, errRuntimeFinanceAuthority
 	}
-	if _, _, err := service.ValidateLoginSession(identity); err != nil {
+	session, _, err := service.ValidateLoginSession(identity)
+	if err != nil {
+		return userkit.ProductIdentity{}, errRuntimeFinanceAuthority
+	}
+	// A broker SID is derived from a central browser session. Until that
+	// source session is verifiably bound and revalidated, a runtime actor by
+	// itself cannot establish that the central browser has not been revoked.
+	if session.LoginMethod == "product_broker" {
 		return userkit.ProductIdentity{}, errRuntimeFinanceAuthority
 	}
 	projected, err := model.CheckUniHubProjection(identity.UserID)

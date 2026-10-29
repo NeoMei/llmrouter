@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/internal/platformaccount"
 	"github.com/QuantumNous/new-api/internal/unihubaccess"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
@@ -34,7 +35,7 @@ func NativeAPIBoundary() gin.HandlerFunc {
 			return
 		}
 		_, management := uniHubManagementPermission(c)
-		if err == nil && policy.PublicEnabled && (publicProjectionPath(c) || management) {
+		if err == nil && (policy.PublicEnabled || platformaccount.RuntimeEnabled()) && (publicProjectionPath(c) || management) {
 			if !hasUniHubBrowserSession(c) {
 				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "UNIHUB_SESSION_REQUIRED"})
 				return
@@ -50,6 +51,10 @@ func NativeAPIBoundary() gin.HandlerFunc {
 		}
 		native(c)
 	}
+}
+
+func isUniHubBrowserLogin(method string) bool {
+	return method == "unihub" || (platformaccount.RuntimeEnabled() && method == "product_broker")
 }
 
 func publicProjectionPath(c *gin.Context) bool {
@@ -73,7 +78,7 @@ func hasUniHubBrowserSession(c *gin.Context) bool {
 				return false
 			}
 			session, err := model.GetUserSessionCached(sid)
-			if err != nil || session.LoginMethod != "unihub" {
+			if err != nil || !isUniHubBrowserLogin(session.LoginMethod) {
 				return false
 			}
 			projected, err := model.CheckUniHubProjection(session.UserID)
@@ -102,10 +107,10 @@ func hasUniHubBrowserSession(c *gin.Context) bool {
 	// prove this was a UniHub session; no native login session is accepted.
 	if c.Request.URL.Path == "/api/user/auth/logout" {
 		session, err := model.GetUserSessionCached(identity.SessionID)
-		return err == nil && session.UserID == identity.UserID && session.LoginMethod == "unihub"
+		return err == nil && session.UserID == identity.UserID && isUniHubBrowserLogin(session.LoginMethod)
 	}
 	session, user, err := service.ValidateLoginSession(identity)
-	if err != nil || session.LoginMethod != "unihub" || user.IdentitySource != model.UniHubIdentitySource {
+	if err != nil || !isUniHubBrowserLogin(session.LoginMethod) || user.IdentitySource != model.UniHubIdentitySource {
 		return false
 	}
 	projected, err := model.CheckUniHubProjection(user.Id)

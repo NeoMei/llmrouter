@@ -24,6 +24,12 @@ func responseFixture(t *testing.T, op string) (*Session, string, string) {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.TempDir()+"/response.db"), &gorm.Config{})
 	require.NoError(t, err)
+	return responseFixtureOnDB(t, op, db)
+}
+
+func responseFixtureOnDB(t *testing.T, op string, db *gorm.DB) (*Session, string, string) {
+	t.Helper()
+	var err error
 	require.NoError(t, db.AutoMigrate(&Call{}, &Attempt{}))
 	key := "fixture-key"
 	sum := sha256.Sum256([]byte(key))

@@ -26,9 +26,12 @@ import (
 const knowledgeResultMaxBytes = 16 << 20
 
 type knowledgeResultRow struct {
-	CallID     string `gorm:"primaryKey;size:128"`
-	ExpiresAt  int64  `gorm:"index"`
-	Ciphertext []byte
+	CallID         string `gorm:"primaryKey;size:128"`
+	ExpiresAt      int64  `gorm:"index"`
+	Ciphertext     []byte
+	BindingVersion int
+	AttemptID      uint
+	ObservationTag string `gorm:"size:64"`
 }
 
 func (knowledgeResultRow) TableName() string { return "platform_knowledge_results" }
@@ -41,10 +44,11 @@ type knowledgeResultKey struct {
 func (knowledgeResultKey) TableName() string { return "platform_knowledge_result_keys" }
 
 type knowledgeResultVault struct {
-	db   *gorm.DB
-	aead cipher.AEAD
-	ttl  time.Duration
-	now  func() time.Time
+	db      *gorm.DB
+	aead    cipher.AEAD
+	sealKey []byte
+	ttl     time.Duration
+	now     func() time.Time
 }
 
 func newKnowledgeResultVault(db *gorm.DB, key []byte, ttl time.Duration) (*knowledgeResultVault, error) {
@@ -96,11 +100,27 @@ func newKnowledgeResultVault(db *gorm.DB, key []byte, ttl time.Duration) (*knowl
 	if err != nil {
 		return nil, err
 	}
-	return &knowledgeResultVault{db: db, aead: aead, ttl: ttl, now: time.Now}, nil
+	seal := hmac.New(sha256.New, key)
+	_, _ = seal.Write([]byte("platform-knowledge-response-seal-v1"))
+	return &knowledgeResultVault{db: db, aead: aead, sealKey: seal.Sum(nil), ttl: ttl, now: time.Now}, nil
 }
 
 func knowledgeResultAAD(row Call, expires int64) ([]byte, error) {
 	return common.Marshal([]any{"knowledge-result-v1", row.CallID, row.InstanceID, row.ActorID, row.AccountID, row.OriginProductID, row.CredentialID, row.CredentialKind, row.TaskID, row.Model, row.WireOperation, row.WireMode, row.Digest, row.Evidence, expires})
+}
+
+func knowledgeResultStoredAAD(row Call, stored knowledgeResultRow) ([]byte, error) {
+	base, err := knowledgeResultAAD(row, stored.ExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	if stored.BindingVersion == 0 {
+		return base, nil
+	}
+	if stored.BindingVersion != 1 || stored.AttemptID == 0 || len(stored.ObservationTag) != 64 {
+		return nil, ErrInvalid
+	}
+	return common.Marshal([]any{"knowledge-result-bound-v1", base, stored.AttemptID, stored.ObservationTag})
 }
 
 func (v *knowledgeResultVault) capture(ctx context.Context, callID string, result []byte) error {
@@ -156,7 +176,7 @@ func (v *knowledgeResultVault) readSettled(ctx context.Context, callID string) (
 		if stored.ExpiresAt <= v.now().UnixMilli() || len(stored.Ciphertext) < v.aead.NonceSize() {
 			return ErrPending
 		}
-		aad, err := knowledgeResultAAD(row, stored.ExpiresAt)
+		aad, err := knowledgeResultStoredAAD(row, stored)
 		if err != nil {
 			return err
 		}
@@ -200,14 +220,14 @@ func (v *knowledgeResultVault) purgeExpired(ctx context.Context, limit int, afte
 			if len(item.Ciphertext) < v.aead.NonceSize() {
 				return ErrInvalid
 			}
-			aad, err := knowledgeResultAAD(row, item.ExpiresAt)
+			aad, err := knowledgeResultStoredAAD(row, item)
 			if err != nil {
 				return err
 			}
 			if _, err = v.aead.Open(nil, item.Ciphertext[:v.aead.NonceSize()], item.Ciphertext[v.aead.NonceSize():], aad); err != nil {
 				return ErrInvalid
 			}
-			saved := tx.Model(&knowledgeResultRow{}).Where("call_id = ? AND expires_at = ? AND ciphertext = ?", item.CallID, item.ExpiresAt, item.Ciphertext).Update("ciphertext", nil)
+			saved := tx.Model(&knowledgeResultRow{}).Where("call_id = ? AND expires_at = ? AND ciphertext = ? AND COALESCE(binding_version, 0) = ? AND COALESCE(attempt_id, 0) = ? AND COALESCE(observation_tag, '') = ?", item.CallID, item.ExpiresAt, item.Ciphertext, item.BindingVersion, item.AttemptID, item.ObservationTag).Update("ciphertext", nil)
 			if saved.Error != nil {
 				return saved.Error
 			}

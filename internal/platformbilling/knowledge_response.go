@@ -7,6 +7,7 @@ package platformbilling
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"io"
 	"math"
@@ -22,6 +23,9 @@ import (
 )
 
 type knowledgeResponse struct {
+	rawDigest     [32]byte
+	snapshot      Call
+	attempt       Attempt
 	callID        string
 	attemptID     uint
 	requestDigest string
@@ -38,6 +42,9 @@ func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, ups
 		return knowledgeResponse{}, ErrInvalid
 	}
 	defer response.Body.Close()
+	// Session is single-owner; use one value snapshot throughout validation.
+	snapshot := *s
+	s = &snapshot
 	if response.StatusCode != http.StatusOK || s.attempt.ChannelID != channel || s.attempt.Status != "DISPATCHED" {
 		return knowledgeResponse{}, ErrInvalid
 	}
@@ -53,6 +60,7 @@ func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, ups
 		return knowledgeResponse{}, ErrInvalid
 	}
 	var row Call
+	var verifiedAttempt Attempt
 	err = s.adapter.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&Call{}).Where("call_id = ?", s.call.CallID).UpdateColumn("updated_at", gorm.Expr("updated_at")).Error; err != nil {
 			return ErrPending
@@ -60,8 +68,7 @@ func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, ups
 		if err := tx.First(&row, "call_id = ?", s.call.CallID).Error; err != nil {
 			return ErrPending
 		}
-		var attempt Attempt
-		if err := tx.First(&attempt, "id = ? AND call_id = ?", s.attempt.ID, s.call.CallID).Error; err != nil || attempt.Status != "DISPATCHED" || attempt.ChannelID != channel {
+		if err := tx.First(&verifiedAttempt, "id = ? AND call_id = ?", s.attempt.ID, s.call.CallID).Error; err != nil || verifiedAttempt.Status != "DISPATCHED" || verifiedAttempt.ChannelID != channel || verifiedAttempt.UpstreamIdentity != s.attempt.UpstreamIdentity {
 			return ErrPending
 		}
 		return nil
@@ -69,7 +76,7 @@ func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, ups
 	if err != nil {
 		return knowledgeResponse{}, err
 	}
-	if row.Status != "UNKNOWN" || row.EvidenceConflict || row.CallID != s.call.CallID || row.ActorID != s.call.ActorID || row.AccountID != s.call.AccountID || row.TaskID != s.call.TaskID || row.OriginProductID != s.call.OriginProductID || row.InstanceID != s.call.InstanceID || row.CredentialID != s.call.CredentialID || row.CredentialKind != s.call.CredentialKind || row.Model != s.call.Model || row.Digest != s.call.Digest || row.DigestVersion != s.call.DigestVersion || row.WireOperation != s.call.WireOperation || row.WirePathModel != s.call.WirePathModel || row.WireMode != s.call.WireMode || row.MediaSnapshot != s.call.MediaSnapshot || row.RateSnapshot != s.call.RateSnapshot || row.RateID != s.call.RateID || row.Asset != s.call.Asset || row.FundingMode != s.call.FundingMode || row.FundingProductID != s.call.FundingProductID || row.FundingSnapshot != s.call.FundingSnapshot || row.BillingProfileVersion != s.call.BillingProfileVersion || row.Amount != s.call.Amount || row.ReservationQuantity != s.call.ReservationQuantity || row.ReservationOutput != s.call.ReservationOutput {
+	if row.Status != "UNKNOWN" || row.EvidenceConflict || !sameKnowledgeCallBinding(row, s.call) {
 		return knowledgeResponse{}, ErrPending
 	}
 	var frozen frozenKnowledge
@@ -237,5 +244,10 @@ func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, ups
 	if sum.Cmp(big.NewInt(row.ReservationQuantity)) > 0 {
 		return knowledgeResponse{}, ErrInvalid
 	}
+	result.rawDigest, result.snapshot, result.attempt = sha256.Sum256(raw), row, verifiedAttempt
 	return result, nil
+}
+
+func sameKnowledgeCallBinding(a, b Call) bool {
+	return a.CallID == b.CallID && a.ActorID == b.ActorID && a.AccountID == b.AccountID && a.TaskID == b.TaskID && a.OriginProductID == b.OriginProductID && a.InstanceID == b.InstanceID && a.CredentialID == b.CredentialID && a.CredentialKind == b.CredentialKind && a.Model == b.Model && a.Digest == b.Digest && a.DigestVersion == b.DigestVersion && a.WireOperation == b.WireOperation && a.WirePathModel == b.WirePathModel && a.WireMode == b.WireMode && a.Operation == b.Operation && a.MediaSnapshot == b.MediaSnapshot && a.RateSnapshot == b.RateSnapshot && a.RateID == b.RateID && a.Asset == b.Asset && a.FundingMode == b.FundingMode && a.FundingProductID == b.FundingProductID && a.FundingSnapshot == b.FundingSnapshot && a.BillingProfileVersion == b.BillingProfileVersion && a.Amount == b.Amount && a.ReservationQuantity == b.ReservationQuantity && a.ReservationOutput == b.ReservationOutput
 }

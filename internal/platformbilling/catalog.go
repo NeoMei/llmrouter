@@ -376,6 +376,8 @@ func (a *Adapter) ProjectCatalog(product string, models []CatalogSourceModel) (T
 				op.DisabledReason = "managed_producer_policy_mismatch"
 			case op.BillingOperation == "embedding" && source.EmbeddingSpace == nil:
 				op.DisabledReason = "embedding_identity_unconfigured"
+			case id == "rerank.create" && !a.config.AllowAliRerank:
+				op.DisabledReason = "certified_knowledge_unavailable"
 			case (id == "embeddings.create" || id == "rerank.create" || id == "multimodal.embeddings.create") && !a.config.KnowledgePolicies[id][m.ID].valid(a.config, m.ID, id):
 				op.DisabledReason = "certified_knowledge_unavailable"
 			case (id == "embeddings.create" || id == "rerank.create" || id == "multimodal.embeddings.create") && op.Policy != "provider_reported_v1":

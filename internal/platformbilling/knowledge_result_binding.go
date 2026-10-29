@@ -1,7 +1,7 @@
 package platformbilling
 
-// Private experimental primitives. A future relay integration must bind the
-// actual supplier connection to this session and preserve usage on failure.
+// These primitives bind certified supplier responses to the dispatched attempt
+// before persisting the encrypted result and settlement intent.
 
 import (
 	"bytes"
@@ -22,11 +22,10 @@ import (
 	"gorm.io/gorm"
 )
 
-// CaptureAliEmbeddingResult is enabled only by the programmatic test gate. The
-// caller must pass the exact response read from the certified supplier request.
-// It never redispatches, and no public recovery endpoint is registered.
-func (s *Session) CaptureAliEmbeddingResult(ctx context.Context, channel int, upstream, key string, raw []byte) ([]byte, error) {
-	if !s.AliEmbeddingV4() || s.adapter.knowledgeResults == nil || len(raw) == 0 || len(raw) > knowledgeResultMaxBytes {
+// CaptureKnowledgeResult consumes the exact response from the certified
+// supplier request. It never redispatches and returns only after settlement.
+func (s *Session) CaptureKnowledgeResult(ctx context.Context, channel int, upstream, key string, raw []byte) ([]byte, error) {
+	if (!s.AliEmbeddingV4() && !s.AliRerank()) || s.adapter.knowledgeResults == nil || len(raw) == 0 || len(raw) > knowledgeResultMaxBytes {
 		return nil, ErrInvalid
 	}
 	work, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
@@ -146,6 +145,9 @@ func (v *knowledgeResultVault) captureValidated(ctx context.Context, s *Session,
 	}
 	var conflict bool
 	err = v.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := v.checkWriter(tx); err != nil {
+			return err
+		}
 		// Rejected locks Attempt before Call. Match its order so a pending
 		// rejection cannot leave a stale DISPATCHED observation in this commit.
 		if err := tx.Model(&Attempt{}).Where("id = ? AND call_id = ?", result.attemptID, result.callID).UpdateColumn("updated_at", gorm.Expr("updated_at")).Error; err != nil {
@@ -229,7 +231,7 @@ func (v *knowledgeResultVault) captureValidated(ctx context.Context, s *Session,
 		observation := hmac.New(sha256.New, v.sealKey)
 		_, _ = observation.Write([]byte("provider-response-digest-v1"))
 		_, _ = observation.Write(result.rawDigest[:])
-		item := knowledgeResultRow{CallID: row.CallID, ExpiresAt: expires, BindingVersion: 2, AttemptID: attempt.ID, ObservationTag: hex.EncodeToString(observation.Sum(nil))}
+		item := knowledgeResultRow{CallID: row.CallID, KeyID: v.active, ExpiresAt: expires, BindingVersion: 2, AttemptID: attempt.ID, ObservationTag: hex.EncodeToString(observation.Sum(nil))}
 		aad, err := knowledgeResultStoredAAD(row, item)
 		if err != nil {
 			return ErrInvalid

@@ -2,6 +2,7 @@ package platformbilling
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -29,6 +30,9 @@ func (a *Adapter) admitWireOperation(ctx context.Context, credential, task, id s
 		}
 	}
 	operation := wireBillingOperation(wire.ID)
+	if wire.ID == "rerank.create" && !a.config.AllowAliRerank {
+		return nil, ErrInvalid
+	}
 	if operation == "" {
 		return nil, ErrInvalid
 	}
@@ -257,10 +261,34 @@ func (a *Adapter) admitWireOperation(ctx context.Context, credential, task, id s
 		row.DigestVersion = "platform-native-history-v1"
 	}
 	var old Call
-	if err = a.db.WithContext(ctx).First(&old, "call_id = ?", id).Error; err == nil {
+	lookupErr := a.db.WithContext(ctx).First(&old, "call_id = ?", id).Error
+	if lookupErr != nil && !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+		return nil, lookupErr
+	}
+	protectedKnowledge := wire.ID == "rerank.create" || (wire.ID == "embeddings.create" && a.config.KnowledgePolicies[wire.ID][req.Model].Version == "knowledge_ali_text_v1")
+	if protectedKnowledge && (lookupErr != nil || old.DigestVersion == "platform-wire-hmac-v1") {
+		if a.knowledgeResults == nil {
+			return nil, ErrInvalid
+		}
+		keyID := a.knowledgeResults.active
+		if lookupErr == nil {
+			var stored frozenKnowledge
+			if common.UnmarshalUnique([]byte(old.MediaSnapshot), &stored) != nil || !knowledgeKeyID.MatchString(stored.BodyKeyID) {
+				return nil, ErrInvalid
+			}
+			keyID = stored.BodyKeyID
+		}
+		key := a.knowledgeResults.digestKeys[keyID]
+		if len(key) != sha256.Size {
+			return nil, ErrInvalid
+		}
+		mac := hmac.New(sha256.New, key)
+		_, _ = mac.Write(digestData)
+		row.Digest = hex.EncodeToString(mac.Sum(nil))
+		row.DigestVersion = "platform-wire-hmac-v1"
+	}
+	if lookupErr == nil {
 		return nil, compareWireCall(old, row, legacyDigest)
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
 	}
 	var rates []Rate
 	if err = a.client.do(ctx, http.MethodGet, "/internal/v1/rates", "", nil, &rates); err != nil {
@@ -413,7 +441,26 @@ func (a *Adapter) admitWireOperation(ctx context.Context, credential, task, id s
 	row.RateSnapshot = string(snapshot)
 	row.RateID = chosen.ID
 	row.Amount = amount
-	created := a.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
+	if protectedKnowledge {
+		if err = a.sealKnowledgeSnapshot(&row); err != nil {
+			return nil, err
+		}
+	}
+	var created *gorm.DB
+	if protectedKnowledge {
+		err = a.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := a.knowledgeResults.checkWriter(tx); err != nil {
+				return err
+			}
+			created = tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
+			return created.Error
+		})
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		created = a.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
+	}
 	if created.Error != nil {
 		return nil, created.Error
 	}

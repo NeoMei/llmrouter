@@ -10,10 +10,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 )
 
-// This private prototype is not wired into the existing relay. A future
-// integration must validate the destination and bind the response to this send.
-// It compares the body consumed at the send boundary to the frozen request,
-// then rebuilds replay bytes from the same validated body.
+// The certified relay calls this immediately before sending. It binds the
+// consumed body to the frozen request and disables transport-level replay.
 func (s *Session) validateKnowledgeOutbound(channel int, upstream, key string, req *http.Request) error {
 	if s == nil || s.adapter == nil || req == nil || req.Method != http.MethodPost || req.Body == nil || len(req.Header.Values("Authorization")) != 1 || req.Header.Get("Authorization") != "Bearer "+key {
 		return ErrInvalid
@@ -68,7 +66,14 @@ func (s *Session) validateKnowledgeOutbound(channel int, upstream, key string, r
 		return ErrInvalid
 	}
 	req.Body = io.NopCloser(bytes.NewReader(raw))
-	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(raw)), nil }
+	// Go's transport may replay a POST after a stale connection when GetBody
+	// and an idempotency header coexist. One reservation permits one attempt.
+	req.GetBody = nil
+	for name := range req.Header {
+		if strings.EqualFold(name, "Idempotency-Key") || strings.EqualFold(name, "X-Idempotency-Key") {
+			delete(req.Header, name)
+		}
+	}
 	req.ContentLength = int64(len(raw))
 	return nil
 }
@@ -81,6 +86,13 @@ func (s *Session) ValidateAliEmbeddingOutbound(channel int, upstream, key string
 	}
 	var frozen frozenKnowledge
 	if common.UnmarshalUnique([]byte(s.call.MediaSnapshot), &frozen) != nil || req.URL.String() != frozen.Policy.Origin+"/compatible-mode/v1/embeddings" {
+		return ErrInvalid
+	}
+	return s.validateKnowledgeOutbound(channel, upstream, key, req)
+}
+
+func (s *Session) ValidateAliRerankOutbound(channel int, upstream, key string, req *http.Request) error {
+	if !s.AliRerank() || req == nil || req.URL == nil || req.Host != req.URL.Host || req.URL.String() != "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank" || req.Header.Get("X-DashScope-Plugin") != "" {
 		return ErrInvalid
 	}
 	return s.validateKnowledgeOutbound(channel, upstream, key, req)

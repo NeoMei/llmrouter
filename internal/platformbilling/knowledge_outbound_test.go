@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -28,16 +29,15 @@ func TestKnowledgeOutboundMatchesReservedRequest(t *testing.T) {
 				return req
 			}
 			validated := makeReq(tc.body)
+			validated.Header.Set("Idempotency-Key", "secret-client-id")
+			validated.Header["x-idempotency-key"] = []string{"alternate-id"}
 			require.NoError(t, s.validateKnowledgeOutbound(1, upstream, key, validated))
-			replay, err := validated.GetBody()
-			require.NoError(t, err)
-			replayed, err := io.ReadAll(replay)
-			require.NoError(t, err)
-			require.NoError(t, replay.Close())
+			assert.Nil(t, validated.GetBody)
+			assert.Empty(t, validated.Header.Get("Idempotency-Key"))
+			assert.NotContains(t, validated.Header, "x-idempotency-key")
 			actual, err := io.ReadAll(validated.Body)
 			require.NoError(t, err)
 			assert.Equal(t, tc.body, string(actual))
-			assert.Equal(t, actual, replayed)
 			assert.Error(t, s.validateKnowledgeOutbound(1, upstream, key, makeReq(tc.altered)))
 			bad := makeReq(tc.body)
 			bad.Header.Set("Authorization", "Bearer another-key")
@@ -57,6 +57,42 @@ func TestKnowledgeOutboundMatchesReservedRequest(t *testing.T) {
 			assert.Error(t, s.validateKnowledgeOutbound(2, upstream, key, makeReq(tc.body)))
 		})
 	}
+}
+
+func TestKnowledgeOutboundConnectionFailureDoesNotReplay(t *testing.T) {
+	s, key, upstream := responseFixture(t, "embedding")
+	body := `{"model":"upstream-embed","input":["first","second"],"dimensions":3}`
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		attempts.Add(1)
+		_, _ = io.Copy(io.Discard, r.Body)
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			_ = conn.Close()
+		}
+	}))
+	defer server.Close()
+	client := server.Client()
+	warm, err := client.Get(server.URL)
+	require.NoError(t, err)
+	_, err = io.Copy(io.Discard, warm.Body)
+	require.NoError(t, err)
+	require.NoError(t, warm.Body.Close())
+	req, err := http.NewRequest(http.MethodPost, server.URL, bytes.NewBufferString(body))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Idempotency-Key", "client-call")
+	require.NoError(t, s.validateKnowledgeOutbound(1, upstream, key, req))
+	resp, err := client.Do(req)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	require.Error(t, err)
+	assert.EqualValues(t, 1, attempts.Load())
 }
 
 // The prototype validates the bytes that a real HTTP transport will consume;

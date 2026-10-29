@@ -51,7 +51,10 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 		variants = []string{"canonical", "token-flat", "token-batch", "zero", "missing", "duplicate", "bad-index", "wrong-grant", "wrong-policy", "wrong-channel", "multi-key", "key-drift", "space-drift", "changed-body"}
 	}
 	if aliEmbedding {
-		variants = []string{"canonical", "zero", "missing", "duplicate", "bad-index", "changed-body", "text-overcap", "settle-unavailable", "receipt-usage", "receipt-digest", "receipt-charged", "receipt-consistent-wrong-charge"}
+		variants = []string{"canonical", "result-read", "result-read-disabled", "disk-cache", "client-cancel", "rotate-key", "zero", "missing", "duplicate", "bad-index", "changed-body", "text-overcap", "settle-unavailable", "receipt-usage", "receipt-digest", "receipt-charged", "receipt-consistent-wrong-charge"}
+	}
+	if kind == "rerank" {
+		variants = append(variants, "result-read", "result-read-disabled", "native-omitted", "disk-cache", "native-disk-cache", "gate-disabled", "client-cancel", "rotate-key", "settle-unavailable", "receipt-usage", "receipt-digest", "receipt-charged", "receipt-consistent-wrong-charge")
 	}
 	if kind == "multimodal" {
 		variants = append(variants, "frozen-image-canonical-oversize", "frozen-image-native-oversize", "frozen-image-canonical-boundary", "frozen-image-native-boundary", "frozen-image-canonical-one-over", "frozen-image-native-one-over")
@@ -61,6 +64,11 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 			continue
 		}
 		t.Run(variant, func(t *testing.T) {
+			if strings.HasSuffix(variant, "disk-cache") {
+				previous := common.GetDiskCacheConfig()
+				common.SetDiskCacheConfig(common.DiskCacheConfig{Enabled: true, ThresholdMB: 0, MaxSizeMB: 100, Path: t.TempDir()})
+				t.Cleanup(func() { common.SetDiskCacheConfig(previous) })
+			}
 			gin.SetMode(gin.TestMode)
 			require.NoError(t, i18n.Init())
 			db, e := gorm.Open(sqlite.Open("file:"+t.TempDir()+"/db"), &gorm.Config{})
@@ -80,7 +88,7 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 			})
 			wire, bill, upstreamModel := "rerank.create", "rerank", "qwen3-rerank"
 			frozenBoundary := strings.HasPrefix(variant, "frozen-image-")
-			nativeEnvelope := variant == "native" || variant == "unknown-native" || strings.Contains(variant, "-native-")
+			nativeEnvelope := variant == "native" || variant == "native-omitted" || variant == "native-disk-cache" || variant == "unknown-native" || strings.Contains(variant, "-native-")
 			var imageBytes bytes.Buffer
 			if frozenBoundary {
 				encoder := png.Encoder{CompressionLevel: png.NoCompression}
@@ -145,10 +153,26 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 			controller.RelayMediaRuntime = nil
 			t.Cleanup(func() { controller.RelayMediaRuntime = oldRuntime })
 			sends, reserves, settles := 0, 0, 0
+			var cancelClient context.CancelFunc
 			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				sends++
+				if strings.HasSuffix(variant, "disk-cache") {
+					files, err := os.ReadDir(common.GetDiskCacheDir())
+					if !os.IsNotExist(err) {
+						require.NoError(t, err)
+						assert.Empty(t, files, "managed input must not create disk cache files")
+					}
+				}
+				if variant == "client-cancel" && cancelClient != nil {
+					cancelClient()
+				}
 				var row platformbilling.Call
 				require.NoError(t, db.First(&row, "call_id = ?", "call").Error)
+				if aliEmbedding || kind == "rerank" {
+					assert.NotContains(t, row.MediaSnapshot, `"input":["a","b"]`, "knowledge content must not be persisted in plaintext")
+					assert.NotContains(t, row.MediaSnapshot, `"query":"q"`, "knowledge query must not be persisted in plaintext")
+					assert.Equal(t, "platform-wire-hmac-v1", row.DigestVersion, "request digests for private input must be keyed")
+				}
 				assert.Equal(t, "UNKNOWN", row.Status)
 				var n int64
 				require.NoError(t, db.Model(&platformbilling.Attempt{}).Where("call_id = ? AND status = ?", "call", "DISPATCHED").Count(&n).Error)
@@ -279,15 +303,31 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 			var remote platformbilling.RemoteCall
 			var settledUsage platformbilling.Usage
 			var finalDigest string
+			resultReadRevoked := false
+			credentialExpiry := time.Now().Add(time.Hour)
 			hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var out any
 				switch r.URL.Path {
 				case "/internal/v1/model-credentials/verify":
+					var input map[string]string
+					require.NoError(t, common.DecodeJson(r.Body, &input))
+					if input["purpose"] == "result_read" && (resultReadRevoked || r.Header.Get("X-UniHub-Actor-Authorization") != "Bearer fixture-actor") {
+						w.WriteHeader(http.StatusForbidden)
+						return
+					}
 					grantWire := wire
+					grantID := "credential"
+					if input["token"] == "uh_model_fresh" {
+						grantID = "fresh-credential"
+					}
 					if variant == "wrong-grant" {
 						grantWire = "chat.completions.create"
 					}
-					out = platformbilling.Claims{Operations: map[string][]string{"rank": {grantWire}}, ID: "credential", Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: "origin", Models: []string{"rank"}, TaskID: "task", ExpiresAt: time.Now().Add(time.Hour)}
+					grant := platformbilling.Claims{Operations: map[string][]string{"rank": {grantWire}}, ID: grantID, Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: "origin", Models: []string{"rank"}, TaskID: "task", ExpiresAt: credentialExpiry}
+					out = struct {
+						platformbilling.Claims
+						ActorExpiresAt int64 `json:"actor_expires_at,omitempty"`
+					}{grant, credentialExpiry.Unix()}
 				case "/internal/v1/rates":
 					out = []platformbilling.Rate{rate}
 				case "/internal/v1/calls/reserve":
@@ -298,7 +338,7 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 					out = remote
 				case "/internal/v1/calls/call/settle":
 					settles++
-					if aliEmbedding {
+					if aliEmbedding || kind == "rerank" {
 						var saved struct{ Ciphertext []byte }
 						require.NoError(t, db.Table("platform_knowledge_results").Where("call_id = ?", "call").Take(&saved).Error)
 						assert.NotEmpty(t, saved.Ciphertext)
@@ -323,8 +363,11 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 					}
 					assert.Equal(t, want, in.Usage.Metered.Measurements[0].Quantity.Value)
 					remote.Status = "SETTLED"
-					if aliEmbedding {
+					if aliEmbedding || kind == "rerank" {
 						remote.Charged = "2"
+						if variant == "zero" {
+							remote.Charged = "0"
+						}
 						if variant == "receipt-consistent-wrong-charge" {
 							remote.Charged = "1"
 						}
@@ -340,7 +383,7 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 					}
 					out = remote
 				case "/internal/v1/calls/call":
-					if !aliEmbedding {
+					if !aliEmbedding && kind != "rerank" {
 						t.Error("unexpected call receipt")
 						w.WriteHeader(404)
 						return
@@ -384,7 +427,7 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 				channelType = constant.ChannelTypeOpenAI
 			}
 			base := up.URL
-			if aliEmbedding {
+			if aliEmbedding || kind == "rerank" {
 				base = "https://dashscope.aliyuncs.com"
 			}
 			require.NoError(t, db.Create(&model.Channel{Id: 1, Type: channelType, Key: "key", Status: common.ChannelStatusEnabled, BaseURL: &base, Models: upstreamModel, Group: "platform"}).Error)
@@ -414,7 +457,7 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 			t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(oldRatio)) })
 			model.InitChannelCache()
 			service.InitHttpClient()
-			if aliEmbedding {
+			if aliEmbedding || kind == "rerank" {
 				client := service.GetHttpClient()
 				baseTransport := client.Transport
 				client.Transport = aliEmbeddingFixtureTransport{target: up.URL, next: baseTransport}
@@ -449,15 +492,18 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 			}
 			cfg := platformbilling.Config{Enabled: true, Origin: hub.URL, ServiceToken: "service-service-service-service-token", PrincipalID: 1, Group: "platform", MaxInputTokens: 1000, MaxOutputTokens: 100, MaxBodyBytes: bodyLimit, KnowledgePolicies: map[string]map[string]platformbilling.KnowledgePolicy{wire: {"rank": p}}, OperationLimits: map[string]map[string]platformbilling.OperationLimits{bill: {"rank": {Policy: "provider_reported_v1"}}}, OperationRateIDs: map[string]map[string]map[string]string{bill: {"CREDIT/6": {"rank": "rate"}}}}
 			cfg.AllowAliEmbeddingV4 = aliEmbedding
-			if aliEmbedding {
-				cfg.AliEmbeddingResultKey = bytes.Repeat([]byte{11}, 32)
+			cfg.AllowAliRerank = kind == "rerank" && variant != "gate-disabled"
+			cfg.EnableKnowledgeResultRead = variant == "result-read" || variant == "client-cancel"
+			if aliEmbedding || kind == "rerank" {
+				cfg.AliEmbeddingResultKeys = map[string][]byte{"v1": bytes.Repeat([]byte{11}, 32), "v2": bytes.Repeat([]byte{12}, 32)}
+				cfg.AliEmbeddingResultActiveKey = "v1"
 			}
 			a, e := platformbilling.New(db, cfg)
 			require.NoError(t, e)
 			catalog, e := readTechnicalCatalog(context.Background(), a, "superwagie")
 			require.NoError(t, e)
 			require.Len(t, catalog.Models, 1)
-			if variant == "multi-key" || variant == "wrong-policy" || variant == "wrong-channel" || variant == "space-drift" {
+			if variant == "multi-key" || variant == "wrong-policy" || variant == "wrong-channel" || variant == "space-drift" || variant == "gate-disabled" {
 				assert.False(t, catalog.Models[0].Operations[0].Available)
 			} else {
 				assert.True(t, catalog.Models[0].Operations[0].Available, catalog.Models[0].Operations[0].DisabledReason)
@@ -481,6 +527,9 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 			if nativeEnvelope {
 				path = "/platform/api/v1/services/rerank/text-rerank/text-rerank"
 				body = `{"model":"rank","input":{"query":"q","documents":["a","b"]},"parameters":{"top_n":1,"return_documents":false}}`
+				if variant == "native-omitted" {
+					body = `{"model":"rank","input":{"query":"q","documents":["a","b"]},"parameters":{"top_n":1}}`
+				}
 			}
 			if kind == "multimodal" {
 				path = "/platform/v1/multimodal/embeddings"
@@ -515,6 +564,11 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 			}
 			send := func(path, body string) *httptest.ResponseRecorder {
 				r := httptest.NewRequest("POST", path, bytes.NewBufferString(body))
+				if variant == "client-cancel" && sends == 0 {
+					ctx, cancel := context.WithCancel(r.Context())
+					cancelClient = cancel
+					r = r.WithContext(ctx)
+				}
 				r.Header.Set("Authorization", "Bearer uh_model_fixture")
 				r.Header.Set("Content-Type", "application/json")
 				r.Header.Set("X-UniHub-Task-ID", "task")
@@ -531,7 +585,7 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 				require.Less(t, len(body), 256)
 			}
 			w := send(path, body)
-			denied := (frozenBoundary && !strings.HasSuffix(variant, "-boundary")) || variant == "multi-key" || variant == "wrong-grant" || variant == "unknown-native" || variant == "wrong-policy" || variant == "wrong-channel" || variant == "key-drift" || variant == "space-drift"
+			denied := (frozenBoundary && !strings.HasSuffix(variant, "-boundary")) || variant == "multi-key" || variant == "wrong-grant" || variant == "unknown-native" || variant == "wrong-policy" || variant == "wrong-channel" || variant == "key-drift" || variant == "space-drift" || variant == "gate-disabled"
 			if denied {
 				assert.GreaterOrEqual(t, w.Code, 400, w.Body.String())
 				if frozenBoundary {
@@ -555,6 +609,36 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 						assert.GreaterOrEqual(t, w.Code, 400)
 						assert.NotContains(t, w.Body.String(), `"embedding"`)
 					}
+				} else if variant == "client-cancel" {
+					assert.Equal(t, "SETTLED", row.Status)
+					assert.Equal(t, 1, settles)
+					assert.NotContains(t, w.Body.String(), `"embedding"`)
+					restarted, err := platformbilling.New(db, cfg)
+					require.NoError(t, err)
+					recoveryEngine := gin.New()
+					SetPlatformRouter(recoveryEngine, restarted)
+					gateway := httptest.NewServer(recoveryEngine)
+					defer gateway.Close()
+					r, err := http.NewRequest(http.MethodPost, gateway.URL+"/platform/v1/knowledge/results/call", nil)
+					require.NoError(t, err)
+					r.Header.Set("Authorization", "Bearer uh_model_fresh")
+					r.Header.Set("X-UniHub-Task-ID", "task")
+					r.Header.Set("X-UniHub-Actor-Authorization", "Bearer fixture-actor")
+					recovered, err := gateway.Client().Do(r)
+					require.NoError(t, err)
+					recoveredBody, err := io.ReadAll(recovered.Body)
+					require.NoError(t, err)
+					require.NoError(t, recovered.Body.Close())
+					require.Equal(t, http.StatusOK, recovered.StatusCode, string(recoveredBody))
+					var output map[string]any
+					require.NoError(t, common.UnmarshalUnique(recoveredBody, &output))
+					if aliEmbedding {
+						assert.Contains(t, output, "data")
+					} else {
+						assert.Contains(t, output, "results")
+					}
+					assert.Equal(t, 1, sends)
+					assert.Equal(t, 1, settles)
 				} else if strings.HasPrefix(variant, "receipt-") {
 					assert.Equal(t, "SETTLED", row.Status)
 					assert.GreaterOrEqual(t, w.Code, 400)
@@ -583,6 +667,46 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 							assert.Contains(t, result, "results")
 						}
 					}
+					if variant == "result-read" || variant == "result-read-disabled" {
+						read := func(actor, task string) *httptest.ResponseRecorder {
+							r := httptest.NewRequest(http.MethodPost, "/platform/v1/knowledge/results/call", nil)
+							r.Header.Set("Authorization", "Bearer uh_model_fixture")
+							r.Header.Set("X-UniHub-Task-ID", task)
+							r.Header.Set("X-UniHub-Actor-Authorization", "Bearer "+actor)
+							response := httptest.NewRecorder()
+							engine.ServeHTTP(response, r)
+							return response
+						}
+						valid := read("fixture-actor", "task")
+						if variant == "result-read-disabled" {
+							assert.Equal(t, http.StatusNotFound, valid.Code)
+						} else {
+							assert.Equal(t, http.StatusOK, valid.Code)
+							assert.JSONEq(t, w.Body.String(), valid.Body.String())
+							assert.Equal(t, "no-store", valid.Header().Get("Cache-Control"))
+							assert.Equal(t, http.StatusNotFound, read("wrong-actor", "task").Code)
+							assert.Equal(t, http.StatusNotFound, read("fixture-actor", "other").Code)
+							invalid := httptest.NewRequest(http.MethodPost, "/platform/v1/knowledge/results/call?x=1", nil)
+							invalid.Header.Set("Authorization", "Bearer uh_model_fixture")
+							invalid.Header.Set("X-UniHub-Task-ID", "task")
+							invalid.Header.Set("X-UniHub-Actor-Authorization", "Bearer fixture-actor")
+							bad := httptest.NewRecorder()
+							engine.ServeHTTP(bad, invalid)
+							assert.Equal(t, http.StatusNotFound, bad.Code)
+							invalid = httptest.NewRequest(http.MethodPost, "/platform/v1/knowledge/results/call", nil)
+							invalid.Header.Set("Authorization", "Bearer uh_model_fixture")
+							invalid.Header["authorization"] = []string{"Bearer attacker"}
+							invalid.Header.Set("X-UniHub-Task-ID", "task")
+							invalid.Header.Set("X-UniHub-Actor-Authorization", "Bearer fixture-actor")
+							bad = httptest.NewRecorder()
+							engine.ServeHTTP(bad, invalid)
+							assert.Equal(t, http.StatusNotFound, bad.Code)
+							resultReadRevoked = true
+							assert.Equal(t, http.StatusNotFound, read("fixture-actor", "task").Code)
+							assert.Equal(t, 1, sends)
+							assert.Equal(t, 1, settles)
+						}
+					}
 				}
 				if variant == "changed-body" {
 					if isEmbedding {
@@ -601,6 +725,14 @@ func knowledgeManagedGateway(t *testing.T, kind string) {
 						path = "/platform/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
 						body = `{"model":"rank","input":{"contents":[{"text":"a"},{"image":"` + imageURI + `"}]},"parameters":{"dimension":256}}`
 					}
+				}
+				if variant == "rotate-key" {
+					require.NoError(t, db.Table("platform_knowledge_result_active").Where("id = ? AND key_id = ?", "active", "v1").Update("key_id", "v2").Error)
+					cfg.AliEmbeddingResultActiveKey = "v2"
+					rotated, err := platformbilling.New(db, cfg)
+					require.NoError(t, err)
+					_, err = rotated.AdmitWireOperation(context.Background(), "uh_model_fixture", "task", "call", platformbilling.WireOperation{ID: wire}, "application/json", []byte(body))
+					assert.ErrorIs(t, err, platformbilling.ErrDuplicate)
 				}
 				again := send(path, body)
 				assert.Equal(t, 409, again.Code)

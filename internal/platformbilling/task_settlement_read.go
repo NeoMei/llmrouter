@@ -31,7 +31,7 @@ func (a *Adapter) VerifyTaskSettlement(ctx context.Context, id string) error {
 		return ErrInvalid
 	}
 	var receipt knowledgeSettledReceipt
-	if err := readKnowledgeAuthority(ctx, a.client, http.MethodGet, "/internal/v1/calls/"+id, nil, &receipt); err != nil {
+	if err := readKnowledgeAuthority(ctx, a.client, http.MethodGet, "/internal/v1/calls/"+id, nil, &receipt, ""); err != nil {
 		return ErrPending
 	}
 	if receipt.Status != "SETTLED" || receipt.ServiceID != "llmrouter" || receipt.TaskID != row.TaskID || !receipt.RemoteCall.matches(row) || receipt.fundingSnapshot() != row.FundingSnapshot || receipt.Charged != row.Charged || receipt.Usage == nil || !reflect.DeepEqual(*receipt.Usage, intent.Usage) || receipt.ProviderCost != intent.ProviderCost {

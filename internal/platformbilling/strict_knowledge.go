@@ -33,9 +33,11 @@ type KnowledgePolicy struct {
 	RateIDs           map[string]string   `json:"rate_ids"`
 }
 type frozenKnowledge struct {
-	Facts  json.RawMessage `json:"media_facts,omitempty"`
-	Policy KnowledgePolicy `json:"knowledge_policy"`
-	Body   json.RawMessage `json:"effective_body"`
+	Facts          json.RawMessage `json:"media_facts,omitempty"`
+	Policy         KnowledgePolicy `json:"knowledge_policy"`
+	Body           json.RawMessage `json:"effective_body,omitempty"`
+	BodyKeyID      string          `json:"body_key_id,omitempty"`
+	BodyCiphertext []byte          `json:"body_ciphertext,omitempty"`
 }
 
 func (p KnowledgePolicy) valid(c Config, model, wire string) bool {
@@ -115,6 +117,9 @@ func parseKnowledgeRerank(c Config, p KnowledgePolicy, body []byte, native bool)
 				request[k] = v
 			}
 		}
+		if _, exists := request["return_documents"]; !exists {
+			request["return_documents"] = false
+		}
 	}
 	if !protocolKeys(request, "model query documents top_n return_documents") || request["model"] != p.PublicModel {
 		return result, ErrInvalid
@@ -183,9 +188,17 @@ func (s *Session) AliEmbeddingV4() bool {
 	var f frozenKnowledge
 	return common.UnmarshalUnique([]byte(s.call.MediaSnapshot), &f) == nil && f.Policy.Version == "knowledge_ali_text_v1" && f.Policy.valid(s.adapter.config, s.call.Model, "embeddings.create")
 }
+
+func (s *Session) AliRerank() bool {
+	if s == nil || s.adapter == nil || !s.adapter.config.AllowAliRerank || s.WireOperation().ID != "rerank.create" {
+		return false
+	}
+	var f frozenKnowledge
+	return common.UnmarshalUnique([]byte(s.call.MediaSnapshot), &f) == nil && f.Policy.valid(s.adapter.config, s.call.Model, "rerank.create") && f.Policy.UpstreamModel == "qwen3-rerank"
+}
 func (s *Session) KnowledgeBody(channel int, upstream string, key ...string) ([]byte, error) {
-	var frozen frozenKnowledge
-	if common.UnmarshalUnique([]byte(s.call.MediaSnapshot), &frozen) != nil || frozen.Policy.ChannelID != channel || frozen.Policy.UpstreamModel != upstream || frozen.Policy.PublicModel != s.call.Model || frozen.Policy.WireOperation != s.WireOperation().ID || len(frozen.Body) == 0 {
+	frozen, err := s.adapter.knowledgeSnapshot(s.call)
+	if err != nil || frozen.Policy.ChannelID != channel || frozen.Policy.UpstreamModel != upstream || frozen.Policy.PublicModel != s.call.Model || frozen.Policy.WireOperation != s.WireOperation().ID || len(frozen.Body) == 0 {
 		return nil, ErrInvalid
 	}
 	if len(key) != 1 {
@@ -206,8 +219,8 @@ func (s *Session) KnowledgeBody(channel int, upstream string, key ...string) ([]
 // KnowledgeBodyForRelay exposes the already-admitted canonical DTO to internal
 // routing while the original envelope remains in the call digest.
 func (s *Session) KnowledgeBodyForRelay() ([]byte, error) {
-	var f frozenKnowledge
-	if common.UnmarshalUnique([]byte(s.call.MediaSnapshot), &f) != nil || len(f.Body) == 0 {
+	f, err := s.adapter.knowledgeSnapshot(s.call)
+	if err != nil || len(f.Body) == 0 {
 		return nil, ErrInvalid
 	}
 	if s.WireOperation().ID == "multimodal.embeddings.create" && s.WireOperation().Mode == "knowledge-native-v1" {

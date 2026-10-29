@@ -70,6 +70,7 @@ func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 		}
 		c.JSON(200, receipt)
 	})
+	registerKnowledgeResultRead(platform, adapter)
 	registerPlatformOperation(platform, adapter, "/videos", "video", "/v1/videos", types.RelayFormatTask)
 	registerPlatformOperation(platform, adapter, "/ocr/jobs", "ocr", "/v1/ocr", types.RelayFormat("platform_ocr"))
 	registerPlatformTaskReads(platform, adapter)
@@ -165,6 +166,9 @@ func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 // falling back to local wallet billing.
 func registerPlatformOperation(engine gin.IRoutes, adapter *platformbilling.Adapter, path, operation, target string, format types.RelayFormat) {
 	engine.POST(path, middleware.RouteTag("relay"), func(c *gin.Context) {
+		if operation == "embedding" || operation == "rerank.create" {
+			c.Set(common.KeyMemoryOnlyBody, true)
+		}
 		policy, policyErr := unihubaccess.FromEnv()
 		if policyErr != nil || !policy.PlatformEnabled {
 			c.AbortWithStatus(http.StatusServiceUnavailable)

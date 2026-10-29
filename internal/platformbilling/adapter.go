@@ -162,6 +162,9 @@ func New(db *gorm.DB, c Config) (*Adapter, error) {
 	if db == nil || !stableID.MatchString(c.InstanceID) || c.Group == "" || c.Group == "auto" || c.MaxInputTokens < 1 || c.MaxInputTokens > 1<<20 || c.MaxOutputTokens < 1 || c.MaxOutputTokens > 32768 || c.MaxBodyBytes < 1 || c.MaxBodyBytes > 1<<20 {
 		return nil, ErrInvalid
 	}
+	if c.EnableKnowledgeResultRead && !c.AllowAliEmbeddingV4 && !c.AllowAliRerank {
+		return nil, ErrInvalid
+	}
 	var err error
 	a.client, err = newClient(c)
 	if err != nil {
@@ -170,8 +173,15 @@ func New(db *gorm.DB, c Config) (*Adapter, error) {
 	if err = db.AutoMigrate(&Call{}, &Attempt{}); err != nil {
 		return nil, err
 	}
-	if c.AllowAliEmbeddingV4 {
-		a.knowledgeResults, err = newKnowledgeResultVault(db, c.AliEmbeddingResultKey, time.Hour)
+	if c.AllowAliEmbeddingV4 || c.AllowAliRerank {
+		if c.AliEmbeddingResultKeys != nil || c.AliEmbeddingResultActiveKey != "" {
+			if len(c.AliEmbeddingResultKey) != 0 {
+				return nil, ErrInvalid
+			}
+			a.knowledgeResults, err = newKnowledgeResultVaultWithKeys(db, c.AliEmbeddingResultKeys, c.AliEmbeddingResultActiveKey, time.Hour)
+		} else {
+			a.knowledgeResults, err = newKnowledgeResultVault(db, c.AliEmbeddingResultKey, time.Hour)
+		}
 		if err != nil {
 			return nil, err
 		}

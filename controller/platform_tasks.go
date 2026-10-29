@@ -104,6 +104,13 @@ func PlatformTaskCancel(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": gin.H{"code": "native_evidence_conflict"}})
 		return
 	}
+	var evidence struct {
+		Source string `json:"source"`
+	}
+	if common.UnmarshalUnique([]byte(task.NativeEvidence), &evidence) != nil || evidence.Source != "provider_confirmed_no_output" {
+		c.JSON(http.StatusBadGateway, gin.H{"error": gin.H{"code": "provider_cancellation_unknown"}})
+		return
+	}
 	won, err := task.UpdateWithStatus(snap.Status)
 	if err != nil || !won {
 		c.JSON(http.StatusConflict, gin.H{"error": gin.H{"code": "provider_task_transition_conflict"}})
@@ -149,11 +156,19 @@ func platformTaskRead(c *gin.Context, result bool) {
 			return
 		}
 		if c.GetBool("platform_ocr_native") {
+			if status.State == "done" && (service.PlatformTaskSettlementCheck == nil || service.PlatformTaskSettlementCheck(c.Request.Context(), row.CallID) != nil) {
+				c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": gin.H{"code": "native_settlement_pending"}})
+				return
+			}
 			status.JobID = row.CallID
 			c.JSON(200, gin.H{"code": 0, "msg": "", "data": status})
 			return
 		}
 		if result {
+			if service.PlatformTaskSettlementCheck == nil || service.PlatformTaskSettlementCheck(c.Request.Context(), row.CallID) != nil {
+				c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": gin.H{"code": "native_settlement_pending"}})
+				return
+			}
 			out, err := OCRRuntime.Service.CanonicalResult(c.Request.Context(), job.ID, job.UserID, job.TokenID)
 			if err != nil {
 				c.AbortWithStatus(409)
@@ -173,6 +188,10 @@ func platformTaskRead(c *gin.Context, result bool) {
 	if result {
 		if task.Status != model.TaskStatusSuccess {
 			c.AbortWithStatus(http.StatusConflict)
+			return
+		}
+		if service.PlatformTaskSettlementCheck == nil || service.PlatformTaskSettlementCheck(c.Request.Context(), row.CallID) != nil {
+			c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": gin.H{"code": "native_settlement_pending"}})
 			return
 		}
 		if task.PrivateData.ResultResourceID != "" {

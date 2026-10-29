@@ -46,6 +46,7 @@ type wanVideoGatewayFixture struct {
 	cfg                                         platformbilling.Config
 	sends, fetches, downloads, cancels, settles int
 	variant                                     string
+	denySettlementRead                          bool
 	mp4                                         []byte
 }
 
@@ -197,6 +198,7 @@ func newWanVideoGatewayFixtureWithHub(t *testing.T, variant, hubOrigin, serviceT
 	price := wanTierPrice()
 	rate := platformbilling.Rate{ID: "wan-rate", Model: "wan2.6-t2v", Asset: "CNY/6", Status: "published", Semantics: "metered_v2", Metered: &price}
 	var remote platformbilling.RemoteCall
+	var final *taskSettlementInput
 	if hubOrigin == "" {
 		hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var out any
@@ -212,15 +214,22 @@ func newWanVideoGatewayFixtureWithHub(t *testing.T, variant, hubOrigin, serviceT
 				out = remote
 			case "/internal/v1/calls/wan-call/settle":
 				f.settles++
-				var settlement struct{ Usage platformbilling.Usage }
+				var settlement taskSettlementInput
 				require.NoError(t, common.DecodeJson(r.Body, &settlement))
 				amount, e := metering.Calculate(*rate.Metered, *settlement.Usage.Metered)
 				require.NoError(t, e)
 				remote.Status, remote.Charged = "SETTLED", amount.RatString()
+				final = &settlement
 				out = remote
 			case "/internal/v1/calls/wan-call/release":
 				remote.Status = "RELEASED"
 				out = remote
+			case "/internal/v1/calls/wan-call":
+				receipt := remote
+				if f.denySettlementRead {
+					receipt.Status = "SETTLE_PENDING"
+				}
+				out = authorityReceipt(t, receipt, "wan-task", final)
 			case "/internal/v1/call-reads/verify":
 				var row platformbilling.Call
 				require.NoError(t, db.First(&row, "call_id = ?", "wan-call").Error)

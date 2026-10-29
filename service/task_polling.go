@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -43,6 +44,51 @@ const (
 	refundReconciliationGracePeriod = 30 * time.Second
 )
 
+// Unknown execution is not evidence that the supplier produced no billable
+// output. These tasks retain their holds until an operator can reconcile them.
+func taskNeedsReconciliation(task *model.Task) bool {
+	return task.FundingOwner == "native" || task.FundingOwner == "platform" || task.Platform == constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeAli))
+}
+
+func markTaskUnknown(ctx context.Context, task *model.Task, reason string) {
+	old := task.Status
+	task.Status = model.TaskStatusReconcile
+	task.FailReason = reason
+	if _, err := task.UpdateWithStatus(old); err != nil {
+		logger.LogError(ctx, fmt.Sprintf("task %s unknown transition failed: %v", task.TaskID, err))
+	}
+}
+
+// Retry only the read-side channel lookup after a bounded delay. This never
+// recreates a supplier task: normal polling fetches the original provider ID.
+func retryUnavailableTaskChannels(ctx context.Context) {
+	cutoff := time.Now().Unix() - model.TaskReconcileRetrySeconds
+	var tasks []model.Task
+	if err := model.DB.WithContext(ctx).Where("status = ? AND fail_reason = ? AND updated_at <= ?", model.TaskStatusReconcile, model.TaskReconcileChannelReason, cutoff).Order("updated_at ASC").Order("id ASC").Limit(100).Find(&tasks).Error; err != nil {
+		logger.LogError(ctx, "retry task channel query failed: "+err.Error())
+		return
+	}
+	for _, task := range tasks {
+		if ctx.Err() != nil {
+			return
+		}
+		result := model.DB.WithContext(ctx).Model(&model.Task{}).Where("id = ? AND status = ? AND fail_reason = ? AND updated_at <= ?", task.ID, model.TaskStatusReconcile, model.TaskReconcileChannelReason, cutoff).Updates(map[string]any{"status": model.TaskStatusInProgress, "fail_reason": model.TaskReconcileRetryPending, "updated_at": time.Now().Unix()})
+		if result.Error != nil {
+			logger.LogError(ctx, "retry task channel transition failed: "+result.Error.Error())
+		}
+	}
+}
+
+func requeuePendingTaskRead(ctx context.Context, task *model.Task) {
+	if task == nil {
+		return
+	}
+	result := model.DB.WithContext(ctx).Model(&model.Task{}).Where("id = ? AND status = ? AND fail_reason = ?", task.ID, model.TaskStatusInProgress, model.TaskReconcileRetryPending).Updates(map[string]any{"status": model.TaskStatusReconcile, "fail_reason": model.TaskReconcileChannelReason, "updated_at": time.Now().Unix()})
+	if result.Error != nil {
+		logger.LogError(ctx, "requeue provider read failed: "+result.Error.Error())
+	}
+}
+
 // sweepTimedOutTasks 在主轮询之前独立清理超时任务。
 // 每次最多处理 100 条，剩余的下个周期继续处理。
 // 使用 per-task CAS (UpdateWithStatus) 防止覆盖被正常轮询已推进的任务。
@@ -62,6 +108,10 @@ func sweepTimedOutTasks(ctx context.Context) {
 	timedOutCount := 0
 
 	for _, task := range tasks {
+		if taskNeedsReconciliation(task) {
+			markTaskUnknown(ctx, task, "provider task status requires reconciliation")
+			continue
+		}
 		isLegacy := task.SubmitTime > 0 && task.SubmitTime < model.TaskRefundLegacyCutoff
 
 		oldStatus := task.Status
@@ -158,8 +208,10 @@ func RunTaskPollingOnce(ctx context.Context, report func(processed, total int)) 
 
 	common.SysLog("任务进度轮询开始")
 	sweepTimedOutTasks(ctx)
+	retryUnavailableTaskChannels(ctx)
 	sweepUnrefundedFailedTasks(ctx)
 	allTasks := model.GetAllUnFinishSyncTasks(constant.TaskQueryLimit)
+	allTasks = append(allTasks, model.GetRetryPendingTasks(100)...)
 	summary.UnfinishedTasks = len(allTasks)
 	platformTask := make(map[constant.TaskPlatform][]*model.Task)
 	for _, t := range allTasks {
@@ -180,18 +232,39 @@ func RunTaskPollingOnce(ctx context.Context, report func(processed, total int)) 
 			continue
 		}
 		summary.PlatformsScanned++
-		taskChannelM := make(map[int][]string)
-		taskM := make(map[string]*model.Task)
+		type pollBatch struct {
+			ids   []string
+			tasks map[string]*model.Task
+		}
+		taskChannelM := make(map[int][]*pollBatch)
 		nullTaskIds := make([]int64, 0)
 		for _, task := range tasks {
 			upstreamID := task.GetUpstreamTaskID()
 			if upstreamID == "" {
+				if taskNeedsReconciliation(task) {
+					markTaskUnknown(ctx, task, "provider task status requires reconciliation")
+					continue
+				}
 				// 统计失败的未完成任务
 				nullTaskIds = append(nullTaskIds, task.ID)
 				continue
 			}
-			taskM[upstreamID] = task
-			taskChannelM[task.ChannelId] = append(taskChannelM[task.ChannelId], upstreamID)
+			// IDs can collide even within one channel when account keys differ.
+			// Each batch has unique IDs and retains each task's account binding.
+			batches := taskChannelM[task.ChannelId]
+			var selected *pollBatch
+			for _, batch := range batches {
+				if batch.tasks[upstreamID] == nil {
+					selected = batch
+					break
+				}
+			}
+			if selected == nil {
+				selected = &pollBatch{tasks: make(map[string]*model.Task)}
+				taskChannelM[task.ChannelId] = append(batches, selected)
+			}
+			selected.tasks[upstreamID] = task
+			selected.ids = append(selected.ids, upstreamID)
 		}
 		if len(nullTaskIds) > 0 {
 			summary.NullTasksFailed += len(nullTaskIds)
@@ -209,7 +282,37 @@ func RunTaskPollingOnce(ctx context.Context, report func(processed, total int)) 
 			continue
 		}
 
-		DispatchPlatformUpdate(ctx, platform, taskChannelM, taskM)
+		// Each channel runs concurrently, but its collision-safe batches run
+		// sequentially. Calling updateVideoTasks directly avoids nested gopool waits.
+		var channelWait sync.WaitGroup
+		for channelID, batches := range taskChannelM {
+			if platform == constant.TaskPlatformMidjourney {
+				continue
+			}
+			if platform == constant.TaskPlatformSuno {
+				for _, batch := range batches {
+					if err := updateSunoTasks(ctx, channelID, batch.ids, batch.tasks); err != nil {
+						for _, task := range batch.tasks {
+							requeuePendingTaskRead(ctx, task)
+						}
+					}
+				}
+				continue
+			}
+			channelWait.Add(1)
+			gopool.Go(func() {
+				defer channelWait.Done()
+				for _, batch := range batches {
+					if ctx.Err() != nil {
+						return
+					}
+					if err := updateVideoTasks(ctx, platform, channelID, batch.ids, batch.tasks); err != nil {
+						logger.LogError(ctx, fmt.Sprintf("Channel #%d failed to update video async tasks: %s", channelID, err.Error()))
+					}
+				}
+			})
+		}
+		channelWait.Wait()
 	}
 	if report != nil && ctx.Err() == nil {
 		report(totalPlatforms, totalPlatforms)
@@ -264,16 +367,20 @@ func updateSunoTasks(ctx context.Context, channelId int, taskIds []string, taskM
 		var failedIDs []int64
 		for _, upstreamID := range taskIds {
 			if t, ok := taskM[upstreamID]; ok {
+				if taskNeedsReconciliation(t) {
+					markTaskUnknown(ctx, t, model.TaskReconcileChannelReason)
+					continue
+				}
 				failedIDs = append(failedIDs, t.ID)
 			}
 		}
-		err = model.TaskBulkUpdateByID(failedIDs, map[string]any{
+		updateErr := model.TaskBulkUpdateByID(failedIDs, map[string]any{
 			"fail_reason": fmt.Sprintf("获取渠道信息失败，请联系管理员，渠道ID：%d", channelId),
 			"status":      "FAILURE",
 			"progress":    "100%",
 		})
-		if err != nil {
-			common.SysLog(fmt.Sprintf("UpdateSunoTask error: %v", err))
+		if updateErr != nil {
+			common.SysLog(fmt.Sprintf("UpdateSunoTask error: %v", updateErr))
 		}
 		return err
 	}
@@ -302,6 +409,13 @@ func updateSunoTasks(ctx context.Context, channelId int, taskIds []string, taskM
 }
 
 func updateSunoAccountTasks(ctx context.Context, ch *model.Channel, taskIds []string, taskM map[string]*model.Task) error {
+	// Confirmed items clear their pending marker atomically; all others return
+	// to the delayed read queue, including on transport or decoding errors.
+	defer func() {
+		for _, taskID := range taskIds {
+			requeuePendingTaskRead(ctx, taskM[taskID])
+		}
+	}()
 	channelId := ch.Id
 	adaptor := GetTaskAdaptorFunc(constant.TaskPlatformSuno)
 	if adaptor == nil {
@@ -333,9 +447,13 @@ func updateSunoAccountTasks(ctx context.Context, ch *model.Channel, taskIds []st
 	}
 	if !responseItems.IsSuccess() {
 		common.SysLog(fmt.Sprintf("渠道 #%d 未完成的任务有: %d, 成功获取到任务数: %s", channelId, len(taskIds), string(responseBody)))
-		return err
+		return errors.New("suno provider response was not successful")
 	}
 
+	counts := make(map[string]int, len(responseItems.Data))
+	for _, item := range responseItems.Data {
+		counts[item.TaskID]++
+	}
 	for _, responseItem := range responseItems.Data {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -345,8 +463,17 @@ func updateSunoAccountTasks(ctx context.Context, ch *model.Channel, taskIds []st
 			logger.LogWarn(ctx, fmt.Sprintf("Suno task response ignored: unknown task_id=%s", responseItem.TaskID))
 			continue
 		}
-		if !taskNeedsUpdate(task, responseItem) {
+		if counts[responseItem.TaskID] != 1 {
 			continue
+		}
+		if task.FailReason == model.TaskReconcileRetryPending && !slices.Contains([]string{string(model.TaskStatusNotStart), model.TaskStatusSubmitted, model.TaskStatusQueued, model.TaskStatusInProgress, model.TaskStatusSuccess, model.TaskStatusFailure}, responseItem.Status) {
+			continue
+		}
+		if !taskNeedsUpdate(task, responseItem) && task.FailReason != model.TaskReconcileRetryPending {
+			continue
+		}
+		if task.FailReason == model.TaskReconcileRetryPending {
+			task.FailReason = ""
 		}
 
 		prevStatus := task.Status
@@ -377,8 +504,10 @@ func updateSunoAccountTasks(ctx context.Context, ch *model.Channel, taskIds []st
 				}
 			}
 			logger.LogWarn(ctx, fmt.Sprintf("Task %s CAS lost or no-op update, skip billing", task.TaskID))
-		} else if isFailure && prevStatus != model.TaskStatusFailure && task.Quota != 0 {
-			RefundTaskQuota(ctx, task, task.FailReason)
+		} else {
+			if isFailure && prevStatus != model.TaskStatusFailure && task.Quota != 0 {
+				RefundTaskQuota(ctx, task, task.FailReason)
+			}
 		}
 	}
 	return nil
@@ -467,6 +596,10 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 		var failedIDs []int64
 		for _, upstreamID := range taskIds {
 			if t, ok := taskM[upstreamID]; ok {
+				if taskNeedsReconciliation(t) {
+					markTaskUnknown(ctx, t, model.TaskReconcileChannelReason)
+					continue
+				}
 				failedIDs = append(failedIDs, t.ID)
 			}
 		}
@@ -498,6 +631,7 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 			return ctx.Err()
 		}
 		if err := updateVideoSingleTask(ctx, adaptor, cacheGetChannel, taskId, taskM); err != nil {
+			requeuePendingTaskRead(ctx, taskM[taskId])
 			logger.LogError(ctx, fmt.Sprintf("Failed to update video task %s: %s", taskId, err.Error()))
 		}
 		if disablePollingSleep || i == len(taskIds)-1 {
@@ -541,19 +675,43 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		return fmt.Errorf("fetchTask failed for task %s: %w", taskId, err)
 	}
 	defer resp.Body.Close()
-	responseBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("readAll failed for task %s: %w", taskId, err)
+	certifiedWan := ch.Type == constant.ChannelTypeAli
+	var responseBody []byte
+	if certifiedWan {
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("wan task provider returned HTTP %d", resp.StatusCode)
+		}
+		responseBody, err = io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
+		if err != nil || len(responseBody) > 1<<20 {
+			return fmt.Errorf("wan task response unreadable or oversized")
+		}
+		var receipt struct {
+			Output struct {
+				TaskID string `json:"task_id"`
+				Status string `json:"task_status"`
+			} `json:"output"`
+		}
+		if common.UnmarshalUnique(responseBody, &receipt) != nil || receipt.Output.TaskID != task.GetUpstreamTaskID() || receipt.Output.TaskID == "" || !slices.Contains([]string{"PENDING", "RUNNING", "SUCCEEDED", "FAILED", "CANCELED", "UNKNOWN"}, receipt.Output.Status) {
+			return fmt.Errorf("wan task response is not bound to the provider task")
+		}
+	} else {
+		responseBody, err = io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("readAll failed for task %s: %w", taskId, err)
+		}
 	}
 
 	logger.LogDebug(ctx, "updateVideoSingleTask response: %s", responseBody)
 
 	snap := task.Snapshot()
+	if task.FailReason == model.TaskReconcileRetryPending {
+		task.FailReason = ""
+	}
 
 	taskResult := &relaycommon.TaskInfo{}
 	// try parse as New API response format
 	var responseItems dto.TaskResponse[model.Task]
-	if err = common.Unmarshal(responseBody, &responseItems); err == nil && responseItems.IsSuccess() {
+	if err = common.Unmarshal(responseBody, &responseItems); !certifiedWan && err == nil && responseItems.IsSuccess() {
 		logger.LogDebug(ctx, "updateVideoSingleTask parsed as new api response format: %+v", responseItems)
 		t := responseItems.Data
 		taskResult.TaskID = t.TaskID
@@ -599,6 +757,14 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 
 	task.Status = model.TaskStatus(taskResult.Status)
 	switch taskResult.Status {
+	case model.TaskStatusUnknown:
+		if !taskNeedsReconciliation(task) {
+			return fmt.Errorf("unknown task status for task %s", task.TaskID)
+		}
+		task.Status = model.TaskStatusReconcile
+		// Preserve the hold and exclude this ambiguous task from normal polling.
+		// It requires reconciliation rather than a refund or another submission.
+		task.FailReason = "provider task status requires reconciliation"
 	case model.TaskStatusSubmitted:
 		task.Progress = taskcommon.ProgressSubmitted
 	case model.TaskStatusQueued:

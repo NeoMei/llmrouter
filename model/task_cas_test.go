@@ -382,3 +382,19 @@ func TestHasTaskPollingWork_IncludesOnlyRefundableFailedTasks(t *testing.T) {
 	insertTask(t, refundable)
 	assert.True(t, HasTaskPollingWork())
 }
+
+func TestRefundQueueExcludesNativeOwnersBeforeLimit(t *testing.T) {
+	truncateTables(t)
+	for _, owner := range []string{"native", "platform"} {
+		insertTask(t, &Task{TaskID: "held-" + owner, FundingOwner: owner, Status: TaskStatusFailure, Progress: "100%", Quota: 3, SubmitTime: TaskRefundLegacyCutoff, Data: json.RawMessage(`{}`)})
+	}
+	legacy := &Task{TaskID: "legacy-refund", Status: TaskStatusFailure, Progress: "100%", Quota: 3, SubmitTime: TaskRefundLegacyCutoff, Data: json.RawMessage(`{}`)}
+	insertTask(t, legacy)
+	rows := GetUnrefundedFailedTasks(time.Now().Unix()+60, 1)
+	require.Len(t, rows, 1)
+	assert.Equal(t, legacy.ID, rows[0].ID)
+	require.NoError(t, DB.Model(&Task{}).Where("id = ?", legacy.ID).Update("funding_owner", nil).Error)
+	rows = GetUnrefundedFailedTasks(time.Now().Unix()+60, 1)
+	require.Len(t, rows, 1)
+	assert.Equal(t, legacy.ID, rows[0].ID)
+}

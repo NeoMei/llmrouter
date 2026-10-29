@@ -42,6 +42,7 @@ type ocrGatewayFixture struct {
 	now                                        time.Time
 	sends, polls, reserves, settles, downloads int
 	variant                                    string
+	denySettlementRead                         bool
 	runtime                                    *ocr.Runtime
 	image                                      []byte
 	cfg                                        platformbilling.Config
@@ -125,6 +126,7 @@ func newOCRGatewayFixture(t *testing.T, variant, hubOrigin, serviceToken, dbPath
 	}
 	rate := platformbilling.Rate{ID: "ocr-rate", Model: "ocr-model", Asset: "CNY/6", Status: "published", Semantics: "metered_v2", Metered: &price}
 	var remote platformbilling.RemoteCall
+	var final *taskSettlementInput
 	if hubOrigin == "" {
 		hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var out any
@@ -146,16 +148,21 @@ func newOCRGatewayFixture(t *testing.T, variant, hubOrigin, serviceToken, dbPath
 				f.settles++
 				remote.Status = "SETTLED"
 				remote.Charged = "12"
-				var settlement struct {
-					Usage platformbilling.Usage `json:"usage"`
-				}
+				var settlement taskSettlementInput
 				require.NoError(t, common.DecodeJson(r.Body, &settlement))
-				if settlement.Usage.Metered != nil {
+				if settlement.Usage != nil && settlement.Usage.Metered != nil {
 					amount, e := metering.Calculate(*rate.Metered, *settlement.Usage.Metered)
 					require.NoError(t, e)
 					remote.Charged = amount.RatString()
 				}
+				final = &settlement
 				out = remote
+			case "/internal/v1/calls/ocr-call":
+				receipt := remote
+				if f.denySettlementRead {
+					receipt.Status = "SETTLE_PENDING"
+				}
+				out = authorityReceipt(t, receipt, "ocr-task", final)
 			case "/internal/v1/call-reads/verify":
 				var row platformbilling.Call
 				require.NoError(t, db.First(&row, "call_id = ?", "ocr-call").Error)

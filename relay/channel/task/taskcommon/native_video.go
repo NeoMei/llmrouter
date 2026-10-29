@@ -24,6 +24,7 @@ func VideoNativeUsage(price metering.Price, body []byte, providerID, resolution 
 		} `json:"data"`
 		Output struct {
 			Status   string `json:"task_status"`
+			TaskID   string `json:"task_id"`
 			VideoURL string `json:"video_url"`
 			Results  []struct {
 				URL string `json:"url"`
@@ -46,7 +47,7 @@ func VideoNativeUsage(price metering.Price, body []byte, providerID, resolution 
 	if price.Policy == "kling_final_units_v1" {
 		outputs = r.Data.Result.Videos
 	}
-	if (r.Status == "failed" || r.Data.Status == "failed" || r.Output.Status == "FAILED") && string(outputs) == "[]" {
+	if price.Policy != "ali_wan26_t2v_billable_duration_v1" && (r.Status == "failed" || r.Data.Status == "failed" || r.Output.Status == "FAILED") && string(outputs) == "[]" {
 		u.State = "incomplete"
 		u.Source = "provider_confirmed_no_output"
 		return u
@@ -79,10 +80,27 @@ func VideoNativeUsage(price metering.Price, body []byte, providerID, resolution 
 	// This policy is explicitly provider billable duration for Wan 2.6 t2v,
 	// not independent measured output seconds or a generic Wan schema.
 	case "ali_wan26_t2v_billable_duration_v1":
+		if providerID == "" || r.Output.TaskID != providerID {
+			u.State = "invalid"
+			return u
+		}
 		if resolution != "video_720p" && resolution != "video_1080p" {
 			return u
 		}
-		if (r.Output.Status == "FAILED" || r.Output.Status == "CANCELED" || r.Output.Status == "UNKNOWN") && r.Output.VideoURL == "" && len(r.Output.Results) == 0 {
+		if (r.Output.Status == "FAILED" || r.Output.Status == "CANCELED") && r.Output.VideoURL == "" && len(r.Output.Results) == 0 && (len(r.Videos) == 0 || string(r.Videos) == "[]") {
+			// Failure/cancellation cannot prove no output when the provider's
+			// usage contradicts it or contains malformed values. UNKNOWN is
+			// not terminal evidence: a completed task can have expired.
+			for _, value := range []json.RawMessage{r.Usage.VideoCount, r.Usage.Duration, r.Usage.VideoDuration} {
+				if len(value) == 0 {
+					continue
+				}
+				q, ok := videoDecimalQuantity(string(value))
+				if !ok || q.Value != "0" {
+					u.State = "invalid"
+					return u
+				}
+			}
 			u.State = "incomplete"
 			u.Source = "provider_confirmed_no_output"
 			return u

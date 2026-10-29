@@ -25,6 +25,7 @@ import (
 // platform endpoint and keep the legacy router untouched.
 func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 	service.PlatformTaskObserver = adapter.ObserveTask
+	service.PlatformTaskSettlementCheck = adapter.VerifyTaskSettlement
 	service.PlatformTaskRelease = adapter.ReleaseTask
 	service.PlatformTaskBind = adapter.BindTask
 	if runtime := controller.RelayMediaRuntime; runtime != nil && runtime.Service != nil {

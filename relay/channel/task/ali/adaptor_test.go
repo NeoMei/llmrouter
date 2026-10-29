@@ -196,3 +196,10 @@ func TestAliWan26CancelUsesOfficialPendingOnlyEndpoint(t *testing.T) {
 	require.Equal(t, "/api/v1/tasks/provider-1/cancel", requests[0].URL.Path)
 	require.Equal(t, "Bearer channel-key", requests[0].Header.Get("Authorization"))
 }
+
+func TestAliUnknownTaskResultDoesNotMarkFailure(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	result, err := adaptor.ParseTaskResult([]byte(`{"output":{"task_id":"expired-task","task_status":"UNKNOWN"}}`))
+	require.NoError(t, err)
+	require.Equal(t, "UNKNOWN", result.Status)
+}

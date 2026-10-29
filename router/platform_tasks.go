@@ -18,7 +18,7 @@ func registerPlatformTaskReads(engine gin.IRoutes, a *platformbilling.Adapter) {
 			token := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
 			if c.Request.Method == http.MethodGet && len(c.Request.Header.Values("Authorization")) == 1 && strings.HasPrefix(c.GetHeader("Authorization"), "Bearer ") && c.Request.URL.RawQuery == "" && platformbilling.IsOwnedReadCredential(token) {
 				row, err := a.OwnedTaskRead(c.Request.Context(), token, c.Param("callID"))
-				if err != nil {
+				if err != nil || row.Operation != op {
 					c.AbortWithStatus(404)
 					return
 				}

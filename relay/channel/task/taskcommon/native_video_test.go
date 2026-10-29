@@ -46,7 +46,7 @@ func TestWan26NativeEvidenceRequiresSelectedResolutionAndCompleteReceipt(t *test
 		{Key: "video_720p", Unit: "video_second", Price: metering.Rational{Numerator: "1", Denominator: "1"}},
 		{Key: "video_1080p", Unit: "video_second", Price: metering.Rational{Numerator: "2", Denominator: "1"}},
 	}}
-	complete := `{"output":{"task_status":"SUCCEEDED","video_url":"https://media.example/video.mp4"},"usage":{"duration":5,"video_count":1}}`
+	complete := `{"output":{"task_id":"task-1","task_status":"SUCCEEDED","video_url":"https://media.example/video.mp4"},"usage":{"duration":5,"video_count":1}}`
 	u := VideoNativeUsage(p, []byte(complete), "task-1", "video_720p")
 	assert.Equal(t, "confirmed", u.State)
 	require.NoError(t, metering.ValidateUsage(p, u))
@@ -71,7 +71,7 @@ func TestWan26NativeEvidenceRequiresSelectedResolutionAndCompleteReceipt(t *test
 		}
 		assert.NotEqual(t, "confirmed", VideoNativeUsage(p, []byte(body), "task-1", resolution).State, name)
 	}
-	cancelBody := `{"output":{"task_status":"CANCELED","results":[]},"usage":{"video_count":0}}`
+	cancelBody := `{"output":{"task_id":"task-1","task_status":"CANCELED","results":[]},"usage":{"video_count":0}}`
 	canceled := VideoNativeUsage(p, []byte(cancelBody), "task-1", "video_720p")
 	assert.Equal(t, "incomplete", canceled.State)
 	assert.Equal(t, "provider_confirmed_no_output", canceled.Source)
@@ -82,4 +82,43 @@ func TestVideoNativeNoOutputRequiresExplicitEmptyCollection(t *testing.T) {
 	assert.NotEqual(t, "provider_confirmed_no_output", VideoNativeUsage(p, []byte(`{"status":"failed"}`), "id", "").Source)
 	assert.Equal(t, "provider_confirmed_no_output", VideoNativeUsage(p, []byte(`{"status":"failed","videos":[]}`), "id", "").Source)
 	assert.NotEqual(t, "provider_confirmed_no_output", VideoNativeUsage(p, []byte(`{"status":"failed","videos":[{"id":"output"}]}`), "id", "").Source)
+}
+
+func TestWanVideoUnknownOrContradictoryReceiptDoesNotProveNoOutput(t *testing.T) {
+	p := metering.Price{Version: "metered_v2", Operation: "video", Policy: "ali_wan26_t2v_billable_duration_v1", Terms: []metering.Term{
+		{Key: "video_720p", Unit: "video_second", Price: metering.Rational{Numerator: "3", Denominator: "5"}},
+		{Key: "video_1080p", Unit: "video_second", Price: metering.Rational{Numerator: "1", Denominator: "1"}},
+	}}
+	for name, body := range map[string]string{
+		"expired_or_unknown":               `{"output":{"task_status":"UNKNOWN"}}`,
+		"unknown_with_empty_results":       `{"output":{"task_status":"UNKNOWN","results":[]},"usage":{"video_count":0}}`,
+		"cancel_with_output_count":         `{"output":{"task_status":"CANCELED"},"usage":{"video_count":1}}`,
+		"failure_with_output_count":        `{"output":{"task_status":"FAILED"},"usage":{"video_count":1}}`,
+		"failure_with_contradictory_video": `{"videos":[],"output":{"task_status":"FAILED","video_url":"https://media.example/video.mp4"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			u := VideoNativeUsage(p, []byte(body), "task-1", "video_720p")
+			assert.NotEqual(t, "provider_confirmed_no_output", u.Source)
+			assert.NotEqual(t, "confirmed", u.State)
+		})
+	}
+}
+
+func TestWanVideoTerminalEvidenceMustMatchProviderTaskID(t *testing.T) {
+	p := metering.Price{Version: "metered_v2", Operation: "video", Policy: "ali_wan26_t2v_billable_duration_v1", Terms: []metering.Term{
+		{Key: "video_720p", Unit: "video_second", Price: metering.Rational{Numerator: "3", Denominator: "5"}},
+		{Key: "video_1080p", Unit: "video_second", Price: metering.Rational{Numerator: "1", Denominator: "1"}},
+	}}
+	for name, body := range map[string]string{
+		"cancel_missing_task":  `{"output":{"task_status":"CANCELED","results":[]}}`,
+		"cancel_wrong_task":    `{"output":{"task_id":"other","task_status":"CANCELED","results":[]}}`,
+		"success_missing_task": `{"output":{"task_status":"SUCCEEDED","video_url":"https://media.example/video.mp4"},"usage":{"duration":5,"video_count":1}}`,
+		"success_wrong_task":   `{"output":{"task_id":"other","task_status":"SUCCEEDED","video_url":"https://media.example/video.mp4"},"usage":{"duration":5,"video_count":1}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			u := VideoNativeUsage(p, []byte(body), "task-1", "video_720p")
+			assert.NotEqual(t, "provider_confirmed_no_output", u.Source)
+			assert.NotEqual(t, "confirmed", u.State)
+		})
+	}
 }

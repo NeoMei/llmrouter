@@ -2,6 +2,7 @@ package platformbilling
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -88,6 +89,31 @@ func TestKnowledgeResultReadRequiresBoundGrantAndRemoteSettlement(t *testing.T) 
 			assert.Equal(t, staged.body, string(got))
 			var stored knowledgeResultRow
 			require.NoError(t, s.adapter.db.First(&stored, "call_id = ?", row.CallID).Error)
+			// A genuine legacy v1 ciphertext remains internally readable for
+			// maintenance, but its weaker funding binding is never released.
+			legacy := stored
+			legacy.BindingVersion = 1
+			legacyAAD, err := knowledgeResultStoredAAD(row, legacy)
+			require.NoError(t, err)
+			nonce := make([]byte, v.aead.NonceSize())
+			_, err = io.ReadFull(rand.Reader, nonce)
+			require.NoError(t, err)
+			legacy.Ciphertext = v.aead.Seal(nonce, nonce, []byte(staged.body), legacyAAD)
+			require.NoError(t, s.adapter.db.Model(&knowledgeResultRow{}).Where("call_id = ?", row.CallID).Updates(map[string]any{"binding_version": legacy.BindingVersion, "ciphertext": legacy.Ciphertext}).Error)
+			legacyBody, err := v.readSettled(context.Background(), row.CallID)
+			require.NoError(t, err)
+			assert.Equal(t, staged.body, string(legacyBody))
+			_, err = v.authorizedResult(context.Background(), s.adapter, "uh_model_original", row.TaskID, row.CallID)
+			assert.Error(t, err)
+			v.now = func() time.Time { return time.UnixMilli(legacy.ExpiresAt) }
+			purged, _, err := v.purgeExpired(context.Background(), 1, "")
+			require.NoError(t, err)
+			assert.EqualValues(t, 1, purged)
+			var tombstone knowledgeResultRow
+			require.NoError(t, s.adapter.db.First(&tombstone, "call_id = ?", row.CallID).Error)
+			assert.Empty(t, tombstone.Ciphertext)
+			v.now = time.Now
+			require.NoError(t, s.adapter.db.Model(&knowledgeResultRow{}).Where("call_id = ?", row.CallID).Updates(map[string]any{"binding_version": stored.BindingVersion, "ciphertext": stored.Ciphertext}).Error)
 			clockReads := 0
 			v.now = func() time.Time {
 				clockReads++

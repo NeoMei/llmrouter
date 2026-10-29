@@ -76,7 +76,7 @@ func TestKnowledgeValidatedBindingAtomic(t *testing.T) {
 					var stored knowledgeResultRow
 					require.NoError(t, caseDB.First(&stored, "call_id = ?", s.call.CallID).Error)
 					assert.NotEmpty(t, stored.Ciphertext)
-					assert.Equal(t, 1, stored.BindingVersion)
+					assert.Equal(t, 2, stored.BindingVersion)
 					assert.Equal(t, s.attempt.ID, stored.AttemptID)
 					assert.Len(t, stored.ObservationTag, 64)
 					require.NoError(t, caseDB.Model(&Call{}).Where("call_id = ?", row.CallID).Update("status", "SETTLED").Error)

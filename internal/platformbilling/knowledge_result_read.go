@@ -64,7 +64,7 @@ func readKnowledgeAuthority(ctx context.Context, c *client, method, path string,
 }
 
 // authorizedResult verifies a task capability, an authoritative UniHub call,
-// and the original v1 result binding. It never dispatches or settles a call.
+// and the original v2 result binding. It never dispatches or settles a call.
 func (v *knowledgeResultVault) authorizedResult(ctx context.Context, a *Adapter, credential, task, id string) ([]byte, error) {
 	if v == nil || a == nil || a.db == nil || !a.Enabled() || a.client == nil || !stableID.MatchString(id) || !stableID.MatchString(task) || !strings.HasPrefix(credential, "uh_model_") || !IsModelCredential(credential) {
 		return nil, ErrInvalid
@@ -138,7 +138,7 @@ func (v *knowledgeResultVault) authorizedResult(ctx context.Context, a *Adapter,
 		return nil, ErrInvalid
 	}
 	var initial knowledgeResultRow
-	if err := v.db.WithContext(ctx).Select("call_id", "binding_version", "attempt_id").First(&initial, "call_id = ?", id).Error; err != nil || initial.BindingVersion != 1 || initial.AttemptID == 0 {
+	if err := v.db.WithContext(ctx).Select("call_id", "binding_version", "attempt_id").First(&initial, "call_id = ?", id).Error; err != nil || initial.BindingVersion != 2 || initial.AttemptID == 0 {
 		return nil, ErrPending
 	}
 	var output []byte
@@ -161,7 +161,7 @@ func (v *knowledgeResultVault) authorizedResult(ctx context.Context, a *Adapter,
 		if err := tx.First(&stored, "call_id = ?", id).Error; err != nil {
 			return ErrPending
 		}
-		if stored.BindingVersion != 1 || stored.AttemptID != initial.AttemptID || stored.ExpiresAt <= v.now().UnixMilli() || len(stored.Ciphertext) < v.aead.NonceSize() {
+		if stored.BindingVersion != 2 || stored.AttemptID != initial.AttemptID || stored.ExpiresAt <= v.now().UnixMilli() || len(stored.Ciphertext) < v.aead.NonceSize() {
 			return ErrPending
 		}
 		if !second.ExpiresAt.After(time.Now()) || ctx.Err() != nil {

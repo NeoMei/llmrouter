@@ -117,10 +117,20 @@ func knowledgeResultStoredAAD(row Call, stored knowledgeResultRow) ([]byte, erro
 	if stored.BindingVersion == 0 {
 		return base, nil
 	}
-	if stored.BindingVersion != 1 || stored.AttemptID == 0 || len(stored.ObservationTag) != 64 {
+	if (stored.BindingVersion != 1 && stored.BindingVersion != 2) || stored.AttemptID == 0 || len(stored.ObservationTag) != 64 {
 		return nil, ErrInvalid
 	}
-	return common.Marshal([]any{"knowledge-result-bound-v1", base, stored.AttemptID, stored.ObservationTag})
+	if stored.BindingVersion == 1 {
+		return common.Marshal([]any{"knowledge-result-bound-v1", base, stored.AttemptID, stored.ObservationTag})
+	}
+	// Version 2 additionally authenticates the reservation and exact settlement
+	// intent. Status and charged are not fixed at capture time; the authorized
+	// read must verify the settled receipt with the authoritative billing service.
+	return common.Marshal([]any{"knowledge-result-bound-v2", base, stored.AttemptID, stored.ObservationTag,
+		row.DigestVersion, row.WirePathModel, row.Operation, row.MediaSnapshot,
+		row.RateSnapshot, row.RateID, row.Asset, row.FundingMode, row.FundingProductID,
+		row.FundingSnapshot, row.BillingProfileVersion, row.Amount, row.ReservationQuantity,
+		row.ReservationOutput, row.Intent})
 }
 
 func (v *knowledgeResultVault) capture(ctx context.Context, callID string, result []byte) error {
@@ -186,7 +196,10 @@ func (v *knowledgeResultVault) readSettled(ctx context.Context, callID string) (
 		}
 		return nil
 	})
-	return result, err
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // purgeExpired clears only payloads, retaining their unique call tombstones.

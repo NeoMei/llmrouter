@@ -177,11 +177,12 @@ func (v *knowledgeResultVault) captureValidated(ctx context.Context, s *Session,
 		if err != nil {
 			return ErrInvalid
 		}
+		row.Intent = string(intent)
 		expires := v.now().Add(v.ttl).UnixMilli()
 		observation := hmac.New(sha256.New, v.sealKey)
 		_, _ = observation.Write([]byte("provider-response-digest-v1"))
 		_, _ = observation.Write(result.rawDigest[:])
-		item := knowledgeResultRow{CallID: row.CallID, ExpiresAt: expires, BindingVersion: 1, AttemptID: attempt.ID, ObservationTag: hex.EncodeToString(observation.Sum(nil))}
+		item := knowledgeResultRow{CallID: row.CallID, ExpiresAt: expires, BindingVersion: 2, AttemptID: attempt.ID, ObservationTag: hex.EncodeToString(observation.Sum(nil))}
 		aad, err := knowledgeResultStoredAAD(row, item)
 		if err != nil {
 			return ErrInvalid

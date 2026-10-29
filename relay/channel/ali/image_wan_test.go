@@ -18,8 +18,8 @@ func TestOaiFormEdit2WanxImageEditPreservesMaskInputs(t *testing.T) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	require.NoError(t, writer.WriteField("prompt", "replace the object"))
-	image := []byte{137, 80, 78, 71, 13, 10, 26, 10}
-	mask := []byte{137, 80, 78, 71, 13, 10, 26, 10}
+	image := []byte{137, 80, 78, 71, 13, 10, 26, 10, 1}
+	mask := []byte{137, 80, 78, 71, 13, 10, 26, 10, 2}
 	part, err := writer.CreateFormFile("image", "source.png")
 	require.NoError(t, err)
 	_, err = part.Write(image)
@@ -39,6 +39,28 @@ func TestOaiFormEdit2WanxImageEditPreservesMaskInputs(t *testing.T) {
 	input, ok := converted.Input.(WanImageInput)
 	require.True(t, ok)
 	require.Equal(t, "description_edit_with_mask", input.Function)
+	require.Empty(t, input.Images)
 	require.Equal(t, "data:image/png;base64,"+base64.StdEncoding.EncodeToString(image), input.BaseImageURL)
 	require.Equal(t, "data:image/png;base64,"+base64.StdEncoding.EncodeToString(mask), input.MaskImageURL)
+}
+
+func TestOaiFormEdit2WanxImageEditWithoutMaskUsesDescriptionEdit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("image", "source.png")
+	require.NoError(t, err)
+	_, err = part.Write([]byte{137, 80, 78, 71, 13, 10, 26, 10, 1})
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	req := httptest.NewRequest("POST", "/v1/images/edits", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = req
+	converted, err := oaiFormEdit2WanxImageEdit(ctx, &relaycommon.RelayInfo{}, dto.ImageRequest{Model: "wanx2.1-imageedit", Prompt: "replace the object"})
+	require.NoError(t, err)
+	input, ok := converted.Input.(WanImageInput)
+	require.True(t, ok)
+	require.Equal(t, "description_edit", input.Function)
+	require.Empty(t, input.MaskImageURL)
 }

@@ -3,17 +3,51 @@ package platformbilling
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/glebarez/sqlite"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
-// External PostgreSQL targets must be dedicated task-owned schemas.
+// Every PostgreSQL case creates and drops its own schema; a search_path is
+// applied to the connection pool, including connections opened for contention.
+func knowledgeResultTestDB(t *testing.T, dialect, dsn string) *gorm.DB {
+	t.Helper()
+	if dialect == "sqlite" {
+		db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+		require.NoError(t, err)
+		pool, err := db.DB()
+		require.NoError(t, err)
+		t.Cleanup(func() { assert.NoError(t, pool.Close()) })
+		return db
+	}
+	admin, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	adminPool, err := admin.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, adminPool.Close()) })
+	schema := "knowledge_result_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	require.NoError(t, admin.Exec("CREATE SCHEMA "+schema).Error)
+	t.Cleanup(func() { assert.NoError(t, admin.Exec("DROP SCHEMA "+schema+" CASCADE").Error) })
+	config, err := pgx.ParseConfig(dsn)
+	require.NoError(t, err)
+	config.RuntimeParams["search_path"] = schema
+	pool := stdlib.OpenDB(*config)
+	t.Cleanup(func() { assert.NoError(t, pool.Close()) })
+	db, err := gorm.Open(postgres.New(postgres.Config{Conn: pool}), &gorm.Config{})
+	require.NoError(t, err)
+	return db
+}
+
 func TestKnowledgeResultVaultContract(t *testing.T) {
 	targets := map[string]string{"sqlite": "file:" + t.TempDir() + "/results.db"}
 	if dsn := os.Getenv("KNOWLEDGE_RESULT_TEST_POSTGRES_DSN"); dsn != "" {
@@ -21,12 +55,7 @@ func TestKnowledgeResultVaultContract(t *testing.T) {
 	}
 	for dialect, dsn := range targets {
 		t.Run(dialect, func(t *testing.T) {
-			var dialector gorm.Dialector = sqlite.Open(dsn)
-			if dialect == "postgres" {
-				dialector = postgres.Open(dsn)
-			}
-			db, err := gorm.Open(dialector, &gorm.Config{})
-			require.NoError(t, err)
+			db := knowledgeResultTestDB(t, dialect, dsn)
 			require.NoError(t, db.AutoMigrate(&Call{}))
 			key := []byte("0123456789abcdef0123456789abcdef")
 			v, err := newKnowledgeResultVault(db, key, time.Hour)
@@ -93,8 +122,7 @@ func TestKnowledgeResultVaultContract(t *testing.T) {
 }
 
 func TestKnowledgeResultPurgeAdvancesPastCorruption(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:"+t.TempDir()+"/purge.db"), &gorm.Config{})
-	require.NoError(t, err)
+	db := knowledgeResultTestDB(t, "sqlite", "file:"+t.TempDir()+"/purge.db")
 	require.NoError(t, db.AutoMigrate(&Call{}))
 	v, err := newKnowledgeResultVault(db, []byte("0123456789abcdef0123456789abcdef"), time.Hour)
 	require.NoError(t, err)

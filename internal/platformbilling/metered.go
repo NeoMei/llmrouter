@@ -587,14 +587,14 @@ func (s *Session) finishMetered(ctx context.Context) error {
 	if err := s.adapter.db.WithContext(ctx).First(&row, "call_id = ?", s.call.CallID).Error; err != nil {
 		return err
 	}
+	if row.EvidenceConflict {
+		return ErrConflict
+	}
 	if row.Status == "SETTLED" || row.Status == "RELEASED" {
 		return nil
 	}
 	if row.Status == "SETTLE_PENDING" || row.Status == "RELEASE_PENDING" {
 		return s.adapter.deliver(ctx, row)
-	}
-	if row.EvidenceConflict {
-		return ErrConflict
 	}
 	var usage metering.Usage
 	status := "UNKNOWN"

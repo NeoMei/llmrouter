@@ -75,6 +75,9 @@ func relayNativeImage(c *gin.Context, a *platformbilling.Adapter) {
 		return
 	}
 	request.Header.Set("Content-Type", ct)
+	if p.ChannelType == constant.ChannelTypeAli && p.WireOperation == "images.edits.create" {
+		request.Header.Set("X-DashScope-Async", "enable")
+	}
 	if p.ChannelType == constant.ChannelTypeGemini {
 		request.Header.Set("x-goog-api-key", channel.Key)
 	} else {
@@ -83,6 +86,13 @@ func relayNativeImage(c *gin.Context, a *platformbilling.Adapter) {
 	if e = s.Dispatch(c.Request.Context(), channel.Id); e != nil {
 		c.AbortWithStatus(409)
 		return
+	}
+	if p.ChannelType == constant.ChannelTypeAli && p.WireOperation == "images.edits.create" {
+		// Once dispatch is journaled, a disconnected client must not prevent
+		// us from receiving and binding the paid supplier task ID.
+		dispatchCtx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 120*time.Second)
+		defer cancel()
+		request = request.WithContext(dispatchCtx)
 	}
 	response, e := closed.Do(request)
 	if e != nil {
@@ -101,7 +111,27 @@ func relayNativeImage(c *gin.Context, a *platformbilling.Adapter) {
 			return
 		}
 	}
-	if readErr != nil || int64(len(raw)) > p.MaxBodyBytes || response.StatusCode != 200 || c.Request.Context().Err() != nil {
+	if readErr != nil || int64(len(raw)) > p.MaxBodyBytes || response.StatusCode != 200 {
+		c.AbortWithStatus(502)
+		return
+	}
+	if p.ChannelType == constant.ChannelTypeAli && p.WireOperation == "images.edits.create" {
+		providerID, err := wanImageSubmission(raw)
+		if err != nil {
+			c.AbortWithStatus(502)
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 15*time.Second)
+		defer cancel()
+		if err := s.BindTask(ctx, providerID); err != nil {
+			c.AbortWithStatus(502)
+			return
+		}
+		c.Header("Cache-Control", "no-store")
+		c.JSON(http.StatusAccepted, gin.H{"id": s.CallID(), "status": "pending"})
+		return
+	}
+	if c.Request.Context().Err() != nil {
 		c.AbortWithStatus(502)
 		return
 	}

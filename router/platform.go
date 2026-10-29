@@ -94,6 +94,7 @@ func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 	registerPlatformOperation(platform, adapter, "/native/dashscope/images/generations", "dashscope.images.generate", "/v1/native/dashscope/images/generations", types.RelayFormat("native_image"))
 	registerPlatformOperation(platform, adapter, "/native/gemini/images/models/*native", "gemini.images.generate", "", types.RelayFormat("native_image"))
 	registerPlatformOperation(platform, adapter, "/images/edits", "images.edits.create", "/v1/images/edits", types.RelayFormat("native_image"))
+	platform.GET("/images/edits/:callID", func(c *gin.Context) { readWanImage(c, adapter) })
 	platform.POST("/chat/completions", func(c *gin.Context) {
 		if len(c.Request.Header.Values("Authorization")) != 1 || !strings.HasPrefix(c.GetHeader("Authorization"), "Bearer ") || !platformbilling.IsModelCredential(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")) {
 			c.AbortWithStatusJSON(401, gin.H{"error": gin.H{"code": "invalid_model_credential"}})

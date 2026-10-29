@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"image"
+	"image/color"
 	"image/jpeg"
 	"image/png"
 	"io"
@@ -39,14 +40,19 @@ import (
 )
 
 type imageGatewayFixture struct {
-	engine     *gin.Engine
-	adapter    *platformbilling.Adapter
-	db         *gorm.DB
-	cfg        platformbilling.Config
-	sends      atomic.Int64
-	downloads  atomic.Int64
-	wire, kind string
-	img        []byte
+	engine           *gin.Engine
+	adapter          *platformbilling.Adapter
+	db               *gorm.DB
+	cfg              platformbilling.Config
+	sends            atomic.Int64
+	downloads        atomic.Int64
+	settleFail       atomic.Bool
+	wire, kind       string
+	img              []byte
+	providerReceived chan struct{}
+	providerRelease  chan struct{}
+	settleEntered    chan struct{}
+	settleRelease    chan struct{}
 }
 
 func newImageGatewayFixture(t *testing.T, kind, hubOrigin, token, dbPath string) *imageGatewayFixture {
@@ -54,8 +60,20 @@ func newImageGatewayFixture(t *testing.T, kind, hubOrigin, token, dbPath string)
 	enableUniHubBoundary(t)
 	gin.SetMode(gin.TestMode)
 	f := &imageGatewayFixture{kind: kind}
+	if kind == "wan-edit-cancel" {
+		f.providerReceived = make(chan struct{})
+		f.providerRelease = make(chan struct{})
+	}
+	if kind == "wan-edit-conflict" {
+		f.settleEntered = make(chan struct{})
+		f.settleRelease = make(chan struct{})
+	}
 	var b bytes.Buffer
-	require.NoError(t, png.Encode(&b, image.NewRGBA(image.Rect(0, 0, 2, 2))))
+	size := 2
+	if strings.HasPrefix(kind, "wan-edit") {
+		size = 512
+	}
+	require.NoError(t, png.Encode(&b, image.NewRGBA(image.Rect(0, 0, size, size))))
 	f.img = b.Bytes()
 	if dbPath == "" {
 		dbPath = t.TempDir() + "/images.db"
@@ -87,7 +105,10 @@ func newImageGatewayFixture(t *testing.T, kind, hubOrigin, token, dbPath string)
 		wire = "images.generations.create"
 	}
 	op := "image_generation"
-	if strings.HasPrefix(kind, "edit") {
+	if strings.HasPrefix(kind, "wan-edit") {
+		origin, upstream, api, channelType = "https://dashscope.aliyuncs.com", "wanx2.1-imageedit", "v1", constant.ChannelTypeAli
+	}
+	if strings.HasPrefix(kind, "edit") || strings.HasPrefix(kind, "wan-edit") {
 		wire, op = "images.edits.create", "image_edit"
 	}
 	f.wire = wire
@@ -129,6 +150,14 @@ func newImageGatewayFixture(t *testing.T, kind, hubOrigin, token, dbPath string)
 				remote = platformbilling.RemoteCall{WireOperation: in["wire_operation"], CallID: in["call_id"], ActorID: "actor", AccountID: "account", OriginProductID: "superwagie", InstanceID: "default", CredentialID: "original-credential", RequestDigest: in["request_digest"], Rate: rate, ChargeAsset: "CNY/6", FundingMode: "prepaid_cash", FundingProductID: "llmrouter", Held: in["amount"], Status: "RESERVED"}
 				out = remote
 			case "/internal/v1/calls/image-call/settle":
+				if kind == "wan-edit-conflict" {
+					close(f.settleEntered)
+					<-f.settleRelease
+				}
+				if f.settleFail.Load() {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
 				remote.Status = "SETTLED"
 				remote.Charged = "12"
 				out = remote
@@ -151,6 +180,27 @@ func newImageGatewayFixture(t *testing.T, kind, hubOrigin, token, dbPath string)
 		token = strings.Repeat("s", 32)
 	}
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(kind, "wan-edit") && r.Method == "GET" && r.URL.Path == "/api/v1/tasks/provider-task" {
+			assert.Equal(t, "Bearer synthetic-image-key", r.Header.Get("Authorization"))
+			if kind == "wan-edit-pending" {
+				_, _ = w.Write([]byte(`{"request_id":"poll","output":{"task_id":"provider-task","task_status":"RUNNING"}}`))
+				return
+			}
+			if kind == "wan-edit-failed" {
+				_, _ = w.Write([]byte(`{"request_id":"poll","output":{"task_id":"provider-task","task_status":"FAILED","task_metrics":{"TOTAL":1,"SUCCEEDED":0,"FAILED":1},"results":[]},"usage":{"image_count":0}}`))
+				return
+			}
+			if kind == "wan-edit-uncertain" {
+				_, _ = w.Write([]byte(`{"request_id":"poll","output":{"task_id":"provider-task","task_status":"FAILED"}}`))
+				return
+			}
+			if kind == "wan-edit-evil" {
+				_, _ = w.Write([]byte(`{"request_id":"poll","output":{"task_id":"provider-task","task_status":"SUCCEEDED","results":[{"url":"https://evil.example/a.png"}]},"usage":{"image_count":1}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"request_id":"poll","output":{"task_id":"provider-task","task_status":"SUCCEEDED","results":[{"url":"https://images.example/image.png?signature=fixture"}],"task_metrics":{"TOTAL":1,"SUCCEEDED":1,"FAILED":0}},"usage":{"image_count":1}}`))
+			return
+		}
 		if r.Method == "GET" {
 			f.downloads.Add(1)
 			assert.Empty(t, r.Header.Get("Authorization"))
@@ -181,7 +231,29 @@ func newImageGatewayFixture(t *testing.T, kind, hubOrigin, token, dbPath string)
 		} else {
 			assert.Equal(t, "Bearer synthetic-image-key", r.Header.Get("Authorization"))
 		}
-		if wire == "images.edits.create" {
+		if strings.HasPrefix(kind, "wan-edit") {
+			assert.Equal(t, "/api/v1/services/aigc/image2image/image-synthesis", r.URL.Path)
+			assert.Equal(t, "enable", r.Header.Get("X-DashScope-Async"))
+			var request struct {
+				Model string            `json:"model"`
+				Input map[string]string `json:"input"`
+			}
+			require.NoError(t, common.DecodeJson(r.Body, &request))
+			assert.Equal(t, upstream, request.Model)
+			assert.Equal(t, "description_edit_with_mask", request.Input["function"])
+			assert.Equal(t, "data:image/png;base64,"+base64.StdEncoding.EncodeToString(f.img), request.Input["base_image_url"])
+			maskBytes, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(request.Input["mask_image_url"], "data:image/png;base64,"))
+			require.NoError(t, err)
+			mask, err := png.Decode(bytes.NewReader(maskBytes))
+			require.NoError(t, err)
+			assert.Equal(t, color.NRGBA{R: 255, G: 255, B: 255, A: 255}, color.NRGBAModel.Convert(mask.At(0, 0)))
+			if kind == "wan-edit-cancel" {
+				close(f.providerReceived)
+				<-f.providerRelease
+			}
+			_, _ = w.Write([]byte(`{"request_id":"submit","output":{"task_id":"provider-task","task_status":"PENDING"}}`))
+			return
+		} else if wire == "images.edits.create" {
 			assert.Equal(t, "/v1/images/edits", r.URL.Path)
 			require.NoError(t, r.ParseMultipartForm(1<<20))
 			defer r.MultipartForm.RemoveAll()
@@ -277,6 +349,9 @@ func newImageGatewayFixture(t *testing.T, kind, hubOrigin, token, dbPath string)
 	t.Cleanup(func() { imageProducerHTTPClient = oldClient })
 	hash := sha256.Sum256([]byte("synthetic-image-key"))
 	policy := platformbilling.ImagePolicy{Version: "image_v1", PublicModel: "image-model", WireOperation: wire, ChannelID: 1, ChannelType: channelType, UpstreamModel: upstream, ChannelKeySHA256: hex.EncodeToString(hash[:]), Origin: origin, APIVersion: api, MaxBodyBytes: 10 << 20, MaxImageBytes: 1 << 20, MaxPixels: 16 << 20, MaxImages: 3, MaxInputImages: 3, ResourceOrigins: []string{"https://images.example"}, RateIDs: map[string]string{"CNY/6": "image-rate"}}
+	if strings.HasPrefix(kind, "wan-edit") {
+		policy.MaxInputImages = 1
+	}
 	f.cfg = platformbilling.Config{Enabled: true, Origin: hubOrigin, ServiceToken: token, PrincipalID: 1, Group: "platform", MaxBodyBytes: 1 << 20, MaxInputTokens: 1000, MaxOutputTokens: 100, ImagePolicies: map[string]map[string]platformbilling.ImagePolicy{wire: {"image-model": policy}}, OperationLimits: map[string]map[string]platformbilling.OperationLimits{op: {"image-model": {MaxBodyBytes: 10 << 20, MaxQuantity: 3, Policy: "successful_outputs_v1"}}}, OperationRateIDs: map[string]map[string]map[string]string{op: {"CNY/6": {"image-model": "image-rate"}}}}
 	f.adapter, e = platformbilling.New(db, f.cfg)
 	require.NoError(t, e)
@@ -304,11 +379,15 @@ func imageGatewayRequest(t *testing.T, kind string, img []byte) (string, string,
 	if strings.HasPrefix(kind, "volc") {
 		body = []byte(fmt.Sprintf(`{"model":"image-model","prompt":"slide","image":"data:image/png;base64,%s","seed":0,"watermark":false}`, b64))
 	}
-	if strings.HasPrefix(kind, "edit") {
+	if strings.HasPrefix(kind, "edit") || strings.HasPrefix(kind, "wan-edit") {
 		path = "/platform/v1/images/edits"
 		var b bytes.Buffer
 		w := multipart.NewWriter(&b)
-		for _, field := range [][2]string{{"model", "image-model"}, {"prompt", "slide"}, {"n", "3"}, {"output_compression", "0"}} {
+		fields := [][2]string{{"model", "image-model"}, {"prompt", "slide"}, {"n", "3"}, {"output_compression", "0"}}
+		if strings.HasPrefix(kind, "wan-edit") {
+			fields = [][2]string{{"model", "image-model"}, {"prompt", "slide"}, {"n", "1"}}
+		}
+		for _, field := range fields {
 			require.NoError(t, w.WriteField(field[0], field[1]))
 		}
 		if kind == "edit-mime" {
@@ -371,6 +450,207 @@ func TestImageSelectedNativeTransports(t *testing.T) {
 				assert.Equal(t, 409, w.Code)
 				assert.EqualValues(t, 1, f.sends.Load())
 			}
+		})
+	}
+}
+
+func TestWanMaskedEditSubmitsOncePollsAndSettles(t *testing.T) {
+	f := newImageGatewayFixture(t, "wan-edit", "", "", "")
+	path, contentType, body := imageGatewayRequest(t, "wan-edit", f.img)
+	w := f.request(t, path, contentType, body)
+	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), `"id":"image-call"`)
+	var row platformbilling.Call
+	require.NoError(t, f.db.First(&row, "call_id = ?", "image-call").Error)
+	assert.Equal(t, "UNKNOWN", row.Status)
+	assert.Equal(t, "provider-task", row.ProviderTaskID)
+	recovery, _, err := f.adapter.WanImageTaskForRecovery(context.Background(), row.CallID)
+	require.NoError(t, err)
+	assert.Equal(t, row.ProviderTaskID, recovery.ProviderTaskID)
+	require.NoError(t, f.db.Model(&platformbilling.Call{}).Where("call_id = ?", row.CallID).Update("instance_id", "other").Error)
+	_, _, err = f.adapter.WanImageTaskForRecovery(context.Background(), row.CallID)
+	require.Error(t, err)
+	require.NoError(t, f.db.Model(&platformbilling.Call{}).Where("call_id = ?", row.CallID).Update("instance_id", f.cfg.InstanceID).Error)
+	assert.Equal(t, http.StatusConflict, f.request(t, path, contentType, body).Code)
+	assert.EqualValues(t, 1, f.sends.Load())
+	request := httptest.NewRequest(http.MethodGet, "/platform/v1/images/edits/image-call", nil)
+	request.Header.Set("Authorization", "Bearer uh_model_"+strings.Repeat("a", 64))
+	request.Header.Set("X-UniHub-Task-ID", "image-task")
+	wrongTask := request.Clone(request.Context())
+	wrongTask.Header.Set("X-UniHub-Task-ID", "other-task")
+	denied := httptest.NewRecorder()
+	f.engine.ServeHTTP(denied, wrongTask)
+	assert.Equal(t, http.StatusNotFound, denied.Code)
+	assert.Zero(t, f.downloads.Load())
+	result := httptest.NewRecorder()
+	f.engine.ServeHTTP(result, request)
+	require.Equal(t, http.StatusOK, result.Code, result.Body.String())
+	assert.Contains(t, result.Body.String(), `"b64_json"`)
+	assert.NotContains(t, result.Body.String(), "signature")
+	require.NoError(t, f.db.First(&row, "call_id = ?", "image-call").Error)
+	assert.Equal(t, "SETTLED", row.Status)
+	assert.Equal(t, "12", row.Charged)
+	assert.NotEmpty(t, row.ImageObservation)
+	assert.EqualValues(t, 1, f.downloads.Load())
+
+	// A crash after persisting the image and before metering evidence can be
+	// recovered from that immutable observation without another supplier call.
+	require.NoError(t, f.db.Model(&platformbilling.Call{}).Where("call_id = ?", "image-call").Updates(map[string]any{"status": "UNKNOWN", "evidence": "", "intent": "", "charged": ""}).Error)
+	recovered := httptest.NewRecorder()
+	f.engine.ServeHTTP(recovered, request.Clone(request.Context()))
+	require.Equal(t, http.StatusOK, recovered.Code, recovered.Body.String())
+	assert.Equal(t, result.Body.String(), recovered.Body.String())
+	require.NoError(t, f.db.First(&row, "call_id = ?", "image-call").Error)
+	assert.Equal(t, "SETTLED", row.Status)
+	assert.EqualValues(t, 1, f.downloads.Load())
+
+	// A subsequent read uses the verified persisted result, never the producer.
+	replay := httptest.NewRecorder()
+	f.engine.ServeHTTP(replay, request.Clone(request.Context()))
+	require.Equal(t, http.StatusOK, replay.Code, replay.Body.String())
+	assert.Equal(t, result.Body.String(), replay.Body.String())
+	assert.EqualValues(t, 1, f.sends.Load())
+	assert.EqualValues(t, 1, f.downloads.Load())
+}
+
+func TestWanMaskedEditBindsTaskAfterClientCancellation(t *testing.T) {
+	f := newImageGatewayFixture(t, "wan-edit-cancel", "", "", "")
+	path, contentType, body := imageGatewayRequest(t, "wan-edit", f.img)
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body)).WithContext(ctx)
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("Authorization", "Bearer uh_model_"+strings.Repeat("a", 64))
+	req.Header.Set("X-UniHub-Task-ID", "image-task")
+	req.Header.Set("Idempotency-Key", "image-call")
+	done := make(chan struct{})
+	go func() { f.engine.ServeHTTP(httptest.NewRecorder(), req); close(done) }()
+	select {
+	case <-f.providerReceived:
+	case <-time.After(5 * time.Second):
+		t.Fatal("supplier request never arrived")
+	}
+	cancel()
+	close(f.providerRelease)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("submit handler did not finish")
+	}
+	var row platformbilling.Call
+	require.NoError(t, f.db.First(&row, "call_id = ?", "image-call").Error)
+	assert.Equal(t, "UNKNOWN", row.Status)
+	assert.Equal(t, "provider-task", row.ProviderTaskID)
+	assert.EqualValues(t, 1, f.sends.Load())
+}
+
+func TestWanMaskedEditWithholdsResultUntilSettlementRecovers(t *testing.T) {
+	f := newImageGatewayFixture(t, "wan-edit", "", "", "")
+	path, contentType, body := imageGatewayRequest(t, "wan-edit", f.img)
+	require.Equal(t, http.StatusAccepted, f.request(t, path, contentType, body).Code)
+	f.settleFail.Store(true)
+	request := httptest.NewRequest(http.MethodGet, "/platform/v1/images/edits/image-call", nil)
+	request.Header.Set("Authorization", "Bearer uh_model_"+strings.Repeat("a", 64))
+	request.Header.Set("X-UniHub-Task-ID", "image-task")
+	first := httptest.NewRecorder()
+	f.engine.ServeHTTP(first, request)
+	assert.Equal(t, http.StatusConflict, first.Code)
+	assert.NotContains(t, first.Body.String(), "b64_json")
+	var row platformbilling.Call
+	require.NoError(t, f.db.First(&row, "call_id = ?", "image-call").Error)
+	assert.Equal(t, "SETTLE_PENDING", row.Status)
+	f.settleFail.Store(false)
+	retry := httptest.NewRecorder()
+	f.engine.ServeHTTP(retry, request.Clone(request.Context()))
+	require.Equal(t, http.StatusOK, retry.Code, retry.Body.String())
+	assert.Contains(t, retry.Body.String(), "b64_json")
+	require.NoError(t, f.db.First(&row, "call_id = ?", "image-call").Error)
+	assert.Equal(t, "SETTLED", row.Status)
+	assert.EqualValues(t, 1, f.sends.Load())
+	assert.EqualValues(t, 1, f.downloads.Load())
+}
+
+func TestWanMaskedEditDoesNotReplayASettledConflictedObservation(t *testing.T) {
+	f := newImageGatewayFixture(t, "wan-edit", "", "", "")
+	path, ct, body := imageGatewayRequest(t, "wan-edit", f.img)
+	require.Equal(t, http.StatusAccepted, f.request(t, path, ct, body).Code)
+	request := httptest.NewRequest(http.MethodGet, "/platform/v1/images/edits/image-call", nil)
+	request.Header.Set("Authorization", "Bearer uh_model_"+strings.Repeat("a", 64))
+	request.Header.Set("X-UniHub-Task-ID", "image-task")
+	w := httptest.NewRecorder()
+	f.engine.ServeHTTP(w, request)
+	require.Equal(t, http.StatusOK, w.Code)
+	require.NoError(t, f.db.Model(&platformbilling.Call{}).Where("call_id = ?", "image-call").Update("evidence_conflict", true).Error)
+	w = httptest.NewRecorder()
+	f.engine.ServeHTTP(w, request.Clone(request.Context()))
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.NotContains(t, w.Body.String(), "b64_json")
+}
+
+func TestWanMaskedEditWithholdsResultWhenConflictAppearsDuringSettlement(t *testing.T) {
+	f := newImageGatewayFixture(t, "wan-edit-conflict", "", "", "")
+	path, ct, body := imageGatewayRequest(t, "wan-edit", f.img)
+	require.Equal(t, http.StatusAccepted, f.request(t, path, ct, body).Code)
+	request := httptest.NewRequest(http.MethodGet, "/platform/v1/images/edits/image-call", nil)
+	request.Header.Set("Authorization", "Bearer uh_model_"+strings.Repeat("a", 64))
+	request.Header.Set("X-UniHub-Task-ID", "image-task")
+	w := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() { f.engine.ServeHTTP(w, request); close(done) }()
+	select {
+	case <-f.settleEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("settlement never started")
+	}
+	var row platformbilling.Call
+	require.NoError(t, f.db.First(&row, "call_id = ?", "image-call").Error)
+	alternative := image.NewRGBA(image.Rect(0, 0, 512, 512))
+	alternative.Set(0, 0, color.RGBA{R: 255, A: 255})
+	var encoded bytes.Buffer
+	require.NoError(t, png.Encode(&encoded, alternative))
+	policy := f.cfg.ImagePolicies["images.edits.create"]["image-model"]
+	second, err := platformbilling.ObserveWanMaskedEdit(policy, "provider-task", []byte(`{"request_id":"poll","output":{"task_id":"provider-task","task_status":"SUCCEEDED","results":[{"url":"https://images.example/image.png"}],"task_metrics":{"TOTAL":1,"SUCCEEDED":1,"FAILED":0}},"usage":{"image_count":1}}`), func(string) ([]byte, string, error) { return encoded.Bytes(), "image/png", nil })
+	require.NoError(t, err)
+	assert.ErrorIs(t, f.adapter.CompleteWanImage(context.Background(), row, second), platformbilling.ErrConflict)
+	close(f.settleRelease)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("settlement never finished")
+	}
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.NotContains(t, w.Body.String(), "b64_json")
+	again := httptest.NewRecorder()
+	f.engine.ServeHTTP(again, request.Clone(context.Background()))
+	assert.Equal(t, http.StatusConflict, again.Code)
+}
+
+func TestWanMaskedEditPollDoesNotChargeOrReleaseUncertainResults(t *testing.T) {
+	for _, tc := range []struct {
+		kind    string
+		status  int
+		billing string
+	}{
+		{"wan-edit-pending", http.StatusAccepted, "UNKNOWN"},
+		{"wan-edit-uncertain", http.StatusConflict, "UNKNOWN"},
+		{"wan-edit-evil", http.StatusBadGateway, "UNKNOWN"},
+		{"wan-edit-failed", http.StatusOK, "RELEASED"},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			f := newImageGatewayFixture(t, tc.kind, "", "", "")
+			path, contentType, body := imageGatewayRequest(t, tc.kind, f.img)
+			require.Equal(t, http.StatusAccepted, f.request(t, path, contentType, body).Code)
+			request := httptest.NewRequest(http.MethodGet, "/platform/v1/images/edits/image-call", nil)
+			request.Header.Set("Authorization", "Bearer uh_model_"+strings.Repeat("a", 64))
+			request.Header.Set("X-UniHub-Task-ID", "image-task")
+			result := httptest.NewRecorder()
+			f.engine.ServeHTTP(result, request)
+			require.Equal(t, tc.status, result.Code, result.Body.String())
+			var row platformbilling.Call
+			require.NoError(t, f.db.First(&row, "call_id = ?", "image-call").Error)
+			assert.Equal(t, tc.billing, row.Status)
+			assert.Empty(t, row.ImageObservation)
+			assert.Zero(t, f.downloads.Load())
+			assert.EqualValues(t, 1, f.sends.Load())
 		})
 	}
 }

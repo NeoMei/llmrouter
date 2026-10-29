@@ -535,6 +535,16 @@ func (s *Session) Finish(ctx context.Context) error {
 	return nil
 }
 func (a *Adapter) deliver(ctx context.Context, row Call) error {
+	var current Call
+	if err := a.db.WithContext(ctx).First(&current, "call_id = ?", row.CallID).Error; err != nil {
+		return err
+	}
+	if current.EvidenceConflict {
+		return ErrConflict
+	}
+	if current.Status != row.Status || current.Intent != row.Intent {
+		return ErrPending
+	}
 	operation, terminal := "settle", "SETTLED"
 	if row.Status == "RELEASE_PENDING" {
 		operation, terminal = "release", "RELEASED"
@@ -550,7 +560,32 @@ func (a *Adapter) deliver(ctx context.Context, row Call) error {
 	if !remote.matches(row) || remote.Status != terminal {
 		return ErrPending
 	}
-	return a.db.WithContext(ctx).Model(&Call{}).Where("call_id = ? AND status = ?", row.CallID, row.Status).Updates(map[string]any{"status": terminal, "charged": remote.Charged}).Error
+	saved := a.db.WithContext(ctx).Model(&Call{}).Where("call_id = ? AND status = ? AND intent = ? AND evidence_conflict = ?", row.CallID, row.Status, row.Intent, false).Updates(map[string]any{"status": terminal, "charged": remote.Charged})
+	if saved.Error != nil {
+		return saved.Error
+	}
+	if saved.RowsAffected != 1 {
+		var latest Call
+		if err := a.db.WithContext(ctx).First(&latest, "call_id = ?", row.CallID).Error; err != nil {
+			return err
+		}
+		if latest.EvidenceConflict {
+			// The remote command may already have succeeded while contradictory
+			// evidence was recorded. Preserve its terminal accounting state, but
+			// keep the conflict sticky and never return a result as valid.
+			if latest.Status == row.Status && latest.Intent == row.Intent {
+				if err := a.db.WithContext(ctx).Model(&Call{}).Where("call_id = ? AND status = ? AND intent = ? AND evidence_conflict = ?", row.CallID, row.Status, row.Intent, true).Updates(map[string]any{"status": terminal, "charged": remote.Charged}).Error; err != nil {
+					return err
+				}
+			}
+			return ErrConflict
+		}
+		if latest.Status == terminal && latest.Intent == row.Intent {
+			return nil
+		}
+		return ErrPending
+	}
+	return nil
 }
 
 // Recover only resends durable final commands. UNKNOWN calls are never replayed

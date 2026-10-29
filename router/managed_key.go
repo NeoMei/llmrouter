@@ -130,7 +130,7 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 		}
 		credential := fields[1]
 		path := c.Request.URL.Path
-		if (path == "/v1/responses/compact" || path == "/v1/audio/speech" || path == "/v1/audio/transcriptions" || path == "/v1/images/generations" || path == "/v1/images/edits" || strings.HasPrefix(path, "/v1/native/")) && c.Request.URL.RawQuery != "" {
+		if (path == "/v1/responses/compact" || path == "/v1/audio/speech" || path == "/v1/audio/transcriptions" || path == "/v1/images/generations" || path == "/v1/images/edits" || strings.HasPrefix(path, "/v1/images/edits/") || strings.HasPrefix(path, "/platform/v1/images/edits/") || strings.HasPrefix(path, "/v1/native/")) && c.Request.URL.RawQuery != "" {
 			c.AbortWithStatus(http.StatusBadRequest)
 			return
 		}
@@ -173,6 +173,10 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 				operation, id = "video", strings.TrimPrefix(path, "/v1/videos/")
 			case strings.HasPrefix(path, "/platform/v1/videos/"):
 				operation, id = "video", strings.TrimPrefix(path, "/platform/v1/videos/")
+			case strings.HasPrefix(path, "/v1/images/edits/"):
+				operation, id = "image_edit", strings.TrimPrefix(path, "/v1/images/edits/")
+			case strings.HasPrefix(path, "/platform/v1/images/edits/"):
+				operation, id = "image_edit", strings.TrimPrefix(path, "/platform/v1/images/edits/")
 			case strings.HasPrefix(path, "/v1/ocr/"):
 				operation, id = "ocr", strings.TrimPrefix(path, "/v1/ocr/")
 			case strings.HasPrefix(path, "/api/v2/ocr/jobs/"):
@@ -191,7 +195,7 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 					id = ""
 				}
 				row, err := adapter.ManagedTask(c.Request.Context(), credential, id)
-				if err != nil || (operation != "receipt" && row.Operation != operation) || (operation == "receipt" && suffix != "") {
+				if err != nil || (operation != "receipt" && row.Operation != operation) || ((operation == "receipt" || operation == "image_edit") && suffix != "") {
 					c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": gin.H{"code": "unified_task_not_found"}})
 					return
 				}
@@ -206,6 +210,8 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 					}
 				case "receipt":
 					target = "/platform/v1/calls/" + row.CallID
+				case "image_edit":
+					target = "/platform/v1/images/edits/" + row.CallID
 				}
 			}
 		}

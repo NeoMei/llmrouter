@@ -115,6 +115,21 @@ func meteredFixture(t *testing.T, op string) (*Adapter, *gorm.DB, *atomic.Int64)
 func speechUsage(value string) metering.Usage {
 	return metering.Usage{Version: "metered_v2", Operation: "speech", State: "confirmed", Source: "provider", Measurements: []metering.Measurement{{Key: "characters", Unit: "character", Quantity: metering.Quantity{Value: value}}}}
 }
+
+func TestConflictedPendingSettlementIsNeverSentOrRecovered(t *testing.T) {
+	a, db, settles := meteredFixture(t, "speech")
+	intent, err := common.Marshal(struct {
+		Usage Usage `json:"usage"`
+	}{Usage{Metered: func() *metering.Usage { u := speechUsage("1"); return &u }()}})
+	require.NoError(t, err)
+	row := Call{CallID: "call", Operation: "speech", Status: "SETTLE_PENDING", Intent: string(intent), EvidenceConflict: true}
+	require.NoError(t, db.Create(&row).Error)
+	s := &Session{adapter: a, call: row}
+	assert.ErrorIs(t, s.Finish(context.Background()), ErrConflict)
+	assert.Zero(t, settles.Load())
+	require.NoError(t, a.Recover(context.Background()))
+	assert.Zero(t, settles.Load())
+}
 func TestMeteredZeroSettlementAndCanonicalDuplicate(t *testing.T) {
 	a, db, settles := meteredFixture(t, "speech")
 	ctx := context.Background()

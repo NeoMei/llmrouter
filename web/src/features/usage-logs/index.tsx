@@ -17,15 +17,18 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { getRouteApi, useNavigate } from '@tanstack/react-router'
-import { useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
 import type { NavGroup } from '@/components/layout/types'
+import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { NativeBillingPanel } from '@/features/native-metering/billing-panel'
 import { CacheStatsDialog } from '@/features/system-settings/general/channel-affinity/cache-stats-dialog'
+import { ProductConsoleView } from '@/features/unihub'
 import { useSidebarConfig } from '@/hooks/use-sidebar-config'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { UserInfoDialog } from './components/dialogs/user-info-dialog'
 import {
@@ -188,9 +191,39 @@ function UsageLogsContent() {
 }
 
 export function UsageLogs() {
+  const { t } = useTranslation()
+  const params = route.useParams()
+  const central = useAuthStore(
+    (state) => state.auth.user?.identity_source === 'unihub'
+  )
+  const [native, setNative] = useState(false)
+  if (central && params.section === 'common' && !native) {
+    return (
+      <>
+        <Button variant='outline' onClick={() => setNative(true)}>
+          {t('Local')} · {t('Common Logs')}
+        </Button>
+        <ProductConsoleView page='usage' />
+      </>
+    )
+  }
   return (
-    <UsageLogsProvider>
-      <UsageLogsContent />
-    </UsageLogsProvider>
+    <>
+      {central && params.section === 'common' ? (
+        <div>
+          <Button variant='outline' onClick={() => setNative(false)}>
+            {t('UniHub account')}
+          </Button>
+          <p role='status'>
+            {t(
+              'For UniHub accounts, local log date ranges must not exceed 30 days.'
+            )}
+          </p>
+        </div>
+      ) : null}
+      <UsageLogsProvider>
+        <UsageLogsContent />
+      </UsageLogsProvider>
+    </>
   )
 }

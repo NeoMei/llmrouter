@@ -16,9 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
+import { Button } from '@/components/ui/button'
+import { ProductConsoleView } from '@/features/unihub'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { ApiKeysDialogs } from './components/api-keys-dialogs'
 import { ApiKeysPrimaryButtons } from './components/api-keys-primary-buttons'
@@ -26,6 +30,34 @@ import { ApiKeysProvider } from './components/api-keys-provider'
 import { ApiKeysTable } from './components/api-keys-table'
 
 export function ApiKeys() {
+  const { t } = useTranslation()
+  const central = useAuthStore(
+    (state) => state.auth.user?.identity_source === 'unihub'
+  )
+  const [native, setNative] = useState(false)
+  if (central && !native) {
+    return (
+      <>
+        <Button variant='outline' onClick={() => setNative(true)}>
+          {t('Local')} · {t('API Keys')}
+        </Button>
+        <ProductConsoleView page='keys' />
+      </>
+    )
+  }
+  return (
+    <>
+      {central ? (
+        <Button variant='outline' onClick={() => setNative(false)}>
+          {t('UniHub account')}
+        </Button>
+      ) : null}
+      <NativeApiKeys />
+    </>
+  )
+}
+
+function NativeApiKeys() {
   const { t } = useTranslation()
   return (
     <ApiKeysProvider>

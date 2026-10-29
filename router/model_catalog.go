@@ -3,16 +3,20 @@ package router
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/url"
 	"reflect"
 	"slices"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/internal/platformbilling"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/service/modelcatalog"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
@@ -154,7 +158,54 @@ func readTechnicalCatalog(ctx context.Context, adapter *platformbilling.Adapter,
 	}
 	return adapter.ProjectCatalog(product, sources)
 }
+
+type chatCatalogModel struct {
+	ID      string            `json:"id"`
+	Policy  string            `json:"policy"`
+	RateIDs map[string]string `json:"rate_ids"`
+}
+
+func projectChatCatalog(catalog platformbilling.TechnicalCatalog, mode string, pins map[string]map[string]string) []chatCatalogModel {
+	result := []chatCatalogModel{}
+	for _, model := range catalog.Models {
+		lowered := strings.ToLower(model.ID)
+		if mode == "legacy" && (strings.Contains(lowered, "search") || strings.Contains(lowered, "audio")) {
+			continue
+		}
+		for _, op := range model.Operations {
+			legacyAvailable := mode == "legacy" && (op.DisabledReason == "metered_admission_unconfigured" || op.DisabledReason == "usage_policy_unconfigured")
+			if op.ID == "chat.completions.create" && (op.Available || legacyAvailable) {
+				rates := map[string]string{}
+				for asset, models := range pins {
+					if id := models[model.ID]; id != "" {
+						rates[asset] = id
+					}
+				}
+				result = append(result, chatCatalogModel{ID: model.ID, Policy: op.Policy, RateIDs: rates})
+			}
+		}
+	}
+	return result
+}
+
 func SetModelCatalogRouter(engine *gin.Engine, adapter *platformbilling.Adapter, config platformbilling.CatalogConfig) {
+	middleware.RegisterUniHubManagementRoute(http.MethodGet, "/api/unihub/chat-models", authz.Permission{Resource: "product", Action: "use"})
+	engine.GET("/api/unihub/chat-models", middleware.UserAuth(), func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		principal, ok := authz.ProductPrincipal(c)
+		if !ok || !principal.HasPermission("product:use") || principal.Access.ProductID == "" || principal.Access.InstanceID == "" {
+			c.Status(http.StatusForbidden)
+			return
+		}
+		catalog, err := readTechnicalCatalog(c.Request.Context(), adapter, principal.Access.ProductID)
+		if err != nil || catalog.ProductID != principal.Access.ProductID || catalog.InstanceID != principal.Access.InstanceID {
+			c.Status(http.StatusServiceUnavailable)
+			return
+		}
+		mode, pins := adapter.ChatAdmissionPolicy()
+		c.JSON(http.StatusOK, gin.H{"product_id": catalog.ProductID, "instance_id": catalog.InstanceID, "admission_mode": mode, "models": projectChatCatalog(catalog, mode, pins)})
+	})
+
 	engine.GET("/internal/v1/model-catalog", gin.WrapH(platformbilling.CatalogHandler(config, func(ctx context.Context) (platformbilling.TechnicalCatalog, error) {
 		return readTechnicalCatalog(ctx, adapter, config.ProductID)
 	})))

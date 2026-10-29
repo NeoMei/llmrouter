@@ -380,65 +380,75 @@ function ScopedApiKeysPanel(props: PanelProps) {
               </tr>
             </thead>
             <tbody>
-              {keys.data?.map((key) => (
-                <tr key={key.id} className='border-t'>
-                  <td className='p-2'>{key.name}</td>
-                  <td>
-                    {t(
-                      key.revoked_at
-                        ? 'Revoked'
-                        : key.expires_at &&
-                            Date.parse(key.expires_at) <= Date.now()
-                          ? 'Expired'
-                          : 'Active'
-                    )}
-                  </td>
-                  <td className='max-w-56 p-2 break-words'>
-                    {key.models.join(', ')}
-                    <details>
-                      <summary>
-                        {t('Granted capabilities (fixed at creation)')}
-                      </summary>
-                      {key.operations ? (
-                        Object.entries(key.operations).map(
-                          ([model, operations]) => (
-                            <p key={model}>
-                              {model}: {operations.join(', ') || '—'}
-                            </p>
-                          )
-                        )
-                      ) : (
-                        <p>
-                          {t('Legacy keys retain their original permissions.')}
-                        </p>
+              {keys.data
+                ?.filter(
+                  (key) =>
+                    (finance || key.actor_id === props.session.user?.id) &&
+                    key.account_id === props.account.id &&
+                    key.origin_product_id === props.config.product_id &&
+                    key.instance_id === (props.config.instance_id ?? 'default')
+                )
+                .map((key) => (
+                  <tr key={key.id} className='border-t'>
+                    <td className='p-2'>{key.name}</td>
+                    <td>
+                      {t(
+                        key.revoked_at
+                          ? 'Revoked'
+                          : key.expires_at &&
+                              Date.parse(key.expires_at) <= Date.now()
+                            ? 'Expired'
+                            : 'Active'
                       )}
-                    </details>
-                  </td>
-                  <td>{exactAmount(key.used, key.asset)}</td>
-                  <td>{exactAmount(key.held, key.asset)}</td>
-                  <td>
-                    {key.max_total === ''
-                      ? t('Unlimited')
-                      : exactAmount(key.max_total, key.asset)}
-                  </td>
-                  <td>
-                    {key.expires_at
-                      ? new Date(key.expires_at).toLocaleString()
-                      : t('Never')}
-                  </td>
-                  <td>
-                    {!key.revoked_at ? (
-                      <Button
-                        variant='outline'
-                        disabled={busy}
-                        onClick={() => void revoke(key.id)}
-                      >
-                        {t('Revoke')}
-                      </Button>
-                    ) : null}
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td className='max-w-56 p-2 break-words'>
+                      {key.models.join(', ')}
+                      <details>
+                        <summary>
+                          {t('Reported capability restrictions')}
+                        </summary>
+                        {key.operations ? (
+                          Object.entries(key.operations).map(
+                            ([model, operations]) => (
+                              <p key={model}>
+                                {model}: {operations.join(', ') || '—'}
+                              </p>
+                            )
+                          )
+                        ) : (
+                          <p>
+                            {t(
+                              'Capabilities are checked against current published rates when the key is used.'
+                            )}
+                          </p>
+                        )}
+                      </details>
+                    </td>
+                    <td>{exactAmount(key.used, key.asset)}</td>
+                    <td>{exactAmount(key.held, key.asset)}</td>
+                    <td>
+                      {key.max_total === ''
+                        ? t('Unlimited')
+                        : exactAmount(key.max_total, key.asset)}
+                    </td>
+                    <td>
+                      {key.expires_at
+                        ? new Date(key.expires_at).toLocaleString()
+                        : t('Never')}
+                    </td>
+                    <td>
+                      {!key.revoked_at ? (
+                        <Button
+                          variant='outline'
+                          disabled={busy}
+                          onClick={() => void revoke(key.id)}
+                        >
+                          {t('Revoke')}
+                        </Button>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))}
             </tbody>
           </table>
         </div>

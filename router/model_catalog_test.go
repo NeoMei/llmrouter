@@ -65,7 +65,9 @@ func TestCatalogRoutesPreserveKeyScopeAndNeverCallBilling(t *testing.T) {
 	}))
 	request := func(path, token string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest("GET", path, nil)
-		r.Header.Set("Authorization", "Bearer "+token)
+		if token != "" {
+			r.Header.Set("Authorization", "Bearer "+token)
+		}
 		w := httptest.NewRecorder()
 		engine.ServeHTTP(w, r)
 		return w
@@ -82,6 +84,7 @@ func TestCatalogRoutesPreserveKeyScopeAndNeverCallBilling(t *testing.T) {
 	require.Equal(t, 200, w.Code, w.Body.String())
 	assert.Contains(t, w.Body.String(), "hidden")
 	assert.NotContains(t, w.Body.String(), "supplier-secret")
+	assert.Equal(t, http.StatusUnauthorized, request("/api/unihub/chat-models", "").Code)
 	assert.Equal(t, 2, verifies)
 	var calls int64
 	require.NoError(t, db.Model(&platformbilling.Call{}).Count(&calls).Error)
@@ -204,4 +207,18 @@ func TestCatalogNativeVisionUsesExactCertifiedProducer(t *testing.T) {
 			assert.Equal(t, "certified_media_reservation_unavailable", m.Operations[0].DisabledReason)
 		}
 	}
+}
+
+func TestChatCatalogProjectionRequiresAvailableChatAndAssetPins(t *testing.T) {
+	catalog := platformbilling.TechnicalCatalog{ProductID: "llmrouter", InstanceID: "default", Models: []platformbilling.CatalogModel{
+		{ID: "chat", Operations: []platformbilling.CatalogOperation{{ID: "chat.completions.create", Available: true, Policy: "provider_reported_v1", RateIDs: map[string]string{"CNY/6": "cash-rate"}}}},
+		{ID: "disabled", Operations: []platformbilling.CatalogOperation{{ID: "chat.completions.create", Available: false, RateIDs: map[string]string{"CNY/6": "rate"}}}},
+		{ID: "rerank", Operations: []platformbilling.CatalogOperation{{ID: "rerank.create", Available: true, RateIDs: map[string]string{"CNY/6": "rate"}}}},
+		{ID: "unpinned", Operations: []platformbilling.CatalogOperation{{ID: "chat.completions.create", Available: true}}},
+	}}
+	result := projectChatCatalog(catalog, "metered_v2", map[string]map[string]string{"CNY/6": {"chat": "cash-rate"}})
+	require.Len(t, result, 2)
+	assert.Equal(t, "chat", result[0].ID)
+	assert.Equal(t, "provider_reported_v1", result[0].Policy)
+	assert.Equal(t, map[string]string{"CNY/6": "cash-rate"}, result[0].RateIDs)
 }

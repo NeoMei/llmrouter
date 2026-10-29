@@ -698,3 +698,35 @@ func (a *Adapter) Receipt(ctx context.Context, credential, task, id string) (Rec
 	}
 	return Receipt{CallID: row.CallID, Status: row.Status, Charged: row.Charged, Asset: asset}, nil
 }
+
+// ChatAdmissionPolicy describes the billing branch used by Admit and its
+// configured per-asset rate pins. It never includes credentials or prices.
+func (a *Adapter) ChatAdmissionPolicy() (string, map[string]map[string]string) {
+	pins := map[string]map[string]string{}
+	mode := "legacy"
+	if len(a.config.OperationRateIDs["chat"]) > 0 {
+		mode = "metered_v2"
+		for asset, models := range a.config.OperationRateIDs["chat"] {
+			pins[asset] = map[string]string{}
+			for model, id := range models {
+				pins[asset][model] = id
+			}
+		}
+		return mode, pins
+	}
+	pins["CREDIT/6"] = map[string]string{}
+	for model, id := range a.config.RateIDs {
+		pins["CREDIT/6"][model] = id
+	}
+	for asset, models := range a.config.AssetRateIDs {
+		if pins[asset] == nil {
+			pins[asset] = map[string]string{}
+		}
+		for model, id := range models {
+			if id != "" {
+				pins[asset][model] = id
+			}
+		}
+	}
+	return mode, pins
+}

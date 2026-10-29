@@ -34,7 +34,8 @@ import { TeamPanel } from './account-panel'
 import { ApiKeysPanel } from './api-keys-panel'
 import { AuthPanel } from './auth-panel'
 import { BillingPanel } from './billing-panel'
-import type { User, Account } from './sdk'
+import { ProductOverview } from './product-overview'
+import { UniHubClient, type User, type Account } from './sdk'
 import {
   createProductSession,
   restoreProductSession,
@@ -47,7 +48,10 @@ import { markProductSignedOut, startProductLogin } from './sso'
 import { TaskPanel } from './task-panel'
 import { UsagePanel } from './usage-panel'
 
-export function ProductShell(props: { config: ProductConfig; page?: 'keys' }) {
+export function ProductShell(props: {
+  config: ProductConfig
+  page?: 'keys' | 'wallet' | 'overview' | 'usage'
+}) {
   const { t } = useTranslation()
   const [session] = useState<ProductSession>(
     () => getActiveProductSession() ?? createProductSession(props.config)
@@ -234,6 +238,31 @@ export function ProductShell(props: { config: ProductConfig; page?: 'keys' }) {
                 account={account}
                 config={props.config}
               />
+            ) : props.page === 'overview' ? (
+              <>
+                <ProductOverview
+                  session={session}
+                  account={account}
+                  config={props.config}
+                />
+                <UsagePanel
+                  session={session}
+                  account={account}
+                  config={props.config}
+                />
+              </>
+            ) : props.page === 'usage' ? (
+              <UsagePanel
+                session={session}
+                account={account}
+                config={props.config}
+              />
+            ) : props.page === 'wallet' ? (
+              <BillingPanel
+                session={session}
+                account={account}
+                config={props.config}
+              />
             ) : (
               <>
                 <TeamPanel
@@ -270,10 +299,75 @@ export function ProductShell(props: { config: ProductConfig; page?: 'keys' }) {
     </QueryClientProvider>
   )
 }
+
+/** Product-scoped views embedded inside the existing authenticated console. */
+export function ProductConsoleView(props: {
+  page: 'keys' | 'wallet' | 'overview' | 'usage'
+}) {
+  const { t } = useTranslation()
+  const brokerSession = useAuthStore(
+    (state) => state.auth.session?.login_method === 'product_broker'
+  )
+  const config = useQuery({
+    queryKey: ['unihub-public-config'],
+    queryFn: async () => {
+      const response = await fetch('/api/unihub/config', {
+        credentials: 'omit',
+      })
+      if (!response.ok) throw new Error('UniHub configuration unavailable')
+      const value = (await response.json()) as ProductConfig
+      if (value.enabled) {
+        new UniHubClient({
+          baseUrl: value.public_origin,
+          clientId: value.client_id,
+          redirectUri: value.redirect_uri,
+        })
+        if (!Array.isArray(value.models)) {
+          throw new Error('UniHub configuration unavailable')
+        }
+      }
+      return value
+    },
+    retry: false,
+  })
+  if (config.isPending) return <p>{t('Loading')}</p>
+  if (config.error) return <p role='alert'>{message(config.error)}</p>
+  if (
+    brokerSession ||
+    (!config.data?.enabled && config.data?.browser_sso_enabled)
+  ) {
+    return (
+      <p role='alert'>
+        {t(
+          'UniHub account access is unavailable for this browser session. Contact the administrator.'
+        )}
+      </p>
+    )
+  }
+  if (!config.data?.enabled) {
+    return (
+      <p role='alert'>
+        {t('UniHub product integration is disabled by this deployment.')}
+      </p>
+    )
+  }
+  return (
+    <>
+      {props.page === 'keys' ? <h1>{t('API Keys')}</h1> : null}
+      {props.page === 'wallet' ? <h1>{t('Wallet')}</h1> : null}
+      {props.page === 'usage' ? <h1>{t('Common Logs')}</h1> : null}
+      <ProductShell config={config.data} page={props.page} />
+    </>
+  )
+}
+
 export function UniHub() {
   const { t } = useTranslation()
   const projected = useAuthStore(
     (state) => state.auth.user?.identity_source === 'unihub'
+  )
+  const brokerSession = useAuthStore(
+    (state) => state.auth.session?.login_method === 'product_broker'
   )
   const config = useQuery({
     queryKey: ['unihub-public-config'],
@@ -302,9 +396,24 @@ export function UniHub() {
       </header>
       {config.isPending ? <p>{t('Loading')}</p> : null}
       {config.error ? <p role='alert'>{message(config.error)}</p> : null}
-      {config.data?.enabled ? <ProductShell config={config.data} /> : null}
+      {config.data?.enabled && !brokerSession ? (
+        <ProductShell config={config.data} />
+      ) : null}
+      {config.data?.enabled && brokerSession ? (
+        <p role='alert'>
+          {t(
+            'UniHub account access is unavailable for this browser session. Contact the administrator.'
+          )}
+        </p>
+      ) : null}
       {config.data && !config.data.enabled ? (
-        <p>{t('UniHub product integration is disabled by this deployment.')}</p>
+        <p role='alert'>
+          {config.data.browser_sso_enabled
+            ? t(
+                'UniHub account access is unavailable for this browser session. Contact the administrator.'
+              )
+            : t('UniHub product integration is disabled by this deployment.')}
+        </p>
       ) : null}
     </main>
   )

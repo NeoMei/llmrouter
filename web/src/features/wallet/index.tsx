@@ -21,9 +21,12 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
+import { Button } from '@/components/ui/button'
+import { ProductConsoleView } from '@/features/unihub'
 import { useStatus } from '@/hooks/use-status'
 import { useSystemConfig } from '@/hooks/use-system-config'
 import { getSelf } from '@/lib/api'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { AffiliateRewardsCard } from './components/affiliate-rewards-card'
 import { CnyTopupCard } from './components/cny-topup-card'
@@ -64,6 +67,34 @@ interface WalletProps {
 }
 
 export function Wallet(props: WalletProps) {
+  const { t } = useTranslation()
+  const central = useAuthStore(
+    (state) => state.auth.user?.identity_source === 'unihub'
+  )
+  const [native, setNative] = useState(false)
+  if (central && !native) {
+    return (
+      <>
+        <Button variant='outline' onClick={() => setNative(true)}>
+          {t('Local')} · {t('Wallet')}
+        </Button>
+        <ProductConsoleView page='wallet' />
+      </>
+    )
+  }
+  return (
+    <>
+      {central ? (
+        <Button variant='outline' onClick={() => setNative(false)}>
+          {t('UniHub account')}
+        </Button>
+      ) : null}
+      <NativeWallet {...props} />
+    </>
+  )
+}
+
+function NativeWallet(props: WalletProps) {
   const { t } = useTranslation()
   const [user, setUser] = useState<UserWalletData | null>(null)
   const [userLoading, setUserLoading] = useState(true)

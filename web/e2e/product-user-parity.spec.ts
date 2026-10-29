@@ -72,6 +72,7 @@ async function fixture(
         native_access: false,
         public_origin: 'https://hub.invalid',
         client_id: 'client',
+        redirect_uri: 'http://127.0.0.1:58006/unihub',
         product_id: 'llmrouter',
         models: ['test-model'],
       }
@@ -88,6 +89,8 @@ async function fixture(
         permissions: user.permissions,
         csrf_token: 'csrf',
       }
+    } else if (path === '/api/unihub/bff/v1/accounts') {
+      body = []
     } else if (path === '/api/status') {
       body = {
         success: true,
@@ -167,6 +170,9 @@ for (const source of ['native', 'unihub'] as const) {
   }) => {
     const { requests, writes } = await fixture(page, source)
     await page.goto('/keys')
+    if (source === 'unihub') {
+      await page.getByRole('button', { name: 'Local · API Keys' }).click()
+    }
     await expect(
       page.getByRole('heading', { name: 'API Keys', exact: true })
     ).toBeVisible()
@@ -215,6 +221,9 @@ for (const source of ['native', 'unihub'] as const) {
   }) => {
     await fixture(page, source)
     await page.goto('/dashboard/overview')
+    if (source === 'unihub') {
+      await page.getByRole('button', { name: 'Local · Overview' }).click()
+    }
     await expect(
       page.getByText('Monitor balance, usage, and request volume', {
         exact: true,
@@ -227,6 +236,9 @@ for (const source of ['native', 'unihub'] as const) {
       page.locator('[data-slot="sidebar"] a[href="/profile"]')
     ).toBeVisible()
     await page.goto('/wallet')
+    if (source === 'unihub') {
+      await page.getByRole('button', { name: 'Local · Wallet' }).click()
+    }
     await expect(
       page.getByRole('heading', { name: 'Wallet', exact: true })
     ).toBeVisible()
@@ -312,6 +324,9 @@ for (const source of ['native', 'unihub'] as const) {
       })
     )
     await page.goto('/usage-logs/common')
+    if (source === 'unihub') {
+      await page.getByRole('button', { name: 'Local · Common Logs' }).click()
+    }
     await expect(
       page.getByText('Native usage and receipts', { exact: true })
     ).toBeVisible()
@@ -413,6 +428,9 @@ for (const source of ['native', 'unihub'] as const) {
       })
     })
     await page.goto('/wallet')
+    if (source === 'unihub') {
+      await page.getByRole('button', { name: 'Local · Wallet' }).click()
+    }
     await page
       .getByRole('button', { name: 'Subscribe Now', exact: true })
       .click()
@@ -425,6 +443,9 @@ for (const source of ['native', 'unihub'] as const) {
     ).toBeEnabled()
     expect(keys[0]).not.toBe('')
     await page.reload()
+    if (source === 'unihub') {
+      await page.getByRole('button', { name: 'Local · Wallet' }).click()
+    }
     await page
       .getByRole('button', { name: 'Subscribe Now', exact: true })
       .click()

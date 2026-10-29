@@ -23,6 +23,7 @@ import { UniHubClient, UniHubError, type User, type Account } from './sdk'
 
 export interface ProductConfig {
   native_access?: boolean
+  browser_sso_enabled?: boolean
   enabled: boolean
   public_origin: string
   client_id: string

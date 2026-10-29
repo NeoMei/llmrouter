@@ -28,7 +28,7 @@ var uniHubBFFRoutes = []struct {
 }{
 	{"GET", regexp.MustCompile(`^/v1/(me|accounts|capabilities|invitations|products|catalog|billing-presets)$`)},
 	{"POST", regexp.MustCompile(`^/v1/accounts$`)},
-	{"GET", regexp.MustCompile(`^/v1/products/[A-Za-z0-9_-]+/billing-profile$`)},
+	{"GET", regexp.MustCompile(`^/v1/products/[A-Za-z0-9_-]+/(billing-profile|model-consistency)$`)},
 	{"POST", regexp.MustCompile(`^/v1/invitations/[A-Za-z0-9_-]+/accept$`)},
 	{"GET", regexp.MustCompile(`^/v1/accounts/[A-Za-z0-9_-]+/(members|invitations|subscriptions|wallets|recharges|operations|orders|settings|resources|calls|usage/summary|model-pool/calls|model-pool/usage/summary)$`)},
 	{"GET", regexp.MustCompile(`^/v1/accounts/[A-Za-z0-9_-]+/(api-keys|usage-budget)$`)},

@@ -108,40 +108,44 @@ test('budget writes retain asset selection and compare-and-set version without f
   }
 })
 
-test('explicit operation selection is sent unchanged and never filled from a newer catalog', async () => {
-  let sent: unknown
+test('key list uses the real central DTO without operation grants', async () => {
   const client = new UniHubClient({
     baseUrl: 'https://hub.test',
     clientId: 'sw',
     redirectUri: 'https://sw.test/callback',
-    fetch: async (_url, init) => {
-      sent = JSON.parse(String(init?.body))
-      return new Response(
-        JSON.stringify({
-          id: 'fixed',
-          operations: { model: ['embeddings.create', 'rerank.create'] },
-        })
-      )
-    },
+    fetch: async () =>
+      new Response(
+        JSON.stringify([
+          {
+            id: 'key',
+            credential_kind: 'api_key',
+            name: 'name',
+            actor_id: 'actor',
+            account_id: 'payer',
+            origin_product_id: 'superwagie',
+            instance_id: 'default',
+            models: ['chat'],
+            funding_mode: 'prepaid_cash',
+            asset: 'CNY/6',
+            billing_profile_version: 1,
+            expires_at: null,
+            created_at: '2026-01-01T00:00:00Z',
+            revoked_at: null,
+            max_total: '',
+            max_per_call: '',
+            held: '0',
+            used: '0',
+            remaining: null,
+          },
+        ])
+      ),
   })
-  const access = new ManagedAccess(
+  const keys = await new ManagedAccess(
     client,
     'payer',
     'superwagie',
-    'server-instance'
-  )
-  const key = await access.createKey({
-    name: 'knowledge',
-    models: ['model'],
-    operations: { model: ['embeddings.create', 'rerank.create'] },
-    funding_mode: 'credits',
-    max_total: '',
-    max_per_call: '',
-  })
-  assert.deepEqual((sent as { operations: unknown }).operations, {
-    model: ['embeddings.create', 'rerank.create'],
-  })
-  assert.deepEqual(key.operations, {
-    model: ['embeddings.create', 'rerank.create'],
-  })
+    'default'
+  ).keys()
+  assert.deepEqual(keys[0].models, ['chat'])
+  assert.equal('operations' in keys[0], false)
 })

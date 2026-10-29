@@ -42,7 +42,6 @@ export interface ManagedKey {
 export interface KeyRequest {
   name: string
   models: string[]
-  operations?: Record<string, string[]>
   funding_mode: FundingMode
   expires_at?: string
   max_total: string

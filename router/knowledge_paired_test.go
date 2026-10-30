@@ -32,6 +32,7 @@ import (
 
 type pairedFixture struct {
 	product                                                                                                         string
+	embeddingUsage                                                                                                  string
 	accessIssuer, accessInstance, accessSubject                                                                     string
 	t                                                                                                               *testing.T
 	db                                                                                                              *gorm.DB
@@ -251,7 +252,11 @@ func newPairedFixture(t *testing.T, embedding bool) *pairedFixture {
 		w.Header().Set("Content-Type", "application/json")
 		if embedding {
 			vector := "[" + strings.TrimSuffix(strings.Repeat("0.1,", 1024), ",") + "]"
-			fmt.Fprintf(w, `{"object":"list","model":"text-embedding-v4","data":[{"index":0,"embedding":%s}],"usage":{"total_tokens":3}}`, vector)
+			usage := f.embeddingUsage
+			if usage == "" {
+				usage = `{"total_tokens":3}`
+			}
+			fmt.Fprintf(w, `{"object":"list","model":"text-embedding-v4","data":[{"index":0,"embedding":%s}],"usage":%s}`, vector, usage)
 		} else {
 			io.WriteString(w, `{"output":{"results":[{"index":0,"relevance_score":0.9}]},"usage":{"total_tokens":3}}`)
 		}
@@ -1016,6 +1021,51 @@ func TestPairedKnowledgePublicIssuerPreservesActivatedPins(t *testing.T) {
 			assert.Zero(t, f.reserves)
 			assert.Zero(t, f.settles)
 			assert.Zero(t, f.verifies)
+		})
+	}
+}
+
+func TestPairedKnowledgeAliCompatibleEmbeddingUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name, usage string
+		valid       bool
+	}{
+		{"total only", `{"total_tokens":3}`, true},
+		{"input alias", `{"prompt_tokens":3,"total_tokens":3}`, true},
+		{"zero completion", `{"prompt_tokens":3,"total_tokens":3,"completion_tokens":0}`, true},
+		{"contradictory input", `{"prompt_tokens":2,"total_tokens":3}`, false},
+		{"nonzero completion", `{"prompt_tokens":3,"total_tokens":3,"completion_tokens":1}`, false},
+		{"unknown counter", `{"prompt_tokens":3,"total_tokens":3,"other_tokens":0}`, false},
+		{"missing total", `{"prompt_tokens":3}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newPairedFixture(t, true)
+			f.embeddingUsage = tc.usage
+			w := f.request(f.path, f.body, false, nil)
+			var call platformbilling.Call
+			require.NoError(t, f.db.First(&call, "call_id = ?", "call").Error)
+			require.Equal(t, 1, f.sends)
+			require.Equal(t, 1, f.reserves)
+			if tc.valid {
+				require.Equal(t, 200, w.Code, w.Body.String())
+				assert.Equal(t, 1, f.settles)
+				assert.Equal(t, "SETTLED", call.Status)
+				assert.Contains(t, call.Evidence, `"value":"3"`)
+				read := f.request("/platform/v1/knowledge/results/call", "", false, func(r *http.Request) { r.Header.Set("Authorization", "Bearer uh_model_reader") })
+				assert.Equal(t, 200, read.Code, read.Body.String())
+			} else {
+				assert.Equal(t, 502, w.Code, w.Body.String())
+				assert.Zero(t, f.settles)
+				assert.Equal(t, "UNKNOWN", call.Status)
+				assert.Empty(t, call.Evidence)
+				assert.Empty(t, call.Intent)
+				assert.Contains(t, w.Body.String(), "knowledge_result_embedding_usage_")
+				assert.NotContains(t, w.Body.String(), tc.usage)
+			}
+			replay := f.request(f.path, f.body, false, nil)
+			assert.Equal(t, 409, replay.Code)
+			assert.Equal(t, 1, f.sends)
+			assert.Equal(t, 1, f.reserves)
 		})
 	}
 }

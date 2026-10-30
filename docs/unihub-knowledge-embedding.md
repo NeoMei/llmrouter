@@ -52,3 +52,24 @@ It does not change an existing knowledge pin's durable policy/route/target/
 channel/ability/group/principal fingerprint or mint replacement pins. Existing
 activated pins must be verified through the actual resolver after deployment;
 their original source-bound activation receipts remain historical evidence.
+
+
+### Compatible embedding usage and safe diagnostics
+
+Certified Ali embedding usage charges the positive integer `total_tokens` once.
+An optional `prompt_tokens` must be the same canonical integer; an optional
+`completion_tokens` must be the canonical integer zero. Unknown counters,
+duplicates, contradictory aliases, nonzero completions and malformed numbers
+remain invalid. This accepts compatible input aliases without estimating tokens
+or summing the same input twice. The [Alibaba Cloud compatible response schema](https://www.alibabacloud.com/help/tc/model-studio/text-embedding-synchronous-api)
+lists the input and total counters; the [mainland schema](https://help.aliyun.com/zh/model-studio/text-embedding-synchronous-api)
+also documents the total-only variant. Documentation variants do not establish
+which response a historical request actually returned.
+
+Knowledge response failures expose only fixed `knowledge_result_*` stages for
+request/attempt/policy binding, JSON/shape/counter validation, persistence and
+settlement/readback. Supplier bodies, credentials and database error text are
+excluded. A rejected response retains its existing unresolved call and held
+reservation. No retry, release or historical-result recovery follows from a
+parser change; without saved validated response evidence, an existing UNKNOWN
+call remains unresolved.

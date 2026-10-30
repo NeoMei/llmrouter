@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -141,4 +142,22 @@ func TestKnowledgeResponseRejectsInvalidAndIncomplete(t *testing.T) {
 	assert.Error(t, err)
 	_, err = validateKnowledgeResponse(context.Background(), s, 1, upstream, key, &http.Response{StatusCode: 502, Body: io.NopCloser(strings.NewReader("{}"))})
 	assert.Error(t, err)
+}
+
+func TestKnowledgeResultDiagnosticsRedactCause(t *testing.T) {
+	secret := "provider-body-and-secret-key"
+	cause := fmt.Errorf("%s: %w", secret, ErrPending)
+	classified := classifyKnowledgeResultError("response_persistence", cause)
+	require.ErrorIs(t, classified, ErrPending)
+	assert.Equal(t, "knowledge_result_response_persistence", classified.Error())
+	assert.NotContains(t, classified.Error(), secret)
+	nested := classifyKnowledgeResultError("response_validation", fmt.Errorf("%s: %w", secret, classified))
+	assert.Equal(t, classified, nested)
+	assert.NotContains(t, nested.Error(), secret)
+	assert.Nil(t, classifyKnowledgeResultError("response_validation", nil))
+	s, key, upstream := responseFixture(t, "embedding")
+	_, err := validateKnowledgeResponse(context.Background(), s, 1, upstream, key, &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(secret))})
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Equal(t, "knowledge_result_response_json", err.Error())
+	assert.NotContains(t, err.Error(), secret)
 }

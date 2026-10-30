@@ -36,7 +36,9 @@ type knowledgeResponse struct {
 // validateKnowledgeResponse consumes a bounded raw provider response for the
 // active, already-dispatched session. It performs no network retry, write,
 // billing or release, and returns no partial result on malformed responses.
-func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, upstream, key string, response *http.Response) (knowledgeResponse, error) {
+func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, upstream, key string, response *http.Response) (_ knowledgeResponse, err error) {
+	stage := "response_admission"
+	defer func() { err = classifyKnowledgeResultError(stage, err) }()
 	if s == nil || s.adapter == nil || s.adapter.db == nil || s.attempt.ID == 0 || response == nil || response.Body == nil {
 		return knowledgeResponse{}, ErrInvalid
 	}
@@ -47,17 +49,21 @@ func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, ups
 	if response.StatusCode != http.StatusOK || s.attempt.ChannelID != channel || s.attempt.Status != "DISPATCHED" {
 		return knowledgeResponse{}, ErrInvalid
 	}
+	stage = "request_binding"
 	if _, err := s.KnowledgeBody(channel, upstream, key); err != nil {
 		return knowledgeResponse{}, ErrInvalid
 	}
+	stage = "response_read"
 	raw, err := io.ReadAll(io.LimitReader(response.Body, knowledgeResultMaxBytes+1))
 	if err != nil || len(raw) == 0 || len(raw) > knowledgeResultMaxBytes || !utf8.Valid(raw) || ctx.Err() != nil {
 		return knowledgeResponse{}, ErrInvalid
 	}
+	stage = "response_json"
 	var wire map[string]json.RawMessage
 	if common.UnmarshalUnique(raw, &wire) != nil || wire == nil || len(wire["error"]) != 0 {
 		return knowledgeResponse{}, ErrInvalid
 	}
+	stage = "attempt_binding"
 	var row Call
 	var verifiedAttempt Attempt
 	err = s.adapter.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -75,9 +81,11 @@ func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, ups
 	if err != nil {
 		return knowledgeResponse{}, err
 	}
+	stage = "call_binding"
 	if row.Status != "UNKNOWN" || row.EvidenceConflict || !sameKnowledgeCallBinding(row, s.call) {
 		return knowledgeResponse{}, ErrPending
 	}
+	stage = "policy_binding"
 	frozen, err := s.adapter.knowledgeSnapshot(row)
 	var rate Rate
 	if err != nil || !frozen.Policy.valid(s.adapter.config, row.Model, row.WireOperation) || common.UnmarshalUnique([]byte(row.RateSnapshot), &rate) != nil || rate.Metered == nil {
@@ -92,6 +100,7 @@ func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, ups
 		return knowledgeResponse{}, ErrInvalid
 	}
 	result := knowledgeResponse{callID: row.CallID, attemptID: s.attempt.ID, requestDigest: row.Digest, wire: s.WireOperation()}
+	stage = "response_shape"
 	switch row.WireOperation {
 	case "embeddings.create":
 		var request map[string]any
@@ -134,6 +143,7 @@ func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, ups
 		if err != nil || len(result.body) > knowledgeResultMaxBytes {
 			return knowledgeResponse{}, ErrInvalid
 		}
+		stage = "embedding_usage_schema"
 		var usageFields map[string]json.RawMessage
 		if common.UnmarshalUnique(wire["usage"], &usageFields) != nil || usageFields == nil {
 			return knowledgeResponse{}, ErrInvalid
@@ -144,6 +154,7 @@ func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, ups
 				return knowledgeResponse{}, ErrInvalid
 			}
 		}
+		stage = "embedding_usage_counters"
 		source := dto.BillingUsageSourceOAIChat
 		if frozen.Policy.Version == "knowledge_ali_text_v1" {
 			source = dto.BillingUsageSourceAliEmbeddingV4
@@ -236,6 +247,7 @@ func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, ups
 	if metering.ValidateUsage(*rate.Metered, result.usage) != nil {
 		return knowledgeResponse{}, ErrInvalid
 	}
+	stage = "usage_reservation_bound"
 	sum := new(big.Int)
 	for _, measurement := range result.usage.Measurements {
 		quantity, ok := new(big.Int).SetString(measurement.Quantity.Value, 10)

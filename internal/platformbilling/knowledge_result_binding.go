@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -22,40 +23,70 @@ import (
 	"gorm.io/gorm"
 )
 
+// knowledgeResultError exposes only a fixed validation stage. The cause stays
+// available to errors.Is without leaking SQL, credentials or supplier content.
+type knowledgeResultError struct {
+	stage string
+	cause error
+}
+
+func (e *knowledgeResultError) Error() string { return "knowledge_result_" + e.stage }
+func (e *knowledgeResultError) Unwrap() error { return e.cause }
+func classifyKnowledgeResultError(stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var classified *knowledgeResultError
+	if errors.As(err, &classified) {
+		return classified
+	}
+	return &knowledgeResultError{stage: stage, cause: err}
+}
+
 // CaptureKnowledgeResult consumes the exact response from the certified
 // supplier request. It never redispatches and returns only after settlement.
-func (s *Session) CaptureKnowledgeResult(ctx context.Context, channel int, upstream, key string, raw []byte) ([]byte, error) {
+func (s *Session) CaptureKnowledgeResult(ctx context.Context, channel int, upstream, key string, raw []byte) (_ []byte, err error) {
+	stage := "admission"
+	defer func() { err = classifyKnowledgeResultError(stage, err) }()
 	if (!s.AliEmbeddingV4() && !s.AliRerank()) || s.adapter.knowledgeResults == nil || len(raw) == 0 || len(raw) > knowledgeResultMaxBytes {
 		return nil, ErrInvalid
 	}
 	work, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
 	defer cancel()
 	vault := s.adapter.knowledgeResults
+	stage = "response_validation"
 	sealed, err := vault.validateForCapture(work, s, channel, upstream, key, &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(raw))})
 	if err != nil {
 		return nil, err
 	}
+	stage = "response_persistence"
 	if err = vault.captureValidated(work, s, sealed); err != nil {
 		return nil, err
 	}
+	stage = "settlement"
 	if err = s.Finish(work); err != nil {
 		return nil, err
 	}
+	stage = "settlement_state"
 	var settled Call
 	if err = s.adapter.db.WithContext(work).First(&settled, "call_id = ?", s.call.CallID).Error; err != nil || settled.Status != "SETTLED" || settled.EvidenceConflict || !sameKnowledgeCallBinding(settled, s.call) {
 		return nil, ErrPending
 	}
+	stage = "settlement_verification"
 	if err = s.adapter.verifyKnowledgeSettlement(work, settled); err != nil {
 		return nil, err
 	}
+	stage = "result_read"
 	result, err := vault.readSettled(work, s.call.CallID)
 	if err != nil {
 		return nil, err
 	}
+	stage = "result_consistency"
 	var current Call
 	if err = s.adapter.db.WithContext(work).First(&current, "call_id = ?", s.call.CallID).Error; err != nil || current.Status != "SETTLED" || current.EvidenceConflict || !sameKnowledgeCallBinding(current, settled) || current.Evidence != settled.Evidence || current.Intent != settled.Intent || current.Charged != settled.Charged {
 		return nil, ErrPending
 	}
+	stage = "delivery_cancelled"
 	if ctx.Err() != nil {
 		return nil, ErrPending
 	}

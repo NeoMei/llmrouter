@@ -16,6 +16,11 @@ import (
 
 func useUserCacheMiniRedis(t *testing.T) *miniredis.Miniredis {
 	t.Helper()
+	return useUserCacheMiniRedisWithClock(t, time.Now)
+}
+
+func useUserCacheMiniRedisWithClock(t *testing.T, now func() time.Time) *miniredis.Miniredis {
+	t.Helper()
 	server := miniredis.RunT(t)
 	oldRedisEnabled := common.RedisEnabled
 	oldRDB := common.RDB
@@ -23,6 +28,10 @@ func useUserCacheMiniRedis(t *testing.T) *miniredis.Miniredis {
 	common.RedisEnabled = true
 	common.SyncFrequency = 2
 	common.RDB = redis.NewClient(&redis.Options{Addr: server.Addr()})
+	// Miniredis freezes relative TTLs unless explicitly advanced. Honor time
+	// spent outside Redis, including slow password hashing, before each read
+	// or write so expired snapshots behave as they do on a real Redis server.
+	common.RDB.AddHook(&miniRedisElapsedTimeHook{server: server, now: now, last: now()})
 	t.Cleanup(func() {
 		_ = common.RDB.Close()
 		common.RedisEnabled = oldRedisEnabled

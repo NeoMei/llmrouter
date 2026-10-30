@@ -30,3 +30,46 @@ gated by `UNIHUB_KNOWLEDGE_RESULT_READ_ENABLED`, disabled by default, and requir
 an enabled producer and versioned keyring. A task capability alone does not prove a current
 logged-in user or account membership, and central authorization must also address
 the interval between result authorization and a concurrent revocation.
+
+## Certified catalog and identity origins
+
+A valid knowledge certificate supplies the fixed `provider_reported_v1` usage
+policy when no generic operation policy is configured. Its certified body/token
+bounds and rate IDs remain authoritative. An explicitly configured different
+policy is refused; an invalid certificate never enables the operation. Catalog
+availability still requires account authorization before execution.
+
+Index-read authorization compares the central verified product-access issuer
+with `UNIHUB_PRODUCT_PUBLIC_ORIGIN`, the existing public identity origin. Missing
+public-origin configuration retains the single-origin `UNIHUB_ORIGIN` fallback.
+The separate billing/API `UNIHUB_ORIGIN` may retain a private port and is still
+used for service requests. No request claim can select the expected issuer, and
+an arbitrary issuer port is never removed to force a match. The public issuer
+is validated as an HTTPS origin (HTTP is limited to loopback fixtures).
+
+This identity field changes the operator approval configuration fingerprint.
+It does not change an existing knowledge pin's durable policy/route/target/
+channel/ability/group/principal fingerprint or mint replacement pins. Existing
+activated pins must be verified through the actual resolver after deployment;
+their original source-bound activation receipts remain historical evidence.
+
+
+### Compatible embedding usage and safe diagnostics
+
+Certified Ali embedding usage charges the positive integer `total_tokens` once.
+An optional `prompt_tokens` must be the same canonical integer; an optional
+`completion_tokens` must be the canonical integer zero. Unknown counters,
+duplicates, contradictory aliases, nonzero completions and malformed numbers
+remain invalid. This accepts compatible input aliases without estimating tokens
+or summing the same input twice. The [Alibaba Cloud compatible response schema](https://www.alibabacloud.com/help/tc/model-studio/text-embedding-synchronous-api)
+lists the input and total counters; the [mainland schema](https://help.aliyun.com/zh/model-studio/text-embedding-synchronous-api)
+also documents the total-only variant. Documentation variants do not establish
+which response a historical request actually returned.
+
+Knowledge response failures expose only fixed `knowledge_result_*` stages for
+request/attempt/policy binding, JSON/shape/counter validation, persistence and
+settlement/readback. Supplier bodies, credentials and database error text are
+excluded. A rejected response retains its existing unresolved call and held
+reservation. No retry, release or historical-result recovery follows from a
+parser change; without saved validated response evidence, an existing UNKNOWN
+call remains unresolved.

@@ -336,6 +336,10 @@ func (a *Adapter) ProjectCatalog(product string, models []CatalogSourceModel) (T
 			knowledgeBoundUnavailable := false
 			if knowledge {
 				p := a.config.KnowledgePolicies[id][m.ID]
+				if op.Policy == "" && p.valid(a.config, m.ID, id) {
+					op.Policy = "provider_reported_v1"
+					op.Limits.Policy = op.Policy
+				}
 				op.Limits.MaxBodyBytes = a.config.MaxBodyBytes
 				quantity := int64(p.HardInputTokens) + int64(p.VisualTokens)
 				knowledgeBoundUnavailable = quantity < 1 || quantity > 86400

@@ -142,7 +142,7 @@ func RerankHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		}
 		result, err := info.PlatformBilling.CaptureKnowledgeResult(c.Request.Context(), info.ChannelId, info.ResolvedModelNameOrOrigin(), info.ApiKey, raw)
 		if err != nil {
-			return types.NewErrorWithStatusCode(fmt.Errorf("rerank result pending verification or settlement"), types.ErrorCodeBadResponseBody, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+			return types.NewErrorWithStatusCode(fmt.Errorf("rerank result pending verification or settlement: %s", err), types.ErrorCodeBadResponseBody, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
 		}
 		c.Header("Content-Type", "application/json")
 		c.Header("Cache-Control", "no-store")

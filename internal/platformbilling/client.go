@@ -131,6 +131,9 @@ type Config struct {
 	RateIDs                         map[string]string
 	AssetRateIDs                    map[string]map[string]string
 	Timeout                         time.Duration
+
+	// IdentityIssuer is the trusted public identity origin, independent of the private billing transport.
+	IdentityIssuer string
 }
 type client struct {
 	origin, token string
@@ -139,7 +142,19 @@ type client struct {
 type remoteError struct{ status int }
 
 func (e *remoteError) Error() string { return fmt.Sprintf("UniHub service returned HTTP %d", e.status) }
+func validIdentityIssuer(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return false
+	}
+	ip := net.ParseIP(u.Hostname())
+	return u.Scheme == "https" || (u.Scheme == "http" && (u.Hostname() == "localhost" || (ip != nil && ip.IsLoopback())))
+}
+
 func newClient(c Config) (*client, error) {
+	if c.IdentityIssuer != "" && !validIdentityIssuer(c.IdentityIssuer) {
+		return nil, ErrInvalid
+	}
 	u, err := url.Parse(c.Origin)
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") || len(c.ServiceToken) < 32 {
 		return nil, ErrInvalid

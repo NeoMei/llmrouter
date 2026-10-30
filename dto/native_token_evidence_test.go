@@ -90,6 +90,17 @@ func TestAliEmbeddingV4UsesActualTotalTokensOnly(t *testing.T) {
 	price := nativeTokenTestPrice("embedding", "input")
 	for _, tc := range []struct{ name, raw, state, quantity string }{
 		{"documented usage", `{"usage":{"total_tokens":23}}`, "confirmed", "23"},
+		{"compatible input alias", `{"usage":{"prompt_tokens":23,"total_tokens":23}}`, "confirmed", "23"},
+		{"compatible zero completion", `{"usage":{"prompt_tokens":23,"total_tokens":23,"completion_tokens":0}}`, "confirmed", "23"},
+		{"zero completion without alias", `{"usage":{"total_tokens":23,"completion_tokens":0}}`, "confirmed", "23"},
+		{"contradictory input", `{"usage":{"prompt_tokens":22,"total_tokens":23}}`, "invalid", ""},
+		{"malformed input alias", `{"usage":{"prompt_tokens":"23","total_tokens":23}}`, "invalid", ""},
+		{"null input alias", `{"usage":{"prompt_tokens":null,"total_tokens":23}}`, "invalid", ""},
+		{"exponent input alias", `{"usage":{"prompt_tokens":2.3e1,"total_tokens":23}}`, "invalid", ""},
+		{"noncanonical completion", `{"usage":{"total_tokens":23,"completion_tokens":0.0}}`, "invalid", ""},
+		{"negative zero completion", `{"usage":{"total_tokens":23,"completion_tokens":-0}}`, "invalid", ""},
+		{"null completion", `{"usage":{"total_tokens":23,"completion_tokens":null}}`, "invalid", ""},
+		{"duplicate input alias", `{"usage":{"prompt_tokens":23,"prompt_tokens":23,"total_tokens":23}}`, "invalid", ""},
 		{"zero", `{"usage":{"total_tokens":0}}`, "invalid", ""},
 		{"missing", `{"usage":{}}`, "incomplete", ""},
 		{"duplicate", `{"usage":{"total_tokens":1,"total_tokens":2}}`, "invalid", ""},

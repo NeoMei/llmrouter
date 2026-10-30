@@ -19,7 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import axios from 'axios'
 
 import { api, refreshAuthentication, type RefreshOutcome } from '@/lib/api'
-import { isSessionSelectionCleared, readSelectedSession } from '@/lib/auth-selection'
+import {
+  isSessionSelectionCleared,
+  readSelectedSession,
+} from '@/lib/auth-selection'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { getAffiliateCode } from './lib/storage'

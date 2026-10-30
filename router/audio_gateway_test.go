@@ -23,6 +23,7 @@ import (
 	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/metering"
+	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay/channel/nativespeech"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -409,6 +410,7 @@ func newAudioGatewayFixture(t *testing.T, kind, variant, hubOrigin, serviceToken
 	f.engine = gin.New()
 	f.engine.Use(middlewareBodyCleanupForTest())
 	SetPlatformRouter(f.engine, f.adapter)
+	t.Cleanup(perfmetrics.DrainRelaySamples)
 	return f
 }
 func TestAudioGatewayNativeProducerAndJournal(t *testing.T) {

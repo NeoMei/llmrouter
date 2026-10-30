@@ -21,7 +21,10 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
-import { AuthOriginUnavailableError, AuthRefreshUnavailableError } from '@/lib/auth-session'
+import {
+  AuthOriginUnavailableError,
+  AuthRefreshUnavailableError,
+} from '@/lib/auth-session'
 import { cn } from '@/lib/utils'
 
 const FEEDBACK_URL = 'https://github.com/QuantumNous/new-api/issues'
@@ -65,7 +68,9 @@ export function GeneralError({
           <h1 className='text-xl font-semibold'>{t('Request failed')}</h1>
           <p role='alert' className='text-muted-foreground text-center'>
             {error instanceof AuthOriginUnavailableError
-              ? t('Session access is blocked by the server origin configuration. Please contact your administrator, then retry.')
+              ? t(
+                  'Session access is blocked by the server origin configuration. Please contact your administrator, then retry.'
+                )
               : t('Please wait a moment before trying again.')}
           </p>
           <Button

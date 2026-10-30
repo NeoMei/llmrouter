@@ -75,7 +75,11 @@ export function Profile() {
                   onProfileUpdate={refreshProfile}
                 />
                 {realmKnown ? (
-                  <ProfileSecurityCard profile={profile} loading={loading} central={central} />
+                  <ProfileSecurityCard
+                    profile={profile}
+                    loading={loading}
+                    central={central}
+                  />
                 ) : (
                   <p role='alert'>{t('Verification unavailable')}</p>
                 )}
@@ -93,7 +97,9 @@ export function Profile() {
                 )}
                 {canConfigureSidebar && <SidebarModulesCard />}
                 {realmKnown && <PasskeyCard loading={loading} />}
-                {realmKnown && <TwoFACard loading={loading} central={central} />}
+                {realmKnown && (
+                  <TwoFACard loading={loading} central={central} />
+                )}
               </div>
             </div>
           </CardStaggerItem>

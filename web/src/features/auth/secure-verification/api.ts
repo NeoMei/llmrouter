@@ -19,13 +19,13 @@ For commercial licensing, please contact support@quantumnous.com
 import i18next from 'i18next'
 
 import type { ApiResponse } from '@/features/auth/types'
-import { useAuthStore } from '@/stores/auth-store'
 import { api, get2FAStatus } from '@/lib/api'
 import {
   buildAssertionResult,
   prepareCredentialRequestOptions,
   isPasskeySupported as detectPasskeySupport,
 } from '@/lib/passkey'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   beginPasskeyVerification,
@@ -45,7 +45,13 @@ import type {
 export async function checkVerificationMethods(): Promise<VerificationMethods> {
   const realm = useAuthStore.getState().auth.session?.authentication_realm
   if (realm !== 'CENTRAL' && realm !== 'LOCAL_ONLY' && realm !== 'LEGACY') {
-    return { has2FA: false, hasPasskey: false, passkeySupported: false, twoFAUnavailable: true, passkeyUnavailable: true }
+    return {
+      has2FA: false,
+      hasPasskey: false,
+      passkeySupported: false,
+      twoFAUnavailable: true,
+      passkeyUnavailable: true,
+    }
   }
   const central = realm === 'CENTRAL'
   // Central verification uses only its own Passkey; its 2FA belongs to the
@@ -59,7 +65,9 @@ export async function checkVerificationMethods(): Promise<VerificationMethods> {
   const passkeyResponse = passkey.status === 'fulfilled' ? passkey.value : null
   return {
     has2FA: Boolean(twoFAResponse?.success && twoFAResponse.data?.enabled),
-    hasPasskey: Boolean(passkeyResponse?.success && passkeyResponse.data?.enabled),
+    hasPasskey: Boolean(
+      passkeyResponse?.success && passkeyResponse.data?.enabled
+    ),
     passkeySupported: support.status === 'fulfilled' && support.value,
     twoFAUnavailable: !central && (!twoFAResponse || !twoFAResponse.success),
     passkeyUnavailable: !passkeyResponse || !passkeyResponse.success,

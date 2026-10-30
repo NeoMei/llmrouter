@@ -25,7 +25,20 @@ import { checkVerificationMethods } from '../../auth/secure-verification/api'
 
 function sessionRealm(realm: 'CENTRAL' | 'LOCAL_ONLY' | 'LEGACY' | 'UNKNOWN') {
   useAuthStore.setState((state) => ({
-    auth: { ...state.auth, session: { sid: 'sid', current: true, login_method: 'password', ip: '', user_agent: '', created_at: 1, last_active_at: 1, expires_at: 2, authentication_realm: realm } },
+    auth: {
+      ...state.auth,
+      session: {
+        sid: 'sid',
+        current: true,
+        login_method: 'password',
+        ip: '',
+        user_agent: '',
+        created_at: 1,
+        last_active_at: 1,
+        expires_at: 2,
+        authentication_realm: realm,
+      },
+    },
   }))
 }
 
@@ -113,12 +126,17 @@ test('central Passkey remains available without calling local 2FA status', async
   }
 })
 
-
 test('local 2FA lookup failure stays unknown and does not hide Passkey', async () => {
   const previous = api.defaults.adapter
   api.defaults.adapter = async (config) => {
     if (config.url === '/api/user/2fa/status') throw new Error('unavailable')
-    return { data: { success: true, data: { enabled: true } }, status: 200, statusText: 'OK', headers: {}, config }
+    return {
+      data: { success: true, data: { enabled: true } },
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    }
   }
   try {
     useAuthStore.getState().auth.setUser({ id: 2, username: 'native', role: 1 })
@@ -158,16 +176,26 @@ test('a failed Passkey status does not hide an available local 2FA method', asyn
   }
 })
 
-
 test('legacy projected account keeps 2FA and unknown realm fails closed', async () => {
   const previous = api.defaults.adapter
   const paths: string[] = []
   api.defaults.adapter = async (config) => {
     paths.push(config.url ?? '')
-    return { data: { success: true, data: { enabled: true } }, status: 200, statusText: 'OK', headers: {}, config }
+    return {
+      data: { success: true, data: { enabled: true } },
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    }
   }
   try {
-    useAuthStore.getState().auth.setUser({ id: 1, username: 'legacy', role: 1, identity_source: 'unihub' })
+    useAuthStore.getState().auth.setUser({
+      id: 1,
+      username: 'legacy',
+      role: 1,
+      identity_source: 'unihub',
+    })
     sessionRealm('LEGACY')
     const legacy = await checkVerificationMethods()
     assert.equal(legacy.has2FA, true)

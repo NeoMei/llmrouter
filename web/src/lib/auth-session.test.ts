@@ -178,12 +178,19 @@ describe('authentication session coordination', () => {
     let cleared = 0
     let transient = 0
     const runtime: AuthRefreshRuntime = {
-      request: async () => ({ status: 403, data: { code: 'AUTH_ORIGIN_FORBIDDEN' } }),
+      request: async () => ({
+        status: 403,
+        data: { code: 'AUTH_ORIGIN_FORBIDDEN' },
+      }),
       getExpectedSID: () => bundle.session.sid,
       parseBundle: () => null,
       acceptBundle: () => undefined,
-      clear: () => { cleared += 1 },
-      markTransient: () => { transient += 1 },
+      clear: () => {
+        cleared += 1
+      },
+      markTransient: () => {
+        transient += 1
+      },
       wait: async () => undefined,
     }
     const outcome = await createRefreshRunner(runtime)()
@@ -199,7 +206,9 @@ describe('authentication session coordination', () => {
       getExpectedSID: () => bundle.session.sid,
       parseBundle: () => null,
       acceptBundle: () => undefined,
-      clear: () => { cleared += 1 },
+      clear: () => {
+        cleared += 1
+      },
       markTransient: () => undefined,
       wait: async () => undefined,
     })()

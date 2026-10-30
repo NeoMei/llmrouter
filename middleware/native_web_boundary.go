@@ -17,7 +17,9 @@ func NativeWebBoundary() gin.HandlerFunc {
 	native := NativePublicBoundary()
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
-		if strings.HasPrefix(c.FullPath(), "/platform/v1/") || strings.HasPrefix(c.FullPath(), "/api/unihub/") {
+		// Only a matched Gin route may enter platform admission, including
+		// native protocol aliases. A raw URL prefix never grants this pass.
+		if strings.HasPrefix(c.FullPath(), "/platform/") || strings.HasPrefix(c.FullPath(), "/api/unihub/") {
 			c.Next()
 			return
 		}

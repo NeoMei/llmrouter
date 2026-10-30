@@ -50,3 +50,23 @@ func TestKnowledgeEmbeddingCertifiedBounds(t *testing.T) {
 	_, e = parseKnowledgeEmbedding(c, p, []byte(`{"model":"embed","input":"a"}`))
 	require.Error(t, e)
 }
+
+func TestAliEmbeddingV4KnowledgePolicyAndBounds(t *testing.T) {
+	p := knowledgePolicy()
+	p.PublicModel, p.WireOperation, p.UpstreamModel = "embedding", "embeddings.create", "text-embedding-v4"
+	p.ChannelType, p.HardInputTokens, p.MaxItemTokens, p.MaxBatch = constant.ChannelTypeAli, 8192, 8192, 10
+	p.Version, p.Origin = "knowledge_ali_text_v1", "https://dashscope.aliyuncs.com"
+	p.Space = &dto.EmbeddingSpace{Provider: "aliyun", Model: "text-embedding-v4", Version: "v4", Dimensions: 1024, InputSemantics: "text"}
+	c := Config{AllowAliEmbeddingV4: true, MaxInputTokens: 8192, MaxBodyBytes: 65536}
+	require.True(t, p.valid(c, p.PublicModel, p.WireOperation))
+	_, err := parseKnowledgeEmbedding(c, p, []byte(`{"model":"embedding","input":["a","b"]}`))
+	require.NoError(t, err)
+	_, err = parseKnowledgeEmbedding(c, p, []byte(`{"model":"embedding","input":[1,2]}`))
+	require.Error(t, err)
+	_, err = parseKnowledgeEmbedding(c, p, []byte(`{"model":"embedding","input":["1","2","3","4","5","6","7","8","9","10","11"]}`))
+	require.Error(t, err)
+	p.MaxBatch = 11
+	assert.False(t, p.valid(c, p.PublicModel, p.WireOperation))
+	p.MaxBatch, p.Space.InputSemantics = 10, "text/query-document-v1"
+	assert.False(t, p.valid(c, p.PublicModel, p.WireOperation))
+}

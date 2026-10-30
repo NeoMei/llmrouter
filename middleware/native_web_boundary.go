@@ -5,6 +5,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/QuantumNous/new-api/internal/platformaccount"
 	"github.com/QuantumNous/new-api/internal/unihubaccess"
 
 	"github.com/gin-gonic/gin"
@@ -32,7 +33,7 @@ func NativeWebBoundary() gin.HandlerFunc {
 		// hydrate live access; management and finance APIs keep their own gates.
 		if c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead {
 			policy, err := unihubaccess.FromEnv()
-			if err == nil && policy.PublicEnabled {
+			if err == nil && (policy.PublicEnabled || platformaccount.RuntimeEnabled()) {
 				if path == "/sign-in" || IsProductApplicationPath(path) {
 					c.Next()
 					return

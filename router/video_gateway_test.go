@@ -46,13 +46,15 @@ type wanVideoGatewayFixture struct {
 	cfg                                         platformbilling.Config
 	sends, fetches, downloads, cancels, settles int
 	variant                                     string
+	originProduct                               string
+	denySettlementRead                          bool
 	mp4                                         []byte
 }
 
 func wanTierPrice() metering.Price {
-	return metering.Price{Version: "metered_v2", Operation: "video", Policy: "ali_wan26_t2v_billable_duration_v1", Terms: []metering.Term{
-		{Key: "video_720p", Unit: "video_second", Price: metering.Rational{Numerator: "3", Denominator: "5"}},
-		{Key: "video_1080p", Unit: "video_second", Price: metering.Rational{Numerator: "1", Denominator: "1"}},
+	return metering.Price{Version: "metered_v2", Operation: "video", Policy: "ali_wan26_t2v_cny6_v2", Terms: []metering.Term{
+		{Key: "video_720p", Unit: "video_second", Price: metering.Rational{Numerator: "600000", Denominator: "1"}},
+		{Key: "video_1080p", Unit: "video_second", Price: metering.Rational{Numerator: "1000000", Denominator: "1"}},
 	}}
 }
 
@@ -66,7 +68,7 @@ func newWanVideoGatewayFixtureWithHub(t *testing.T, variant, hubOrigin, serviceT
 	enableUniHubBoundary(t)
 	gin.SetMode(gin.TestMode)
 	require.NoError(t, i18n.Init())
-	f := &wanVideoGatewayFixture{variant: variant}
+	f := &wanVideoGatewayFixture{variant: variant, originProduct: "fixture-product"}
 	if variant == "1080" {
 		f.mp4 = wanVideoTestFile(t, "wan1080.mp4")
 	} else {
@@ -151,7 +153,15 @@ func newWanVideoGatewayFixtureWithHub(t *testing.T, variant, hubOrigin, serviceT
 				fmt.Fprintf(w, `{"output":{"task_id":"provider-wan","task_status":"SUCCEEDED","video_url":%q,"results":[{},{"url":"other"}]},"usage":{"duration":5,"video_count":1}}`, videoURL)
 				return
 			}
-			fmt.Fprintf(w, `{"output":{"task_id":"provider-wan","task_status":"SUCCEEDED","video_url":%q},"usage":{"duration":5,"video_count":1},"request_id":"status-1"}`, videoURL)
+			sr := 720
+			if variant == "1080" {
+				sr = 1080
+			}
+			size := "1280*720"
+			if sr == 1080 {
+				size = "1920*1080"
+			}
+			fmt.Fprintf(w, `{"output":{"task_id":"provider-wan","task_status":"SUCCEEDED","video_url":%q},"usage":{"duration":5,"input_video_duration":0,"output_video_duration":5,"video_count":1,"SR":%d,"size":%q},"request_id":"status-1"}`, videoURL, sr, size)
 		case "/api/v1/tasks/provider-wan/cancel":
 			f.cancels++
 			if variant == "running-cancel" {
@@ -197,30 +207,38 @@ func newWanVideoGatewayFixtureWithHub(t *testing.T, variant, hubOrigin, serviceT
 	price := wanTierPrice()
 	rate := platformbilling.Rate{ID: "wan-rate", Model: "wan2.6-t2v", Asset: "CNY/6", Status: "published", Semantics: "metered_v2", Metered: &price}
 	var remote platformbilling.RemoteCall
+	var final *taskSettlementInput
 	if hubOrigin == "" {
 		hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var out any
 			switch r.URL.Path {
 			case "/internal/v1/model-credentials/verify":
-				out = platformbilling.Claims{CredentialKind: "task", ID: "original-credential", Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: "superwagie", InstanceID: "default", Models: []string{"wan2.6-t2v"}, Operations: map[string][]string{"wan2.6-t2v": {"videos.create"}}, TaskID: "wan-task", ExpiresAt: time.Now().Add(time.Hour), Asset: "CNY/6", FundingMode: "prepaid_cash"}
+				out = platformbilling.Claims{CredentialKind: "task", ID: "original-credential", Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: f.originProduct, InstanceID: "default", Models: []string{"wan2.6-t2v"}, Operations: map[string][]string{"wan2.6-t2v": {"videos.create"}}, TaskID: "wan-task", ExpiresAt: time.Now().Add(time.Hour), Asset: "CNY/6", FundingMode: "prepaid_cash"}
 			case "/internal/v1/rates":
 				out = []platformbilling.Rate{rate}
 			case "/internal/v1/calls/reserve":
 				var in map[string]string
 				require.NoError(t, common.DecodeJson(r.Body, &in))
-				remote = platformbilling.RemoteCall{WireOperation: in["wire_operation"], CallID: in["call_id"], ActorID: "actor", AccountID: "account", OriginProductID: "superwagie", InstanceID: "default", CredentialID: "original-credential", RequestDigest: in["request_digest"], Rate: rate, ChargeAsset: "CNY/6", FundingMode: "prepaid_cash", FundingProductID: "llmrouter", Held: in["amount"], Status: "RESERVED"}
+				remote = platformbilling.RemoteCall{WireOperation: in["wire_operation"], CallID: in["call_id"], ActorID: "actor", AccountID: "account", OriginProductID: f.originProduct, InstanceID: "default", CredentialID: "original-credential", RequestDigest: in["request_digest"], Rate: rate, ChargeAsset: "CNY/6", FundingMode: "prepaid_cash", FundingProductID: "llmrouter", Held: in["amount"], Status: "RESERVED"}
 				out = remote
 			case "/internal/v1/calls/wan-call/settle":
 				f.settles++
-				var settlement struct{ Usage platformbilling.Usage }
+				var settlement taskSettlementInput
 				require.NoError(t, common.DecodeJson(r.Body, &settlement))
 				amount, e := metering.Calculate(*rate.Metered, *settlement.Usage.Metered)
 				require.NoError(t, e)
 				remote.Status, remote.Charged = "SETTLED", amount.RatString()
+				final = &settlement
 				out = remote
 			case "/internal/v1/calls/wan-call/release":
 				remote.Status = "RELEASED"
 				out = remote
+			case "/internal/v1/calls/wan-call":
+				receipt := remote
+				if f.denySettlementRead {
+					receipt.Status = "SETTLE_PENDING"
+				}
+				out = authorityReceipt(t, receipt, "wan-task", final)
 			case "/internal/v1/call-reads/verify":
 				var row platformbilling.Call
 				require.NoError(t, db.First(&row, "call_id = ?", "wan-call").Error)
@@ -255,8 +273,8 @@ func newWanVideoGatewayFixtureWithHub(t *testing.T, variant, hubOrigin, serviceT
 	t.Cleanup(func() { service.GetTaskAdaptorFunc = oldAdaptor })
 
 	keyHash := sha256.Sum256([]byte("synthetic-wan-key"))
-	policy := platformbilling.VideoPolicy{Version: "video_v1", PublicModel: "wan2.6-t2v", WireOperation: "videos.create", ChannelID: 16, ChannelType: constant.ChannelTypeAli, UpstreamModel: "wan2.6-t2v", ChannelKeySHA256: hex.EncodeToString(keyHash[:]), Origin: "https://dashscope.aliyuncs.com", APIVersion: "dashscope-video-v1", UsagePolicy: "ali_wan26_t2v_billable_duration_v1", MaxSeconds: 10, MaxVideoBytes: 64 << 20, Resolutions: []string{"720P", "1080P"}, ResourceOrigins: []string{provider.URL}, AllowLoopbackHTTP: true, RateIDs: map[string]string{"CNY/6": "wan-rate"}}
-	f.cfg = platformbilling.Config{Enabled: true, Origin: hubOrigin, ServiceToken: serviceToken, PrincipalID: 1, Group: "platform", MaxBodyBytes: 1 << 20, MaxInputTokens: 1000, MaxOutputTokens: 100, VideoPolicies: map[string]map[string]platformbilling.VideoPolicy{"videos.create": {"wan2.6-t2v": policy}}, OperationLimits: map[string]map[string]platformbilling.OperationLimits{"video": {"wan2.6-t2v": {MaxQuantity: 10, Policy: "ali_wan26_t2v_billable_duration_v1"}}}, OperationRateIDs: map[string]map[string]map[string]string{"video": {"CNY/6": {"wan2.6-t2v": "wan-rate"}}}}
+	policy := platformbilling.VideoPolicy{Version: "video_v2", PublicModel: "wan2.6-t2v", WireOperation: "videos.create", ChannelID: 16, ChannelType: constant.ChannelTypeAli, UpstreamModel: "wan2.6-t2v", ChannelKeySHA256: hex.EncodeToString(keyHash[:]), Origin: "https://dashscope.aliyuncs.com", APIVersion: "dashscope-video-v1", UsagePolicy: "ali_wan26_t2v_cny6_v2", MaxSeconds: 10, MaxVideoBytes: 64 << 20, Resolutions: []string{"720P", "1080P"}, ResourceOrigins: []string{provider.URL}, AllowLoopbackHTTP: true, RateIDs: map[string]string{"CNY/6": "wan-rate"}}
+	f.cfg = platformbilling.Config{Enabled: true, Origin: hubOrigin, ServiceToken: serviceToken, PrincipalID: 1, Group: "platform", MaxBodyBytes: 1 << 20, MaxInputTokens: 1000, MaxOutputTokens: 100, VideoPolicies: map[string]map[string]platformbilling.VideoPolicy{"videos.create": {"wan2.6-t2v": policy}}, OperationLimits: map[string]map[string]platformbilling.OperationLimits{"video": {"wan2.6-t2v": {MaxQuantity: 10, Policy: "ali_wan26_t2v_cny6_v2"}}}, OperationRateIDs: map[string]map[string]map[string]string{"video": {"CNY/6": {"wan2.6-t2v": "wan-rate"}}}}
 	f.adapter, err = platformbilling.New(db, f.cfg)
 	require.NoError(t, err)
 	f.engine = gin.New()
@@ -284,7 +302,7 @@ func TestWanAsyncSignedQueryArtifactBoundaries(t *testing.T) {
 			var call platformbilling.Call
 			require.NoError(t, f.db.First(&call, "call_id = ?", "wan-call").Error)
 			assert.Equal(t, "UNKNOWN", call.Status)
-			assert.Equal(t, "3", call.Amount)
+			assert.Equal(t, "3000000", call.Amount)
 			switch variant {
 			case "uncertified-origin", "userinfo", "fragment", "non-https":
 				assert.Zero(t, f.downloads)
@@ -331,7 +349,7 @@ func (f *wanVideoGatewayFixture) read(t *testing.T, suffix, token string) *httpt
 }
 
 func TestWanAsyncActualGatewayLifecycle(t *testing.T) {
-	for _, tc := range []struct{ variant, resolution, charged string }{{"720", "720P", "3"}, {"1080", "1080P", "5"}} {
+	for _, tc := range []struct{ variant, resolution, charged string }{{"720", "720P", "3000000"}, {"1080", "1080P", "5000000"}} {
 		t.Run(tc.resolution, func(t *testing.T) {
 			f := newWanVideoGatewayFixture(t, tc.variant)
 			w := f.submit(t, tc.resolution)
@@ -388,7 +406,7 @@ func TestWanAsyncHoldsAndCancellation(t *testing.T) {
 				var call platformbilling.Call
 				require.NoError(t, f.db.First(&call, "call_id = ?", "wan-call").Error)
 				assert.Equal(t, "UNKNOWN", call.Status)
-				assert.Equal(t, "3", call.Amount)
+				assert.Equal(t, "3000000", call.Amount)
 				assert.Zero(t, f.settles)
 				return
 			}
@@ -423,7 +441,7 @@ func TestWanAsyncHoldsAndCancellation(t *testing.T) {
 				assert.Equal(t, model.TaskStatus(model.TaskStatusFailure), canceled.Status)
 			} else {
 				assert.Equal(t, "UNKNOWN", call.Status)
-				assert.Equal(t, "3", call.Amount)
+				assert.Equal(t, "3000000", call.Amount)
 			}
 		})
 	}
@@ -472,4 +490,16 @@ func TestWanVideoLocalLiveFixture(t *testing.T) {
 	defer cancel()
 	require.NoError(t, server.Shutdown(ctx))
 	require.ErrorIs(t, <-done, http.ErrServerClosed)
+}
+
+func TestWanCashAdmissionRequiresFrozenProducerCertificate(t *testing.T) {
+	f := newWanVideoGatewayFixture(t, "720")
+	f.cfg.VideoPolicies = nil
+	adapter, err := platformbilling.New(f.db, f.cfg)
+	require.NoError(t, err)
+	f.engine = gin.New()
+	SetPlatformRouter(f.engine, adapter)
+	response := f.submit(t, "720P")
+	require.NotEqual(t, http.StatusOK, response.Code, response.Body.String())
+	assert.Zero(t, f.sends, "supplier dispatch must not occur without a bound video certificate")
 }

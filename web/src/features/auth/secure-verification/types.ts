@@ -32,6 +32,8 @@ export interface SecurityProof {
 
 export interface VerificationMethods {
   has2FA: boolean
+  twoFAUnavailable?: boolean
+  passkeyUnavailable?: boolean
   hasPasskey: boolean
   passkeySupported: boolean
 }

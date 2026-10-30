@@ -10,7 +10,9 @@ import (
 )
 
 func TestUserCacheIdentityMetadataRoundTrip(t *testing.T) {
-	server := useUserCacheMiniRedis(t)
+	// Freeze elapsed time because this test asserts the exact initial TTL.
+	now := time.Now()
+	server := useUserCacheMiniRedisWithClock(t, func() time.Time { return now })
 	user := &UserBase{Id: 4301, AuthVersion: 1, Status: common.UserStatusEnabled,
 		Role: common.RoleCommonUser, Quota: 0, IdentitySource: UniHubIdentitySource, UniHubUserID: "central-subject"}
 	require.NoError(t, writeUserCache(user, true))

@@ -23,6 +23,7 @@ type KnowledgePolicy struct {
 	WireOperation     string              `json:"wire_operation"`
 	ChannelID         int                 `json:"channel_id"`
 	ChannelType       int                 `json:"channel_type"`
+	Origin            string              `json:"origin,omitempty"`
 	UpstreamModel     string              `json:"upstream_model"`
 	HardInputTokens   int                 `json:"hard_input_tokens"`
 	VisualTokens      int                 `json:"visual_tokens"`
@@ -32,9 +33,12 @@ type KnowledgePolicy struct {
 	RateIDs           map[string]string   `json:"rate_ids"`
 }
 type frozenKnowledge struct {
-	Facts  json.RawMessage `json:"media_facts,omitempty"`
-	Policy KnowledgePolicy `json:"knowledge_policy"`
-	Body   json.RawMessage `json:"effective_body"`
+	Binding        *ManagedBinding `json:"managed_binding,omitempty"`
+	Facts          json.RawMessage `json:"media_facts,omitempty"`
+	Policy         KnowledgePolicy `json:"knowledge_policy"`
+	Body           json.RawMessage `json:"effective_body,omitempty"`
+	BodyKeyID      string          `json:"body_key_id,omitempty"`
+	BodyCiphertext []byte          `json:"body_ciphertext,omitempty"`
 }
 
 func (p KnowledgePolicy) valid(c Config, model, wire string) bool {
@@ -43,7 +47,7 @@ func (p KnowledgePolicy) valid(c Config, model, wire string) bool {
 	if e != nil || reference.Scheme != "https" || reference.Host == "" || reference.User != nil || reference.Fragment != "" || herr != nil || len(hash) != 32 || len(p.PublicModel) > 255 || strings.TrimSpace(p.PublicModel) == "" {
 		return false
 	}
-	if len(p.ChannelKeySHA256) != 64 || p.Version != "knowledge_v1" || !strings.HasPrefix(p.ProviderReference, "https://") || p.PublicModel != model || p.WireOperation != wire || p.ChannelID < 1 || p.UpstreamModel == "" || p.HardInputTokens < 1 || p.HardInputTokens > c.MaxInputTokens || len(p.RateIDs) == 0 {
+	if len(p.ChannelKeySHA256) != 64 || (p.Version != "knowledge_v1" && p.Version != "knowledge_ali_text_v1") || !strings.HasPrefix(p.ProviderReference, "https://") || p.PublicModel != model || p.WireOperation != wire || p.ChannelID < 1 || p.UpstreamModel == "" || p.HardInputTokens < 1 || p.HardInputTokens > c.MaxInputTokens || len(p.RateIDs) == 0 {
 		return false
 	}
 	for asset, id := range p.RateIDs {
@@ -51,10 +55,35 @@ func (p KnowledgePolicy) valid(c Config, model, wire string) bool {
 			return false
 		}
 	}
+	if p.Version == "knowledge_ali_text_v1" && wire != "embeddings.create" || p.Version == "knowledge_v1" && p.Origin != "" {
+		return false
+	}
 	switch wire {
 	case "rerank.create":
 		return p.ChannelType == constant.ChannelTypeAli && p.UpstreamModel == "qwen3-rerank" && p.HardInputTokens <= 120000 && p.MaxItemTokens > 0 && p.MaxItemTokens <= 4000 && p.MaxBatch > 0 && p.MaxBatch <= 500 && p.VisualTokens == 0
 	case "embeddings.create":
+		if p.Version == "knowledge_ali_text_v1" {
+			if !c.AllowAliEmbeddingV4 {
+				return false
+			}
+			origin, err := url.Parse(p.Origin)
+			if err != nil || origin.Scheme != "https" || origin.User != nil || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" || origin.Port() != "" || origin.Host != origin.Hostname() || origin.String() != p.Origin {
+				return false
+			}
+			host := origin.Hostname()
+			workspace := strings.TrimSuffix(host, ".cn-beijing.maas.aliyuncs.com")
+			if host != "dashscope.aliyuncs.com" && (workspace == host || strings.Contains(workspace, ".") || workspace == "" || strings.Trim(workspace, "abcdefghijklmnopqrstuvwxyz0123456789-") != "") {
+				return false
+			}
+			if p.Space == nil || p.ChannelType != constant.ChannelTypeAli || p.UpstreamModel != "text-embedding-v4" || p.Space.Provider != "aliyun" || p.Space.Model != p.UpstreamModel || p.Space.Version != "v4" || p.Space.InputSemantics != "text" || p.MaxBatch < 1 || p.MaxBatch > 10 || p.MaxItemTokens < 1 || p.MaxItemTokens > 8192 || p.HardInputTokens > 81920 || p.VisualTokens != 0 {
+				return false
+			}
+			switch p.Space.Dimensions {
+			case 64, 128, 256, 512, 768, 1024, 1536, 2048:
+				return true
+			}
+			return false
+		}
 		return p.ChannelType == constant.ChannelTypeOpenAI && p.MaxItemTokens > 0 && p.MaxItemTokens <= 8192 && p.MaxBatch > 0 && p.MaxBatch <= 2048 && p.Space != nil && p.Space.Model == p.UpstreamModel && p.Space.Version != "" && p.Space.Provider != "" && p.Space.Dimensions > 0 && p.Space.Dimensions <= 65536 && p.Space.InputSemantics == "text" && p.VisualTokens == 0
 	case "multimodal.embeddings.create":
 		return p.ChannelType == constant.ChannelTypeAli && p.UpstreamModel == "qwen3-vl-embedding" && p.HardInputTokens <= 64000 && p.VisualTokens > 0 && p.VisualTokens <= 10000000 && p.MaxBatch > 0 && p.MaxBatch <= 20 && validKnowledgeSpace(p.Space) && p.Space.Provider == "aliyun" && p.Space.Model == p.UpstreamModel && p.Space.Version != "" && p.Space.InputSemantics == dto.QwenMultimodalInputSemantics
@@ -88,6 +117,9 @@ func parseKnowledgeRerank(c Config, p KnowledgePolicy, body []byte, native bool)
 			for k, v := range params {
 				request[k] = v
 			}
+		}
+		if _, exists := request["return_documents"]; !exists {
+			request["return_documents"] = false
 		}
 	}
 	if !protocolKeys(request, "model query documents top_n return_documents") || request["model"] != p.PublicModel {
@@ -142,14 +174,32 @@ func parseKnowledgeRerank(c Config, p KnowledgePolicy, body []byte, native bool)
 
 // KnowledgeTarget is shared by catalog projection and execution; channel family
 // alone can never certify a particular upstream model or semantic space.
-func (a *Adapter) KnowledgeTarget(model, wire string, channelID, channelType int, upstream, key string) bool {
+func (a *Adapter) KnowledgeTarget(model, wire string, channelID, channelType int, upstream, key, origin string) bool {
 	p, ok := a.config.KnowledgePolicies[wire][model]
 	sum := sha256.Sum256([]byte(key))
-	return p.ChannelKeySHA256 == hex.EncodeToString(sum[:]) && ok && p.valid(a.config, model, wire) && p.ChannelID == channelID && p.ChannelType == channelType && p.UpstreamModel == upstream
+	return p.ChannelKeySHA256 == hex.EncodeToString(sum[:]) && ok && p.valid(a.config, model, wire) && p.ChannelID == channelID && p.ChannelType == channelType && p.UpstreamModel == upstream && (p.Version != "knowledge_ali_text_v1" || p.Origin == origin)
+}
+
+// AliEmbeddingV4 identifies the explicitly certified policy; it does not prove
+// current membership or bind an outgoing request without the send check.
+func (s *Session) AliEmbeddingV4() bool {
+	if s == nil || s.adapter == nil || s.WireOperation().ID != "embeddings.create" {
+		return false
+	}
+	var f frozenKnowledge
+	return common.UnmarshalUnique([]byte(s.call.MediaSnapshot), &f) == nil && f.Policy.Version == "knowledge_ali_text_v1" && f.Policy.valid(s.adapter.config, s.call.Model, "embeddings.create")
+}
+
+func (s *Session) AliRerank() bool {
+	if s == nil || s.adapter == nil || !s.adapter.config.AllowAliRerank || s.WireOperation().ID != "rerank.create" {
+		return false
+	}
+	var f frozenKnowledge
+	return common.UnmarshalUnique([]byte(s.call.MediaSnapshot), &f) == nil && f.Policy.valid(s.adapter.config, s.call.Model, "rerank.create") && f.Policy.UpstreamModel == "qwen3-rerank"
 }
 func (s *Session) KnowledgeBody(channel int, upstream string, key ...string) ([]byte, error) {
-	var frozen frozenKnowledge
-	if common.UnmarshalUnique([]byte(s.call.MediaSnapshot), &frozen) != nil || frozen.Policy.ChannelID != channel || frozen.Policy.UpstreamModel != upstream || frozen.Policy.PublicModel != s.call.Model || frozen.Policy.WireOperation != s.WireOperation().ID || len(frozen.Body) == 0 {
+	frozen, err := s.adapter.knowledgeSnapshot(s.call)
+	if err != nil || frozen.Policy.ChannelID != channel || frozen.Policy.UpstreamModel != upstream || frozen.Policy.PublicModel != s.call.Model || frozen.Policy.WireOperation != s.WireOperation().ID || len(frozen.Body) == 0 {
 		return nil, ErrInvalid
 	}
 	if len(key) != 1 {
@@ -170,8 +220,8 @@ func (s *Session) KnowledgeBody(channel int, upstream string, key ...string) ([]
 // KnowledgeBodyForRelay exposes the already-admitted canonical DTO to internal
 // routing while the original envelope remains in the call digest.
 func (s *Session) KnowledgeBodyForRelay() ([]byte, error) {
-	var f frozenKnowledge
-	if common.UnmarshalUnique([]byte(s.call.MediaSnapshot), &f) != nil || len(f.Body) == 0 {
+	f, err := s.adapter.knowledgeSnapshot(s.call)
+	if err != nil || len(f.Body) == 0 {
 		return nil, ErrInvalid
 	}
 	if s.WireOperation().ID == "multimodal.embeddings.create" && s.WireOperation().Mode == "knowledge-native-v1" {

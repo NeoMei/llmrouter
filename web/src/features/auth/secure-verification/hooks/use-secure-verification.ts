@@ -88,6 +88,14 @@ export function useSecureVerification(
       const availableMethods = await fetchVerificationMethods()
 
       if (!availableMethods.has2FA && !availableMethods.hasPasskey) {
+        if (
+          availableMethods.twoFAUnavailable ||
+          availableMethods.passkeyUnavailable
+        ) {
+          toast.error(i18next.t('Verification unavailable'))
+          onError?.(new Error('Verification unavailable'))
+          return false
+        }
         toast.error(
           i18next.t(
             'Please enable Two-factor Authentication or Passkey before proceeding'

@@ -96,7 +96,7 @@ func Login(c *gin.Context) {
 	}
 	if twoFAEnabled {
 		expiresAt := time.Now().Add(5 * time.Minute)
-		payload, err := common.Marshal(twoFALoginFlowPayload{AuthVersion: user.AuthVersion})
+		payload, err := common.Marshal(twoFALoginFlowPayload{AuthVersion: user.AuthVersion, NativeRealm: user.FundingRealm == model.NativeFundingLocalOnly && user.NativePassword})
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -124,6 +124,9 @@ func Login(c *gin.Context) {
 		return
 	}
 
+	if user.FundingRealm == model.NativeFundingLocalOnly && user.NativePassword {
+		c.Set("native_password_authenticated", true)
+	}
 	setupLogin(&user, c)
 }
 
@@ -181,7 +184,10 @@ func setupLoginAtAuthVersion(user *model.User, expectedAuthVersion int64, c *gin
 			return
 		}
 	}
-	if user == nil || user.Id <= 0 || user.Status != common.UserStatusEnabled {
+	centralKind := c.GetString("central_credential_kind")
+	centralValue := c.GetString("central_credential_value")
+	centralCredential := centralKind != "" && centralValue != ""
+	if user == nil || user.Id <= 0 || (user.Status != common.UserStatusEnabled && !centralCredential) {
 		common.ApiErrorI18n(c, i18n.MsgAuthUserBanned)
 		return
 	}
@@ -190,7 +196,9 @@ func setupLoginAtAuthVersion(user *model.User, expectedAuthVersion int64, c *gin
 		common.ApiError(c, err)
 		return
 	}
-	if platformaccount.RuntimeEnabled() {
+	maintenance := (c.FullPath() == "/api/user/login" || c.FullPath() == "/api/user/login/2fa") && middleware.NativePrivateMaintenanceIdentity(c, currentUser.Id)
+	native := c.GetBool("native_password_authenticated")
+	if platformaccount.RuntimeEnabled() && !maintenance && !native && !centralCredential {
 		if err = applyCurrentProductIdentity(c, currentUser, true); err != nil {
 			productIdentityError(c, err)
 			return
@@ -201,7 +209,19 @@ func setupLoginAtAuthVersion(user *model.User, expectedAuthVersion int64, c *gin
 		return
 	}
 	var bundle *service.AuthBundle
-	if expectedAuthVersion > 0 {
+	if centralCredential {
+		var central userkit.ProductIdentity
+		bundle, central, err = service.CreateCentralCredentialLogin(c.Request.Context(), user.Id, centralKind, centralValue, loginMethodFromContext(c), c.ClientIP(), c.Request.UserAgent())
+		if err == nil {
+			authz.SetProductPrincipal(c, userkit.Principal{LocalUser: userkit.LocalUser{ID: strconv.Itoa(user.Id)}, Access: central.Access})
+		}
+	} else if native {
+		version := user.AuthVersion
+		if expectedAuthVersion > 0 {
+			version = expectedAuthVersion
+		}
+		bundle, err = service.CreateNativeLoginSessionAtAuthVersion(user.Id, version, loginMethodFromContext(c), c.ClientIP(), c.Request.UserAgent())
+	} else if expectedAuthVersion > 0 {
 		bundle, err = service.CreateLoginSessionAtAuthVersion(
 			user.Id,
 			expectedAuthVersion,
@@ -222,6 +242,8 @@ func setupLoginAtAuthVersion(user *model.User, expectedAuthVersion int64, c *gin
 		return
 	}
 	model.UpdateUserLastLoginAt(user.Id)
+	userData := productSelfData(c, currentUser, native)
+	userData["authentication_realm"] = bundle.Session.AuthenticationRealm
 	service.WriteRefreshCookie(c, bundle.RefreshToken)
 	setAuthNoStore(c)
 	recordLoginAudit(user, c)
@@ -229,12 +251,12 @@ func setupLoginAtAuthVersion(user *model.User, expectedAuthVersion int64, c *gin
 		"message": "",
 		"success": true,
 		"data": gin.H{
-			"central_session_handoff": platformaccount.BrowserHandoffEnabled(),
+			"central_session_handoff": platformaccount.BrowserHandoffEnabled() && !native && !centralCredential,
 			"access_token":            bundle.AccessToken,
 			"token_type":              bundle.TokenType,
 			"access_expires_at":       bundle.AccessExpiresAt,
 			"session":                 bundle.Session,
-			"user":                    productSelfData(c, currentUser),
+			"user":                    userData,
 		},
 	})
 }
@@ -366,6 +388,14 @@ func Register(c *gin.Context) {
 func GetAllUsers(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	sortOptions := model.NewUserSortOptions(c.Query("sort_by"), c.Query("sort_order"))
+	_, productAuthority := authz.ProductPrincipal(c)
+	if productAuthority || middleware.CentralRealmAuthenticated(c) {
+		// A shared row can belong to an unenrolled native owner even when it
+		// has a central mapping. No durable proof currently separates the
+		// native and central profile or serializes enrollment with disclosure.
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"success": false, "code": "USER_REALM_UNAVAILABLE"})
+		return
+	}
 	users, total, err := model.GetAllUsers(pageInfo, sortOptions)
 	if err != nil {
 		common.ApiError(c, err)
@@ -377,6 +407,9 @@ func GetAllUsers(c *gin.Context) {
 			productIdentityError(c, e)
 			return
 		}
+		// Reconciliation may reload the full row after the query omitted secrets.
+		user.Password = ""
+		user.AccessToken = nil
 	}
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(users)
@@ -402,6 +435,14 @@ func SearchUsers(c *gin.Context) {
 	}
 	pageInfo := common.GetPageQuery(c)
 	sortOptions := model.NewUserSortOptions(c.Query("sort_by"), c.Query("sort_order"))
+	_, productAuthority := authz.ProductPrincipal(c)
+	if productAuthority || middleware.CentralRealmAuthenticated(c) {
+		// A shared row can belong to an unenrolled native owner even when it
+		// has a central mapping. No durable proof currently separates the
+		// native and central profile or serializes enrollment with disclosure.
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"success": false, "code": "USER_REALM_UNAVAILABLE"})
+		return
+	}
 	users, total, err := model.SearchUsers(keyword, group, role, status, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOptions)
 	if err != nil {
 		common.ApiError(c, err)
@@ -413,6 +454,9 @@ func SearchUsers(c *gin.Context) {
 			productIdentityError(c, e)
 			return
 		}
+		// Reconciliation may reload the full row after the query omitted secrets.
+		user.Password = ""
+		user.AccessToken = nil
 	}
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(users)
@@ -448,7 +492,7 @@ func GetUser(c *gin.Context) {
 		return
 	}
 	user.AdminPermissions = authz.Capabilities(user.Id, user.Role)
-	if platformaccount.RuntimeEnabled() {
+	if platformaccount.RuntimeEnabled() && user.FundingRealm != model.NativeFundingLocalOnly {
 		snapshot, e := platformaccount.IdentityForLocal(c.Request.Context(), strconv.Itoa(user.Id))
 		if e != nil {
 			productIdentityError(c, e)
@@ -489,7 +533,26 @@ func GenerateAccessToken(c *gin.Context) {
 		return
 	}
 
-	if err := model.UpdateUserAccessToken(id, key); err != nil {
+	var saveErr error
+	if middleware.CentralRealmAuthenticated(c) {
+		identity, ok := middleware.GetSessionAuthIdentity(c)
+		if !ok || identity.UserID != id {
+			common.ApiError(c, service.ErrLoginSessionInvalid)
+			return
+		}
+		if _, err := service.ValidateSessionReference(c.Request.Context(), id, identity.SessionID); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		saveErr = model.DB.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+			return model.SetCentralLoginCredentialTx(tx, id, identity.SessionID, "pat", key, func(tx *gorm.DB) error {
+				return tx.Model(&model.User{}).Where("id = ?", id).Update("access_token", key).Error
+			})
+		})
+	} else {
+		saveErr = model.UpdateUserAccessToken(id, key, tokenRequestRealm(c))
+	}
+	if err := saveErr; err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -500,6 +563,34 @@ func GenerateAccessToken(c *gin.Context) {
 		"data":    key,
 	})
 	return
+}
+
+func RevokeAccessToken(c *gin.Context) {
+	id := c.GetInt("id")
+	identity, ok := middleware.GetSessionAuthIdentity(c)
+	if !ok || identity.UserID != id {
+		common.ApiError(c, service.ErrLoginSessionInvalid)
+		return
+	}
+	if _, err := service.ValidateSessionReference(c.Request.Context(), id, identity.SessionID); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	var err error
+	if middleware.CentralRealmAuthenticated(c) {
+		err = model.DB.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+			return model.DeleteCentralLoginCredentialTx(tx, id, identity.SessionID, "pat", func(tx *gorm.DB) error {
+				return tx.Model(&model.User{}).Where("id = ?", id).Update("access_token", nil).Error
+			})
+		})
+	} else {
+		err = model.UpdateUserAccessToken(id, "", tokenRequestRealm(c))
+	}
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, nil)
 }
 
 type TransferAffQuotaRequest struct {
@@ -629,7 +720,25 @@ func buildSelfUserData(user *model.User) map[string]interface{} {
 }
 
 // BuildSelfUserData returns the dashboard-safe user contract for non-password logins.
-func BuildSelfUserData(user *model.User) map[string]interface{} { return buildSelfUserData(user) }
+func BuildSelfUserData(user *model.User) map[string]interface{} {
+	return buildRealmSelfUserData(user, false)
+}
+
+func buildRealmSelfUserData(user *model.User, native bool) map[string]interface{} {
+	if user.FundingRealm == model.NativeFundingLocalOnly && !native {
+		// The shared SQL row is a native account. Central authority must supply
+		// its own profile/permissions; it never inherits the local financial DTO.
+		return map[string]interface{}{"id": user.Id, "identity_source": user.IdentitySource, "unihub_user_id": user.UniHubUserID}
+	}
+	data := buildSelfUserData(user)
+	if native {
+		// Identity mapping belongs to the central realm even when both
+		// identities share the same local row.
+		data["identity_source"] = ""
+		data["unihub_user_id"] = ""
+	}
+	return data
+}
 
 // 计算用户权限的辅助函数
 func calculateUserPermissions(userRole int) map[string]interface{} {
@@ -796,13 +905,13 @@ func UpdateUser(c *gin.Context) {
 		updatedUser.Password = "" // rollback to what it should be
 	}
 	updatePassword := updatedUser.Password != ""
-	if platformaccount.RuntimeEnabled() {
+	if platformaccount.RuntimeEnabled() && originUser.FundingRealm != model.NativeFundingLocalOnly {
 		if _, e := mutateProductIdentity(c, originUser.Id, userkit.ProductIdentityMutation{Event: "profile"}); e != nil {
 			productIdentityError(c, e)
 			return
 		}
 	}
-	if platformaccount.RuntimeEnabled() && updatedUser.AdminPermissions != nil {
+	if platformaccount.RuntimeEnabled() && originUser.FundingRealm != model.NativeFundingLocalOnly && updatedUser.AdminPermissions != nil {
 		if _, e := mutateProductIdentity(c, originUser.Id, userkit.ProductIdentityMutation{Event: "authorization", PermissionOverrides: updatedUser.AdminPermissions}); e != nil {
 			productIdentityError(c, e)
 			return
@@ -883,7 +992,7 @@ func AdminClearUserBinding(c *gin.Context) {
 	if !authorizeProductIdentityWrite(c, id, "oauth") {
 		return
 	}
-	if err := user.ClearBinding(bindingType); err != nil {
+	if err := user.ClearBinding(bindingType, tokenRequestRealm(c)); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -1007,18 +1116,12 @@ func UpdateSelf(c *gin.Context) {
 			common.ApiError(c, errors.New("当前认证方式不支持安全验证"))
 			return
 		}
-		if err := model.DB.Transaction(func(tx *gorm.DB) error {
-			return cleanUser.UpdateWithTx(tx, true)
-		}); err != nil {
-			common.ApiError(c, err)
-			return
-		}
-		if err := model.PublishUserAuthCache(cleanUser.Id); err != nil {
-			common.ApiError(c, err)
-			return
-		}
-		bundle, err := service.AdvanceCurrentSessionToUserVersion(identity, "password_changed")
+		bundle, err := service.ChangePasswordForCurrentSession(identity, tokenRequestRealm(c), &cleanUser, user.OriginalPassword)
 		if err != nil {
+			if errors.Is(err, model.ErrPasswordSessionMismatch) {
+				common.ApiErrorI18n(c, i18n.MsgUserOriginalPasswordError)
+				return
+			}
 			common.ApiError(c, err)
 			return
 		}
@@ -1077,12 +1180,15 @@ func DeleteUser(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if !refreshManagedTarget(c, originUser) {
+		return
+	}
 	myRole := c.GetInt("role")
 	if myRole <= originUser.Role {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
 		return
 	}
-	if platformaccount.RuntimeEnabled() {
+	if platformaccount.RuntimeEnabled() && originUser.FundingRealm != model.NativeFundingLocalOnly {
 		handleCentralUserManagement(c, originUser, "delete")
 		return
 	}
@@ -1105,7 +1211,11 @@ func DeleteUser(c *gin.Context) {
 func DeleteSelf(c *gin.Context) {
 	id := c.GetInt("id")
 	user, _ := model.GetUserById(id, false)
-	if platformaccount.RuntimeEnabled() {
+	if user != nil && user.FundingRealm == model.NativeFundingLocalOnly && !middleware.NativeRealmAuthenticated(c) {
+		productIdentityError(c, model.ErrNativeCredentialUnverified)
+		return
+	}
+	if platformaccount.RuntimeEnabled() && user.FundingRealm != model.NativeFundingLocalOnly {
 		handleCentralUserManagement(c, user, "delete")
 		return
 	}
@@ -1156,7 +1266,11 @@ func CreateUser(c *gin.Context) {
 	}
 	authzTouched := false
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
-		if err := cleanUser.InsertWithTx(tx, 0); err != nil {
+		if middleware.NativeRealmAuthenticated(c) {
+			if err := model.CreateNativeUserWithTx(tx, c.GetInt("id"), &cleanUser); err != nil {
+				return err
+			}
+		} else if err := cleanUser.InsertWithTx(tx, 0); err != nil {
 			return err
 		}
 		touched, err := updateAdminPermissionsForUserInTx(c, tx, cleanUser.Id, cleanUser.Role, user.AdminPermissions)
@@ -1173,7 +1287,7 @@ func CreateUser(c *gin.Context) {
 		}
 	}
 	cleanUser.FinishInsert(0)
-	if platformaccount.RuntimeEnabled() {
+	if platformaccount.RuntimeEnabled() && !middleware.NativeRealmAuthenticated(c) {
 		desiredRole := cleanUser.Role
 		overrides := user.AdminPermissions
 		if e := completePendingProductIdentity(c, &cleanUser); e != nil {
@@ -1200,7 +1314,7 @@ func CreateUser(c *gin.Context) {
 }
 
 func updateAdminPermissionsForUserInTx(c *gin.Context, tx *gorm.DB, userID int, userRole int, permissions map[string]map[string]bool) (bool, error) {
-	if platformaccount.RuntimeEnabled() {
+	if platformaccount.RuntimeEnabled() && !middleware.NativeRealmAuthenticated(c) {
 		return false, nil
 	}
 	if permissions == nil {
@@ -1251,7 +1365,7 @@ func ManageUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
 		return
 	}
-	if platformaccount.RuntimeEnabled() && req.Action != "add_quota" {
+	if platformaccount.RuntimeEnabled() && user.FundingRealm != model.NativeFundingLocalOnly && req.Action != "add_quota" {
 		handleCentralUserManagement(c, &user, req.Action)
 		return
 	}

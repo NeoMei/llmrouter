@@ -235,6 +235,14 @@ func main() {
 		IndexPage: indexPage,
 	})
 	router.SetPlatformRouter(server, platformAdapter)
+	if platformAdapter.Enabled() {
+		stopWanRecovery, err := router.StartWanImageRecovery(context.Background(), platformAdapter, model.DB, platformConfig.InstanceID)
+		if err != nil {
+			common.FatalLog("failed to initialize Wan image task recovery")
+			return
+		}
+		defer stopWanRecovery()
+	}
 	productConfig, productErr := platformaccount.FromEnv()
 	if productErr != nil {
 		common.FatalLog("invalid UniHub product configuration")

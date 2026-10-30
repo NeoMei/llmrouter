@@ -42,6 +42,9 @@ func cleanupAuthArtifacts() {
 	if err := model.PurgeUniHubSessionBindings(now.Unix()); err != nil {
 		common.SysError("failed to delete expired UniHub proofs")
 	}
+	if err := model.PurgeBrokerSourceProofs(now.Unix()); err != nil {
+		common.SysError("failed to delete expired broker source proofs")
+	}
 	if err := model.DeleteExpiredUserSessions(now.Unix()); err != nil {
 		common.SysError("failed to delete expired user sessions: " + err.Error())
 	}

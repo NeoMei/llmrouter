@@ -43,6 +43,12 @@ type Usage struct {
 	ProviderRequestID string        `json:"provider_request_id,omitempty"`
 }
 
+// WanCashTierPolicy uses CNY/6 micro-yuan per second; legacy native
+// quota policy remains separate and retains its historical denomination.
+func WanCashTierPolicy(policy string) bool {
+	return policy == "ali_wan26_t2v_cny6_v2" || policy == "ali_wan27_t2v_cny6_v1"
+}
+
 var units = map[string]bool{"token": true, "character": true, "audio_second": true, "image": true, "request": true, "video_second": true, "provider_unit": true}
 var ops = map[string]bool{"chat": true, "responses": true, "embedding": true, "rerank": true, "multimodal_embedding": true, "speech": true, "transcription": true, "image_generation": true, "image_edit": true, "ocr": true, "video": true}
 
@@ -93,7 +99,7 @@ func ValidatePrice(p Price) error {
 			tokenDimension = t.Key == "text" || t.Key == "visual"
 		}
 		videoKey := t.Key == "video"
-		if p.Operation == "video" && p.Policy == "ali_wan26_t2v_billable_duration_v1" {
+		if p.Operation == "video" && (p.Policy == "ali_wan26_t2v_billable_duration_v1" || WanCashTierPolicy(p.Policy)) {
 			videoKey = t.Key == "video_720p" || t.Key == "video_1080p"
 		}
 		if (t.Unit == "token" && !tokenDimension) || (t.Unit == "character" && t.Key != "characters") || (t.Unit == "audio_second" && t.Key != "audio") || (t.Unit == "request" && t.Key != "requests") || (t.Unit == "video_second" && !videoKey) || (t.Unit == "provider_unit" && t.Key != "provider") {
@@ -145,7 +151,7 @@ func ValidatePrice(p Price) error {
 			return errors.New("invalid provider token tariff")
 		}
 	}
-	if p.Operation == "video" && p.Policy == "ali_wan26_t2v_billable_duration_v1" {
+	if p.Operation == "video" && (p.Policy == "ali_wan26_t2v_billable_duration_v1" || WanCashTierPolicy(p.Policy)) {
 		if len(p.Terms) != 2 || !seen["video_720p"] || !seen["video_1080p"] {
 			return errors.New("missing Wan resolution tier")
 		}
@@ -180,7 +186,7 @@ func ValidateUsage(p Price, u Usage) error {
 		}
 		seen[m.Key] = true
 	}
-	selectedTier := p.Operation == "video" && p.Policy == "ali_wan26_t2v_billable_duration_v1"
+	selectedTier := p.Operation == "video" && (p.Policy == "ali_wan26_t2v_billable_duration_v1" || WanCashTierPolicy(p.Policy))
 	if selectedTier && (len(seen) != 1 || (!seen["video_720p"] && !seen["video_1080p"])) {
 		return errors.New("missing selected video resolution")
 	}

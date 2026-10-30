@@ -25,6 +25,7 @@ import {
   prepareCredentialRequestOptions,
   isPasskeySupported as detectPasskeySupport,
 } from '@/lib/passkey'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   beginPasskeyVerification,
@@ -42,33 +43,34 @@ import type {
  * Fetch available verification methods for the current user.
  */
 export async function checkVerificationMethods(): Promise<VerificationMethods> {
-  try {
-    const [twoFAResponse, passkeyResponse, passkeySupported] =
-      await Promise.all([
-        get2FAStatus(),
-        getPasskeyStatus(),
-        detectPasskeySupport(),
-      ])
-
-    const has2FA =
-      Boolean(twoFAResponse?.success) && Boolean(twoFAResponse?.data?.enabled)
-    const hasPasskey =
-      Boolean(passkeyResponse?.success) &&
-      Boolean(passkeyResponse?.data?.enabled)
-
-    return {
-      has2FA,
-      hasPasskey,
-      passkeySupported,
-    }
-  } catch (error) {
-    // eslint-disable-next-line no-console
-    console.error('[Secure Verification] Failed to check methods', error)
+  const realm = useAuthStore.getState().auth.session?.authentication_realm
+  if (realm !== 'CENTRAL' && realm !== 'LOCAL_ONLY' && realm !== 'LEGACY') {
     return {
       has2FA: false,
       hasPasskey: false,
       passkeySupported: false,
+      twoFAUnavailable: true,
+      passkeyUnavailable: true,
     }
+  }
+  const central = realm === 'CENTRAL'
+  // Central verification uses only its own Passkey; its 2FA belongs to the
+  // central authority and cannot be used for local security proofs.
+  const [twoFA, passkey, support] = await Promise.allSettled([
+    central ? Promise.resolve(null) : get2FAStatus(),
+    getPasskeyStatus(),
+    detectPasskeySupport(),
+  ])
+  const twoFAResponse = twoFA.status === 'fulfilled' ? twoFA.value : null
+  const passkeyResponse = passkey.status === 'fulfilled' ? passkey.value : null
+  return {
+    has2FA: Boolean(twoFAResponse?.success && twoFAResponse.data?.enabled),
+    hasPasskey: Boolean(
+      passkeyResponse?.success && passkeyResponse.data?.enabled
+    ),
+    passkeySupported: support.status === 'fulfilled' && support.value,
+    twoFAUnavailable: !central && (!twoFAResponse || !twoFAResponse.success),
+    passkeyUnavailable: !passkeyResponse || !passkeyResponse.success,
   }
 }
 

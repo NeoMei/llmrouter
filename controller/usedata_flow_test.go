@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -20,7 +21,10 @@ type flowQuotaResponse struct {
 func setupFlowControllerTestDB(t *testing.T) {
 	t.Helper()
 	db := setupModelListControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.Token{}, &model.QuotaData{}))
+	require.NoError(t, db.AutoMigrate(&model.Token{}, &model.QuotaData{}, &model.UserSession{}))
+	require.NoError(t, model.RegisterProductFundingModels(db))
+	require.NoError(t, db.Create(&model.User{Id: 1, Username: "flow-native", AffCode: "flow-native", Status: common.UserStatusEnabled, AuthVersion: 1, FundingRealm: model.NativeFundingLocalOnly, FundingRealmEvidence: "reviewed", NativePassword: true}).Error)
+	require.NoError(t, db.Create(&model.UserSession{SID: "flow-native-session", UserID: 1, Version: 1, UserAuthVersion: 1, AuthRealm: model.NativeFundingLocalOnly, Status: model.UserSessionStatusActive, RefreshHash: "fixture", LoginMethod: "password", ExpiresAt: time.Now().Add(time.Hour).Unix()}).Error)
 	require.NoError(t, model.DB.Create(&model.Channel{Id: 1, Name: "east"}).Error)
 	require.NoError(t, model.DB.Create(&model.Token{Id: 11, UserId: 1, Key: "sk-primary", Name: "primary"}).Error)
 	require.NoError(t, model.DB.Create(&model.Token{Id: 22, UserId: 2, Key: "sk-backup", Name: "backup"}).Error)
@@ -52,6 +56,14 @@ func setupFlowControllerTestDB(t *testing.T) {
 	}).Error)
 }
 
+func setAuthenticatedFlowNativeSession(ctx *gin.Context) {
+	ctx.Set("authenticated_native_realm", true)
+	ctx.Set("id", 1)
+	ctx.Set("session_id", "flow-native-session")
+	ctx.Set("session_version", int64(1))
+	ctx.Set("auth_version", int64(1))
+}
+
 func decodeFlowQuotaResponse(t *testing.T, recorder *httptest.ResponseRecorder) flowQuotaResponse {
 	t.Helper()
 	require.Equal(t, http.StatusOK, recorder.Code)
@@ -66,6 +78,7 @@ func TestGetAllFlowQuotaDatesUsesAdminDimensions(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
+	setAuthenticatedFlowNativeSession(ctx)
 	ctx.Set("role", common.RoleAdminUser)
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/data/flow?start_timestamp=1000&end_timestamp=2000&username=bob", nil)
 
@@ -85,6 +98,7 @@ func TestGetAllFlowQuotaDatesUsesRootDimensions(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
+	setAuthenticatedFlowNativeSession(ctx)
 	ctx.Set("role", common.RoleRootUser)
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/data/flow?start_timestamp=1000&end_timestamp=2000&username=alice", nil)
 
@@ -104,6 +118,7 @@ func TestGetUserFlowQuotaDatesRestrictsToAuthenticatedUser(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
+	setAuthenticatedFlowNativeSession(ctx)
 	ctx.Set("id", 1)
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/data/flow/self?start_timestamp=1000&end_timestamp=2000", nil)
 
@@ -122,6 +137,7 @@ func TestGetUserFlowQuotaDatesRejectsInvalidTimeRange(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
+	setAuthenticatedFlowNativeSession(ctx)
 	ctx.Set("id", 1)
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/data/flow/self?start_timestamp=bad&end_timestamp=2000", nil)
 

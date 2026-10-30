@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
+import { clearSelectedSession } from '@/lib/auth-selection'
 import type { LoginSession } from '@/stores/auth-store'
 
 import type {
@@ -160,6 +161,7 @@ export async function getLoginSessions(): Promise<ApiResponse<LoginSession[]>> {
 
 export async function revokeLoginSession(sid: string): Promise<ApiResponse> {
   const res = await api.delete(`/api/user/sessions/${encodeURIComponent(sid)}`)
+  if (res.data.success) clearSelectedSession(sid)
   return res.data
 }
 

@@ -9,8 +9,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"image"
+	"image/color"
 	"image/jpeg"
 	"image/png"
+	"mime/multipart"
+	"net/textproto"
+	"strings"
 	"testing"
 )
 
@@ -29,6 +33,182 @@ func imageFixtureBytes(t *testing.T) []byte {
 	var b bytes.Buffer
 	require.NoError(t, png.Encode(&b, image.NewRGBA(image.Rect(0, 0, 2, 2))))
 	return b.Bytes()
+}
+
+func wanFixtureBytes(t *testing.T, width, height int) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	require.NoError(t, png.Encode(&b, image.NewRGBA(image.Rect(0, 0, width, height))))
+	return b.Bytes()
+}
+
+func TestWanMaskedEditConvertsOpenAIAlphaAndRejectsPartialAlpha(t *testing.T) {
+	p := imagePolicyFixture("images.edits.create")
+	p.PublicModel, p.UpstreamModel, p.ChannelType, p.Origin = "wanx2.1-imageedit", "wanx2.1-imageedit", constant.ChannelTypeAli, "https://dashscope.aliyuncs.com"
+	p.MaxInputImages, p.ResourceOrigins = 1, []string{"https://images.example"}
+	makeRequest := func(alpha, red uint8) ([]byte, string) {
+		var source bytes.Buffer
+		mask := image.NewNRGBA(image.Rect(0, 0, 512, 512))
+		mask.SetNRGBA(0, 0, color.NRGBA{R: red, G: 42, B: 99, A: alpha})
+		mask.SetNRGBA(1, 0, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+		require.NoError(t, png.Encode(&source, mask))
+		var body bytes.Buffer
+		w := multipart.NewWriter(&body)
+		require.NoError(t, w.WriteField("model", p.PublicModel))
+		require.NoError(t, w.WriteField("prompt", "replace"))
+		for _, part := range []struct {
+			name string
+			data []byte
+		}{{"image", wanFixtureBytes(t, 512, 512)}, {"mask", source.Bytes()}} {
+			header := textproto.MIMEHeader{"Content-Disposition": {`form-data; name="` + part.name + `"; filename="file.png"`}, "Content-Type": {"image/png"}}
+			out, err := w.CreatePart(header)
+			require.NoError(t, err)
+			_, err = out.Write(part.data)
+			require.NoError(t, err)
+		}
+		require.NoError(t, w.Close())
+		return body.Bytes(), w.FormDataContentType()
+	}
+	body, ct := makeRequest(0, 27)
+	parsed, err := parseImageOperation(p, WireOperation{ID: p.WireOperation}, ct, body)
+	require.NoError(t, err)
+	s := &Session{canonical: parsed.Canonical, call: Call{Model: p.PublicModel, WireOperation: p.WireOperation, MediaSnapshot: parsed.MediaSnapshot}}
+	native, _, _, err := s.ImageBody()
+	require.NoError(t, err)
+	var req struct {
+		Input map[string]string `json:"input"`
+	}
+	require.NoError(t, common.UnmarshalUnique(native, &req))
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(req.Input["mask_image_url"], "data:image/png;base64,"))
+	require.NoError(t, err)
+	mask, err := png.Decode(bytes.NewReader(raw))
+	require.NoError(t, err)
+	assert.Equal(t, color.NRGBA{R: 255, G: 255, B: 255, A: 255}, color.NRGBAModel.Convert(mask.At(0, 0)))
+	assert.Equal(t, color.NRGBA{A: 255}, color.NRGBAModel.Convert(mask.At(1, 0)))
+	// Invisible RGB differences must remain part of the original identity even
+	// though both masks convert to the same provider image.
+	changed, changedCT := makeRequest(0, 28)
+	changedParsed, err := parseImageOperation(p, WireOperation{ID: p.WireOperation}, changedCT, changed)
+	require.NoError(t, err)
+	assert.NotEqual(t, string(parsed.Canonical), string(changedParsed.Canonical))
+	partial, partialCT := makeRequest(128, 27)
+	_, err = parseImageOperation(p, WireOperation{ID: p.WireOperation}, partialCT, partial)
+	require.Error(t, err)
+}
+
+func TestWanMaskedEditRejectsInvalidDimensionsPromptAndCount(t *testing.T) {
+	p := imagePolicyFixture("images.edits.create")
+	p.PublicModel, p.UpstreamModel, p.ChannelType, p.Origin = "wanx2.1-imageedit", "wanx2.1-imageedit", constant.ChannelTypeAli, "https://dashscope.aliyuncs.com"
+	p.MaxInputImages = 1
+	p.ResourceOrigins = []string{"https://images.example"}
+	tests := []struct {
+		name          string
+		width, height int
+		prompt, n     string
+		valid         bool
+	}{
+		{"minimum", 512, 512, strings.Repeat("中", 800), "1", true},
+		{"short side", 511, 512, "edit", "1", false},
+		{"long side", 4097, 512, "edit", "1", false},
+		{"prompt length", 512, 512, strings.Repeat("中", 801), "1", false},
+		{"multiple", 512, 512, "edit", "2", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var body bytes.Buffer
+			w := multipart.NewWriter(&body)
+			require.NoError(t, w.WriteField("model", p.PublicModel))
+			require.NoError(t, w.WriteField("prompt", tc.prompt))
+			require.NoError(t, w.WriteField("n", tc.n))
+			imageBytes := wanFixtureBytes(t, tc.width, tc.height)
+			for _, name := range []string{"image", "mask"} {
+				header := textproto.MIMEHeader{"Content-Disposition": {`form-data; name="` + name + `"; filename="file.png"`}, "Content-Type": {"image/png"}}
+				part, e := w.CreatePart(header)
+				require.NoError(t, e)
+				_, e = part.Write(imageBytes)
+				require.NoError(t, e)
+			}
+			require.NoError(t, w.Close())
+			_, err := parseImageOperation(p, WireOperation{ID: p.WireOperation}, w.FormDataContentType(), body.Bytes())
+			if tc.valid {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+}
+
+func TestWanMaskedEditAdmissionAndNativeBody(t *testing.T) {
+	p := imagePolicyFixture("images.edits.create")
+	p.PublicModel, p.UpstreamModel, p.ChannelType, p.Origin = "wanx2.1-imageedit", "wanx2.1-imageedit", constant.ChannelTypeAli, "https://dashscope.aliyuncs.com"
+	p.MaxInputImages = 1
+	p.ResourceOrigins = []string{"https://images.example"}
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	require.NoError(t, w.WriteField("model", p.PublicModel))
+	require.NoError(t, w.WriteField("prompt", "replace object"))
+	for _, name := range []string{"image", "mask"} {
+		header := textproto.MIMEHeader{"Content-Disposition": {`form-data; name="` + name + `"; filename="` + name + `.png"`}, "Content-Type": {"image/png"}}
+		part, err := w.CreatePart(header)
+		require.NoError(t, err)
+		_, err = part.Write(wanFixtureBytes(t, 512, 512))
+		require.NoError(t, err)
+	}
+	require.NoError(t, w.Close())
+	parsed, err := parseImageOperation(p, WireOperation{ID: p.WireOperation}, w.FormDataContentType(), body.Bytes())
+	require.NoError(t, err)
+	assert.Equal(t, 1, parsed.Quantity)
+	s := &Session{canonical: parsed.Canonical, call: Call{Model: p.PublicModel, WireOperation: p.WireOperation, MediaSnapshot: parsed.MediaSnapshot}}
+	native, contentType, path, err := s.ImageBody()
+	require.NoError(t, err)
+	assert.Equal(t, "application/json", contentType)
+	assert.Equal(t, "/api/v1/services/aigc/image2image/image-synthesis", path)
+	var request struct {
+		Model string            `json:"model"`
+		Input map[string]string `json:"input"`
+	}
+	require.NoError(t, common.UnmarshalUnique(native, &request))
+	assert.Equal(t, p.UpstreamModel, request.Model)
+	assert.Equal(t, "description_edit_with_mask", request.Input["function"])
+	assert.Equal(t, "data:image/png;base64,"+base64.StdEncoding.EncodeToString(wanFixtureBytes(t, 512, 512)), request.Input["base_image_url"])
+	maskBytes, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(request.Input["mask_image_url"], "data:image/png;base64,"))
+	require.NoError(t, err)
+	mask, err := png.Decode(bytes.NewReader(maskBytes))
+	require.NoError(t, err)
+	assert.Equal(t, color.NRGBA{R: 255, G: 255, B: 255, A: 255}, color.NRGBAModel.Convert(mask.At(0, 0)))
+
+	badPolicy := p
+	badPolicy.UpstreamModel = "wan2.7-image"
+	assert.False(t, badPolicy.valid(badPolicy.PublicModel, badPolicy.WireOperation))
+	_, err = parseImageOperation(p, WireOperation{ID: p.WireOperation}, w.FormDataContentType(), bytes.Replace(body.Bytes(), []byte(`name="mask"`), []byte(`name="other"`), 1))
+	require.Error(t, err)
+}
+
+func TestWanMaskedEditValidatesProviderResultAndResourceOrigin(t *testing.T) {
+	p := imagePolicyFixture("images.edits.create")
+	p.PublicModel, p.UpstreamModel, p.ChannelType, p.Origin = "wanx2.1-imageedit", "wanx2.1-imageedit", constant.ChannelTypeAli, "https://dashscope.aliyuncs.com"
+	p.MaxInputImages = 1
+	p.ResourceOrigins = []string{"https://images.example"}
+	raw := []byte(`{"request_id":"result","output":{"task_id":"owned-task","task_status":"SUCCEEDED","results":[{"url":"https://images.example/a.png?signature=fixture"}],"task_metrics":{"TOTAL":1,"SUCCEEDED":1,"FAILED":0}},"usage":{"image_count":1}}`)
+	fetch := func(location string) ([]byte, string, error) { return imageFixtureBytes(t), "image/png", nil }
+	result, err := ObserveWanMaskedEdit(p, "owned-task", raw, fetch)
+	require.NoError(t, err)
+	require.Len(t, result.Outputs, 1)
+	assert.Contains(t, string(result.Body), `"b64_json"`)
+	assert.NotContains(t, string(result.Body), "signature")
+	again, err := ObserveWanMaskedEdit(p, "owned-task", bytes.Replace(raw, []byte("signature=fixture"), []byte("signature=refreshed"), 1), fetch)
+	require.NoError(t, err)
+	assert.Equal(t, result.SHA256, again.SHA256)
+	for _, bad := range [][]byte{
+		bytes.Replace(raw, []byte("owned-task"), []byte("other-task"), 1),
+		bytes.Replace(raw, []byte("images.example"), []byte("evil.example"), 1),
+		bytes.Replace(raw, []byte(`"image_count":1`), []byte(`"image_count":2`), 1),
+		bytes.Replace(raw, []byte(`"FAILED":0`), []byte(`"FAILED":1`), 1),
+	} {
+		_, err := ObserveWanMaskedEdit(p, "owned-task", bad, fetch)
+		require.Error(t, err)
+	}
 }
 func TestImageNativePolicyAdmission(t *testing.T) {
 	p := imagePolicyFixture("gemini.images.generate")

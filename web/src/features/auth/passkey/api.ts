@@ -28,8 +28,12 @@ function proofHeaders(proofToken?: string): Record<string, string> | undefined {
   return proofToken ? { 'X-Security-Proof': proofToken } : undefined
 }
 
-export async function getPasskeyStatus(): Promise<ApiResponse<PasskeyStatus>> {
-  const res = await api.get<ApiResponse<PasskeyStatus>>('/api/user/passkey')
+export async function getPasskeyStatus(
+  fresh = false
+): Promise<ApiResponse<PasskeyStatus>> {
+  const res = await api.get<ApiResponse<PasskeyStatus>>('/api/user/passkey', {
+    disableDuplicate: fresh,
+  })
   return res.data
 }
 
@@ -55,7 +59,11 @@ export async function finishPasskeyRegistration(
       flow_token: flowToken,
       credential: payload,
     },
-    { headers: proofHeaders(proofToken), acceptAuthRotation: true }
+    {
+      headers: proofHeaders(proofToken),
+      acceptAuthRotation: true,
+      allowNoAuthRotation: true,
+    }
   )
   return res.data
 }
@@ -64,6 +72,7 @@ export async function deletePasskey(proofToken?: string): Promise<ApiResponse> {
   const res = await api.delete<ApiResponse>('/api/user/passkey', {
     headers: proofHeaders(proofToken),
     acceptAuthRotation: true,
+    allowNoAuthRotation: true,
   })
   return res.data
 }

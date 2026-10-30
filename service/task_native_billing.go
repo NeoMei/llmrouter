@@ -12,6 +12,10 @@ import (
 // Installed by the platform router; background workers retain no credentials.
 var PlatformTaskObserver func(context.Context, string, string, metering.Usage) error
 
+// PlatformTaskSettlementCheck verifies a task's settlement against UniHub.
+// It is service-only and never grants a caller access to the task.
+var PlatformTaskSettlementCheck func(context.Context, string) error
+
 // PlatformTaskRelease is installed by platformbilling for trusted no-output terminals.
 var PlatformTaskRelease func(context.Context, string, string) error
 

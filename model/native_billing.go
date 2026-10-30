@@ -126,6 +126,9 @@ func (s *NativeBillingStore) Begin(ctx context.Context, a NativeAdmission) (Nati
 			if err := lockProductFundingAdmission(tx, a.UserID); err != nil {
 				return err
 			}
+			if err := validateLocalFundingCredentialTx(tx, a.UserID, a.TokenID); err != nil {
+				return err
+			}
 			if tx.Migrator().HasTable(&ProductFundingAccount{}) {
 				var prior NativeBilling
 				e := tx.Where("user_id = ? AND call_id = ?", a.UserID, a.CallID).First(&prior).Error

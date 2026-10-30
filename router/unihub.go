@@ -5,12 +5,14 @@ import (
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/internal/platformaccount"
 	"github.com/QuantumNous/new-api/internal/unihubaccess"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/gin-gonic/gin"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -69,6 +71,7 @@ func SetUniHubRouter(r *gin.Engine, c platformaccount.Config) {
 		}
 		access, err := c.Resolve(ctx.Request.Context(), strings.TrimPrefix(h, "Bearer "))
 		if err != nil {
+			logger.LogWarn(ctx.Request.Context(), "unihub_session_failure stage=resolve")
 			ctx.Status(http.StatusUnauthorized)
 			return
 		}
@@ -79,11 +82,14 @@ func SetUniHubRouter(r *gin.Engine, c platformaccount.Config) {
 		}
 		local, err := model.ResolveUniHubProjection(platformaccount.Identity{Issuer: access.Issuer, User: platformaccount.User{ID: access.Subject, Name: access.User.Name, Email: access.User.Email}})
 		if err != nil {
+			logger.LogWarn(ctx.Request.Context(), "unihub_session_failure stage=projection")
 			ctx.Status(401)
 			return
 		}
 		local.Role = middleware.RoleFromAccess(access)
-		user := controller.BuildSelfUserData(local)
+		authz.SetProductPrincipal(ctx, userkit.Principal{LocalUser: userkit.LocalUser{ID: strconv.Itoa(local.Id)}, Access: access})
+		user := controller.CurrentProductUserData(ctx, local)
+		user["authentication_realm"] = bundle.Session.AuthenticationRealm
 		user["permissions"] = gin.H{"admin_permissions": permissionsForAccess(access)}
 
 		service.WriteRefreshCookie(ctx, bundle.RefreshToken)

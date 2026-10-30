@@ -85,9 +85,27 @@ export function sanitizeAuthRedirect(
 export function getProductLoginDestination(
   centralSessionHandoff: unknown,
   redirectTo: unknown,
-  origin: string
+  origin: string,
+  sid?: string
 ): string {
   const destination = sanitizeAuthRedirect(redirectTo, origin) ?? '/dashboard'
   if (centralSessionHandoff !== true) return destination
-  return `/api/user/auth/unihub-handoff?${new URLSearchParams({ return_to: destination })}`
+  const params = new URLSearchParams({ return_to: destination })
+  if (sid && /^[A-Za-z0-9_-]{1,128}$/.test(sid)) {
+    params.set('auth_session', sid)
+  }
+  return `/api/user/auth/unihub-handoff?${params}`
+}
+
+export function getOAuthCallbackDestination(
+  bundle: { central_session_handoff?: boolean; session: { sid: string } },
+  redirectTo: unknown,
+  origin: string
+): string {
+  return getProductLoginDestination(
+    bundle.central_session_handoff,
+    redirectTo,
+    origin,
+    bundle.session.sid
+  )
 }

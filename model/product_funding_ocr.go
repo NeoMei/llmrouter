@@ -40,7 +40,7 @@ func (s *OCRBillingStore) reserveManagedProductFunding(ctx context.Context, j OC
 // A purchased subscription is a product entitlement, not another cash wallet.
 // Consuming it keeps original limits and does not debit the central wallet again.
 func (s *OCRBillingStore) reserveManagedSubscription(ctx context.Context, j OCRJob) (OCRJob, bool, error) {
-	store, _, err := ProductFundingStoreForUser(ctx, j.UserID)
+	store, _, err := productFundingStoreForDB(ctx, s.db, j.UserID)
 	if err != nil {
 		return j, false, err
 	}
@@ -94,7 +94,7 @@ func (s *OCRBillingStore) reserveManagedSubscription(ctx context.Context, j OCRJ
 // The existing OCR/native journal continues to own provider dispatch, evidence,
 // counters and audit. Only its financial component is delegated to UniHub.
 func (s *OCRBillingStore) reserveProductFunding(ctx context.Context, j OCRJob) (OCRJob, error) {
-	store, managed, err := ProductFundingStoreForUser(ctx, j.UserID)
+	store, managed, err := productFundingStoreForDB(ctx, s.db, j.UserID)
 	if err != nil {
 		return j, err
 	}
@@ -155,7 +155,7 @@ func (s *OCRBillingStore) finishProductFunding(ctx context.Context, id string, a
 	if j.BillingState == "settled" || j.BillingState == "refunded" {
 		return j, nil
 	}
-	store, _, err := ProductFundingStoreForUser(ctx, j.UserID)
+	store, _, err := productFundingStoreForDB(ctx, s.db, j.UserID)
 	if err != nil {
 		return j, err
 	}

@@ -40,6 +40,14 @@ async function fixture(page: Page) {
         },
       })
     }
+    if (path === '/api/user/self') {
+      return route.fulfill({
+        json: {
+          success: true,
+          data: { id: 1, username: 'fixture', role: 100, status: 1 },
+        },
+      })
+    }
     if (path === '/api/option/') {
       if (route.request().method() === 'PUT') {
         writes.push(route.request().postDataJSON())

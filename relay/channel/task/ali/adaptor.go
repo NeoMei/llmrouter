@@ -595,7 +595,10 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		}
 		taskResult.Status = model.TaskStatusSuccess
 		taskResult.Url = url
-	case "FAILED", "CANCELED", "UNKNOWN":
+	case "UNKNOWN":
+		// An expired provider task may already have produced a billable video.
+		taskResult.Status = model.TaskStatusUnknown
+	case "FAILED", "CANCELED":
 		taskResult.Status = model.TaskStatusFailure
 		if aliResp.Message != "" {
 			taskResult.Reason = aliResp.Message
@@ -672,8 +675,10 @@ func convertAliStatus(aliStatus string) string {
 		return dto.VideoStatusInProgress
 	case "SUCCEEDED":
 		return dto.VideoStatusCompleted
-	case "FAILED", "CANCELED", "UNKNOWN":
+	case "FAILED", "CANCELED":
 		return dto.VideoStatusFailed
+	case "UNKNOWN":
+		return dto.VideoStatusUnknown
 	default:
 		return dto.VideoStatusUnknown
 	}

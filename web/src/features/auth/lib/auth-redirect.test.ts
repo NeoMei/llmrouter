@@ -25,6 +25,7 @@ import {
   getSavedLanguage,
   sanitizeAuthRedirect,
   getProductLoginDestination,
+  getOAuthCallbackDestination,
 } from './auth-redirect'
 
 const origin = 'https://dashboard.example.com'
@@ -117,6 +118,23 @@ describe('central browser session handoff after original authentication', () => 
     assert.equal(
       getProductLoginDestination(true, 'https://attacker.test/', origin),
       '/api/user/auth/unihub-handoff?return_to=%2Fdashboard'
+    )
+  })
+  test('includes only the explicitly selected session in a handoff navigation', () => {
+    assert.equal(
+      getProductLoginDestination(true, '/users', origin, 'sid-central'),
+      '/api/user/auth/unihub-handoff?return_to=%2Fusers&auth_session=sid-central'
+    )
+  })
+  test('OAuth callback handoff uses the SID from the accepted login bundle', () => {
+    const result = getOAuthCallbackDestination(
+      { central_session_handoff: true, session: { sid: 'oauth-session' } },
+      '/users',
+      origin
+    )
+    assert.equal(
+      result,
+      '/api/user/auth/unihub-handoff?return_to=%2Fusers&auth_session=oauth-session'
     )
   })
 })

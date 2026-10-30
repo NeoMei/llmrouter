@@ -108,6 +108,10 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
     }
 
     const methods = await fetchVerificationMethods()
+    if (methods.twoFAUnavailable) {
+      toast.error(t('Verification unavailable'))
+      return
+    }
     if (!methods.has2FA) {
       // Without 2FA enabled, register directly. The browser-level Passkey prompt
       // is itself a strong proof of presence, so no extra verification is needed.
@@ -128,6 +132,10 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
 
   const handleRemove = useCallback(async () => {
     const methods = await fetchVerificationMethods()
+    if (methods.twoFAUnavailable) {
+      toast.error(t('Verification unavailable'))
+      return
+    }
     let required: VerificationMethod | null = null
     if (methods.has2FA) {
       required = '2fa'
@@ -136,6 +144,10 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
     }
 
     if (!required) {
+      if (methods.passkeyUnavailable) {
+        toast.error(t('Verification unavailable'))
+        return
+      }
       toast.error(
         t(
           'Please enable Two-factor Authentication or Passkey before proceeding'

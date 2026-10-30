@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/internal/knowledgebinding"
 	ci "github.com/QuantumNous/new-api/internal/platformbilling/continuityindex"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -86,28 +87,33 @@ type Attempt struct {
 func (Attempt) TableName() string { return "platform_model_attempts" }
 
 type Adapter struct {
-	history         *ci.Index
-	historyResolver NativeHistoryResolver
-	db              *gorm.DB
-	config          Config
-	client          *client
+	bindingResolver  func(*gorm.DB, string, string, string) (ManagedBinding, string, error)
+	bindingRotator   func(*gorm.DB, string) error
+	knowledgeResults *knowledgeResultVault
+	history          *ci.Index
+	historyResolver  NativeHistoryResolver
+	db               *gorm.DB
+	config           Config
+	client           *client
 }
 type Session struct {
-	nativeSend    string
-	canonical     []byte
-	adapter       *Adapter
-	call          Call
-	attempt       Attempt
-	requestTariff bool
-	confirmed     *Usage
-	safeFailure   bool
-	uncertain     bool
-	err           error
+	knowledgeAdmission *pinnedKnowledgeAdmission
+	nativeSend         string
+	canonical          []byte
+	adapter            *Adapter
+	call               Call
+	attempt            Attempt
+	requestTariff      bool
+	confirmed          *Usage
+	safeFailure        bool
+	uncertain          bool
+	err                error
 }
 
 var stableID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
 
 func New(db *gorm.DB, c Config) (*Adapter, error) {
+	c.KnowledgePolicies = cloneKnowledgePolicies(c.KnowledgePolicies)
 	c.InstanceID = strings.TrimSpace(c.InstanceID)
 	if c.InstanceID == "" {
 		c.InstanceID = "default"
@@ -161,13 +167,29 @@ func New(db *gorm.DB, c Config) (*Adapter, error) {
 	if db == nil || !stableID.MatchString(c.InstanceID) || c.Group == "" || c.Group == "auto" || c.MaxInputTokens < 1 || c.MaxInputTokens > 1<<20 || c.MaxOutputTokens < 1 || c.MaxOutputTokens > 32768 || c.MaxBodyBytes < 1 || c.MaxBodyBytes > 1<<20 {
 		return nil, ErrInvalid
 	}
+	if c.EnableKnowledgeResultRead && !c.AllowAliEmbeddingV4 && !c.AllowAliRerank {
+		return nil, ErrInvalid
+	}
 	var err error
 	a.client, err = newClient(c)
 	if err != nil {
 		return nil, err
 	}
-	if err = db.AutoMigrate(&Call{}, &Attempt{}); err != nil {
+	if err = db.AutoMigrate(&Call{}, &Attempt{}, &knowledgebinding.KnowledgeActiveBinding{}, &knowledgebinding.KnowledgeRoutePin{}); err != nil {
 		return nil, err
+	}
+	if c.AllowAliEmbeddingV4 || c.AllowAliRerank {
+		if c.AliEmbeddingResultKeys != nil || c.AliEmbeddingResultActiveKey != "" {
+			if len(c.AliEmbeddingResultKey) != 0 {
+				return nil, ErrInvalid
+			}
+			a.knowledgeResults, err = newKnowledgeResultVaultWithKeys(db, c.AliEmbeddingResultKeys, c.AliEmbeddingResultActiveKey, time.Hour)
+		} else {
+			a.knowledgeResults, err = newKnowledgeResultVault(db, c.AliEmbeddingResultKey, time.Hour)
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err = a.initNativeHistory(context.Background()); err != nil {
 		return nil, err
@@ -382,6 +404,12 @@ func compareCall(old, row Call) error {
 	return ErrDuplicate
 }
 func (s *Session) Dispatch(ctx context.Context, channel int) error {
+	if s.PinnedKnowledge() {
+		if channel != s.knowledgeAdmission.binding.ChannelID {
+			return ErrConflict
+		}
+		return nil
+	}
 	if IsImageWire(s.WireOperation().ID) {
 		p, e := s.ImagePolicy()
 		if e != nil || p.ChannelID != channel {
@@ -445,6 +473,9 @@ func (s *Session) Dispatch(ctx context.Context, channel int) error {
 	return nil
 }
 func (s *Session) Rejected() {
+	if s.PinnedKnowledge() {
+		return
+	}
 	if s.attempt.ID == 0 {
 		return
 	}
@@ -535,6 +566,16 @@ func (s *Session) Finish(ctx context.Context) error {
 	return nil
 }
 func (a *Adapter) deliver(ctx context.Context, row Call) error {
+	var current Call
+	if err := a.db.WithContext(ctx).First(&current, "call_id = ?", row.CallID).Error; err != nil {
+		return err
+	}
+	if current.EvidenceConflict {
+		return ErrConflict
+	}
+	if current.Status != row.Status || current.Intent != row.Intent {
+		return ErrPending
+	}
 	operation, terminal := "settle", "SETTLED"
 	if row.Status == "RELEASE_PENDING" {
 		operation, terminal = "release", "RELEASED"
@@ -550,7 +591,32 @@ func (a *Adapter) deliver(ctx context.Context, row Call) error {
 	if !remote.matches(row) || remote.Status != terminal {
 		return ErrPending
 	}
-	return a.db.WithContext(ctx).Model(&Call{}).Where("call_id = ? AND status = ?", row.CallID, row.Status).Updates(map[string]any{"status": terminal, "charged": remote.Charged}).Error
+	saved := a.db.WithContext(ctx).Model(&Call{}).Where("call_id = ? AND status = ? AND intent = ? AND evidence_conflict = ?", row.CallID, row.Status, row.Intent, false).Updates(map[string]any{"status": terminal, "charged": remote.Charged})
+	if saved.Error != nil {
+		return saved.Error
+	}
+	if saved.RowsAffected != 1 {
+		var latest Call
+		if err := a.db.WithContext(ctx).First(&latest, "call_id = ?", row.CallID).Error; err != nil {
+			return err
+		}
+		if latest.EvidenceConflict {
+			// The remote command may already have succeeded while contradictory
+			// evidence was recorded. Preserve its terminal accounting state, but
+			// keep the conflict sticky and never return a result as valid.
+			if latest.Status == row.Status && latest.Intent == row.Intent {
+				if err := a.db.WithContext(ctx).Model(&Call{}).Where("call_id = ? AND status = ? AND intent = ? AND evidence_conflict = ?", row.CallID, row.Status, row.Intent, true).Updates(map[string]any{"status": terminal, "charged": remote.Charged}).Error; err != nil {
+					return err
+				}
+			}
+			return ErrConflict
+		}
+		if latest.Status == terminal && latest.Intent == row.Intent {
+			return nil
+		}
+		return ErrPending
+	}
+	return nil
 }
 
 // Recover only resends durable final commands. UNKNOWN calls are never replayed
@@ -655,4 +721,36 @@ func (a *Adapter) Receipt(ctx context.Context, credential, task, id string) (Rec
 		return Receipt{}, ErrInvalid
 	}
 	return Receipt{CallID: row.CallID, Status: row.Status, Charged: row.Charged, Asset: asset}, nil
+}
+
+// ChatAdmissionPolicy describes the billing branch used by Admit and its
+// configured per-asset rate pins. It never includes credentials or prices.
+func (a *Adapter) ChatAdmissionPolicy() (string, map[string]map[string]string) {
+	pins := map[string]map[string]string{}
+	mode := "legacy"
+	if len(a.config.OperationRateIDs["chat"]) > 0 {
+		mode = "metered_v2"
+		for asset, models := range a.config.OperationRateIDs["chat"] {
+			pins[asset] = map[string]string{}
+			for model, id := range models {
+				pins[asset][model] = id
+			}
+		}
+		return mode, pins
+	}
+	pins["CREDIT/6"] = map[string]string{}
+	for model, id := range a.config.RateIDs {
+		pins["CREDIT/6"][model] = id
+	}
+	for asset, models := range a.config.AssetRateIDs {
+		if pins[asset] == nil {
+			pins[asset] = map[string]string{}
+		}
+		for model, id := range models {
+			if id != "" {
+				pins[asset][model] = id
+			}
+		}
+	}
+	return mode, pins
 }

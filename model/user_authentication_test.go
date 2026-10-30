@@ -165,7 +165,9 @@ func TestValidateBackupCodeCanOnlySucceedOnce(t *testing.T) {
 	user := User{Id: 123, Username: "backup-code-user", Password: "password", AuthVersion: 1}
 	require.NoError(t, DB.Create(&user).Error)
 	require.NoError(t, DB.Create(&TwoFA{UserId: user.Id, Secret: "secret", IsEnabled: false}).Error)
-	require.NoError(t, CreatePendingTwoFASetupBackupCodes(user.Id, []string{code}))
+	var pending TwoFA
+	require.NoError(t, DB.Where("user_id = ?", user.Id).First(&pending).Error)
+	require.NoError(t, CreatePendingTwoFASetupBackupCodes(user.Id, pending.Id, pending.Secret, []string{code}))
 
 	const attempts = 2
 	results := make(chan bool, attempts)
@@ -208,7 +210,7 @@ func TestPendingTwoFASetupAPIsRejectEnabledFactor(t *testing.T) {
 	twoFA := TwoFA{UserId: user.Id, Secret: "secret", IsEnabled: true}
 	require.NoError(t, DB.Create(&twoFA).Error)
 
-	require.Error(t, CreatePendingTwoFASetupBackupCodes(user.Id, []string{"ABCD-1234"}))
+	require.Error(t, CreatePendingTwoFASetupBackupCodes(user.Id, twoFA.Id, twoFA.Secret, []string{"ABCD-1234"}))
 	require.Error(t, twoFA.DeletePendingTwoFASetup())
 
 	var stored TwoFA

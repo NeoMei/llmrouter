@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
@@ -114,7 +114,10 @@ function ScopedApiKeysPanel(props: PanelProps) {
       ),
     retry: false,
   })
-  const mode = modeOverride ?? profile.data?.usage.default_funding_mode ?? ''
+  const profileReady = profile.isSuccess && !profile.isFetching
+  const mode = profileReady
+    ? (modeOverride ?? profile.data?.usage.default_funding_mode ?? '')
+    : ''
   const asset = mode === 'prepaid_cash' ? 'CNY/6' : 'CREDIT/6'
   const keys = useQuery({
     queryKey: [
@@ -142,10 +145,36 @@ function ScopedApiKeysPanel(props: PanelProps) {
       ),
     retry: false,
   })
+  const keysReady = keys.isSuccess && !keys.isFetching
+  const resourcesReady = resources.isSuccess && !resources.isFetching
+  const budgetReady = !!mode && budget.isSuccess && !budget.isFetching
+  const currentModeAllowed =
+    !!mode && !!profile.data?.usage.funding_modes.includes(mode as FundingMode)
+  const canCreate =
+    props.session.canFinanceWrite(
+      'model-credentials:write',
+      props.account.id
+    ) &&
+    profileReady &&
+    resourcesReady &&
+    keysReady &&
+    (!finance || budgetReady) &&
+    currentModeAllowed &&
+    !!profile.data?.usage.enabled
+  useEffect(() => {
+    if (
+      profile.isError ||
+      resources.isError ||
+      keys.isError ||
+      budget.isError
+    ) {
+      setSecret('')
+    }
+  }, [profile.isError, resources.isError, keys.isError, budget.isError])
   const availableFunds =
-    mode === 'credits'
+    resourcesReady && mode === 'credits'
       ? resources.data?.credits?.spendable
-      : mode === 'prepaid_cash'
+      : resourcesReady && mode === 'prepaid_cash'
         ? resources.data?.wallets?.find(
             (wallet) =>
               wallet.product_id === props.config.product_id &&
@@ -154,7 +183,7 @@ function ScopedApiKeysPanel(props: PanelProps) {
         : undefined
 
   async function create(form: HTMLFormElement) {
-    if (busy || !mode) return
+    if (busy || !mode || !canCreate || models.length === 0) return
     setBusy(true)
     setError('')
     setSecret('')
@@ -189,7 +218,16 @@ function ScopedApiKeysPanel(props: PanelProps) {
     }
   }
   async function revoke(id: string) {
-    if (busy) return
+    if (
+      busy ||
+      !keysReady ||
+      !props.session.canFinanceWrite(
+        'model-credentials:write',
+        props.account.id
+      )
+    ) {
+      return
+    }
     setBusy(true)
     setError('')
     setSecret('')
@@ -211,7 +249,19 @@ function ScopedApiKeysPanel(props: PanelProps) {
     }
   }
   async function saveBudget(total: string, perCall: string) {
-    if (busy || !budget.data || !mode) return
+    if (
+      busy ||
+      !props.session.canFinanceWrite('settings:write', props.account.id) ||
+      !budgetReady ||
+      !profileReady ||
+      !resourcesReady ||
+      !keysReady ||
+      !currentModeAllowed ||
+      !budget.data ||
+      !mode
+    ) {
+      return
+    }
     const version = budget.data.version
     setBusy(true)
     setError('')
@@ -258,7 +308,7 @@ function ScopedApiKeysPanel(props: PanelProps) {
             className='bg-background rounded border p-2'
             aria-label={t('Funding mode')}
             value={mode}
-            disabled={!profile.data || busy}
+            disabled={!profileReady || busy}
             onChange={(event) =>
               setModeOverride(event.target.value as FundingMode)
             }
@@ -266,14 +316,19 @@ function ScopedApiKeysPanel(props: PanelProps) {
             {!mode ? (
               <option value=''>{t('Choose funding mode')}</option>
             ) : null}
-            {profile.data?.usage.funding_modes.map((item) => (
-              <option value={item} key={item}>
-                {t(item === 'credits' ? 'Model credits' : 'Prepaid cash')}
-              </option>
-            ))}
+            {(profileReady ? profile.data?.usage.funding_modes : [])?.map(
+              (item) => (
+                <option value={item} key={item}>
+                  {t(item === 'credits' ? 'Model credits' : 'Prepaid cash')}
+                </option>
+              )
+            )}
           </select>
         </label>
         {profile.error ? <p role='alert'>{message(profile.error)}</p> : null}
+        {resources.error ? (
+          <p role='alert'>{message(resources.error)}</p>
+        ) : null}
         <p>
           {t('Available funds')}:{' '}
           {resources.isPending || profile.isPending ? (
@@ -340,15 +395,14 @@ function ScopedApiKeysPanel(props: PanelProps) {
           </fieldset>
           <Submit
             text='Create API key'
-            busy={
-              busy ||
-              !mode ||
-              models.length === 0 ||
-              !profile.data?.usage.enabled
-            }
+            busy={busy || !mode || models.length === 0 || !canCreate}
           />
         </form>
-        {secret ? (
+        {secret &&
+        !profile.isError &&
+        !resources.isError &&
+        !keys.isError &&
+        !budget.isError ? (
           <div className='space-y-2 rounded border p-3' role='status'>
             <p>{t('Copy this key now. It will only be shown once.')}</p>
             <code className='block break-all select-all'>{secret}</code>
@@ -380,69 +434,85 @@ function ScopedApiKeysPanel(props: PanelProps) {
               </tr>
             </thead>
             <tbody>
-              {keys.data?.map((key) => (
-                <tr key={key.id} className='border-t'>
-                  <td className='p-2'>{key.name}</td>
-                  <td>
-                    {t(
-                      key.revoked_at
-                        ? 'Revoked'
-                        : key.expires_at &&
-                            Date.parse(key.expires_at) <= Date.now()
-                          ? 'Expired'
-                          : 'Active'
-                    )}
-                  </td>
-                  <td className='max-w-56 p-2 break-words'>
-                    {key.models.join(', ')}
-                    <details>
-                      <summary>
-                        {t('Granted capabilities (fixed at creation)')}
-                      </summary>
-                      {key.operations ? (
-                        Object.entries(key.operations).map(
-                          ([model, operations]) => (
-                            <p key={model}>
-                              {model}: {operations.join(', ') || '—'}
-                            </p>
-                          )
-                        )
-                      ) : (
-                        <p>
-                          {t('Legacy keys retain their original permissions.')}
-                        </p>
+              {(keysReady ? keys.data : [])
+                ?.filter(
+                  (key) =>
+                    (finance || key.actor_id === props.session.user?.id) &&
+                    key.account_id === props.account.id &&
+                    key.origin_product_id === props.config.product_id &&
+                    key.instance_id === (props.config.instance_id ?? 'default')
+                )
+                .map((key) => (
+                  <tr key={key.id} className='border-t'>
+                    <td className='p-2'>{key.name}</td>
+                    <td>
+                      {t(
+                        key.revoked_at
+                          ? 'Revoked'
+                          : key.expires_at &&
+                              Date.parse(key.expires_at) <= Date.now()
+                            ? 'Expired'
+                            : 'Active'
                       )}
-                    </details>
-                  </td>
-                  <td>{exactAmount(key.used, key.asset)}</td>
-                  <td>{exactAmount(key.held, key.asset)}</td>
-                  <td>
-                    {key.max_total === ''
-                      ? t('Unlimited')
-                      : exactAmount(key.max_total, key.asset)}
-                  </td>
-                  <td>
-                    {key.expires_at
-                      ? new Date(key.expires_at).toLocaleString()
-                      : t('Never')}
-                  </td>
-                  <td>
-                    {!key.revoked_at ? (
-                      <Button
-                        variant='outline'
-                        disabled={busy}
-                        onClick={() => void revoke(key.id)}
-                      >
-                        {t('Revoke')}
-                      </Button>
-                    ) : null}
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td className='max-w-56 p-2 break-words'>
+                      {key.models.join(', ')}
+                      <details>
+                        <summary>
+                          {t('Reported capability restrictions')}
+                        </summary>
+                        {key.operations ? (
+                          Object.entries(key.operations).map(
+                            ([model, operations]) => (
+                              <p key={model}>
+                                {model}: {operations.join(', ') || '—'}
+                              </p>
+                            )
+                          )
+                        ) : (
+                          <p>
+                            {t(
+                              'Capabilities are checked against current published rates when the key is used.'
+                            )}
+                          </p>
+                        )}
+                      </details>
+                    </td>
+                    <td>{exactAmount(key.used, key.asset)}</td>
+                    <td>{exactAmount(key.held, key.asset)}</td>
+                    <td>
+                      {key.max_total === ''
+                        ? t('Unlimited')
+                        : exactAmount(key.max_total, key.asset)}
+                    </td>
+                    <td>
+                      {key.expires_at
+                        ? new Date(key.expires_at).toLocaleString()
+                        : t('Never')}
+                    </td>
+                    <td>
+                      {!key.revoked_at &&
+                      props.session.canFinanceWrite(
+                        'model-credentials:write',
+                        props.account.id
+                      ) ? (
+                        <Button
+                          variant='outline'
+                          disabled={busy}
+                          onClick={() => void revoke(key.id)}
+                        >
+                          {t('Revoke')}
+                        </Button>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))}
             </tbody>
           </table>
         </div>
-        {keys.data?.length === 0 ? <p>{t('No API keys yet.')}</p> : null}
+        {keysReady && keys.data?.length === 0 ? (
+          <p>{t('No API keys yet.')}</p>
+        ) : null}
       </Panel>
       <Panel title='Usage budget'>
         <p>
@@ -450,19 +520,29 @@ function ScopedApiKeysPanel(props: PanelProps) {
             'The account budget applies to all keys for this product and instance. Wallet balance and consumption limits are separate.'
           )}
         </p>
-        {budget.data ? (
+        {budgetReady &&
+        profileReady &&
+        resourcesReady &&
+        keysReady &&
+        currentModeAllowed &&
+        budget.data ? (
           <>
             <p>
               {t('Used')}: {exactAmount(budget.data.used, budget.data.asset)} ·{' '}
               {t('Reserved')}:{' '}
               {exactAmount(budget.data.held, budget.data.asset)}
             </p>
-            <BudgetForm
-              key={`${mode}:${budget.data.version}`}
-              budget={budget.data}
-              busy={busy}
-              save={(total, perCall) => void saveBudget(total, perCall)}
-            />
+            {props.session.canFinanceWrite(
+              'settings:write',
+              props.account.id
+            ) ? (
+              <BudgetForm
+                key={`${mode}:${budget.data.version}`}
+                budget={budget.data}
+                busy={busy}
+                save={(total, perCall) => void saveBudget(total, perCall)}
+              />
+            ) : null}
           </>
         ) : null}
         {budget.error ? <p role='alert'>{message(budget.error)}</p> : null}

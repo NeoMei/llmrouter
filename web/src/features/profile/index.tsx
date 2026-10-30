@@ -16,11 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useTranslation } from 'react-i18next'
+
 import { Main } from '@/components/layout'
 import {
   CardStaggerContainer,
   CardStaggerItem,
 } from '@/components/page-transition'
+import { AccountSwitchCard } from '@/features/auth/components/account-switch-card'
 import { useStatus } from '@/hooks/use-status'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -36,9 +39,13 @@ import { TwoFACard } from './components/two-fa-card'
 import { useProfile } from './hooks'
 
 export function Profile() {
+  const { t } = useTranslation()
   const { profile, loading, refreshProfile } = useProfile()
   const { status } = useStatus()
   const permissions = useAuthStore((s) => s.auth.user?.permissions)
+  const realm = useAuthStore((s) => s.auth.session?.authentication_realm)
+  const central = realm === 'CENTRAL'
+  const realmKnown = central || realm === 'LOCAL_ONLY' || realm === 'LEGACY'
 
   const checkinEnabled = status?.checkin_enabled === true
   const turnstileEnabled = !!(
@@ -67,7 +74,16 @@ export function Profile() {
                   profile={profile}
                   onProfileUpdate={refreshProfile}
                 />
-                <ProfileSecurityCard profile={profile} loading={loading} />
+                {realmKnown ? (
+                  <ProfileSecurityCard
+                    profile={profile}
+                    loading={loading}
+                    central={central}
+                  />
+                ) : (
+                  <p role='alert'>{t('Verification unavailable')}</p>
+                )}
+                <AccountSwitchCard />
                 <LoginSessionsCard />
               </div>
 
@@ -80,8 +96,10 @@ export function Profile() {
                   />
                 )}
                 {canConfigureSidebar && <SidebarModulesCard />}
-                <PasskeyCard loading={loading} />
-                <TwoFACard loading={loading} />
+                {realmKnown && <PasskeyCard loading={loading} />}
+                {realmKnown && (
+                  <TwoFACard loading={loading} central={central} />
+                )}
               </div>
             </div>
           </CardStaggerItem>

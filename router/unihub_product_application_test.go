@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -27,10 +28,11 @@ func TestUniHubProductMemberOwnApplicationData(t *testing.T) {
 		require.Eventually(t, func() bool { return gopool.WorkerCount() == 0 }, 5*time.Second, 10*time.Millisecond)
 		model.LOG_DB = oldLog
 	})
-	require.NoError(t, f.db.AutoMigrate(&model.QuotaData{}, &model.Log{}, &model.Channel{}, &model.Ability{}, &model.Model{}, &model.Vendor{}, &model.Task{}, &model.Midjourney{}))
+	require.NoError(t, f.db.AutoMigrate(&model.QuotaData{}, &model.Log{}, &platformbilling.Call{}, &platformbilling.Attempt{}, &model.Channel{}, &model.Ability{}, &model.Model{}, &model.Vendor{}, &model.Task{}, &model.Midjourney{}))
 	member, _ := decodeUniHubBundle(t, f.request("POST", "/api/unihub/session", "subject", nil))
 	other, _ := decodeUniHubBundle(t, f.request("POST", "/api/unihub/session", "other", nil))
 	now := time.Now().Unix()
+	require.NoError(t, f.db.Create(&platformbilling.Call{CallID: "own-central-request", ActorID: "subject", InstanceID: "default", FundingProductID: "llmrouter", Model: "own-central-model", Status: "SETTLED", TelemetryOutcome: "success", CreatedAt: time.Unix(now, 0)}).Error)
 	for _, row := range []model.QuotaData{{UserID: member.Data.User.Id, Username: member.Data.User.Username, ModelName: "own-model", CreatedAt: now, Count: 1}, {UserID: other.Data.User.Id, Username: other.Data.User.Username, ModelName: "other-model", CreatedAt: now, Count: 9}} {
 		require.NoError(t, f.db.Create(&row).Error)
 	}
@@ -55,7 +57,8 @@ func TestUniHubProductMemberOwnApplicationData(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			w := f.request("GET", path+query, member.Data.AccessToken, nil)
 			require.Equal(t, 200, w.Code, w.Body.String())
-			assert.Contains(t, w.Body.String(), "own-model")
+			assert.Contains(t, w.Body.String(), "own-central-model")
+			assert.NotContains(t, w.Body.String(), "own-model")
 			assert.NotContains(t, w.Body.String(), "other-model")
 			assert.NotContains(t, w.Body.String(), "provider-secret")
 			assert.NotContains(t, w.Body.String(), "private")
@@ -230,7 +233,7 @@ func TestUniHubProductSSOApplicationDestinations(t *testing.T) {
 		require.Equal(t, 303, w.Code)
 		callback := f.callback(t, w)
 		require.Equal(t, 303, callback.Code)
-		assert.Equal(t, destination, callback.Header().Get("Location"))
+		requireSessionRedirect(t, callback, destination)
 	}
 	for _, destination := range []string{"https://attacker.test/", "//attacker.test", "/%2f%2fattacker.test", "/api/user/token", "/unknown"} {
 		w := httptest.NewRecorder()

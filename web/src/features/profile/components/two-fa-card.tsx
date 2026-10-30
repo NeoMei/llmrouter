@@ -43,14 +43,28 @@ import { TwoFASetupDialog } from './dialogs/two-fa-setup-dialog'
 
 interface TwoFACardProps {
   loading: boolean
+  central: boolean
 }
 
 type DialogKey = 'setup' | 'disable' | 'backup'
 
-export function TwoFACard({ loading: pageLoading }: TwoFACardProps) {
+export function TwoFACard({ loading: pageLoading, central }: TwoFACardProps) {
   const { t } = useTranslation()
-  const { status, loading, refetch } = useTwoFA(!pageLoading)
+  const { status, loading, refetch } = useTwoFA(!pageLoading && !central)
   const dialogs = useDialogs<DialogKey>()
+
+  if (!pageLoading && central) {
+    return (
+      <Card data-card-hover='false'>
+        <CardHeader>
+          <CardTitle>{t('Two-Factor Authentication')}</CardTitle>
+          <CardDescription>
+            {t('Two-factor authentication is managed by UniHub.')}
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    )
+  }
 
   if (pageLoading || loading) {
     return (
@@ -61,6 +75,24 @@ export function TwoFACard({ loading: pageLoading }: TwoFACardProps) {
         </CardHeader>
         <CardContent className='p-3 sm:p-5'>
           <Skeleton className='h-20 w-full' />
+        </CardContent>
+      </Card>
+    )
+  }
+
+  if (!status) {
+    return (
+      <Card data-card-hover='false'>
+        <CardHeader>
+          <CardTitle>{t('Two-Factor Authentication')}</CardTitle>
+          <CardDescription>
+            {t('Two-factor authentication status is temporarily unavailable.')}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button variant='outline' onClick={() => void refetch()}>
+            {t('Try again')}
+          </Button>
         </CardContent>
       </Card>
     )

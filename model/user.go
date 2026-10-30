@@ -79,6 +79,9 @@ func resolveUserSortOptions(sortOptions []UserSortOptions) UserSortOptions {
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
 // Otherwise, the sensitive information will be saved on local storage in plain text!
 type User struct {
+	NativePassword             bool                       `json:"-"`
+	FundingRealm               string                     `json:"-" gorm:"size:24"`
+	FundingRealmEvidence       string                     `json:"-" gorm:"type:text"`
 	ProductRegistrationPending bool                       `json:"-" gorm:"not null;default:false"`
 	ProductJITPending          bool                       `json:"-"`
 	Id                         int                        `json:"id"`
@@ -149,18 +152,23 @@ func (user *User) SetAccessToken(token string) {
 
 // UpdateUserAccessToken rotates a dashboard personal access token without
 // writing a stale user snapshot back over concurrently updated fields.
-func UpdateUserAccessToken(id int, token string) error {
-	if id == 0 {
+func UpdateUserAccessToken(id int, token string, realm ...string) error {
+	if id <= 0 {
 		return errors.New("id 为空！")
 	}
-	result := DB.Model(&User{}).Where("id = ?", id).Update("access_token", token)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
-	}
-	return nil
+	return DB.Transaction(func(tx *gorm.DB) error {
+		scope := ""
+		if len(realm) > 0 {
+			scope = realm[0]
+		}
+		if err := SetNativeLoginCredentialTx(tx, id, "pat", token, scope); err != nil {
+			return err
+		}
+		if token == "" {
+			return tx.Model(&User{}).Where("id = ?", id).Update("access_token", nil).Error
+		}
+		return tx.Model(&User{}).Where("id = ?", id).Update("access_token", token).Error
+	})
 }
 
 func (user *User) GetSetting() dto.UserSetting {
@@ -212,17 +220,30 @@ var userBindColumns = map[string]bool{
 // 绑定操作必须只写绑定列：若改为“读取完整用户 → 改一个字段 → 整体更新”，
 // 读快照期间并发发生的封禁、降权或分组变更会被旧快照覆盖恢复。
 // 角色、状态、分组只允许通过各自带锁/CAS 的专用方法修改。
-func UpdateUserBindColumn(userId int, column string, value string) error {
+func UpdateUserBindColumn(userId int, column string, value string, realm ...string) error {
 	if userId <= 0 {
 		return errors.New("id 为空！")
 	}
 	if !userBindColumns[column] {
 		return fmt.Errorf("invalid user bind column: %s", column)
 	}
-	if platformaccount.RuntimeEnabled() {
-		return ApplyManagedCredentialChange(userId, func(tx *gorm.DB) error { return tx.Model(&User{}).Where("id = ?", userId).Update(column, value).Error })
+	change := func(tx *gorm.DB) error {
+		scope := ""
+		if len(realm) > 0 {
+			scope = realm[0]
+		}
+		if err := SetNativeLoginCredentialTx(tx, userId, column, value, scope); err != nil {
+			return err
+		}
+		if err := guardLegacyCentralSecurityTx(tx, userId, scope); err != nil {
+			return err
+		}
+		return tx.Model(&User{}).Where("id = ?", userId).Update(column, value).Error
 	}
-	return DB.Model(&User{}).Where("id = ?", userId).Update(column, value).Error
+	if platformaccount.RuntimeEnabled() {
+		return ApplyManagedCredentialChange(userId, change)
+	}
+	return DB.Transaction(change)
 }
 
 // 根据用户角色生成默认的边栏配置
@@ -397,7 +418,17 @@ func GetMaxUserId() int {
 	return user.Id
 }
 
-func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (users []*User, total int64, err error) {
+func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) ([]*User, int64, error) {
+	return getAllUsersScoped(pageInfo, false, sortOptions...)
+}
+
+// GetProductUsers stays closed until profiles have independently verified
+// realm ownership and enrollment is serialized with disclosure.
+func GetProductUsers(_ *common.PageInfo, _ ...UserSortOptions) ([]*User, int64, error) {
+	return nil, 0, ErrNativeCredentialUnverified
+}
+
+func getAllUsersScoped(pageInfo *common.PageInfo, excludeNative bool, sortOptions ...UserSortOptions) (users []*User, total int64, err error) {
 	// Start transaction
 	tx := DB.Begin()
 	if tx.Error != nil {
@@ -409,8 +440,12 @@ func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (use
 		}
 	}()
 
+	query := tx.Unscoped().Model(&User{})
+	if excludeNative {
+		query = query.Where("funding_realm IS NULL OR funding_realm <> ?", NativeFundingLocalOnly)
+	}
 	// Get total count within transaction
-	err = tx.Unscoped().Model(&User{}).Count(&total).Error
+	err = query.Count(&total).Error
 	if err != nil {
 		tx.Rollback()
 		return nil, 0, err
@@ -418,7 +453,7 @@ func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (use
 
 	// Get paginated users within same transaction
 	order := resolveUserSortOptions(sortOptions)
-	err = order.Apply(tx.Unscoped()).Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Omit("password", "access_token").Find(&users).Error
+	err = order.Apply(query).Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Omit("password", "access_token").Find(&users).Error
 	if err != nil {
 		tx.Rollback()
 		return nil, 0, err
@@ -433,6 +468,15 @@ func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (use
 }
 
 func SearchUsers(keyword string, group string, role *int, status *int, startIdx int, num int, sortOptions ...UserSortOptions) ([]*User, int64, error) {
+	return searchUsersScoped(keyword, group, role, status, startIdx, num, false, sortOptions...)
+}
+
+// SearchProductUsers remains closed for the same ownership ambiguity.
+func SearchProductUsers(_ string, _ string, _ *int, _ *int, _ int, _ int, _ ...UserSortOptions) ([]*User, int64, error) {
+	return nil, 0, ErrNativeCredentialUnverified
+}
+
+func searchUsersScoped(keyword string, group string, role *int, status *int, startIdx int, num int, excludeNative bool, sortOptions ...UserSortOptions) ([]*User, int64, error) {
 	var users []*User
 	var total int64
 	var err error
@@ -450,6 +494,9 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 
 	// 构建基础查询
 	query := tx.Unscoped().Model(&User{})
+	if excludeNative {
+		query = query.Where("funding_realm IS NULL OR funding_realm <> ?", NativeFundingLocalOnly)
+	}
 
 	// 构建搜索条件
 	likeCondition := "username LIKE ? OR email LIKE ? OR display_name LIKE ?"
@@ -798,7 +845,12 @@ func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 	}
 	newUser := *user
 	current := User{}
-	if err = tx.First(&current, user.Id).Error; err != nil {
+	if tx.Dialector.Name() == "sqlite" {
+		if err = tx.Model(&User{}).Where("id = ?", user.Id).UpdateColumn("auth_version", gorm.Expr("auth_version")).Error; err != nil {
+			return err
+		}
+	}
+	if err = lockForUpdate(tx).First(&current, user.Id).Error; err != nil {
 		return err
 	}
 	// Updates(struct) ignores zero values. Match that behavior when deciding
@@ -823,6 +875,13 @@ func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 		"aff_quota",
 		"aff_history",
 		"auth_version",
+		"funding_realm",
+		"funding_realm_evidence",
+		"native_password",
+		"identity_source",
+		"unihub_user_id",
+		"product_registration_pending",
+		"product_jit_pending",
 	).Updates(newUser).Error; err != nil {
 		return err
 	}
@@ -889,7 +948,7 @@ func (user *User) EditWithTx(tx *gorm.DB, updatePassword bool) error {
 	return tx.First(user, user.Id).Error
 }
 
-func (user *User) ClearBinding(bindingType string) error {
+func (user *User) ClearBinding(bindingType string, realm ...string) error {
 	if user.Id == 0 {
 		return errors.New("user id is empty")
 	}
@@ -910,6 +969,13 @@ func (user *User) ClearBinding(bindingType string) error {
 	}
 
 	if err := DB.Transaction(func(tx *gorm.DB) error {
+		scope := ""
+		if len(realm) > 0 {
+			scope = realm[0]
+		}
+		if err := SetNativeLoginCredentialTx(tx, user.Id, column, "", scope); err != nil {
+			return err
+		}
 		if err := tx.Model(&User{}).Where("id = ?", user.Id).Update(column, "").Error; err != nil {
 			return err
 		}
@@ -1065,7 +1131,27 @@ func (user *User) UpdateGitHubId(newGitHubId string) error {
 	if user.Id == 0 {
 		return errors.New("user id is empty")
 	}
-	return DB.Model(user).Update("github_id", newGitHubId).Error
+	return DB.Transaction(func(tx *gorm.DB) error {
+		// Serialize with realm enrollment on SQLite, which has no FOR UPDATE.
+		if tx.Dialector.Name() == "sqlite" {
+			if err := tx.Model(&User{}).Where("id = ?", user.Id).UpdateColumn("github_id", gorm.Expr("github_id")).Error; err != nil {
+				return err
+			}
+		}
+		var current User
+		if err := lockForUpdate(tx).First(&current, user.Id).Error; err != nil {
+			return err
+		}
+		// Existing shared slots have no proof that this migration belongs to
+		// either realm. Never change an enrolled owner's binding on that basis.
+		if current.FundingRealm == NativeFundingLocalOnly || current.GitHubId != user.GitHubId {
+			return ErrNativeCredentialUnverified
+		}
+		if err := guardLegacyCentralSecurityTx(tx, user.Id, ""); err != nil {
+			return err
+		}
+		return tx.Model(&User{}).Where("id = ?", user.Id).Update("github_id", newGitHubId).Error
+	})
 }
 
 func (user *User) FillUserByDiscordId() error {

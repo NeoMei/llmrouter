@@ -200,11 +200,18 @@ func upsertPasskeyCredentialWithTx(tx *gorm.DB, credential *PasskeyCredential) e
 
 // UpsertPasskeyCredentialWithAuthVersion is reserved for enrollment changes;
 // assertion sign-count updates must use UpdatePasskeyAssertionState.
-func UpsertPasskeyCredentialWithAuthVersion(credential *PasskeyCredential) error {
+func UpsertPasskeyCredentialWithAuthVersion(credential *PasskeyCredential, realm ...string) error {
 	if credential == nil || credential.UserID <= 0 {
 		return fmt.Errorf("Passkey 保存失败，请重试")
 	}
 	if err := DB.Transaction(func(tx *gorm.DB) error {
+		scope := ""
+		if len(realm) > 0 {
+			scope = realm[0]
+		}
+		if err := SetNativeLoginCredentialTx(tx, credential.UserID, "passkey", credential.CredentialID, scope); err != nil {
+			return err
+		}
 		if _, err := IncrementUserAuthVersionWithTx(tx, credential.UserID); err != nil {
 			return err
 		}
@@ -215,11 +222,18 @@ func UpsertPasskeyCredentialWithAuthVersion(credential *PasskeyCredential) error
 	return PublishUserAuthCache(credential.UserID)
 }
 
-func DeletePasskeyByUserIDWithAuthVersion(userID int) error {
+func DeletePasskeyByUserIDWithAuthVersion(userID int, realm ...string) error {
 	if userID == 0 {
 		return fmt.Errorf("删除失败，请重试")
 	}
 	if err := DB.Transaction(func(tx *gorm.DB) error {
+		scope := ""
+		if len(realm) > 0 {
+			scope = realm[0]
+		}
+		if err := SetNativeLoginCredentialTx(tx, userID, "passkey", "", scope); err != nil {
+			return err
+		}
 		var credential PasskeyCredential
 		if err := lockForUpdate(tx).Where("user_id = ?", userID).First(&credential).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {

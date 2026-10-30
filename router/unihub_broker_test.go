@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"net/http"
@@ -249,7 +250,7 @@ func TestBrokerExchangeCreatesOriginalSessionAndKeepsExistingLocalUserID(t *test
 	old, redis, secret := model.DB, common.RedisEnabled, common.SessionSecret
 	db, e := gorm.Open(sqlite.Open(t.TempDir()+"/jit.db"), &gorm.Config{})
 	require.NoError(t, e)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.AuthFlow{}, &model.UniHubIdentityMapping{}, &model.ProductFundingAccount{}, &model.ProductAuthLifecycle{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.AuthFlow{}, &model.UniHubIdentityMapping{}, &model.ProductFundingAccount{}, &model.ProductAuthLifecycle{}, &model.ProductBrokerSessionProof{}))
 	model.DB = db
 	common.RedisEnabled = false
 	common.SessionSecret = "browser-jit-session-test-secret"
@@ -261,6 +262,7 @@ func TestBrokerExchangeCreatesOriginalSessionAndKeepsExistingLocalUserID(t *test
 	require.NoError(t, db.Model(&model.User{}).Where("id = ?", existing.Id).Update("status", common.UserStatusDisabled).Error)
 	exchanges := 0
 	binds := 0
+	giveSourceProof := true
 	var hub *httptest.Server
 	access := userkit.Access{Issuer: "https://hub.test", Subject: "central-existing", User: userkit.User{ID: "central-existing", Name: "Original"}, ProductID: "llmrouter", InstanceID: "default", Version: 1, Active: true, ProductRole: 1, Permissions: []string{"product:use"}, ExpiresAt: time.Now().Add(120 * time.Second).Unix()}
 	binding := userkit.RuntimeBinding{ID: "binding", LocalUserID: strconv.Itoa(existing.Id), UserID: access.Subject, ProductID: "llmrouter", InstanceID: "default", PersonalAccountID: "personal"}
@@ -277,7 +279,12 @@ func TestBrokerExchangeCreatesOriginalSessionAndKeepsExistingLocalUserID(t *test
 			require.Equal(t, verifier, in.Verifier)
 			require.Equal(t, nonce, in.Nonce)
 			require.Equal(t, "https://router.test/api/unihub/callback", in.RedirectURI)
-			json.NewEncoder(w).Encode(userkit.ProductBrowserGrant{Access: access, ProofToken: "ubp_once", ExpiresAt: access.ExpiresAt})
+			grant := userkit.ProductBrowserGrant{Access: access, ProofToken: "ubp_once", ExpiresAt: access.ExpiresAt}
+			if giveSourceProof {
+				grant.SourceProofToken = "ubsp_" + strings.Repeat("a", 64)
+				grant.SourceProofExpiresAt = time.Now().Add(time.Hour).Unix()
+			}
+			json.NewEncoder(w).Encode(grant)
 		case "/internal/v1/product-runtime/bindings":
 			binds++
 			require.Equal(t, "Bearer ubp_once", r.Header.Get("X-UniHub-Actor-Authorization"))
@@ -299,7 +306,7 @@ func TestBrokerExchangeCreatesOriginalSessionAndKeepsExistingLocalUserID(t *test
 	t.Setenv("UNIHUB_ORIGIN", hub.URL)
 	t.Setenv("UNIHUB_PRODUCT_RUNTIME_TOKEN", strings.Repeat("s", 32))
 	r := gin.New()
-	registerUniHubSSO(r, platformaccount.Config{Enabled: true, ClientID: "router", PublicOrigin: hub.URL, RedirectURI: "https://router.test/api/unihub/callback"})
+	registerUniHubSSO(r, platformaccount.Config{Enabled: true, ProductID: "llmrouter", InstanceID: "default", ClientID: "router", PublicOrigin: "https://hub.test", RedirectURI: "https://router.test/api/unihub/callback"})
 	start := httptest.NewRecorder()
 	r.ServeHTTP(start, httptest.NewRequest("GET", "https://router.test/api/unihub/login?prompt=none&return_to=%2Fprofile", nil))
 	require.Equal(t, 303, start.Code)
@@ -324,7 +331,7 @@ func TestBrokerExchangeCreatesOriginalSessionAndKeepsExistingLocalUserID(t *test
 	done := httptest.NewRecorder()
 	r.ServeHTTP(done, request)
 	require.Equal(t, 303, done.Code, done.Body.String())
-	require.Equal(t, "/profile", done.Header().Get("Location"))
+	requireSessionRedirect(t, done, "/profile")
 	require.Equal(t, 1, exchanges)
 	require.Equal(t, 1, binds)
 	var refresh *http.Cookie
@@ -356,4 +363,35 @@ func TestBrokerExchangeCreatesOriginalSessionAndKeepsExistingLocalUserID(t *test
 	r.ServeHTTP(replay, request)
 	require.Equal(t, 401, replay.Code)
 	require.Equal(t, 1, exchanges)
+	// An old central code without a source proof cannot leave a usable new SID.
+	giveSourceProof = false
+	start = httptest.NewRecorder()
+	r.ServeHTTP(start, httptest.NewRequest("GET", "https://router.test/api/unihub/login?prompt=none&return_to=%2Fprofile", nil))
+	require.Equal(t, http.StatusSeeOther, start.Code)
+	destination, e = url.Parse(start.Header().Get("Location"))
+	require.NoError(t, e)
+	state = destination.Query().Get("state")
+	flow, e = model.GetAuthFlow(state, model.AuthFlowMatch{Purpose: productBrokerPurpose})
+	require.NoError(t, e)
+	require.NoError(t, common.UnmarshalJsonStr(flow.Payload, &saved))
+	verifier, nonce = saved.Verifier, saved.Nonce
+	cookie = nil
+	for _, c := range start.Result().Cookies() {
+		if c.Name == productBrokerCookie {
+			cookie = c
+		}
+	}
+	require.NotNil(t, cookie)
+	request = httptest.NewRequest("GET", "https://router.test/api/unihub/callback?"+url.Values{"broker": {"1"}, "code": {"one-use-code"}, "state": {state}}.Encode(), nil)
+	request.AddCookie(cookie)
+	done = httptest.NewRecorder()
+	r.ServeHTTP(done, request)
+	require.Equal(t, http.StatusSeeOther, done.Code)
+	assert.NotEqual(t, "/profile", done.Header().Get("Location"))
+	for _, c := range done.Result().Cookies() {
+		assert.NotEqual(t, service.RefreshCookieName, c.Name)
+	}
+	var active int64
+	require.NoError(t, db.Model(&model.UserSession{}).Where("user_id = ? AND status = ?", existing.Id, model.UserSessionStatusActive).Count(&active).Error)
+	assert.EqualValues(t, 1, active, "partial SID must be revoked without changing the original session")
 }

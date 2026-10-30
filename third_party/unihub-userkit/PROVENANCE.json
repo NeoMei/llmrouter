@@ -1,9 +1,9 @@
 {
-  "commit": "ca2f0a6bcacbce74e41ef7a623c685d43c3872a1",
+  "commit": "0c1ee378780cf1950c7212efa609dcca62effb63",
   "distribution": "unpublished source snapshot; no declared upstream license",
   "module": "packages/userkit-go",
   "sha256": {
-    "README.md": "7fd5e392951cd1c9eca7c9bd069ba0b932f8f956f76ef9dc867aa37a7ff31408",
+    "README.md": "7ccf30a2e340f2955fd4fe167a83c4e4672e91fe02940fba2b5d55f10a649dae",
     "browser.go": "419d49c77dd0d37b91236aefae74d9e6c9d0672e2f4b07a2a1756166e0b0eac7",
     "browser_test.go": "6958e070239b178a4667f8541cd0e298b2496fddfb632b1ea5b1bb42862a6cf6",
     "client.go": "03183985164f08463f3fe3697b574a42794faf7b2022cb36a47e74336c7f4210",
@@ -11,7 +11,17 @@
     "examples/minimal/main.go": "0ff2151fab240a39ea76f4e289b994ffb95776cbe80eadfc961faa185f2f1839",
     "go.mod": "a88f90b18de180fd8b6f8aae0e10770a222b8e88abdef63eca1fb552e8a41882",
     "go.sum": "21a2a449644379d3f95fcfa857f00d91e0e672bf3d2153a1daa35b9f82ee263c",
-    "service.go": "258eed6d467df5c4af7098ebd5c7a4edbe23a2b1663acf4af65d26a75f579d36",
+    "product_auth.go": "3fc48e73b4d0d0d400c03367bd0f1a2b5a9d1cf91bf1e038a95452ba64cd6de5",
+    "product_auth_test.go": "b6bef7a2a9b6319ad9c10a7d59331e21e806eec7feff6a3c0bf682f437b3c61c",
+    "product_browser.go": "888c26ad8a7c20b4b9d56941be87baad75271db8b32a062d0a6fd89c72c1b665",
+    "product_browser_test.go": "93ee12506f7333f6dd5d3ca027056b602cba0d8bb9a4ffe1b7b34a408dcfc28e",
+    "product_finance.go": "2c88056a06060da635e0570017a697dd08c518adb2d0384958f933707f0d4bac",
+    "product_finance_test.go": "64bdf6c1b86f888e44547715a49330c3618d03d13548edef02bc1bfaebae4862",
+    "runtime.go": "1bad65a4e36803e3633b93d6901f176575752ed52419ca6e7b07954775bf0354",
+    "runtime_refund.go": "36075e97098e17be5bf60bb7e89ca7916f0fe31cfdd172d7575012da3df0287b",
+    "runtime_scope.go": "b146b538d3a51df800abe644db91af6878dbf52c9c59e62b0651c0dbcd65b103",
+    "runtime_test.go": "6b066195552b87162147b9faafb856b8e55abe020c21aaf80e7d8bf77fa6b8f2",
+    "service.go": "b86e72a5ef164d2a4712da5a8057f15f6c5053a81247f9fe76180a745456689f",
     "service_test.go": "b6dfeac64620d4973f47fa74c47f55c194645dd22c5f30e57dd235fcbe338983"
   },
   "source": "https://github.com/NeoMei/UniHub"

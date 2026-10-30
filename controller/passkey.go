@@ -18,6 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-webauthn/webauthn/protocol"
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
+	"gorm.io/gorm"
 )
 
 const (
@@ -199,12 +200,31 @@ func PasskeyRegisterFinish(c *gin.Context) {
 		common.ApiErrorMsg(c, "无法创建 Passkey 凭证")
 		return
 	}
-
-	if err := model.UpsertPasskeyCredentialWithAuthVersion(passkeyCredential); err != nil {
-		common.ApiError(c, err)
+	if middleware.CentralRealmAuthenticated(c) {
+		bundle, err := service.CurrentSessionBundle(c.Request.Context(), identity)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		value := passkeyCredential.CredentialID + "\x00" + passkeyCredential.PublicKey
+		err = model.DB.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+			if err := model.ValidateCentralCredentialSessionTx(tx, identity.UserID, identity.SessionID, identity.SessionVersion, identity.UserAuthVersion); err != nil {
+				return err
+			}
+			return model.SetCentralLoginCredentialTx(tx, user.Id, identity.SessionID, "passkey", value, func(tx *gorm.DB) error { return tx.Create(passkeyCredential).Error })
+		})
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		recordUserSecurityAudit(c, user.Id, "user.passkey_register", nil)
+		data := authRotationData(bundle)
+		data["auth_rotation_required"] = false
+		c.JSON(http.StatusOK, gin.H{"success": true, "message": "Passkey 注册成功", "data": data})
 		return
 	}
-	bundle, err := service.AdvanceCurrentSessionToUserVersion(identity, "passkey_registered")
+
+	bundle, err := service.ChangePasskeyForCurrentSession(identity, tokenRequestRealm(c), passkeyCredential)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -237,11 +257,31 @@ func PasskeyDelete(c *gin.Context) {
 		common.ApiError(c, errors.New("当前认证方式不支持安全验证"))
 		return
 	}
-	if err := model.DeletePasskeyByUserIDWithAuthVersion(user.Id); err != nil {
-		common.ApiError(c, err)
+	if middleware.CentralRealmAuthenticated(c) {
+		bundle, err := service.CurrentSessionBundle(c.Request.Context(), identity)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		err = model.DB.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+			if err := model.ValidateCentralCredentialSessionTx(tx, identity.UserID, identity.SessionID, identity.SessionVersion, identity.UserAuthVersion); err != nil {
+				return err
+			}
+			return model.DeleteCentralLoginCredentialTx(tx, user.Id, identity.SessionID, "passkey", func(tx *gorm.DB) error {
+				return tx.Unscoped().Where("user_id = ?", user.Id).Delete(&model.PasskeyCredential{}).Error
+			})
+		})
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		recordUserSecurityAudit(c, user.Id, "user.passkey_delete", nil)
+		data := authRotationData(bundle)
+		data["auth_rotation_required"] = false
+		c.JSON(http.StatusOK, gin.H{"success": true, "message": "Passkey 已解绑", "data": data})
 		return
 	}
-	bundle, err := service.AdvanceCurrentSessionToUserVersion(identity, "passkey_deleted")
+	bundle, err := service.ChangePasskeyForCurrentSession(identity, tokenRequestRealm(c), nil)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -278,6 +318,9 @@ func PasskeyStatus(c *gin.Context) {
 	}
 	if err != nil {
 		common.ApiError(c, err)
+		return
+	}
+	if !passkeyBelongsToSession(c, user, credential) {
 		return
 	}
 
@@ -394,7 +437,10 @@ func PasskeyLoginFinish(c *gin.Context) {
 			return nil, e
 		}
 		if user.Status != common.UserStatusEnabled {
-			return nil, errors.New("该用户已被禁用")
+			central, centralErr := model.IsCentralLoginCredential(c.Request.Context(), user.Id, "passkey", credential.CredentialID+"\x00"+credential.PublicKey)
+			if centralErr != nil || !central {
+				return nil, errors.New("该用户已被禁用")
+			}
 		}
 
 		if len(userHandle) > 0 {
@@ -428,16 +474,46 @@ func PasskeyLoginFinish(c *gin.Context) {
 		return
 	}
 
-	if modelUser.Status != common.UserStatusEnabled {
+	stored, err := model.GetPasskeyByCredentialID(credential.ID)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	native, err := model.IsNativeLoginCredential(c.Request.Context(), modelUser.Id, "passkey", stored.CredentialID)
+	var centralProof model.CentralLoginCredential
+	centralLookup := model.DB.WithContext(c.Request.Context()).Where("user_id = ? AND kind = ?", modelUser.Id, "passkey").First(&centralProof).Error
+	if centralLookup == nil {
+		var nativeProof model.NativeLoginCredential
+		nativeLookup := model.DB.WithContext(c.Request.Context()).Where("user_id = ? AND kind = ?", modelUser.Id, "passkey").First(&nativeProof).Error
+		if nativeLookup == nil || !errors.Is(nativeLookup, gorm.ErrRecordNotFound) {
+			common.ApiError(c, model.ErrNativeCredentialUnverified)
+			return
+		}
+		value := stored.CredentialID + "\x00" + stored.PublicKey
+		central, centralErr := model.IsCentralLoginCredential(c.Request.Context(), modelUser.Id, "passkey", value)
+		if centralErr != nil || !central {
+			common.ApiError(c, model.ErrNativeCredentialUnverified)
+			return
+		}
+		c.Set("central_credential_kind", "passkey")
+		c.Set("central_credential_value", value)
+	} else if !errors.Is(centralLookup, gorm.ErrRecordNotFound) {
+		common.ApiError(c, centralLookup)
+		return
+	} else if err != nil {
+		common.ApiError(c, err)
+		return
+	} else if modelUser.Status != common.UserStatusEnabled {
 		common.ApiErrorMsg(c, "该用户已被禁用")
 		return
 	}
-
+	if native {
+		c.Set("native_password_authenticated", true)
+	}
 	if err := model.UpdatePasskeyAssertionState(modelUser.Id, credential, time.Now()); err != nil {
 		common.ApiError(c, err)
 		return
 	}
-
 	setupLogin(modelUser, c)
 }
 
@@ -477,7 +553,7 @@ func AdminResetPasskey(c *gin.Context) {
 		return
 	}
 
-	if err := model.DeletePasskeyByUserIDWithAuthVersion(user.Id); err != nil {
+	if err := model.DeletePasskeyByUserIDWithAuthVersion(user.Id, tokenRequestRealm(c)); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -529,6 +605,9 @@ func PasskeyVerifyBegin(c *gin.Context) {
 			"success": false,
 			"message": "该用户尚未绑定 Passkey",
 		})
+		return
+	}
+	if !passkeyBelongsToSession(c, user, credential) {
 		return
 	}
 
@@ -616,6 +695,9 @@ func PasskeyVerifyFinish(c *gin.Context) {
 		})
 		return
 	}
+	if !passkeyBelongsToSession(c, user, credential) {
+		return
+	}
 
 	identity, ok := middleware.GetSessionAuthIdentity(c)
 	if !ok {
@@ -663,6 +745,26 @@ func PasskeyVerifyFinish(c *gin.Context) {
 	})
 }
 
+func passkeyBelongsToSession(c *gin.Context, user *model.User, credential *model.PasskeyCredential) bool {
+	if middleware.CentralRealmAuthenticated(c) {
+		valid, err := model.IsCentralLoginCredential(c.Request.Context(), user.Id, "passkey", credential.CredentialID+"\x00"+credential.PublicKey)
+		if err == nil && valid {
+			return true
+		}
+		common.ApiError(c, model.ErrNativeCredentialUnverified)
+		return false
+	}
+	if middleware.NativeRealmAuthenticated(c) {
+		valid, err := model.IsNativeLoginCredential(c.Request.Context(), user.Id, "passkey", credential.CredentialID)
+		if err == nil && valid {
+			return true
+		}
+		common.ApiError(c, model.ErrNativeCredentialUnverified)
+		return false
+	}
+	return true
+}
+
 func getAuthenticatedUser(c *gin.Context) (*model.User, error) {
 	id := c.GetInt("id")
 	if id == 0 {
@@ -672,13 +774,21 @@ func getAuthenticatedUser(c *gin.Context) (*model.User, error) {
 	if err := user.FillUserById(); err != nil {
 		return nil, err
 	}
-	if user.Status != common.UserStatusEnabled {
+	if user.Status != common.UserStatusEnabled && !middleware.CentralRealmAuthenticated(c) {
 		return nil, errors.New("该用户已被禁用")
 	}
 	return user, nil
 }
 
 func requirePasskeyRegistrationVerification(c *gin.Context, userID int) bool {
+	if middleware.CentralRealmAuthenticated(c) {
+		// Initial central enrollment cannot reuse a native or unknown slot.
+		if _, err := model.GetPasskeyByUserID(userID); err == nil || !errors.Is(err, model.ErrPasskeyNotFound) {
+			common.ApiError(c, model.ErrNativeCredentialUnverified)
+			return false
+		}
+		return true
+	}
 	twoFA, err := model.GetTwoFAByUserId(userID)
 	if err != nil {
 		common.ApiError(c, err)
@@ -691,6 +801,19 @@ func requirePasskeyRegistrationVerification(c *gin.Context, userID int) bool {
 }
 
 func requirePasskeyDeleteVerification(c *gin.Context, userID int) bool {
+	if middleware.CentralRealmAuthenticated(c) {
+		credential, err := model.GetPasskeyByUserID(userID)
+		if err != nil {
+			common.ApiError(c, err)
+			return false
+		}
+		central, err := model.IsCentralLoginCredential(c.Request.Context(), userID, "passkey", credential.CredentialID+"\x00"+credential.PublicKey)
+		if err != nil || !central {
+			common.ApiError(c, model.ErrNativeCredentialUnverified)
+			return false
+		}
+		return middleware.RequireSecurityProof(c, securityProofScopePasskeyDelete, []string{secureVerificationMethodPasskey})
+	}
 	twoFA, err := model.GetTwoFAByUserId(userID)
 	if err != nil {
 		common.ApiError(c, err)

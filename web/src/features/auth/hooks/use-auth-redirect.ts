@@ -50,7 +50,8 @@ export function useAuthRedirect() {
     const targetPath = getProductLoginDestination(
       bundle.central_session_handoff,
       redirectTo,
-      window.location.origin
+      window.location.origin,
+      bundle.session.sid
     )
     if (bundle.central_session_handoff === true) {
       window.location.replace(targetPath)

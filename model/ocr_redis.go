@@ -145,6 +145,24 @@ func (s *OCRBillingStore) holdOCR(ctx context.Context, id, reason string) error 
 	return s.db.WithContext(ctx).Model(&OCRJob{}).Where("id = ? AND billing_state NOT IN ?", id, []string{"settled", "refunded"}).Updates(map[string]any{"billing_state": "reconciliation", "reason": reason}).Error
 }
 func (s *OCRBillingStore) receiptEvidence(ctx context.Context, j *OCRJob, op *OCROperation) (string, error) {
+	if op.Kind == "token" {
+		var token Token
+		if err := s.db.WithContext(ctx).Unscoped().First(&token, op.OwnerID).Error; err != nil {
+			return "", err
+		}
+		if token.AuthRealm == NativeFundingLocalOnly {
+			// Native token admission is already committed with this exact
+			// OCROperation in SQL. Redis remains its read projection; a token
+			// receipt never certifies the separate wallet/subscription leg.
+			if token.UserId != j.UserID || op.State != "applied" || op.SQLAppliedAt == 0 || op.CacheAttempt != "" {
+				return "", ErrOCRReconciliation
+			}
+			if _, err := nativeQuotaState(s.db.WithContext(ctx), token); err != nil {
+				return "", err
+			}
+			return "native-sql:" + op.ID, nil
+		}
+	}
 	key, _, err := s.ocrCacheAccount(ctx, j, op, false)
 	if err != nil {
 		return "", ErrOCRReconciliation
@@ -202,8 +220,16 @@ func (s *OCRBillingStore) applyOCRCacheOperation(ctx context.Context, id, kind, 
 	if op.State == "rejected" {
 		return ErrOCRInsufficient
 	}
-	if op.Amount == 0 {
-		return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	nativeToken := false
+	if kind == "token" {
+		var token Token
+		if err := s.db.WithContext(ctx).Unscoped().First(&token, op.OwnerID).Error; err != nil {
+			return err
+		}
+		nativeToken = token.AuthRealm == NativeFundingLocalOnly
+	}
+	if op.Amount == 0 || nativeToken {
+		return nativeQuotaTransaction(s.db.WithContext(ctx), func(tx *gorm.DB) error {
 			locked, err := ocrLockJobAndFundingOwner(tx, id)
 			if err != nil {
 				return err

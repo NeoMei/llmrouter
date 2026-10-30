@@ -198,8 +198,11 @@ type AliImageInput struct {
 }
 
 type WanImageInput struct {
-	Prompt         string   `json:"prompt"`                    // 必需：文本提示词，描述生成图像中期望包含的元素和视觉特点
-	Images         []string `json:"images"`                    // 必需：图像URL数组，长度不超过2，支持HTTP/HTTPS URL或Base64编码
+	Prompt         string   `json:"prompt"`           // 必需：文本提示词，描述生成图像中期望包含的元素和视觉特点
+	Images         []string `json:"images,omitempty"` // 图像URL数组，长度不超过2，支持HTTP/HTTPS URL或Base64编码
+	Function       string   `json:"function,omitempty"`
+	BaseImageURL   string   `json:"base_image_url,omitempty"`
+	MaskImageURL   string   `json:"mask_image_url,omitempty"`
 	NegativePrompt string   `json:"negative_prompt,omitempty"` // 可选：反向提示词，描述不希望在画面中看到的内容
 }
 

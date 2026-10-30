@@ -40,7 +40,6 @@ import {
   AuthRefreshUnavailableError,
   bootstrapAuthentication,
   clearAuthenticatedClientState,
-  clearAuthentication,
 } from '@/lib/auth-session'
 import { subscribeAuthSessionEvents } from '@/lib/auth-session-sync'
 import { resolveLegacyRoute } from '@/lib/legacy-route'
@@ -79,11 +78,8 @@ function RootComponent() {
         const currentSID = useAuthStore.getState().auth.session?.sid
 
         if (event.kind === 'authenticated') {
-          if (event.sid === currentSID) return
-          if (currentSID) {
-            clearAuthentication(false)
-          }
-          window.location.reload()
+          // Another tab may intentionally use a different realm. Its login
+          // must not replace or revoke the current tab's explicit selection.
           return
         }
 
@@ -177,6 +173,12 @@ export const Route = createRootRouteWithContext<{
       setSetupStatusCache(true)
     } else {
       await authBootstrap
+    }
+    const bootstrapResult = await authBootstrap
+    if (bootstrapResult.kind === 'transient_error') {
+      throw bootstrapResult.error instanceof AuthRefreshUnavailableError
+        ? bootstrapResult.error
+        : new AuthRefreshUnavailableError()
     }
     const auth = useAuthStore.getState().auth
     if (auth.user?.identity_source === 'unihub' && auth.accessToken) {

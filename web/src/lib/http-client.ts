@@ -23,6 +23,9 @@ import { toast } from 'sonner'
 import {
   applyAuthRotation,
   clearAuthentication,
+  getAuthEpoch,
+  getAuthGeneration,
+  getAuthRotationEpoch,
   refreshAuthentication,
 } from '@/lib/auth-session'
 import { getServerErrorMessageKey } from '@/lib/server-error-message'
@@ -36,6 +39,11 @@ declare module 'axios' {
     skipAuthRefresh?: boolean
     authRetry?: boolean
     acceptAuthRotation?: boolean
+    allowNoAuthRotation?: boolean
+    authRequestEpoch?: number
+    authRequestSID?: string
+    authRequestGeneration?: number
+    authRequestRotationEpoch?: number
   }
 }
 
@@ -57,7 +65,7 @@ api.get = ((url: string, config: ApiRequestConfig = {}) => {
 
   const params = config.params ? JSON.stringify(config.params) : '{}'
   const sessionSID = useAuthStore.getState().auth.session?.sid || 'anonymous'
-  const key = `${sessionSID}:${url}?${params}`
+  const key = `${getAuthGeneration()}:${sessionSID}:${url}?${params}`
   const existingRequest = inFlightGet.get(key)
   if (existingRequest) return existingRequest
 
@@ -79,7 +87,48 @@ function redirectToSignIn(): void {
 
 api.interceptors.response.use(
   (response) => {
+    if (
+      response.config.authRequestGeneration !== getAuthGeneration() ||
+      response.config.authRequestSID !==
+        useAuthStore.getState().auth.session?.sid
+    ) {
+      throw new Error('Authentication response was superseded')
+    }
     if (response.config.acceptAuthRotation && response.data?.success === true) {
+      const data = response.data.data
+      if (data?.auth_rotation_required === false) {
+        const session = data?.session
+        if (
+          !response.config.allowNoAuthRotation ||
+          useAuthStore.getState().auth.session?.authentication_realm !==
+            'CENTRAL' ||
+          session?.authentication_realm !== 'CENTRAL' ||
+          session?.sid !== response.config.authRequestSID ||
+          session?.current !== true ||
+          typeof data.access_token !== 'string' ||
+          !data.access_token ||
+          data.token_type !== 'Bearer' ||
+          typeof data.access_expires_at !== 'number' ||
+          !Number.isFinite(data.access_expires_at) ||
+          data.access_expires_at <= 0 ||
+          typeof session.login_method !== 'string' ||
+          typeof session.ip !== 'string' ||
+          typeof session.user_agent !== 'string' ||
+          typeof session.created_at !== 'number' ||
+          typeof session.last_active_at !== 'number' ||
+          typeof session.expires_at !== 'number'
+        ) {
+          throw new Error('Invalid unchanged authentication response')
+        }
+        return response
+      }
+      if (
+        response.config.authRequestRotationEpoch !== getAuthRotationEpoch() ||
+        response.config.authRequestSID !==
+          useAuthStore.getState().auth.session?.sid
+      ) {
+        throw new Error('Authentication rotation response was superseded')
+      }
       applyAuthRotation(response.data.data)
     }
 
@@ -103,10 +152,41 @@ api.interceptors.response.use(
     const status = error?.response?.status
 
     if (status === 401) {
+      const auth = useAuthStore.getState().auth
+      if (
+        config &&
+        !config.authRetry &&
+        !config.skipAuthRefresh &&
+        error?.response?.data?.code === 'AUTH_TOKEN_EXPIRED' &&
+        config.authRequestEpoch !== getAuthEpoch() &&
+        config.authRequestGeneration === getAuthGeneration() &&
+        config.authRequestSID === auth.session?.sid &&
+        auth.accessToken &&
+        config.headers?.Authorization !== `Bearer ${auth.accessToken}`
+      ) {
+        config.authRetry = true
+        config.authRequestEpoch = getAuthEpoch()
+        return api.request(config)
+      }
+      if (
+        config?.authRequestEpoch !== getAuthEpoch() ||
+        config?.authRequestSID !== useAuthStore.getState().auth.session?.sid
+      ) {
+        throw error
+      }
       if (config && !config.skipAuthRefresh && !config.authRetry) {
+        const requestEpoch = config.authRequestEpoch
+        const requestSID = config.authRequestSID
         config.authRetry = true
         const outcome = await refreshAuthentication()
         if (outcome.kind === 'authenticated') {
+          if (
+            getAuthEpoch() !== requestEpoch + 1 ||
+            outcome.bundle.session.sid !== requestSID ||
+            useAuthStore.getState().auth.session?.sid !== requestSID
+          ) {
+            throw error
+          }
           const token = useAuthStore.getState().auth.accessToken
           if (token) {
             config.headers = {
@@ -114,17 +194,33 @@ api.interceptors.response.use(
               Authorization: `Bearer ${token}`,
             }
           }
+          config.authRequestEpoch = getAuthEpoch()
           return api.request(config)
         }
 
         if (outcome.kind === 'anonymous' || outcome.kind === 'out_of_sync') {
+          if (
+            useAuthStore.getState().auth.session ||
+            getAuthEpoch() > requestEpoch + 1
+          ) {
+            throw error
+          }
           if (!skipErrorHandler) toast.error(t('Session expired!'))
           redirectToSignIn()
         }
       } else if (config?.authRetry) {
-        clearAuthentication(false)
-        if (!skipErrorHandler) toast.error(t('Session expired!'))
-        redirectToSignIn()
+        const code = error?.response?.data?.code
+        if (
+          [
+            'AUTH_SESSION_REVOKED',
+            'AUTH_USER_DISABLED',
+            'AUTH_USER_VERSION_REVOKED',
+          ].includes(code)
+        ) {
+          clearAuthentication(false)
+          if (!skipErrorHandler) toast.error(t('Session expired!'))
+          redirectToSignIn()
+        }
       } else if (!skipErrorHandler) {
         toast.error(t('Session expired!'))
       }
@@ -142,10 +238,29 @@ api.interceptors.response.use(
   }
 )
 
-api.interceptors.request.use((config) => {
-  const accessToken = useAuthStore.getState().auth.accessToken
-  if (accessToken) {
-    config.headers.Authorization = `Bearer ${accessToken}`
-  }
-  return config
-})
+api.interceptors.request.use(
+  (config) => {
+    const auth = useAuthStore.getState().auth
+    if (
+      config.authRetry &&
+      config.authRequestEpoch !== undefined &&
+      (config.authRequestEpoch !== getAuthEpoch() ||
+        config.authRequestSID !== auth.session?.sid)
+    ) {
+      throw new Error('Authentication retry was superseded')
+    }
+    config.authRequestEpoch = getAuthEpoch()
+    config.authRequestGeneration = getAuthGeneration()
+    config.authRequestRotationEpoch = getAuthRotationEpoch()
+    config.authRequestSID = auth.session?.sid
+    const accessToken = auth.accessToken
+    if (accessToken) {
+      config.headers.Authorization = `Bearer ${accessToken}`
+    }
+    return config
+  },
+  (error) => {
+    throw error
+  },
+  { synchronous: true }
+)

@@ -29,7 +29,7 @@ func TokenProducer(wire string, channel int) (types.RelayFormat, bool) {
 	case "dashscope.audio.transcriptions.create":
 		return types.RelayFormat("native_qwen_asr"), channel == constant.ChannelTypeAli
 	case "embeddings.create":
-		return types.RelayFormatEmbedding, channel == constant.ChannelTypeOpenAI
+		return types.RelayFormatEmbedding, channel == constant.ChannelTypeOpenAI || channel == constant.ChannelTypeAli
 	}
 	return "", false
 }

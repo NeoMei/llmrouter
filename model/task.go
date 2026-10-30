@@ -40,10 +40,15 @@ const (
 	TaskStatusFailure               = "FAILURE"
 	TaskStatusSuccess               = "SUCCESS"
 	TaskStatusUnknown               = "UNKNOWN"
+	TaskStatusReconcile             = "RECONCILE"
 )
 
 // TaskRefundLegacyCutoff separates legacy timeout tasks that intentionally
 // do not receive automatic refunds from tasks covered by reconciliation.
+const TaskReconcileChannelReason = "provider channel temporarily unavailable"
+const TaskReconcileRetryPending = "provider channel retry pending"
+const TaskReconcileRetrySeconds int64 = 60
+
 const TaskRefundLegacyCutoff int64 = 1740182400 // 2025-02-22 00:00:00 UTC
 
 type Task struct {
@@ -345,7 +350,8 @@ func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*
 func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
 	var tasks []*Task
 	err := DB.Where("progress != ?", "100%").
-		Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
+		Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess, TaskStatusReconcile}).
+		Where("(fail_reason IS NULL OR fail_reason != ?)", TaskReconcileRetryPending).
 		Where("submit_time < ?", cutoffUnix).
 		Order("submit_time").
 		Limit(limit).
@@ -367,6 +373,7 @@ func GetUnrefundedFailedTasks(updatedBefore int64, limit int) []*Task {
 	var tasks []*Task
 	err := DB.Where("status = ?", TaskStatusFailure).
 		Where("quota != ?", 0).
+		Where("(funding_owner IS NULL OR funding_owner NOT IN ?)", []string{"native", "platform"}).
 		Where("updated_at <= ?", updatedBefore).
 		Where("(submit_time <= ? OR submit_time >= ?)", 0, TaskRefundLegacyCutoff).
 		Order("id").
@@ -382,8 +389,21 @@ func GetAllUnFinishSyncTasks(limit int) []*Task {
 	var tasks []*Task
 	var err error
 	// get all tasks progress is not 100%
-	err = DB.Where("progress != ?", "100%").Where("status != ?", TaskStatusFailure).Where("status != ?", TaskStatusSuccess).Limit(limit).Order("id").Find(&tasks).Error
+	err = DB.Where("progress != ?", "100%").Where("status != ?", TaskStatusFailure).Where("status != ?", TaskStatusSuccess).Where("status != ?", TaskStatusReconcile).Where("(fail_reason IS NULL OR fail_reason != ?)", TaskReconcileRetryPending).Limit(limit).Order("id").Find(&tasks).Error
 	if err != nil {
+		return nil
+	}
+	return tasks
+}
+
+// Recoverable provider lookups have a separate bounded page so ordinary task
+// limits cannot hide a retried task before it is actually fetched.
+func GetRetryPendingTasks(limit int) []*Task {
+	var tasks []*Task
+	if limit <= 0 {
+		return tasks
+	}
+	if err := DB.Where("status = ? AND fail_reason = ?", TaskStatusInProgress, TaskReconcileRetryPending).Order("updated_at ASC").Order("id ASC").Limit(limit).Find(&tasks).Error; err != nil {
 		return nil
 	}
 	return tasks
@@ -399,6 +419,7 @@ func HasUnfinishedSyncTasks() bool {
 		Where("progress != ?", "100%").
 		Where("status != ?", TaskStatusFailure).
 		Where("status != ?", TaskStatusSuccess).
+		Where("status != ?", TaskStatusReconcile).
 		Limit(1).
 		Pluck("id", &id).Error
 	return err == nil && id != 0
@@ -415,11 +436,16 @@ func HasTaskPollingWork() bool {
 	if HasUnfinishedSyncTasks() {
 		return true
 	}
+	var retryID int64
+	if DB.Model(&Task{}).Where("status = ? AND fail_reason = ? AND updated_at <= ?", TaskStatusReconcile, TaskReconcileChannelReason, time.Now().Unix()-TaskReconcileRetrySeconds).Limit(1).Pluck("id", &retryID).Error == nil && retryID != 0 {
+		return true
+	}
 
 	var id int64
 	err := DB.Model(&Task{}).
 		Where("status = ?", TaskStatusFailure).
 		Where("quota != ?", 0).
+		Where("(funding_owner IS NULL OR funding_owner NOT IN ?)", []string{"native", "platform"}).
 		Where("(submit_time <= ? OR submit_time >= ?)", 0, TaskRefundLegacyCutoff).
 		Limit(1).
 		Pluck("id", &id).Error

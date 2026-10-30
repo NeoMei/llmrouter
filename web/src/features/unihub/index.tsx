@@ -34,11 +34,14 @@ import { TeamPanel } from './account-panel'
 import { ApiKeysPanel } from './api-keys-panel'
 import { AuthPanel } from './auth-panel'
 import { BillingPanel } from './billing-panel'
-import type { User, Account } from './sdk'
+import { ProductOverview } from './product-overview'
+import { UniHubClient, type User, type Account } from './sdk'
 import {
   createProductSession,
   restoreProductSession,
+  refreshProductAccess,
   getActiveProductSession,
+  productAuthorityKey,
   type ProductConfig,
   type ProductSession,
   message,
@@ -47,10 +50,34 @@ import { markProductSignedOut, startProductLogin } from './sso'
 import { TaskPanel } from './task-panel'
 import { UsagePanel } from './usage-panel'
 
-export function ProductShell(props: { config: ProductConfig; page?: 'keys' }) {
+export function ProductShell(props: {
+  config: ProductConfig
+  page?: 'keys' | 'wallet' | 'overview' | 'usage'
+}) {
+  const authority = useAuthStore((state) => productAuthorityKey(state.auth))
+  return (
+    <ProductShellContent
+      key={JSON.stringify([
+        authority,
+        props.config.public_origin,
+        props.config.client_id,
+        props.config.product_id,
+        props.config.instance_id ?? 'default',
+      ])}
+      {...props}
+    />
+  )
+}
+
+function ProductShellContent(props: {
+  config: ProductConfig
+  page?: 'keys' | 'wallet' | 'overview' | 'usage'
+}) {
   const { t } = useTranslation()
   const [session] = useState<ProductSession>(
-    () => getActiveProductSession() ?? createProductSession(props.config)
+    () =>
+      getActiveProductSession(props.config) ??
+      createProductSession(props.config)
   )
   const [cache] = useState(
     () =>
@@ -75,8 +102,16 @@ export function ProductShell(props: { config: ProductConfig; page?: 'keys' }) {
       setAccounts([])
       setPayer('')
     }
+    session.onForbidden = (reason) => {
+      void cache.cancelQueries()
+      cache.clear()
+      setAccounts([])
+      setPayer('')
+      setError(reason)
+    }
     return () => {
       session.onClear = () => {}
+      session.onForbidden = () => {}
       cache.clear()
     }
   }, [session, cache])
@@ -101,7 +136,22 @@ export function ProductShell(props: { config: ProductConfig; page?: 'keys' }) {
     }
   }, [session])
   async function refresh() {
+    const epoch = session.epoch
+    let access
+    try {
+      access = await refreshProductAccess()
+      if (epoch !== session.epoch) {
+        throw new Error('UniHub session or payer changed')
+      }
+      session.acceptFinanceAccess(access)
+    } catch (error) {
+      if (!session.canWrite && epoch === session.epoch) session.clear()
+      throw error
+    }
     const result = await session.bound(() => session.client.accounts())
+    if (epoch !== session.epoch) {
+      throw new Error('UniHub session or payer changed')
+    }
     const current = accounts.find((item) => item.id === payer)
     const fresh = result.find((item) => item.id === payer)
     if (current?.role !== fresh?.role) {
@@ -111,6 +161,7 @@ export function ProductShell(props: { config: ProductConfig; page?: 'keys' }) {
       if (!fresh) setPayer('')
     }
     session.accounts = result
+    session.csrfToken = access.csrf_token
     setAccounts(result)
     await cache.invalidateQueries()
   }
@@ -234,6 +285,44 @@ export function ProductShell(props: { config: ProductConfig; page?: 'keys' }) {
                 account={account}
                 config={props.config}
               />
+            ) : props.page === 'overview' ? (
+              <>
+                <ProductOverview
+                  session={session}
+                  account={account}
+                  config={props.config}
+                />
+                <UsagePanel
+                  session={session}
+                  account={account}
+                  config={props.config}
+                />
+              </>
+            ) : props.page === 'usage' ? (
+              <UsagePanel
+                session={session}
+                account={account}
+                config={props.config}
+              />
+            ) : props.page === 'wallet' ? (
+              <BillingPanel
+                session={session}
+                account={account}
+                config={props.config}
+              />
+            ) : !session.canWrite ? (
+              <>
+                <BillingPanel
+                  session={session}
+                  account={account}
+                  config={props.config}
+                />
+                <UsagePanel
+                  session={session}
+                  account={account}
+                  config={props.config}
+                />
+              </>
             ) : (
               <>
                 <TeamPanel
@@ -270,10 +359,85 @@ export function ProductShell(props: { config: ProductConfig; page?: 'keys' }) {
     </QueryClientProvider>
   )
 }
+
+/** Product-scoped views embedded inside the existing authenticated console. */
+export function ProductConsoleView(props: {
+  page: 'keys' | 'wallet' | 'overview' | 'usage'
+}) {
+  const { t } = useTranslation()
+  const runtimeSession = useAuthStore(
+    (state) =>
+      state.auth.user?.identity_source === 'unihub' &&
+      !!state.auth.session &&
+      state.auth.session.login_method !== 'unihub'
+  )
+  const config = useQuery({
+    queryKey: ['unihub-public-config'],
+    queryFn: async () => {
+      const response = await fetch('/api/unihub/config', {
+        credentials: 'omit',
+      })
+      if (!response.ok) throw new Error('UniHub configuration unavailable')
+      const value = (await response.json()) as ProductConfig
+      if (value.enabled || value.browser_sso_enabled) {
+        new UniHubClient({
+          baseUrl: value.public_origin,
+          clientId: value.client_id,
+          redirectUri: value.redirect_uri,
+        })
+        if (!Array.isArray(value.models)) {
+          throw new Error('UniHub configuration unavailable')
+        }
+      }
+      return value
+    },
+    retry: false,
+  })
+  if (config.isPending) return <p>{t('Loading')}</p>
+  if (config.error) return <p role='alert'>{message(config.error)}</p>
+  if (
+    !runtimeSession &&
+    !config.data?.enabled &&
+    config.data?.browser_sso_enabled
+  ) {
+    return (
+      <p role='alert'>
+        {t(
+          'UniHub account access is unavailable for this browser session. Contact the administrator.'
+        )}
+      </p>
+    )
+  }
+  if (
+    !config.data?.enabled &&
+    !(runtimeSession && config.data?.browser_sso_enabled)
+  ) {
+    return (
+      <p role='alert'>
+        {t('UniHub product integration is disabled by this deployment.')}
+      </p>
+    )
+  }
+  return (
+    <>
+      {props.page === 'keys' ? <h1>{t('API Keys')}</h1> : null}
+      {props.page === 'wallet' ? <h1>{t('Wallet')}</h1> : null}
+      {props.page === 'usage' ? <h1>{t('Common Logs')}</h1> : null}
+      <ProductShell config={config.data} page={props.page} />
+    </>
+  )
+}
+
 export function UniHub() {
   const { t } = useTranslation()
   const projected = useAuthStore(
     (state) => state.auth.user?.identity_source === 'unihub'
+  )
+  const runtimeSession = useAuthStore(
+    (state) =>
+      state.auth.user?.identity_source === 'unihub' &&
+      !!state.auth.session &&
+      state.auth.session.login_method !== 'unihub'
   )
   const config = useQuery({
     queryKey: ['unihub-public-config'],
@@ -302,9 +466,21 @@ export function UniHub() {
       </header>
       {config.isPending ? <p>{t('Loading')}</p> : null}
       {config.error ? <p role='alert'>{message(config.error)}</p> : null}
-      {config.data?.enabled ? <ProductShell config={config.data} /> : null}
-      {config.data && !config.data.enabled ? (
-        <p>{t('UniHub product integration is disabled by this deployment.')}</p>
+      {config.data &&
+      (config.data.enabled ||
+        (runtimeSession && config.data.browser_sso_enabled)) ? (
+        <ProductShell config={config.data} />
+      ) : null}
+      {config.data &&
+      !config.data.enabled &&
+      !(runtimeSession && config.data.browser_sso_enabled) ? (
+        <p role='alert'>
+          {config.data.browser_sso_enabled
+            ? t(
+                'UniHub account access is unavailable for this browser session. Contact the administrator.'
+              )
+            : t('UniHub product integration is disabled by this deployment.')}
+        </p>
       ) : null}
     </main>
   )

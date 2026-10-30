@@ -32,6 +32,7 @@ type productBrowserState struct {
 	Verifier string `json:"verifier,omitempty"`
 	Nonce    string `json:"nonce,omitempty"`
 	Approved bool   `json:"approved,omitempty"`
+	Silent   *bool  `json:"silent,omitempty"`
 }
 
 func newProductBrowserBridge(r *gin.Engine, c platformaccount.Config) *productBrowserBridge {
@@ -76,12 +77,17 @@ func browserStateCookie(c *gin.Context, name string) bool {
 	cookie, e := c.Cookie(name)
 	return e == nil && len(state) == 43 && len(cookie) == 43 && subtle.ConstantTimeCompare([]byte(state), []byte(cookie)) == 1
 }
-func productBrowserFailure(c *gin.Context, target string) {
-	q := url.Values{"unihub_silent": {"done"}}
+func productBrowserFailure(c *gin.Context, target string, silent bool) {
+	path := "/unihub"
+	q := url.Values{"sso_error": {"1"}}
+	if silent {
+		path = "/sign-in"
+		q = url.Values{"unihub_silent": {"done"}}
+	}
 	if safe, ok := safeProductBrowserReturn(target); ok {
 		q.Set("redirect", safe)
 	}
-	c.Redirect(303, "/sign-in?"+q.Encode())
+	c.Redirect(303, path+"?"+q.Encode())
 }
 
 // SameSite cookies also cross sibling subdomains. The source start is a
@@ -131,7 +137,11 @@ func (b *productBrowserBridge) startHandoff(c *gin.Context) {
 	}
 	// SameSite=Strict refresh credentials are sent only on this same-origin start.
 	// Rotating the refresh secret proves the original browser; an SID alone cannot.
-	raw, e := c.Cookie(service.RefreshCookieName)
+	expectedSID := strings.TrimSpace(c.GetHeader("X-Auth-Session"))
+	if expectedSID == "" {
+		expectedSID = strings.TrimSpace(c.Query("auth_session"))
+	}
+	cookieName, raw, e := service.SelectRefreshCookie(c, expectedSID)
 	if e != nil {
 		c.Status(401)
 		return
@@ -141,12 +151,33 @@ func (b *productBrowserBridge) startHandoff(c *gin.Context) {
 		c.Status(401)
 		return
 	}
+	identity, e := service.ParseAccessToken(bundle.AccessToken)
+	if e != nil {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+	if native, nativeErr := service.IsNativeLoginSession(c.Request.Context(), identity); nativeErr != nil || native {
+		service.WriteRefreshCookie(c, bundle.RefreshToken)
+		c.Status(http.StatusForbidden)
+		return
+	}
+	if e = service.VerifyBrokerSource(c.Request.Context(), identity); e != nil {
+		if errors.Is(e, service.ErrLoginSessionRevoked) {
+			_, _ = model.RevokeUserSession(identity.UserID, identity.SessionID, "broker_source_revoked")
+			service.ClearNamedRefreshCookie(c, cookieName)
+			c.Status(http.StatusUnauthorized)
+		} else {
+			service.WriteRefreshCookie(c, bundle.RefreshToken)
+			c.Status(http.StatusServiceUnavailable)
+		}
+		return
+	}
 	service.WriteRefreshCookie(c, bundle.RefreshToken)
 	if e = model.SyncProductAuthVersions(c.Request.Context(), user.Id); e != nil {
 		c.Status(503)
 		return
 	}
-	if _, e = platformaccount.AuthenticateLocal(c.Request.Context(), strconv.Itoa(user.Id), user.AuthVersion, "session"); e != nil {
+	if _, e = platformaccount.AuthenticateLocal(c.Request.Context(), strconv.Itoa(user.Id), identity.UserAuthVersion, "session"); e != nil {
 		c.Status(401)
 		return
 	}
@@ -178,7 +209,7 @@ func (b *productBrowserBridge) begin(c *gin.Context, target string) bool {
 	}
 	origin, e := b.origin()
 	if e != nil || !b.validCallbackHost(c) || b.config.ClientID == "" {
-		productBrowserFailure(c, destination)
+		productBrowserFailure(c, destination, c.Query("prompt") == "none")
 		return true
 	}
 	verifier, e := common.GenerateRandomCharsKey(64)
@@ -191,7 +222,7 @@ func (b *productBrowserBridge) begin(c *gin.Context, target string) bool {
 		c.Status(500)
 		return true
 	}
-	payload, e := common.Marshal(productBrowserState{ReturnTo: destination, Verifier: verifier, Nonce: nonce})
+	payload, e := common.Marshal(productBrowserState{ReturnTo: destination, Verifier: verifier, Nonce: nonce, Silent: common.GetPointer(c.Query("prompt") == "none")})
 	if e != nil {
 		c.Status(500)
 		return true
@@ -242,8 +273,13 @@ func (b *productBrowserBridge) callback(c *gin.Context) bool {
 		c.Status(401)
 		return true
 	}
-	if _, e = service.ValidateSessionReference(flow.UserId, flow.SessionId); e != nil {
+	flowIdentity, e := service.ValidateSessionReference(c.Request.Context(), flow.UserId, flow.SessionId)
+	if e != nil {
 		c.Status(401)
+		return true
+	}
+	if native, nativeErr := service.IsNativeLoginSession(c.Request.Context(), flowIdentity); nativeErr != nil || native {
+		c.Status(http.StatusForbidden)
 		return true
 	}
 	if c.Query("handoff_done") == "1" {
@@ -272,7 +308,7 @@ func (b *productBrowserBridge) callback(c *gin.Context) bool {
 		c.Status(401)
 		return true
 	}
-	actor, e := platformaccount.AuthenticateLocal(c.Request.Context(), strconv.Itoa(user.Id), user.AuthVersion, "session")
+	actor, e := platformaccount.AuthenticateLocal(c.Request.Context(), strconv.Itoa(user.Id), flowIdentity.UserAuthVersion, "session")
 	if e != nil {
 		c.Status(401)
 		return true
@@ -314,53 +350,90 @@ func (b *productBrowserBridge) completeBroker(c *gin.Context) {
 		return
 	}
 	if c.Query("error") == "login_required" {
-		q := url.Values{"prompt": {"none"}, "return_to": {state.ReturnTo}, "broker_fallback": {"1"}}
+		q := url.Values{"return_to": {state.ReturnTo}, "broker_fallback": {"1"}}
+		if state.Silent == nil || *state.Silent {
+			q.Set("prompt", "none")
+		}
 		c.Redirect(303, "/api/unihub/login?"+q.Encode())
 		return
 	}
 	if c.Query("error") != "" || c.Query("code") == "" {
-		productBrowserFailure(c, state.ReturnTo)
+		productBrowserFailure(c, state.ReturnTo, state.Silent == nil || *state.Silent)
 		return
 	}
 	client, e := platformaccount.RuntimeClient()
 	if e != nil {
-		productBrowserFailure(c, state.ReturnTo)
+		productBrowserFailure(c, state.ReturnTo, state.Silent == nil || *state.Silent)
 		return
 	}
 	grant, e := client.ExchangeProductBrowser(c.Request.Context(), userkit.ProductBrowserExchange{ClientID: b.config.ClientID, Code: c.Query("code"), Verifier: state.Verifier, Nonce: state.Nonce, RedirectURI: b.config.RedirectURI})
 	if e != nil {
-		productBrowserFailure(c, state.ReturnTo)
+		productBrowserFailure(c, state.ReturnTo, state.Silent == nil || *state.Silent)
 		return
 	}
 	local, e := (model.UniHubProvisioner{}).Ensure(c.Request.Context(), grant.Access)
 	if e != nil {
-		productBrowserFailure(c, state.ReturnTo)
+		productBrowserFailure(c, state.ReturnTo, state.Silent == nil || *state.Silent)
 		return
 	}
 	if _, e = client.Bind(c.Request.Context(), grant.ProofToken, userkit.BindRequest{LocalUserID: local.ID, BindingKey: "browser:" + local.ID}); e != nil {
-		productBrowserFailure(c, state.ReturnTo)
+		productBrowserFailure(c, state.ReturnTo, state.Silent == nil || *state.Silent)
 		return
 	}
 	userID, e := strconv.Atoi(local.ID)
 	if e != nil {
-		productBrowserFailure(c, state.ReturnTo)
+		productBrowserFailure(c, state.ReturnTo, state.Silent == nil || *state.Silent)
 		return
 	}
-	if e = reconcileSSOUser(c, userID); e != nil {
-		productBrowserFailure(c, state.ReturnTo)
-		return
-	}
-	if e = model.EnsureProductFunding(c.Request.Context(), userID); e != nil && !errors.Is(e, model.ErrProductFundingMigration) {
-		productBrowserFailure(c, state.ReturnTo)
-		return
-	}
-	bundle, e := service.CreateLoginSession(userID, "product_broker", c.ClientIP(), c.Request.UserAgent())
+	owner, e := model.GetUserById(userID, false)
 	if e != nil {
-		productBrowserFailure(c, state.ReturnTo)
+		productBrowserFailure(c, state.ReturnTo, state.Silent == nil || *state.Silent)
+		return
+	}
+	if owner.FundingRealm != model.NativeFundingLocalOnly {
+		if e = reconcileSSOUser(c, userID); e != nil {
+			productBrowserFailure(c, state.ReturnTo, state.Silent == nil || *state.Silent)
+			return
+		}
+	}
+	if owner.FundingRealm != model.NativeFundingLocalOnly {
+		if e = model.EnsureProductFunding(c.Request.Context(), userID); e != nil && !errors.Is(e, model.ErrProductFundingMigration) {
+			productBrowserFailure(c, state.ReturnTo, state.Silent == nil || *state.Silent)
+			return
+		}
+	}
+	var bundle *service.AuthBundle
+	if owner.FundingRealm == model.NativeFundingLocalOnly {
+		bundle, e = service.CreateCentralSessionFromVerifiedSource(c.Request.Context(), userID, grant.Access, "product_broker", grant.SourceProofExpiresAt, c.ClientIP(), c.Request.UserAgent())
+	} else {
+		bundle, e = service.CreateLoginSession(userID, "product_broker", c.ClientIP(), c.Request.UserAgent())
+	}
+	if e != nil {
+		productBrowserFailure(c, state.ReturnTo, state.Silent == nil || *state.Silent)
+		return
+	}
+	if e = model.BindBrokerSourceProof(bundle.Session.SID, userID, grant.Access, b.config, grant.SourceProofToken, grant.SourceProofExpiresAt); e != nil {
+		_, _ = model.RevokeUserSession(userID, bundle.Session.SID, "broker_source_binding_failed")
+		productBrowserFailure(c, state.ReturnTo, state.Silent == nil || *state.Silent)
 		return
 	}
 	service.WriteRefreshCookie(c, bundle.RefreshToken)
-	c.Redirect(303, state.ReturnTo)
+	c.Redirect(303, returnToWithSession(state.ReturnTo, bundle.Session.SID))
+}
+
+func returnToWithSession(target, sid string) string {
+	safe, ok := safeProductBrowserReturn(target)
+	if !ok {
+		return "/"
+	}
+	u, err := url.Parse(safe)
+	if err != nil {
+		return "/"
+	}
+	q := u.Query()
+	q.Set("__auth_session", sid)
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 func reconcileSSOUser(c *gin.Context, userID int) error {

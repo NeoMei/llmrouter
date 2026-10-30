@@ -428,6 +428,9 @@ func applyOCRQuotaTx(tx *gorm.DB, j *OCRJob, op *OCROperation, cacheAdmitted boo
 		if token.UserId != j.UserID {
 			return ErrOCRConflict
 		}
+		if token.AuthRealm == NativeFundingLocalOnly {
+			return applyNativeOCRTokenQuotaTx(tx, j, op, token, delta)
+		}
 		if !cacheAdmitted && op.Phase == "reserve" && (token.Status != common.TokenStatusEnabled || token.DeletedAt.Valid || (token.ExpiredTime != -1 && token.ExpiredTime <= time.Now().Unix())) {
 			return ErrOCRConflict
 		}
@@ -459,7 +462,7 @@ func (s *OCRBillingStore) Reserve(ctx context.Context, id string) (OCRJob, error
 		return OCRJob{}, err
 	}
 	if snapshot.Job.Funding != "platform" {
-		_, managed, e := ProductFundingStoreForUser(ctx, snapshot.Job.UserID)
+		_, managed, e := productFundingStoreForDB(ctx, s.db, snapshot.Job.UserID)
 		if e != nil {
 			return snapshot.Job, e
 		}

@@ -27,6 +27,7 @@ export type UserPermissions = {
 }
 
 export interface AuthUser {
+  authentication_realm?: 'CENTRAL' | 'LOCAL_ONLY' | 'LEGACY' | 'UNKNOWN'
   id: number
   username: string
   display_name?: string
@@ -58,6 +59,7 @@ export interface AuthUser {
 }
 
 export interface LoginSession {
+  authentication_realm?: 'CENTRAL' | 'LOCAL_ONLY' | 'LEGACY' | 'UNKNOWN'
   sid: string
   current: boolean
   login_method: string

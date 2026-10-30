@@ -100,6 +100,17 @@ type RemoteCall struct {
 	BillingProfileVersion int          `json:"billing_profile_version"`
 }
 type Config struct {
+	// Explicit opt-in; production activation additionally requires the
+	// authenticated recovery path and complete host/worker integration.
+	AllowAliEmbeddingV4 bool
+	AllowAliRerank      bool
+	// Separate opt-in requires a knowledge producer and versioned keyring.
+	EnableKnowledgeResultRead bool `json:"-"`
+	// The single key is retained for old in-process fixtures. Deployments use
+	// versioned keys that must be kept across restarts and rotations.
+	AliEmbeddingResultKey           []byte            `json:"-"`
+	AliEmbeddingResultKeys          map[string][]byte `json:"-"`
+	AliEmbeddingResultActiveKey     string
 	NativeHistory                   *NativeHistoryConfig
 	ImagePolicies                   map[string]map[string]ImagePolicy
 	NativePresetPolicies            map[string]map[string]NativePresetPolicy

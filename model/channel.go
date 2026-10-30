@@ -578,6 +578,21 @@ func (channel *Channel) Update() error {
 			}
 		}
 	}
+	if channel.Id == 102 || channel.Id == 103 {
+		return DB.Transaction(func(tx *gorm.DB) error {
+			if err := LockKnowledgeParents(tx, 0); err != nil {
+				return err
+			}
+			if err := tx.Model(channel).Updates(channel).Error; err != nil {
+				return err
+			}
+			if err := tx.First(channel, channel.Id).Error; err != nil {
+				return err
+			}
+			return channel.UpdateAbilities(tx)
+		})
+	}
+
 	var err error
 	err = DB.Model(channel).Updates(channel).Error
 	if err != nil {
@@ -609,6 +624,18 @@ func (channel *Channel) UpdateBalance(balance float64) {
 }
 
 func (channel *Channel) Delete() error {
+	if channel.Id == 102 || channel.Id == 103 {
+		return DB.Transaction(func(tx *gorm.DB) error {
+			if err := LockKnowledgeParents(tx, 0); err != nil {
+				return err
+			}
+			if err := tx.Delete(channel).Error; err != nil {
+				return err
+			}
+			return tx.Where("channel_id = ?", channel.Id).Delete(&Ability{}).Error
+		})
+	}
+
 	var err error
 	err = DB.Delete(channel).Error
 	if err != nil {
@@ -1077,7 +1104,8 @@ func BatchSetChannelTag(ids []int, tag *string) error {
 	}
 
 	// update ability status
-	channels, err := GetChannelsByIds(ids)
+	var channels []*Channel
+	err = tx.Where("id IN ?", ids).Find(&channels).Error
 	if err != nil {
 		tx.Rollback()
 		return err

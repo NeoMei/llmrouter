@@ -54,7 +54,8 @@ func setupAuthFlowControllerTest(t *testing.T) *authFlowTestOAuthProvider {
 	previousType := common.MainDatabaseType()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.AuthFlow{}))
+	require.NoError(t, db.AutoMigrate(&model.AuthFlow{}, &model.User{}))
+	require.NoError(t, db.Create(&model.User{Id: 42, Username: "flow-owner", AffCode: "flow-owner", Status: common.UserStatusEnabled, AuthVersion: 1}).Error)
 	model.DB = db
 	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	provider := &authFlowTestOAuthProvider{}

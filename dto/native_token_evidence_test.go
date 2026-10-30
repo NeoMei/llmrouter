@@ -85,3 +85,28 @@ func TestNativeEmbeddingBatchUsesProviderAggregateOnce(t *testing.T) {
 	require.Len(t, u.Measurements, 1)
 	assert.Equal(t, "23", u.Measurements[0].Quantity.Value)
 }
+
+func TestAliEmbeddingV4UsesActualTotalTokensOnly(t *testing.T) {
+	price := nativeTokenTestPrice("embedding", "input")
+	for _, tc := range []struct{ name, raw, state, quantity string }{
+		{"documented usage", `{"usage":{"total_tokens":23}}`, "confirmed", "23"},
+		{"zero", `{"usage":{"total_tokens":0}}`, "invalid", ""},
+		{"missing", `{"usage":{}}`, "incomplete", ""},
+		{"duplicate", `{"usage":{"total_tokens":1,"total_tokens":2}}`, "invalid", ""},
+		{"negative", `{"usage":{"total_tokens":-1}}`, "invalid", ""},
+		{"unknown counter", `{"usage":{"total_tokens":1,"other_tokens":2}}`, "invalid", ""},
+		{"completion charge", `{"usage":{"total_tokens":1,"completion_tokens":1}}`, "invalid", ""},
+		{"estimated only", `{"usage":{"prompt_tokens":23}}`, "invalid", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := NativeTokenEvidence{Source: "ali_text_embedding_v4"}
+			e.Observe([]byte(tc.raw), false)
+			u := e.Usage(price)
+			assert.Equal(t, tc.state, u.State)
+			if tc.state == "confirmed" {
+				require.Len(t, u.Measurements, 1)
+				assert.Equal(t, tc.quantity, u.Measurements[0].Quantity.Value)
+			}
+		})
+	}
+}

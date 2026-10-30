@@ -25,6 +25,7 @@ import (
 // platform endpoint and keep the legacy router untouched.
 func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 	service.PlatformTaskObserver = adapter.ObserveTask
+	service.PlatformTaskSettlementCheck = adapter.VerifyTaskSettlement
 	service.PlatformTaskRelease = adapter.ReleaseTask
 	service.PlatformTaskBind = adapter.BindTask
 	if runtime := controller.RelayMediaRuntime; runtime != nil && runtime.Service != nil {
@@ -49,6 +50,7 @@ func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 		return
 	}
 	installNativeHistoryResolver(adapter)
+	InstallKnowledgeBindings(adapter)
 	platform := engine.Group("/platform/v1", middleware.RouteTag("relay"), func(c *gin.Context) {
 		policy, err := unihubaccess.FromEnv()
 		if err != nil || !policy.PlatformEnabled {
@@ -69,6 +71,8 @@ func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 		}
 		c.JSON(200, receipt)
 	})
+	registerKnowledgeResultRead(platform, adapter)
+	registerKnowledgeRoute(platform, adapter)
 	registerPlatformOperation(platform, adapter, "/videos", "video", "/v1/videos", types.RelayFormatTask)
 	registerPlatformOperation(platform, adapter, "/ocr/jobs", "ocr", "/v1/ocr", types.RelayFormat("platform_ocr"))
 	registerPlatformTaskReads(platform, adapter)
@@ -94,6 +98,7 @@ func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 	registerPlatformOperation(platform, adapter, "/native/dashscope/images/generations", "dashscope.images.generate", "/v1/native/dashscope/images/generations", types.RelayFormat("native_image"))
 	registerPlatformOperation(platform, adapter, "/native/gemini/images/models/*native", "gemini.images.generate", "", types.RelayFormat("native_image"))
 	registerPlatformOperation(platform, adapter, "/images/edits", "images.edits.create", "/v1/images/edits", types.RelayFormat("native_image"))
+	platform.GET("/images/edits/:callID", func(c *gin.Context) { readWanImage(c, adapter) })
 	platform.POST("/chat/completions", func(c *gin.Context) {
 		if len(c.Request.Header.Values("Authorization")) != 1 || !strings.HasPrefix(c.GetHeader("Authorization"), "Bearer ") || !platformbilling.IsModelCredential(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")) {
 			c.AbortWithStatusJSON(401, gin.H{"error": gin.H{"code": "invalid_model_credential"}})
@@ -163,6 +168,9 @@ func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 // falling back to local wallet billing.
 func registerPlatformOperation(engine gin.IRoutes, adapter *platformbilling.Adapter, path, operation, target string, format types.RelayFormat) {
 	engine.POST(path, middleware.RouteTag("relay"), func(c *gin.Context) {
+		if operation == "embedding" || operation == "rerank.create" {
+			c.Set(common.KeyMemoryOnlyBody, true)
+		}
 		policy, policyErr := unihubaccess.FromEnv()
 		if policyErr != nil || !policy.PlatformEnabled {
 			c.AbortWithStatus(http.StatusServiceUnavailable)
@@ -309,22 +317,28 @@ func registerPlatformOperation(engine gin.IRoutes, adapter *platformbilling.Adap
 				return
 			}
 			modelID, _ := raw["model"].(string)
-			catalog, e := readTechnicalCatalog(c.Request.Context(), adapter, "superwagie")
-			available := false
-			if e == nil {
-				for _, m := range catalog.Models {
-					if m.ID == modelID {
-						for _, op := range m.Operations {
-							if (op.ID == operation || (operation == "embedding" && op.ID == "embeddings.create")) && op.Available {
-								available = true
+			// Canonical paired knowledge has its actual product-scoped DB
+			// resolver in AdmitPinnedKnowledge before reserve. The old global
+			// SuperWagie catalog probe is only for legacy/nonpaired operations.
+			paired := platformbilling.ApprovedKnowledgePair(modelID, wire.ID) || (operation == "embedding" && modelID == "unihub-text-embedding-v4")
+			if !paired {
+				catalog, e := readTechnicalCatalog(c.Request.Context(), adapter, "superwagie")
+				available := false
+				if e == nil {
+					for _, m := range catalog.Models {
+						if m.ID == modelID {
+							for _, op := range m.Operations {
+								if (op.ID == operation || (operation == "embedding" && op.ID == "embeddings.create")) && op.Available {
+									available = true
+								}
 							}
 						}
 					}
 				}
-			}
-			if !available {
-				c.AbortWithStatus(503)
-				return
+				if !available {
+					c.AbortWithStatus(503)
+					return
+				}
 			}
 		}
 		if platformbilling.IsImageWire(wire.ID) {
@@ -412,9 +426,33 @@ func registerPlatformOperation(engine gin.IRoutes, adapter *platformbilling.Adap
 				return
 			}
 		}
+		var knowledgeRequest struct {
+			Model string `json:"model"`
+		}
+		_ = common.UnmarshalUnique(body, &knowledgeRequest)
+		if operation == "embedding" && knowledgeRequest.Model == "unihub-text-embedding-v4" {
+			wire.ID = "embeddings.create"
+		}
+		for name := range c.Request.Header {
+			if strings.EqualFold(name, "X-UniHub-Knowledge-Policy") && !platformbilling.ApprovedKnowledgePair(knowledgeRequest.Model, wire.ID) {
+				c.AbortWithStatus(400)
+				return
+			}
+		}
 		var session *platformbilling.Session
 		if wire.ID == "multimodal.embeddings.create" {
 			session, err = adapter.AdmitPreparedKnowledge(c.Request.Context(), strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "), c.GetHeader("X-UniHub-Task-ID"), c.GetHeader("Idempotency-Key"), wire, ct, body, knowledgeMediaPreparation(c, adapter))
+		} else if platformbilling.ApprovedKnowledgePair(knowledgeRequest.Model, wire.ID) {
+			actor, actorOK := singleKnowledgeHeader(c.Request.Header, "X-UniHub-Actor-Authorization")
+			pin, pinOK := singleKnowledgeHeader(c.Request.Header, "X-UniHub-Knowledge-Policy")
+			auth, authOK := singleKnowledgeHeader(c.Request.Header, "Authorization")
+			task, taskOK := singleKnowledgeHeader(c.Request.Header, "X-UniHub-Task-ID")
+			call, callOK := singleKnowledgeHeader(c.Request.Header, "Idempotency-Key")
+			if !actorOK || !pinOK || !authOK || !taskOK || !callOK || !strings.HasPrefix(actor, "Bearer ") || !strings.HasPrefix(auth, "Bearer ") || c.GetHeader("Cookie") != "" {
+				c.AbortWithStatus(http.StatusBadRequest)
+				return
+			}
+			session, err = adapter.AdmitPinnedKnowledge(c.Request.Context(), strings.TrimPrefix(actor, "Bearer "), strings.TrimPrefix(auth, "Bearer "), task, call, pin, wire, ct, body)
 		} else if wire.ID != "" {
 			session, err = adapter.AdmitWireOperation(c.Request.Context(), strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "), c.GetHeader("X-UniHub-Task-ID"), c.GetHeader("Idempotency-Key"), wire, ct, body)
 		} else {

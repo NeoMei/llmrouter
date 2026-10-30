@@ -1,6 +1,7 @@
 package platformbilling
 
 import (
+	"encoding/base64"
 	"github.com/QuantumNous/new-api/common"
 	"strconv"
 	"strings"
@@ -16,6 +17,37 @@ func ConfigFromEnv(get func(string) string) (Config, error) {
 	}
 	if !c.Enabled {
 		return c, nil
+	}
+	for _, name := range []string{"UNIHUB_ALI_EMBEDDING_ENABLED", "UNIHUB_ALI_RERANK_ENABLED", "UNIHUB_KNOWLEDGE_RESULT_READ_ENABLED"} {
+		if raw := get(name); raw != "" && raw != "false" && raw != "true" {
+			return c, ErrInvalid
+		}
+	}
+	c.AllowAliEmbeddingV4 = get("UNIHUB_ALI_EMBEDDING_ENABLED") == "true"
+	c.AllowAliRerank = get("UNIHUB_ALI_RERANK_ENABLED") == "true"
+	c.EnableKnowledgeResultRead = get("UNIHUB_KNOWLEDGE_RESULT_READ_ENABLED") == "true"
+	if c.EnableKnowledgeResultRead && !c.AllowAliEmbeddingV4 && !c.AllowAliRerank {
+		return c, ErrInvalid
+	}
+	if c.AllowAliEmbeddingV4 || c.AllowAliRerank {
+		var keys map[string]string
+		if common.UnmarshalUnique([]byte(get("UNIHUB_KNOWLEDGE_RESULT_KEYS")), &keys) != nil || len(keys) == 0 || len(keys) > 32 {
+			return c, ErrInvalid
+		}
+		c.AliEmbeddingResultKeys = make(map[string][]byte, len(keys))
+		seen := make(map[string]bool, len(keys))
+		for id, encoded := range keys {
+			key, err := base64.StdEncoding.Strict().DecodeString(encoded)
+			if !knowledgeKeyID.MatchString(id) || err != nil || len(key) != 32 || seen[string(key)] || base64.StdEncoding.EncodeToString(key) != encoded {
+				return c, ErrInvalid
+			}
+			seen[string(key)] = true
+			c.AliEmbeddingResultKeys[id] = key
+		}
+		c.AliEmbeddingResultActiveKey = get("UNIHUB_KNOWLEDGE_RESULT_ACTIVE_KEY")
+		if _, ok := c.AliEmbeddingResultKeys[c.AliEmbeddingResultActiveKey]; !ok {
+			return c, ErrInvalid
+		}
 	}
 	if raw := get("UNIHUB_NATIVE_HISTORY"); raw != "" {
 		if common.UnmarshalUnique([]byte(raw), &c.NativeHistory) != nil {
@@ -159,7 +191,7 @@ func ConfigFromEnv(get func(string) string) (Config, error) {
 		}
 		for _, models := range policies {
 			for _, p := range models {
-				if !protocolKeys(p, "channel_key_sha256 version provider_reference public_model wire_operation channel_id channel_type upstream_model hard_input_tokens visual_tokens max_item_tokens max_batch embedding_space rate_ids") {
+				if !protocolKeys(p, "channel_key_sha256 version provider_reference public_model wire_operation channel_id channel_type origin upstream_model hard_input_tokens visual_tokens max_item_tokens max_batch embedding_space rate_ids") {
 					return c, ErrInvalid
 				}
 				if raw, exists := p["embedding_space"]; exists {

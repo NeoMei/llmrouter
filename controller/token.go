@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
@@ -35,12 +36,12 @@ func buildMaskedTokenResponses(tokens []*model.Token) []*model.Token {
 func GetAllTokens(c *gin.Context) {
 	userId := c.GetInt("id")
 	pageInfo := common.GetPageQuery(c)
-	tokens, err := model.GetAllUserTokens(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	tokens, err := model.GetAllUserTokens(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), tokenRequestRealm(c))
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	total, _ := model.CountUserTokens(userId)
+	total, _ := model.CountUserTokens(userId, tokenRequestRealm(c))
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(buildMaskedTokenResponses(tokens))
 	common.ApiSuccess(c, pageInfo)
@@ -53,7 +54,7 @@ func SearchTokens(c *gin.Context) {
 
 	pageInfo := common.GetPageQuery(c)
 
-	tokens, total, err := model.SearchUserTokens(userId, keyword, token, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	tokens, total, err := model.SearchUserTokens(userId, keyword, token, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), tokenRequestRealm(c))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -70,7 +71,7 @@ func GetToken(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	token, err := model.GetTokenByIds(id, userId)
+	token, err := model.GetTokenByIds(id, userId, tokenRequestRealm(c))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -85,7 +86,7 @@ func GetTokenKey(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	token, err := model.GetTokenByIds(id, userId)
+	token, err := model.GetTokenByIds(id, userId, tokenRequestRealm(c))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -223,6 +224,9 @@ func AddToken(c *gin.Context) {
 		Group:              token.Group,
 		CrossGroupRetry:    token.CrossGroupRetry,
 	}
+	if middleware.NativeRealmAuthenticated(c) {
+		cleanToken.AuthRealm = model.NativeFundingLocalOnly
+	}
 	err = cleanToken.Insert()
 	if err != nil {
 		common.ApiError(c, err)
@@ -270,6 +274,9 @@ func CreateChatCredential(c *gin.Context) {
 		Status: common.TokenStatusEnabled, CreatedTime: now, AccessedTime: now,
 		ExpiredTime: expiresAt, UnlimitedQuota: true, Purpose: "chat_embed", BoundOrigin: target.Scheme + "://" + target.Host,
 	}
+	if middleware.NativeRealmAuthenticated(c) {
+		token.AuthRealm = model.NativeFundingLocalOnly
+	}
 	if err := token.Insert(); err != nil {
 		common.ApiError(c, err)
 		return
@@ -280,7 +287,7 @@ func CreateChatCredential(c *gin.Context) {
 func DeleteToken(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	userId := c.GetInt("id")
-	err := model.DeleteTokenById(id, userId)
+	err := model.DeleteTokenById(id, userId, tokenRequestRealm(c))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -294,6 +301,14 @@ func DeleteToken(c *gin.Context) {
 func UpdateToken(c *gin.Context) {
 	userId := c.GetInt("id")
 	statusOnly := c.Query("status_only")
+	preserveQuota := false
+	if values, present := c.Request.URL.Query()["preserve_quota"]; present {
+		if len(values) != 1 || values[0] != "true" || statusOnly != "" {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		preserveQuota = true
+	}
 	token := model.Token{}
 	err := c.ShouldBindJSON(&token)
 	if err != nil {
@@ -315,7 +330,7 @@ func UpdateToken(c *gin.Context) {
 			return
 		}
 	}
-	cleanToken, err := model.GetTokenByIds(token.Id, userId)
+	cleanToken, err := model.GetTokenByIds(token.Id, userId, tokenRequestRealm(c))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -336,15 +351,23 @@ func UpdateToken(c *gin.Context) {
 		// If you add more fields, please also update token.Update()
 		cleanToken.Name = token.Name
 		cleanToken.ExpiredTime = token.ExpiredTime
-		cleanToken.RemainQuota = token.RemainQuota
-		cleanToken.UnlimitedQuota = token.UnlimitedQuota
+		if !preserveQuota {
+			cleanToken.RemainQuota = token.RemainQuota
+			cleanToken.UnlimitedQuota = token.UnlimitedQuota
+		}
 		cleanToken.ModelLimitsEnabled = token.ModelLimitsEnabled
 		cleanToken.ModelLimits = token.ModelLimits
 		cleanToken.AllowIps = token.AllowIps
 		cleanToken.Group = token.Group
 		cleanToken.CrossGroupRetry = token.CrossGroupRetry
 	}
-	err = cleanToken.Update()
+	if statusOnly != "" {
+		err = cleanToken.UpdateStatus(tokenRequestRealm(c))
+	} else if preserveQuota {
+		err = cleanToken.UpdateMetadata(tokenRequestRealm(c))
+	} else {
+		err = cleanToken.Update(tokenRequestRealm(c))
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -367,7 +390,7 @@ func DeleteTokenBatch(c *gin.Context) {
 		return
 	}
 	userId := c.GetInt("id")
-	count, err := model.BatchDeleteTokens(tokenBatch.Ids, userId)
+	count, err := model.BatchDeleteTokens(tokenBatch.Ids, userId, tokenRequestRealm(c))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -390,7 +413,7 @@ func GetTokenKeysBatch(c *gin.Context) {
 		return
 	}
 	userId := c.GetInt("id")
-	tokens, err := model.GetTokenKeysByIds(tokenBatch.Ids, userId)
+	tokens, err := model.GetTokenKeysByIds(tokenBatch.Ids, userId, tokenRequestRealm(c))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -400,4 +423,11 @@ func GetTokenKeysBatch(c *gin.Context) {
 		keysMap[t.Id] = t.GetFullKey()
 	}
 	common.ApiSuccess(c, gin.H{"keys": keysMap})
+}
+
+func tokenRequestRealm(c *gin.Context) string {
+	if middleware.NativeRealmAuthenticated(c) {
+		return model.NativeFundingLocalOnly
+	}
+	return ""
 }

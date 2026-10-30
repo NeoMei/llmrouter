@@ -8,6 +8,13 @@ import (
 	"strings"
 )
 
+// A receipt-scoped capability is sufficient for financial reconciliation,
+// but not for releasing SuperWagie's private media. Result delivery remains
+// closed until current-user authorization and revocation are coordinated.
+func superwagiePrivateResultBlocked(row platformbilling.Call) bool {
+	return row.OriginProductID == "superwagie"
+}
+
 func registerPlatformTaskReads(engine gin.IRoutes, a *platformbilling.Adapter) {
 	for _, op := range []string{"video", "ocr"} {
 		path := "/videos/:callID"
@@ -18,8 +25,12 @@ func registerPlatformTaskReads(engine gin.IRoutes, a *platformbilling.Adapter) {
 			token := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
 			if c.Request.Method == http.MethodGet && len(c.Request.Header.Values("Authorization")) == 1 && strings.HasPrefix(c.GetHeader("Authorization"), "Bearer ") && c.Request.URL.RawQuery == "" && platformbilling.IsOwnedReadCredential(token) {
 				row, err := a.OwnedTaskRead(c.Request.Context(), token, c.Param("callID"))
-				if err != nil {
+				if err != nil || row.Operation != op {
 					c.AbortWithStatus(404)
+					return
+				}
+				if strings.HasSuffix(c.Request.URL.Path, "/result") && superwagiePrivateResultBlocked(row) {
+					c.AbortWithStatus(http.StatusNotFound)
 					return
 				}
 				if op == "ocr" && recoverOwnedOCRRead(c.Request.Context(), a, row) != nil {
@@ -37,6 +48,10 @@ func registerPlatformTaskReads(engine gin.IRoutes, a *platformbilling.Adapter) {
 			row, err := a.Task(c.Request.Context(), strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "), c.GetHeader("X-UniHub-Task-ID"), c.Param("callID"))
 			if err != nil || row.Operation != op {
 				c.AbortWithStatus(404)
+				return
+			}
+			if superwagiePrivateResultBlocked(row) && ((c.Request.Method == http.MethodGet && strings.HasSuffix(c.Request.URL.Path, "/result")) || c.Request.Method == http.MethodPost) {
+				c.AbortWithStatus(http.StatusNotFound)
 				return
 			}
 			c.Set("platform_task_call", row)

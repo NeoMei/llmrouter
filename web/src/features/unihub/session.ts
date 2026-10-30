@@ -23,6 +23,7 @@ import { UniHubClient, UniHubError, type User, type Account } from './sdk'
 
 export interface ProductConfig {
   native_access?: boolean
+  browser_sso_enabled?: boolean
   enabled: boolean
   public_origin: string
   client_id: string
@@ -63,11 +64,15 @@ export class ProductSession {
   account = ''
   epoch = 0
   csrfToken = ''
+  financeWriteScopes: string[] = []
+  financeExpiresAt = 0
+  financeTransport: '' | 'oidc' | 'runtime_actor' = ''
   restorePromise: Promise<void> | null = null
   readonly client: UniHubClient
   private controller = new AbortController()
   private timer: ReturnType<typeof setTimeout> | undefined
   onClear = () => {}
+  onForbidden = (_reason: string) => {}
   constructor(client: UniHubClient) {
     this.client = client
   }
@@ -86,12 +91,119 @@ export class ProductSession {
     this.intents.clear()
     this.user = null
     this.accounts = []
+    this.csrfToken = ''
+    this.financeExpiresAt = 0
+    this.financeTransport = ''
+    this.financeWriteScopes = []
+    this.restorePromise = null
     this.select('')
     this.onClear()
   }
   expire(seconds: number): void {
     clearTimeout(this.timer)
     this.timer = setTimeout(() => this.clear(), seconds * 1000)
+  }
+  get canWrite(): boolean {
+    return (
+      this.financeTransport === 'oidc' &&
+      useAuthStore.getState().auth.session?.login_method === 'unihub' &&
+      (this.financeExpiresAt === 0 || this.financeExpiresAt > Date.now() / 1000)
+    )
+  }
+  canFinanceWrite(scope: string, account = this.account): boolean {
+    const selected = this.accounts.find((item) => item.id === account)
+    if (!selected || account !== this.account) return false
+    if (
+      scope !== 'model-credentials:write' &&
+      !['owner', 'billing_admin'].includes(selected.role)
+    ) {
+      return false
+    }
+    return (
+      this.canWrite ||
+      (this.financeTransport === 'runtime_actor' &&
+        this.financeExpiresAt > Date.now() / 1000 &&
+        this.financeWriteScopes.includes(scope))
+    )
+  }
+  canFinanceRequest(method: string, path: string): boolean {
+    const match = /^\/v1\/accounts\/([A-Za-z0-9_-]+)\/(.+)$/.exec(path)
+    if (!match) return false
+    const [, account, resource] = match
+    let scope = ''
+    if (
+      (method === 'POST' && resource === 'api-keys') ||
+      (method === 'DELETE' && /^api-keys\/[A-Za-z0-9_-]+$/.test(resource))
+    ) {
+      scope = 'model-credentials:write'
+    }
+    if (method === 'PUT' && resource === 'usage-budget') {
+      scope = 'settings:write'
+    }
+    if (
+      method === 'POST' &&
+      (resource === 'recharges' ||
+        /^recharges\/[A-Za-z0-9_-]+\/sandbox-settle$/.test(resource))
+    ) {
+      scope = 'recharges:write'
+    }
+    return scope !== '' && this.canFinanceWrite(scope, account)
+  }
+  acceptFinanceAccess(data: ProductAccessSnapshot): void {
+    const auth = useAuthStore.getState().auth
+    const proof = data.finance_access
+    if (!proof && auth.session?.login_method === 'unihub') {
+      // Older deployments already validate the OIDC-bound session on every BFF request.
+      this.financeWriteScopes = []
+      this.financeTransport = 'oidc'
+      this.financeExpiresAt = 0
+      return
+    }
+    const now = Date.now() / 1000
+    if (
+      !proof ||
+      proof.available !== true ||
+      (proof.transport !== 'runtime_actor' && proof.transport !== 'oidc') ||
+      (proof.transport === 'oidc' && auth.session?.login_method !== 'unihub') ||
+      proof.central_user_id !== auth.user?.unihub_user_id ||
+      proof.central_user_id !== data.access.subject ||
+      proof.central_user_id !== data.access.user.id ||
+      typeof proof.expires_at !== 'number' ||
+      !Number.isFinite(proof.expires_at) ||
+      proof.expires_at <= now
+    ) {
+      this.clear()
+      throw new Error(
+        'UniHub account access is unavailable for this browser session. Contact the administrator.'
+      )
+    }
+    this.financeWriteScopes = Array.isArray(proof.write_scopes)
+      ? proof.write_scopes.filter((scope) =>
+          [
+            'model-credentials:write',
+            'settings:write',
+            'recharges:write',
+          ].includes(scope)
+        )
+      : []
+    this.financeTransport = proof.transport
+    this.financeExpiresAt = proof.expires_at
+    clearTimeout(this.timer)
+    this.timer = setTimeout(
+      () => {
+        this.intents.clear()
+        this.csrfToken = ''
+        this.financeExpiresAt = 0
+        this.financeTransport = ''
+        this.financeWriteScopes = []
+        this.accounts = []
+        this.select('')
+        this.onForbidden(
+          'UniHub account access has expired. Refresh accounts and roles.'
+        )
+      },
+      Math.max(0, (proof.expires_at - now) * 1000)
+    )
   }
   async bound<T>(work: () => Promise<T>): Promise<T> {
     const epoch = this.epoch
@@ -104,6 +216,17 @@ export class ProductSession {
     } catch (error) {
       if (
         error instanceof UniHubError &&
+        error.status === 403 &&
+        epoch === this.epoch
+      ) {
+        this.intents.clear()
+        this.accounts = []
+        this.csrfToken = ''
+        this.select('')
+        this.onForbidden(error.message)
+      }
+      if (
+        error instanceof UniHubError &&
         error.status === 401 &&
         epoch === this.epoch
       ) {
@@ -114,18 +237,64 @@ export class ProductSession {
   }
 }
 let activeProductSession: ProductSession | null = null
+let activeProductConfig = ''
+
+// These claims are used only to invalidate client state, never to authorize a
+// request. The server verifies each token and all financial permissions.
+function tokenGeneration(token: string | null): string {
+  if (!token) return ''
+  try {
+    const payload = token.split('.')[1]
+    const claims = JSON.parse(
+      atob(payload.replaceAll('-', '+').replaceAll('_', '/'))
+    ) as {
+      sv?: unknown
+      uv?: unknown
+    }
+    if (Number.isSafeInteger(claims.sv) && Number.isSafeInteger(claims.uv)) {
+      return `${claims.sv}:${claims.uv}`
+    }
+  } catch {
+    // Unknown token formats are conservatively invalidated on any rotation.
+  }
+  return token
+}
+
+export function productAuthorityKey(
+  auth: ReturnType<typeof useAuthStore.getState>['auth']
+): string {
+  return JSON.stringify([
+    auth.user?.id,
+    auth.user?.identity_source,
+    auth.user?.unihub_user_id,
+    auth.session?.sid,
+    auth.session?.login_method,
+    tokenGeneration(auth.accessToken),
+  ])
+}
+
+function productConfigKey(config: ProductConfig): string {
+  return JSON.stringify([
+    config.public_origin,
+    config.client_id,
+    config.product_id,
+    config.instance_id ?? 'default',
+  ])
+}
 
 useAuthStore.subscribe((state, previous) => {
-  const identityChanged =
-    state.auth.user?.id !== previous.auth.user?.id ||
-    state.auth.user?.identity_source !== previous.auth.user?.identity_source ||
-    state.auth.user?.unihub_user_id !== previous.auth.user?.unihub_user_id
-  if (identityChanged && activeProductSession?.user) {
-    activeProductSession.clear()
+  if (productAuthorityKey(state.auth) !== productAuthorityKey(previous.auth)) {
+    activeProductSession?.clear()
   }
 })
 
-export function getActiveProductSession(): ProductSession | null {
+export function getActiveProductSession(
+  config?: ProductConfig
+): ProductSession | null {
+  if (config && activeProductConfig !== productConfigKey(config)) {
+    activeProductSession?.clear()
+    activeProductSession = null
+  }
   return activeProductSession
 }
 
@@ -144,9 +313,36 @@ export function createProductSession(config: ProductConfig): ProductSession {
         throw new Error('Cross-origin product request')
       }
       const headers = new Headers(init?.headers)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (
+        !session.canWrite &&
+        method !== 'GET' &&
+        !session.canFinanceRequest(method, source.pathname)
+      ) {
+        throw new Error(
+          'UniHub account access is read only for this browser session.'
+        )
+      }
+      if (!session.canWrite && session.financeExpiresAt <= Date.now() / 1000) {
+        throw new Error(
+          'UniHub account access is unavailable for this browser session. Contact the administrator.'
+        )
+      }
       const native = await getFreshAuthHeaders()
+      if (epoch !== session.epoch) {
+        throw new Error('UniHub session or payer changed')
+      }
+      if (
+        !session.canWrite &&
+        method !== 'GET' &&
+        !session.canFinanceRequest(method, source.pathname)
+      ) {
+        throw new Error(
+          'UniHub account access is read only for this browser session.'
+        )
+      }
       headers.set('Authorization', native.Authorization ?? '')
-      if (init?.method !== 'GET') {
+      if (method !== 'GET') {
         headers.set('X-UniHub-CSRF', session.csrfToken)
       }
       result = await fetch(
@@ -178,6 +374,7 @@ export function createProductSession(config: ProductConfig): ProductSession {
     })
   )
   activeProductSession = session
+  activeProductConfig = productConfigKey(config)
   return session
 }
 
@@ -207,13 +404,20 @@ export interface ProductAccessSnapshot {
   >['permissions']
   user?: AuthUser
   csrf_token: string
+  finance_access?: {
+    available: boolean
+    transport?: string
+    central_user_id?: string
+    expires_at?: number
+    write_scopes?: string[]
+  }
 }
 export async function refreshProductAccess(): Promise<ProductAccessSnapshot> {
   const auth = useAuthStore.getState().auth
   if (auth.user?.identity_source !== 'unihub') {
     throw new Error('Product identity proof rejected')
   }
-  const sid = auth.session?.sid
+  const authority = productAuthorityKey(auth)
   const response = await fetch('/api/unihub/access', {
     headers: await getFreshAuthHeaders(),
     credentials: 'same-origin',
@@ -221,13 +425,16 @@ export async function refreshProductAccess(): Promise<ProductAccessSnapshot> {
     redirect: 'error',
     signal: AbortSignal.timeout(10000),
   })
+  if (authority !== productAuthorityKey(useAuthStore.getState().auth)) {
+    throw new Error('UniHub session or payer changed')
+  }
   if (!response.ok) {
     if (response.status === 401 || response.status === 403) {
       clearAuthentication()
       throw new Error('Product identity proof rejected')
     }
     const current = useAuthStore.getState().auth
-    if (current.user?.id === auth.user.id) {
+    if (productAuthorityKey(current) === authority) {
       current.setUser({ ...auth.user, permissions: { admin_permissions: {} } })
     }
     throw new Error('Product identity proof rejected')
@@ -235,7 +442,7 @@ export async function refreshProductAccess(): Promise<ProductAccessSnapshot> {
   const data = (await response.json()) as ProductAccessSnapshot
   if (
     data.access.subject !== auth.user.unihub_user_id ||
-    sid !== useAuthStore.getState().auth.session?.sid
+    authority !== productAuthorityKey(useAuthStore.getState().auth)
   ) {
     throw new Error('UniHub session or payer changed')
   }
@@ -257,9 +464,12 @@ export async function refreshProductAccess(): Promise<ProductAccessSnapshot> {
 // Hydrate through the session-authenticated BFF. A restored identity cannot
 // silently replace an existing payer or a pending financial intent.
 export function restoreProductSession(session: ProductSession): Promise<void> {
-  session.restorePromise ??= restoreProductSessionOnce(session).finally(() => {
-    session.restorePromise = null
-  })
+  if (!session.restorePromise) {
+    const promise = restoreProductSessionOnce(session).finally(() => {
+      if (session.restorePromise === promise) session.restorePromise = null
+    })
+    session.restorePromise = promise
+  }
   return session.restorePromise
 }
 async function restoreProductSessionOnce(
@@ -267,7 +477,17 @@ async function restoreProductSessionOnce(
 ): Promise<void> {
   if (useAuthStore.getState().auth.user?.identity_source !== 'unihub') return
   const epoch = session.epoch
-  const data = await refreshProductAccess()
+  let data: ProductAccessSnapshot
+  try {
+    data = await refreshProductAccess()
+  } catch (error) {
+    if (!session.canWrite && epoch === session.epoch) session.clear()
+    throw error
+  }
+  if (epoch !== session.epoch) {
+    throw new Error('UniHub session or payer changed')
+  }
+  session.acceptFinanceAccess(data)
   const accounts = await session.bound(() => session.client.accounts())
   if (epoch !== session.epoch) {
     throw new Error('UniHub session or payer changed')

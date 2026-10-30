@@ -34,6 +34,11 @@ func registerNativeOCRRead(engine gin.IRoutes, a *platformbilling.Adapter) {
 			c.AbortWithStatus(http.StatusNotFound)
 			return
 		}
+		// Native status can contain signed URLs to OCR content.
+		if superwagiePrivateResultBlocked(row) {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
 		if platformbilling.IsOwnedReadCredential(token) && recoverOwnedOCRRead(c.Request.Context(), a, row) != nil {
 			c.AbortWithStatusJSON(409, gin.H{"error": gin.H{"code": "ocr_ownership_proof_required"}})
 			return

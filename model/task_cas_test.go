@@ -41,6 +41,11 @@ func TestMain(m *testing.M) {
 		&AuthFlow{},
 		&ExternalIdentityClaim{},
 		&Token{},
+		&NativeTokenQuotaProtocol{},
+		&NativeTokenQuotaState{},
+		&NativeTokenQuotaOperation{},
+		&NativeTokenQuotaSession{},
+		&NativeTokenFundingOperation{},
 		&PasskeyCredential{},
 		&TwoFA{},
 		&TwoFABackupCode{},
@@ -74,6 +79,11 @@ func truncateTables(t *testing.T) {
 		DB.Exec("DELETE FROM passkey_credentials")
 		DB.Exec("DELETE FROM two_fa_backup_codes")
 		DB.Exec("DELETE FROM two_fas")
+		DB.Exec("DELETE FROM native_token_funding_operations")
+		DB.Exec("DELETE FROM native_token_quota_sessions")
+		DB.Exec("DELETE FROM native_token_quota_operations")
+		DB.Exec("DELETE FROM native_token_quota_states")
+		DB.Exec("DELETE FROM native_token_quota_protocols")
 		DB.Exec("DELETE FROM tokens")
 		DB.Exec("DELETE FROM user_oauth_bindings")
 		DB.Exec("DELETE FROM users")
@@ -381,4 +391,20 @@ func TestHasTaskPollingWork_IncludesOnlyRefundableFailedTasks(t *testing.T) {
 	}
 	insertTask(t, refundable)
 	assert.True(t, HasTaskPollingWork())
+}
+
+func TestRefundQueueExcludesNativeOwnersBeforeLimit(t *testing.T) {
+	truncateTables(t)
+	for _, owner := range []string{"native", "platform"} {
+		insertTask(t, &Task{TaskID: "held-" + owner, FundingOwner: owner, Status: TaskStatusFailure, Progress: "100%", Quota: 3, SubmitTime: TaskRefundLegacyCutoff, Data: json.RawMessage(`{}`)})
+	}
+	legacy := &Task{TaskID: "legacy-refund", Status: TaskStatusFailure, Progress: "100%", Quota: 3, SubmitTime: TaskRefundLegacyCutoff, Data: json.RawMessage(`{}`)}
+	insertTask(t, legacy)
+	rows := GetUnrefundedFailedTasks(time.Now().Unix()+60, 1)
+	require.Len(t, rows, 1)
+	assert.Equal(t, legacy.ID, rows[0].ID)
+	require.NoError(t, DB.Model(&Task{}).Where("id = ?", legacy.ID).Update("funding_owner", nil).Error)
+	rows = GetUnrefundedFailedTasks(time.Now().Unix()+60, 1)
+	require.Len(t, rows, 1)
+	assert.Equal(t, legacy.ID, rows[0].ID)
 }

@@ -62,6 +62,20 @@ func (e *NativeTokenEvidence) Observe(raw []byte, stream bool) {
 		e.invalid = true
 		return
 	}
+	if e.Source == BillingUsageSourceAliEmbeddingV4 {
+		// The certified v4 embedding endpoint documents only total_tokens.
+		// Reject any additional counters rather than silently undercharging.
+		if stream {
+			e.invalid = true
+			return
+		}
+		u.ForEach(func(k, _ gjson.Result) bool {
+			if k.String() != "total_tokens" {
+				e.invalid = true
+			}
+			return true
+		})
+	}
 	if e.values == nil {
 		e.values = map[string]int64{}
 	}
@@ -73,6 +87,8 @@ func (e *NativeTokenEvidence) Observe(raw []byte, stream bool) {
 		names = []string{"input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"}
 	case BillingUsageSourceGeminiChat:
 		names = []string{"promptTokenCount", "candidatesTokenCount", "totalTokenCount", "cachedContentTokenCount", "thoughtsTokenCount", "toolUsePromptTokenCount"}
+	case BillingUsageSourceAliEmbeddingV4:
+		names = []string{"total_tokens"}
 	}
 	for _, name := range names {
 		v := u.Get(name)
@@ -151,6 +167,19 @@ func (e *NativeTokenEvidence) Usage(price metering.Price) metering.Usage {
 	}
 	input, hasInput := e.values[p]
 	output, hasOutput := e.values[c]
+	if e.Source == BillingUsageSourceAliEmbeddingV4 {
+		if price.Operation != "embedding" || len(price.Terms) != 1 || price.Terms[0].Key != "input" || price.Terms[0].Unit != "token" {
+			u.State = "invalid"
+			return u
+		}
+		input, hasInput = e.values["total_tokens"]
+		// Admission accepts only nonempty text for this certified model; a
+		// successful zero-token result contradicts the supplier contract.
+		if hasInput && input == 0 {
+			u.State = "invalid"
+			return u
+		}
+	}
 	if price.Operation == "embedding" {
 		output = 0
 		hasOutput = true

@@ -2,6 +2,7 @@ package platformbilling
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -29,6 +30,9 @@ func (a *Adapter) admitWireOperation(ctx context.Context, credential, task, id s
 		}
 	}
 	operation := wireBillingOperation(wire.ID)
+	if wire.ID == "rerank.create" && !a.config.AllowAliRerank {
+		return nil, ErrInvalid
+	}
 	if operation == "" {
 		return nil, ErrInvalid
 	}
@@ -165,7 +169,23 @@ func (a *Adapter) admitWireOperation(ctx context.Context, credential, task, id s
 		return nil, err
 	}
 	var grant Claims
-	if err = a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": req.Model, "instance_id": a.config.InstanceID, "wire_operation": wire.ID}, &grant); err != nil {
+	pinned, _ := ctx.Value(pinnedKnowledgeContextKey{}).(*pinnedKnowledgeAdmission)
+	if ApprovedKnowledgePair(req.Model, wire.ID) {
+		if pinned == nil || pinned.binding.Model != req.Model || pinned.binding.WireOperation != wire.ID {
+			return nil, ErrInvalid
+		}
+		grant = pinned.grant.Claims
+		var frozen frozenKnowledge
+		if common.UnmarshalUnique([]byte(req.MediaSnapshot), &frozen) != nil {
+			return nil, ErrInvalid
+		}
+		frozen.Binding = &pinned.binding
+		encoded, e := common.Marshal(frozen)
+		if e != nil {
+			return nil, e
+		}
+		req.MediaSnapshot = string(encoded)
+	} else if err = a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": req.Model, "instance_id": a.config.InstanceID, "wire_operation": wire.ID}, &grant); err != nil {
 		return nil, err
 	}
 	if a.validateModelCredential(credential, task, req.Model, grant) != nil || !allowsWire(grant, req.Model, wire.ID) {
@@ -257,10 +277,34 @@ func (a *Adapter) admitWireOperation(ctx context.Context, credential, task, id s
 		row.DigestVersion = "platform-native-history-v1"
 	}
 	var old Call
-	if err = a.db.WithContext(ctx).First(&old, "call_id = ?", id).Error; err == nil {
+	lookupErr := a.db.WithContext(ctx).First(&old, "call_id = ?", id).Error
+	if lookupErr != nil && !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+		return nil, lookupErr
+	}
+	protectedKnowledge := wire.ID == "rerank.create" || (wire.ID == "embeddings.create" && a.config.KnowledgePolicies[wire.ID][req.Model].Version == "knowledge_ali_text_v1")
+	if protectedKnowledge && (lookupErr != nil || old.DigestVersion == "platform-wire-hmac-v1") {
+		if a.knowledgeResults == nil {
+			return nil, ErrInvalid
+		}
+		keyID := a.knowledgeResults.active
+		if lookupErr == nil {
+			var stored frozenKnowledge
+			if common.UnmarshalUnique([]byte(old.MediaSnapshot), &stored) != nil || !knowledgeKeyID.MatchString(stored.BodyKeyID) {
+				return nil, ErrInvalid
+			}
+			keyID = stored.BodyKeyID
+		}
+		key := a.knowledgeResults.digestKeys[keyID]
+		if len(key) != sha256.Size {
+			return nil, ErrInvalid
+		}
+		mac := hmac.New(sha256.New, key)
+		_, _ = mac.Write(digestData)
+		row.Digest = hex.EncodeToString(mac.Sum(nil))
+		row.DigestVersion = "platform-wire-hmac-v1"
+	}
+	if lookupErr == nil {
 		return nil, compareWireCall(old, row, legacyDigest)
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
 	}
 	var rates []Rate
 	if err = a.client.do(ctx, http.MethodGet, "/internal/v1/rates", "", nil, &rates); err != nil {
@@ -299,6 +343,9 @@ func (a *Adapter) admitWireOperation(ctx context.Context, credential, task, id s
 	if wire.ID == "embeddings.create" || wire.ID == "rerank.create" || wire.ID == "multimodal.embeddings.create" {
 		p := a.config.KnowledgePolicies[wire.ID][req.Model]
 		if chosen == nil || chosen.Metered.Policy != "provider_reported_v1" || p.RateIDs[asset] != chosen.ID {
+			return nil, ErrInvalid
+		}
+		if p.Version == "knowledge_ali_text_v1" && (len(chosen.Metered.Terms) != 1 || chosen.Metered.Terms[0].Key != "input" || chosen.Metered.Terms[0].Unit != "token") {
 			return nil, ErrInvalid
 		}
 	}
@@ -351,12 +398,18 @@ func (a *Adapter) admitWireOperation(ctx context.Context, credential, task, id s
 			return nil, ErrInvalid
 		}
 	}
-	if operation == "video" && billing_setting.ValidateNativeVideoPrice(*chosen.Metered) != nil {
+	// Legacy Wan prices were expressed as yuan, but the platform ledger uses
+	// micro-yuan. Keep old snapshots readable, never reserve new platform calls.
+	if operation == "video" && chosen.Metered.Policy == "ali_wan26_t2v_billable_duration_v1" {
+		return nil, ErrInvalid
+	}
+	if operation == "video" && !metering.WanCashTierPolicy(chosen.Metered.Policy) && billing_setting.ValidateNativeVideoPrice(*chosen.Metered) != nil {
 		return nil, ErrInvalid
 	}
 	if operation == "video" {
-		if p, ok := a.config.VideoPolicies["videos.create"][req.Model]; ok {
-			if !p.valid(req.Model, "videos.create") || !validWanVideoPrice(*chosen.Metered) || p.RateIDs[asset] != chosen.ID {
+		p, configured := a.config.VideoPolicies["videos.create"][req.Model]
+		if metering.WanCashTierPolicy(chosen.Metered.Policy) || configured {
+			if !configured || !p.valid(req.Model, "videos.create") || asset != "CNY/6" || p.UsagePolicy != chosen.Metered.Policy || !validWanVideoPrice(*chosen.Metered) || p.RateIDs[asset] != chosen.ID {
 				return nil, ErrInvalid
 			}
 		}
@@ -404,7 +457,31 @@ func (a *Adapter) admitWireOperation(ctx context.Context, credential, task, id s
 	row.RateSnapshot = string(snapshot)
 	row.RateID = chosen.ID
 	row.Amount = amount
-	created := a.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
+	if protectedKnowledge && pinned == nil {
+		if err = a.sealKnowledgeSnapshot(&row); err != nil {
+			return nil, err
+		}
+	}
+	var created *gorm.DB
+	if protectedKnowledge {
+		err = a.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if pinned != nil {
+				if err := a.preparePinnedCallTx(tx, &row, pinned); err != nil {
+					return err
+				}
+			}
+			if err := a.knowledgeResults.checkWriter(tx); err != nil {
+				return err
+			}
+			created = tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
+			return created.Error
+		})
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		created = a.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
+	}
 	if created.Error != nil {
 		return nil, created.Error
 	}
@@ -432,7 +509,7 @@ func (a *Adapter) admitWireOperation(ctx context.Context, credential, task, id s
 		return nil, ErrPending
 	}
 	row.Status = "RESERVED"
-	return &Session{adapter: a, call: row, safeFailure: true, canonical: req.Canonical}, nil
+	return &Session{adapter: a, call: row, safeFailure: true, canonical: req.Canonical, knowledgeAdmission: pinned}, nil
 }
 
 func meteredReserve(price metering.Price, req operationRequest) (string, error) {
@@ -440,7 +517,7 @@ func meteredReserve(price metering.Price, req operationRequest) (string, error) 
 	// Sum every tariff dimension at its maximum. This intentionally over-reserves
 	// overlapping token dimensions and image tiers, so no rate choice under-reserves.
 	for _, term := range price.Terms {
-		if price.Policy == "ali_wan26_t2v_billable_duration_v1" && term.Key != req.MeasurementKey {
+		if (price.Policy == "ali_wan26_t2v_billable_duration_v1" || metering.WanCashTierPolicy(price.Policy)) && term.Key != req.MeasurementKey {
 			continue
 		}
 		n := req.Quantity
@@ -548,6 +625,23 @@ func (s *Session) ObserveMetering(ctx context.Context, u metering.Usage) error {
 		if row.EvidenceConflict {
 			return ErrConflict
 		}
+		if metering.WanCashTierPolicy(price.Policy) && u.State == "confirmed" {
+			var frozen frozenVideo
+			var storedRate Rate
+			if row.Asset != "CNY/6" || row.Operation != "video" || row.WireOperation != "videos.create" || row.ProviderTaskID == "" || row.ProviderTaskID != u.ProviderRequestID || u.Source != price.Policy || common.UnmarshalUnique([]byte(row.MediaSnapshot), &frozen) != nil || common.UnmarshalUnique([]byte(row.RateSnapshot), &storedRate) != nil || storedRate.Metered == nil || !reflect.DeepEqual(*storedRate.Metered, price) || !validWanVideoPrice(price) || len(u.Measurements) != 1 {
+				return ErrInvalid
+			}
+			key := "video_" + strings.ToLower(frozen.Resolution)
+			if (key != "video_720p" && key != "video_1080p") || u.Measurements[0].Key != key {
+				return ErrInvalid
+			}
+			quantity := u.Measurements[0].Quantity
+			value, ok := new(big.Int).SetString(quantity.Value, 10)
+			bound := new(big.Int).Mul(big.NewInt(row.ReservationQuantity), new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(quantity.Scale)), nil))
+			if !ok || row.ReservationQuantity < 1 || value.Sign() <= 0 || value.Cmp(bound) != 0 {
+				return ErrInvalid
+			}
+		}
 
 		if row.Evidence != "" {
 			var previous metering.Usage
@@ -587,14 +681,14 @@ func (s *Session) finishMetered(ctx context.Context) error {
 	if err := s.adapter.db.WithContext(ctx).First(&row, "call_id = ?", s.call.CallID).Error; err != nil {
 		return err
 	}
+	if row.EvidenceConflict {
+		return ErrConflict
+	}
 	if row.Status == "SETTLED" || row.Status == "RELEASED" {
 		return nil
 	}
 	if row.Status == "SETTLE_PENDING" || row.Status == "RELEASE_PENDING" {
 		return s.adapter.deliver(ctx, row)
-	}
-	if row.EvidenceConflict {
-		return ErrConflict
 	}
 	var usage metering.Usage
 	status := "UNKNOWN"

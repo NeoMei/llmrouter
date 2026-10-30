@@ -27,6 +27,7 @@ import {
   bootstrapAuthentication,
   clearAuthenticatedClientState,
   createRefreshRunner,
+  createSessionSwitcher,
   isAuthBundle,
   type AuthRefreshRuntime,
 } from './auth-session'
@@ -57,6 +58,56 @@ afterEach(() => {
 })
 
 describe('authentication session coordination', () => {
+  test('accepts the central user contract without a native wallet', () => {
+    const value = {
+      ...bundle,
+      user: {
+        id: 42,
+        username: 'central-subject',
+        role: 1,
+        identity_source: 'unihub',
+        unihub_user_id: 'central-subject',
+      },
+    }
+    assert.equal(isAuthBundle(value), true)
+    assert.equal('quota' in value.user, false)
+  })
+  test('explicit switching accepts only a saved SID with a matching refresh bundle', async () => {
+    const accepted: AuthBundle[] = []
+    const requests: string[] = []
+    const switchSession = createSessionSwitcher({
+      allowed: () => ['session-a', 'session-b'],
+      request: async (sid) => {
+        requests.push(sid)
+        return {
+          status: 200,
+          data: {
+            success: true,
+            data: { ...bundle, session: { ...bundle.session, sid } },
+          },
+        }
+      },
+      accept: (value) => accepted.push(value),
+      isCurrent: () => true,
+    })
+    assert.equal((await switchSession('unknown')).kind, 'out_of_sync')
+    assert.deepEqual(requests, [])
+    assert.equal((await switchSession('session-b')).kind, 'authenticated')
+    assert.deepEqual(requests, ['session-b'])
+    assert.equal(accepted[0]?.session.sid, 'session-b')
+  })
+
+  test('a failed switch keeps the current session untouched', async () => {
+    const accepted: AuthBundle[] = []
+    const switchSession = createSessionSwitcher({
+      allowed: () => ['session-b'],
+      request: async () => ({ status: 503 }),
+      accept: (value) => accepted.push(value),
+      isCurrent: () => true,
+    })
+    assert.equal((await switchSession('session-b')).kind, 'transient_error')
+    assert.deepEqual(accepted, [])
+  })
   test('bootstrap distinguishes a completed anonymous check from an active session', async () => {
     useAuthStore.getState().auth.reset('complete')
     assert.deepEqual(await bootstrapAuthentication(), { kind: 'anonymous' })
@@ -68,7 +119,7 @@ describe('authentication session coordination', () => {
     })
   })
 
-  test('a session mismatch clears only local state and retries without the stale SID', async () => {
+  test('a session mismatch never guesses another cookie without an explicit choice', async () => {
     let expectedSID: string | undefined = bundle.session.sid
     const requestedSIDs: Array<string | undefined> = []
     const clears: Array<[boolean, string | undefined]> = []
@@ -97,10 +148,10 @@ describe('authentication session coordination', () => {
 
     const outcome = await createRefreshRunner(runtime)()
 
-    assert.equal(outcome.kind, 'authenticated')
-    assert.deepEqual(requestedSIDs, [bundle.session.sid, undefined])
-    assert.deepEqual(clears, [[false, 'idle']])
-    assert.deepEqual(accepted, [bundle])
+    assert.equal(outcome.kind, 'out_of_sync')
+    assert.deepEqual(requestedSIDs, [bundle.session.sid])
+    assert.deepEqual(clears, [[false, undefined]])
+    assert.deepEqual(accepted, [])
   })
 
   test('a rejected refresh confirms anonymous state and synchronizes sign-out', async () => {
@@ -121,6 +172,48 @@ describe('authentication session coordination', () => {
       kind: 'anonymous',
     })
     assert.deepEqual(clears, [[true, undefined]])
+  })
+
+  test('origin configuration denial preserves the selected session for retry', async () => {
+    let cleared = 0
+    let transient = 0
+    const runtime: AuthRefreshRuntime = {
+      request: async () => ({
+        status: 403,
+        data: { code: 'AUTH_ORIGIN_FORBIDDEN' },
+      }),
+      getExpectedSID: () => bundle.session.sid,
+      parseBundle: () => null,
+      acceptBundle: () => undefined,
+      clear: () => {
+        cleared += 1
+      },
+      markTransient: () => {
+        transient += 1
+      },
+      wait: async () => undefined,
+    }
+    const outcome = await createRefreshRunner(runtime)()
+    assert.equal(outcome.kind, 'transient_error')
+    assert.equal(cleared, 0)
+    assert.equal(transient, 1)
+  })
+
+  test('an unrelated forbidden refresh is not treated as an origin configuration error', async () => {
+    let cleared = 0
+    const outcome = await createRefreshRunner({
+      request: async () => ({ status: 403, data: { code: 'OTHER_ERROR' } }),
+      getExpectedSID: () => bundle.session.sid,
+      parseBundle: () => null,
+      acceptBundle: () => undefined,
+      clear: () => {
+        cleared += 1
+      },
+      markTransient: () => undefined,
+      wait: async () => undefined,
+    })()
+    assert.equal(outcome.kind, 'out_of_sync')
+    assert.equal(cleared, 1)
   })
 
   test('a temporary refresh failure remains retryable without clearing the session', async () => {

@@ -37,6 +37,7 @@ import { DeleteAccountDialog } from './dialogs/delete-account-dialog'
 interface ProfileSecurityCardProps {
   profile: UserProfile | null
   loading: boolean
+  central: boolean
 }
 
 type DialogKey = 'password' | 'token' | 'delete'
@@ -44,6 +45,7 @@ type DialogKey = 'password' | 'token' | 'delete'
 export function ProfileSecurityCard({
   profile,
   loading,
+  central,
 }: ProfileSecurityCardProps) {
   const { t } = useTranslation()
   const dialogs = useDialogs<DialogKey>()
@@ -68,6 +70,7 @@ export function ProfileSecurityCard({
 
   const securityActions = [
     {
+      id: 'password',
       icon: Shield,
       title: t('Change Password'),
       description: t('Update your password to keep your account secure'),
@@ -75,6 +78,7 @@ export function ProfileSecurityCard({
       variant: 'default' as const,
     },
     {
+      id: 'token',
       icon: Key,
       title: t('Access Token'),
       description: t('Generate and manage your API access token'),
@@ -82,13 +86,14 @@ export function ProfileSecurityCard({
       variant: 'default' as const,
     },
     {
+      id: 'delete',
       icon: Trash2,
       title: t('Delete Account'),
       description: t('Permanently delete your account and all data'),
       action: () => dialogs.open('delete'),
       variant: 'destructive' as const,
     },
-  ]
+  ].filter((item) => !central || item.id === 'token')
 
   return (
     <>
@@ -99,6 +104,11 @@ export function ProfileSecurityCard({
         iconTone='success'
         disableHoverEffect
       >
+        {central && (
+          <p className='text-muted-foreground mb-3 text-sm'>
+            {t('Password and account deletion are managed by UniHub.')}
+          </p>
+        )}
         <div className='grid grid-cols-1 gap-2.5 sm:gap-3 md:grid-cols-3'>
           {securityActions.map((item) => (
             <button

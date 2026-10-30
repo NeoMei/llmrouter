@@ -107,7 +107,7 @@ func TelegramBind(c *gin.Context) {
 		telegramBindFailure(c, telegramBindErrorFlowInvalid)
 		return
 	}
-	if _, err := service.ValidateSessionReference(pendingFlow.UserId, pendingFlow.SessionId); err != nil {
+	if _, err := service.ValidateSessionReference(c.Request.Context(), pendingFlow.UserId, pendingFlow.SessionId); err != nil {
 		if !errors.Is(err, service.ErrLoginSessionInvalid) &&
 			!errors.Is(err, service.ErrLoginSessionRevoked) &&
 			!errors.Is(err, model.ErrUserSessionInactive) &&
@@ -186,6 +186,9 @@ func TelegramBind(c *gin.Context) {
 			if errors.Is(err, model.ErrExternalIdentityAlreadyClaimed) {
 				return errTelegramAccountAlreadyBound
 			}
+			return err
+		}
+		if err := model.SetNativeLoginCredentialTx(tx, user.Id, "telegram_id", telegramId, session.AuthRealm); err != nil {
 			return err
 		}
 		result := tx.Model(&model.User{}).
@@ -267,6 +270,14 @@ func TelegramLogin(c *gin.Context) {
 			"success": false,
 		})
 		return
+	}
+	native, err := model.IsNativeLoginCredential(c.Request.Context(), user.Id, "telegram_id", telegramId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if native {
+		c.Set("native_password_authenticated", true)
 	}
 	setupLogin(&user, c)
 }

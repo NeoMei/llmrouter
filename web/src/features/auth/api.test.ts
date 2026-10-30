@@ -67,24 +67,24 @@ describe('logout coordination', () => {
     assert.equal(refreshCount, 0)
   })
 
-  test('recovers a cookie mismatch and retries with the refreshed SID', async () => {
+  test('does not log out a different session after mismatch recovery', async () => {
     let sid = 'session-a'
     const requestedSIDs: Array<string | undefined> = []
-    const result = await executeLogout({
-      getExpectedSID: () => sid,
-      request: async (expectedSID) => {
-        requestedSIDs.push(expectedSID)
-        if (requestedSIDs.length === 1) throw mismatchError()
-        return { success: true, message: '' }
-      },
-      refresh: async () => {
-        sid = bundle.session.sid
-        return { kind: 'authenticated', bundle }
-      },
-    })
-
-    assert.deepEqual(result, { success: true, message: '' })
-    assert.deepEqual(requestedSIDs, ['session-a', 'session-b'])
+    await assert.rejects(
+      executeLogout({
+        getExpectedSID: () => sid,
+        request: async (expectedSID) => {
+          requestedSIDs.push(expectedSID)
+          if (requestedSIDs.length === 1) throw mismatchError()
+          return { success: true, message: '' }
+        },
+        refresh: async () => {
+          sid = bundle.session.sid
+          return { kind: 'authenticated', bundle }
+        },
+      })
+    )
+    assert.deepEqual(requestedSIDs, ['session-a'])
   })
 
   test('treats a mismatch that refresh confirms anonymous as signed out', async () => {

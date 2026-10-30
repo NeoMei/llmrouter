@@ -12,27 +12,33 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 const RefreshCookieName = "new_api_refresh"
+const CentralRefreshCookieName = "new_api_central_refresh"
+const SelectionCookieName = "new_api_session_selection"
 
 var (
-	ErrLoginSessionInvalid  = errors.New("login session is invalid")
-	ErrLoginSessionRevoked  = errors.New("login session is revoked")
-	ErrLoginSessionMismatch = errors.New("login session does not match the expected session")
-	ErrRefreshTokenInvalid  = errors.New("refresh token is invalid")
-	ErrRefreshRace          = errors.New("refresh token was already rotated")
+	ErrLoginSessionInvalid   = errors.New("login session is invalid")
+	ErrLoginSessionRevoked   = errors.New("login session is revoked")
+	ErrLoginSessionMismatch  = errors.New("login session does not match the expected session")
+	ErrRefreshTokenInvalid   = errors.New("refresh token is invalid")
+	ErrRefreshRace           = errors.New("refresh token was already rotated")
+	ErrProjectionUnavailable = errors.New("identity projection is temporarily unavailable")
+	ErrAuthStoreUnavailable  = errors.New("authentication store is temporarily unavailable")
 )
 
 type LoginSessionView struct {
-	SID          string `json:"sid"`
-	Current      bool   `json:"current"`
-	LoginMethod  string `json:"login_method"`
-	IP           string `json:"ip"`
-	UserAgent    string `json:"user_agent"`
-	CreatedAt    int64  `json:"created_at"`
-	LastActiveAt int64  `json:"last_active_at"`
-	ExpiresAt    int64  `json:"expires_at"`
+	AuthenticationRealm string `json:"authentication_realm"`
+	SID                 string `json:"sid"`
+	Current             bool   `json:"current"`
+	LoginMethod         string `json:"login_method"`
+	IP                  string `json:"ip"`
+	UserAgent           string `json:"user_agent"`
+	CreatedAt           int64  `json:"created_at"`
+	LastActiveAt        int64  `json:"last_active_at"`
+	ExpiresAt           int64  `json:"expires_at"`
 }
 
 type AuthBundle struct {
@@ -44,28 +50,35 @@ type AuthBundle struct {
 }
 
 func CreateLoginSession(userID int, loginMethod, ip, userAgent string) (*AuthBundle, error) {
-	return createLoginSession(userID, 0, loginMethod, ip, userAgent, 0)
+	return createLoginSession(userID, 0, loginMethod, ip, userAgent, 0, "")
 }
 
 func CreateLoginSessionAtAuthVersion(userID int, expectedAuthVersion int64, loginMethod, ip, userAgent string) (*AuthBundle, error) {
 	if expectedAuthVersion <= 0 {
 		return nil, ErrLoginSessionInvalid
 	}
-	return createLoginSession(userID, expectedAuthVersion, loginMethod, ip, userAgent, 0)
+	return createLoginSession(userID, expectedAuthVersion, loginMethod, ip, userAgent, 0, "")
 }
 
-func createLoginSession(userID int, expectedAuthVersion int64, loginMethod, ip, userAgent string, expiresAt int64) (*AuthBundle, error) {
+func createLoginSession(userID int, expectedAuthVersion int64, loginMethod, ip, userAgent string, expiresAt int64, realm string) (*AuthBundle, error) {
 	user, err := model.GetUserCache(userID)
 	if err != nil {
 		return nil, err
 	}
-	if user.Status != common.UserStatusEnabled || user.AuthVersion <= 0 {
+	version := user.AuthVersion
+	if realm == model.CentralAuthRealm {
+		state, stateErr := model.ReadCentralAuthState(context.Background(), userID)
+		if stateErr != nil || !state.Active || state.AuthVersion <= 0 {
+			return nil, ErrLoginSessionInvalid
+		}
+		version = state.AuthVersion
+	} else if user.Status != common.UserStatusEnabled || user.AuthVersion <= 0 {
 		return nil, ErrLoginSessionInvalid
 	}
-	if _, err := model.CheckUniHubProjection(userID); err != nil {
+	if _, err := model.CheckUniHubProjection(userID); realm == "" && err != nil {
 		return nil, ErrLoginSessionInvalid
 	}
-	if expectedAuthVersion > 0 && user.AuthVersion != expectedAuthVersion {
+	if expectedAuthVersion > 0 && version != expectedAuthVersion {
 		return nil, ErrLoginSessionRevoked
 	}
 	now := time.Now().Unix()
@@ -89,9 +102,10 @@ func createLoginSession(userID int, expectedAuthVersion int64, loginMethod, ip, 
 	}
 	session := &model.UserSession{
 		SID:             uuid.NewString(),
+		AuthRealm:       realm,
 		UserID:          userID,
 		Version:         1,
-		UserAuthVersion: user.AuthVersion,
+		UserAuthVersion: version,
 		Status:          model.UserSessionStatusActive,
 		RefreshHash:     hashRefreshSecret(refreshSecret),
 		LoginMethod:     strings.TrimSpace(loginMethod),
@@ -135,11 +149,27 @@ func ValidateLoginSession(identity AuthIdentity) (*model.UserSession, *model.Use
 	if session.UserID != identity.UserID || session.Status != model.UserSessionStatusActive || session.RevokedAt != 0 || session.ExpiresAt <= now || session.Version != identity.SessionVersion || session.UserAuthVersion != identity.UserAuthVersion {
 		return nil, nil, ErrLoginSessionRevoked
 	}
+	if session.AuthRealm != "" && session.AuthRealm != model.NativeFundingLocalOnly && session.AuthRealm != model.CentralAuthRealm {
+		return nil, nil, ErrLoginSessionRevoked
+	}
 	user, err := model.GetUserCache(identity.UserID)
 	if err != nil {
 		return nil, nil, err
 	}
-	if user.Status != common.UserStatusEnabled || user.AuthVersion != identity.UserAuthVersion {
+	if session.AuthRealm == model.CentralAuthRealm {
+		state, stateErr := model.ReadCentralAuthState(context.Background(), identity.UserID)
+		if stateErr != nil {
+			return nil, nil, stateErr
+		}
+		if !state.Active || state.AuthVersion != identity.UserAuthVersion {
+			return nil, nil, ErrLoginSessionRevoked
+		}
+		if session.LoginMethod == "central_credential" {
+			if err := model.ValidateCentralSessionCredential(context.Background(), session); err != nil {
+				return nil, nil, err
+			}
+		}
+	} else if user.Status != common.UserStatusEnabled || user.AuthVersion != identity.UserAuthVersion {
 		return nil, nil, ErrLoginSessionRevoked
 	}
 	return session, user, nil
@@ -147,7 +177,7 @@ func ValidateLoginSession(identity AuthIdentity) (*model.UserSession, *model.Use
 
 // ValidateSessionReference validates a server-side flow bound to an existing
 // dashboard session without requiring an access token on the callback request.
-func ValidateSessionReference(userID int, sid string) (AuthIdentity, error) {
+func ValidateSessionReference(ctx context.Context, userID int, sid string) (AuthIdentity, error) {
 	if userID <= 0 || strings.TrimSpace(sid) == "" {
 		return AuthIdentity{}, ErrLoginSessionInvalid
 	}
@@ -164,7 +194,62 @@ func ValidateSessionReference(userID int, sid string) (AuthIdentity, error) {
 	if _, _, err := ValidateLoginSession(identity); err != nil {
 		return AuthIdentity{}, err
 	}
+	if err := VerifyBrokerSource(ctx, identity); err != nil {
+		return AuthIdentity{}, err
+	}
+	if session.AuthRealm == model.CentralAuthRealm && session.LoginMethod == "unihub" {
+		if _, _, err := ResolveUniHubSession(ctx, identity); err != nil {
+			return AuthIdentity{}, ErrProjectionUnavailable
+		}
+	}
+	if session.AuthRealm == model.CentralAuthRealm {
+		if err := VerifyCentralRealmAuthority(ctx, identity); err != nil {
+			return AuthIdentity{}, err
+		}
+	}
 	return identity, nil
+}
+
+func CurrentSessionBundle(ctx context.Context, identity AuthIdentity) (*AuthBundle, error) {
+	validated, err := ValidateSessionReference(ctx, identity.UserID, identity.SessionID)
+	if err != nil || validated != identity {
+		if err != nil {
+			return nil, err
+		}
+		return nil, ErrLoginSessionRevoked
+	}
+	session, err := model.GetUserSessionCached(identity.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	return issueAuthBundle(session, "", true)
+}
+
+func ChangeTwoFAForCurrentSession(identity AuthIdentity, operation, code string, backupCodes []string) (*AuthBundle, error) {
+	session, err := model.ChangeTwoFAForSession(identity.UserID, identity.SessionID, identity.SessionVersion, identity.UserAuthVersion, operation, code, backupCodes)
+	if err != nil {
+		return nil, err
+	}
+	return issueAuthBundle(session, "", true)
+}
+
+func ChangePasskeyForCurrentSession(identity AuthIdentity, realm string, credential *model.PasskeyCredential) (*AuthBundle, error) {
+	session, err := model.ChangePasskeyForSession(identity.UserID, identity.SessionID, identity.SessionVersion, identity.UserAuthVersion, realm, credential)
+	if err != nil {
+		return nil, err
+	}
+	return issueAuthBundle(session, "", true)
+}
+
+func ChangePasswordForCurrentSession(identity AuthIdentity, realm string, change *model.User, originalPassword string) (*AuthBundle, error) {
+	if change == nil || change.Id != identity.UserID {
+		return nil, ErrLoginSessionInvalid
+	}
+	session, err := model.ChangePasswordForSession(change, originalPassword, identity.SessionID, identity.SessionVersion, identity.UserAuthVersion, realm)
+	if err != nil {
+		return nil, err
+	}
+	return issueAuthBundle(session, "", true)
 }
 
 // AdvanceCurrentSessionSecurity increments the user's global auth version,
@@ -204,7 +289,7 @@ func advanceCurrentSessionToVersion(identity AuthIdentity, nextUserAuthVersion i
 	if err != nil {
 		return nil, err
 	}
-	if _, err := model.RevokeOtherUserSessions(identity.UserID, identity.SessionID, reason); err != nil {
+	if _, err := model.RevokeOtherUserSessions(identity.UserID, identity.SessionID, reason, session.AuthRealm); err != nil {
 		return nil, err
 	}
 	return issueAuthBundle(session, "", true)
@@ -223,7 +308,10 @@ func RefreshLoginSession(rawRefreshToken, expectedSID, ip, userAgent string) (*A
 		if errors.Is(err, model.ErrUserSessionInactive) {
 			return nil, nil, ErrLoginSessionRevoked
 		}
-		return nil, nil, ErrRefreshTokenInvalid
+		if errors.Is(err, gorm.ErrRecordNotFound) || errors.Is(err, model.ErrUserSessionInvalid) {
+			return nil, nil, ErrRefreshTokenInvalid
+		}
+		return nil, nil, ErrAuthStoreUnavailable
 	}
 	if session.Status != model.UserSessionStatusActive || session.RevokedAt != 0 || session.ExpiresAt <= time.Now().Unix() {
 		return nil, nil, ErrLoginSessionRevoked
@@ -236,11 +324,33 @@ func RefreshLoginSession(rawRefreshToken, expectedSID, ip, userAgent string) (*A
 	if err != nil {
 		return nil, nil, err
 	}
-	if _, err := model.CheckUniHubProjection(currentUser.Id); err != nil {
-		_, _ = model.RevokeUserSession(session.UserID, session.SID, "unihub_projection_invalid")
-		return nil, nil, ErrLoginSessionRevoked
+	native, nativeErr := IsNativeLoginSession(context.Background(), AuthIdentity{UserID: session.UserID, SessionID: session.SID, SessionVersion: session.Version, UserAuthVersion: session.UserAuthVersion})
+	if nativeErr != nil {
+		return nil, nil, nativeErr
 	}
-	if userCache.Status != common.UserStatusEnabled || userCache.AuthVersion != session.UserAuthVersion ||
+	if _, err := model.CheckUniHubProjection(currentUser.Id); !native && err != nil {
+		// The projection reads its user and mapping separately, so even a
+		// reported mismatch can be a concurrent binding in progress. Deny
+		// refresh without destroying credentials until an atomic check exists.
+		return nil, nil, ErrProjectionUnavailable
+	}
+	if session.AuthRealm == model.CentralAuthRealm {
+		state, stateErr := model.ReadCentralAuthState(context.Background(), session.UserID)
+		if stateErr != nil {
+			return nil, nil, ErrAuthStoreUnavailable
+		}
+		if !state.Active || state.AuthVersion != session.UserAuthVersion {
+			return nil, nil, ErrLoginSessionRevoked
+		}
+		if session.LoginMethod == "central_credential" {
+			if proofErr := model.ValidateCentralSessionCredential(context.Background(), session); proofErr != nil {
+				if errors.Is(proofErr, model.ErrNativeCredentialUnverified) || errors.Is(proofErr, gorm.ErrRecordNotFound) {
+					return nil, nil, ErrLoginSessionRevoked
+				}
+				return nil, nil, ErrAuthStoreUnavailable
+			}
+		}
+	} else if userCache.Status != common.UserStatusEnabled || userCache.AuthVersion != session.UserAuthVersion ||
 		currentUser.Status != common.UserStatusEnabled || currentUser.AuthVersion != session.UserAuthVersion {
 		_, _ = model.RevokeUserSession(session.UserID, session.SID, "user_security_changed")
 		return nil, nil, ErrLoginSessionRevoked
@@ -248,7 +358,12 @@ func RefreshLoginSession(rawRefreshToken, expectedSID, ip, userAgent string) (*A
 	if session.LoginMethod == "unihub" {
 		identity := AuthIdentity{UserID: session.UserID, SessionID: sid, SessionVersion: session.Version, UserAuthVersion: session.UserAuthVersion}
 		if _, _, e := ResolveUniHubSession(context.Background(), identity); e != nil {
-			return nil, nil, ErrLoginSessionRevoked
+			if errors.Is(e, model.ErrUniHubSessionBindingAbsentOrExpired) {
+				return nil, nil, ErrLoginSessionRevoked
+			}
+			// Its current error contract collapses authority denial, store
+			// failure and source outage. None proves permanent revocation.
+			return nil, nil, ErrProjectionUnavailable
 		}
 	}
 	nextSecret := deriveNextRefreshSecret(sid, secret)
@@ -291,8 +406,8 @@ func RefreshTokenSID(rawRefreshToken string) (string, bool) {
 	return sid, ok
 }
 
-func ListLoginSessions(userID int, currentSID string) ([]LoginSessionView, error) {
-	sessions, err := model.ListActiveUserSessions(userID, currentSID, time.Now().Unix())
+func ListLoginSessions(userID int, currentSID string, realm ...string) ([]LoginSessionView, error) {
+	sessions, err := model.ListActiveUserSessions(userID, currentSID, time.Now().Unix(), realm...)
 	if err != nil {
 		return nil, err
 	}
@@ -305,17 +420,25 @@ func ListLoginSessions(userID int, currentSID string) ([]LoginSessionView, error
 
 func WriteRefreshCookie(c *gin.Context, rawToken string) {
 	expiresAt := time.Now().Add(LoginSessionTTL)
-	if sid, _, ok := splitRefreshToken(rawToken); ok {
-		if session, err := model.GetUserSessionCached(sid); err == nil && session.ExpiresAt > time.Now().Unix() {
-			expiresAt = time.Unix(session.ExpiresAt, 0)
-		}
+	name := RefreshCookieName
+	sid, _, ok := splitRefreshToken(rawToken)
+	if !ok {
+		return
+	}
+	session, err := model.GetUserSessionCached(sid)
+	if err != nil || session.ExpiresAt <= time.Now().Unix() {
+		return
+	}
+	expiresAt = time.Unix(session.ExpiresAt, 0)
+	if session.AuthRealm == model.CentralAuthRealm {
+		name = CentralRefreshCookieName
 	}
 	maxAge := int(time.Until(expiresAt) / time.Second)
 	if maxAge < 1 {
 		maxAge = 1
 	}
 	http.SetCookie(c.Writer, &http.Cookie{
-		Name:     RefreshCookieName,
+		Name:     name,
 		Value:    rawToken,
 		Path:     "/api/user/auth",
 		MaxAge:   maxAge,
@@ -327,8 +450,15 @@ func WriteRefreshCookie(c *gin.Context, rawToken string) {
 }
 
 func ClearRefreshCookie(c *gin.Context) {
+	ClearNamedRefreshCookie(c, RefreshCookieName)
+}
+
+func ClearNamedRefreshCookie(c *gin.Context, name string) {
+	if name != RefreshCookieName && name != CentralRefreshCookieName {
+		return
+	}
 	http.SetCookie(c.Writer, &http.Cookie{
-		Name:     RefreshCookieName,
+		Name:     name,
 		Value:    "",
 		Path:     "/api/user/auth",
 		MaxAge:   -1,
@@ -337,6 +467,46 @@ func ClearRefreshCookie(c *gin.Context) {
 		Secure:   common.SessionCookieSecure,
 		SameSite: http.SameSiteStrictMode,
 	})
+}
+
+// This non-secret tombstone only prevents unselected refresh from guessing
+// another cookie after an explicit logout. An explicit SID remains usable.
+func MarkSessionSelectionCleared(c *gin.Context) {
+	http.SetCookie(c.Writer, &http.Cookie{Name: SelectionCookieName, Value: "none", Path: "/api/user/auth", MaxAge: int(LoginSessionTTL / time.Second), HttpOnly: true, Secure: common.SessionCookieSecure, SameSite: http.SameSiteStrictMode})
+}
+
+func SessionSelectionCleared(c *gin.Context) bool {
+	value, err := c.Cookie(SelectionCookieName)
+	return err == nil && value == "none"
+}
+
+// SelectRefreshCookie uses the SID only to select an opaque cookie. The
+// refresh secret is always validated separately before granting authority.
+func SelectRefreshCookie(c *gin.Context, expectedSID string) (string, string, error) {
+	type candidate struct{ name, value string }
+	var cookies []candidate
+	for _, name := range []string{RefreshCookieName, CentralRefreshCookieName} {
+		if value, err := c.Cookie(name); err == nil && value != "" {
+			cookies = append(cookies, candidate{name, value})
+		}
+	}
+	if expectedSID != "" {
+		for _, cookie := range cookies {
+			if sid, ok := RefreshTokenSID(cookie.value); ok && sid == expectedSID {
+				return cookie.name, cookie.value, nil
+			}
+		}
+		if len(cookies) > 0 {
+			return "", "", ErrLoginSessionMismatch
+		}
+	}
+	if len(cookies) == 1 {
+		return cookies[0].name, cookies[0].value, nil
+	}
+	if len(cookies) > 1 {
+		return "", "", ErrLoginSessionMismatch
+	}
+	return "", "", ErrRefreshTokenInvalid
 }
 
 func issueAuthBundle(session *model.UserSession, rawRefreshToken string, current bool) (*AuthBundle, error) {
@@ -360,15 +530,23 @@ func issueAuthBundle(session *model.UserSession, rawRefreshToken string, current
 }
 
 func sessionView(session *model.UserSession, current bool) LoginSessionView {
+	realm := "UNKNOWN"
+	switch session.AuthRealm {
+	case "":
+		realm = "LEGACY"
+	case model.NativeFundingLocalOnly, model.CentralAuthRealm:
+		realm = session.AuthRealm
+	}
 	return LoginSessionView{
-		SID:          session.SID,
-		Current:      current,
-		LoginMethod:  session.LoginMethod,
-		IP:           session.IP,
-		UserAgent:    session.UserAgent,
-		CreatedAt:    session.CreatedAt,
-		LastActiveAt: session.LastActiveAt,
-		ExpiresAt:    session.ExpiresAt,
+		AuthenticationRealm: realm,
+		SID:                 session.SID,
+		Current:             current,
+		LoginMethod:         session.LoginMethod,
+		IP:                  session.IP,
+		UserAgent:           session.UserAgent,
+		CreatedAt:           session.CreatedAt,
+		LastActiveAt:        session.LastActiveAt,
+		ExpiresAt:           session.ExpiresAt,
 	}
 }
 
@@ -409,6 +587,10 @@ func authSessionErrorCode(err error) (int, string) {
 		return http.StatusConflict, "AUTH_SESSION_MISMATCH"
 	case errors.Is(err, ErrRefreshRace):
 		return http.StatusConflict, "AUTH_REFRESH_RACE"
+	case errors.Is(err, ErrProjectionUnavailable):
+		return http.StatusServiceUnavailable, "AUTH_PROJECTION_UNAVAILABLE"
+	case errors.Is(err, ErrAuthStoreUnavailable):
+		return http.StatusServiceUnavailable, "AUTH_STORE_UNAVAILABLE"
 	case errors.Is(err, ErrAuthTokenExpired):
 		return http.StatusUnauthorized, "AUTH_TOKEN_EXPIRED"
 	case errors.Is(err, ErrLoginSessionRevoked):
@@ -432,5 +614,14 @@ func FormatAuthError(err error) string {
 }
 
 func CreateUniHubLoginSession(userID int, expiresAt int64, ip, userAgent string) (*AuthBundle, error) {
-	return createLoginSession(userID, 0, "unihub", ip, userAgent, expiresAt)
+	return createLoginSession(userID, 0, "unihub", ip, userAgent, expiresAt, "")
+}
+
+// CreateVerifiedCentralLoginSession is only for the verified browser exchange
+// path after the independent central state has been recorded.
+func CreateVerifiedCentralLoginSession(userID int, version int64, method string, expiresAt int64, ip, userAgent string) (*AuthBundle, error) {
+	if version <= 0 || (method != "unihub" && method != "product_broker") {
+		return nil, ErrLoginSessionInvalid
+	}
+	return createLoginSession(userID, version, method, ip, userAgent, expiresAt, model.CentralAuthRealm)
 }

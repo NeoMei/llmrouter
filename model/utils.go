@@ -53,9 +53,18 @@ func addNewRecord(type_ int, id int, value int) {
 	}
 }
 
+// FlushBatchUpdates drains the current queue synchronously under its normal
+// writer fence. Callers must stop admissions first for a complete shutdown drain.
+func FlushBatchUpdates() { batchUpdate() }
+
 func batchUpdate() {
 	batchUpdateRunMu.Lock()
 	defer batchUpdateRunMu.Unlock()
+	if DB.Migrator().HasTable(&NativeTokenQuotaState{}) {
+		if err := FlushNativeTokenQuotaProjections(); err != nil {
+			common.SysLog("native token quota projection pending: " + err.Error())
+		}
+	}
 	// check if there's any data to update
 	hasData := false
 	for i := 0; i < BatchUpdateTypeCount; i++ {
@@ -88,6 +97,17 @@ func batchUpdate() {
 		for key, value := range store {
 			switch i {
 			case BatchUpdateTypeTokenQuota:
+				// Native keys never enter this queue. Reject any stale legacy
+				// wakeup rather than applying it to the durable balance again.
+				var token Token
+				if err := DB.Select("id", "auth_realm").First(&token, key).Error; err != nil {
+					common.SysLog("failed to identify batch token: " + err.Error())
+					continue
+				}
+				if token.AuthRealm == NativeFundingLocalOnly {
+					common.SysError("rejected legacy native token batch delta; writer cutover must be reviewed")
+					continue
+				}
 				err := increaseTokenQuota(key, value)
 				if err != nil {
 					common.SysLog("failed to batch update token quota: " + err.Error())

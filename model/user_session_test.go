@@ -192,6 +192,33 @@ func TestActiveSessionCacheFillUsesRemainingObservationWindow(t *testing.T) {
 	assert.LessOrEqual(t, ttl, 1500*time.Millisecond, "a delayed fill must inherit only the unused observation window")
 }
 
+func TestSessionReadAfterExpiredSecurityChangeObservation(t *testing.T) {
+	setupUserSessionTest(t)
+	now := time.Now()
+	useUserCacheMiniRedisWithClock(t, func() time.Time { return now })
+	session := newTestUserSession("expired-security-change-observation", 1205, now.Unix())
+	require.NoError(t, DB.Create(session).Error)
+	cached, err := GetUserSessionCached(session.SID)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, cached.UserAuthVersion)
+
+	// A security change can commit after its cache observation window has
+	// elapsed (for example, while bcrypt runs on a loaded worker). Publication
+	// must stay bounded, and the older cached authority must expire as well.
+	session.Version, session.UserAuthVersion = 2, 2
+	require.NoError(t, DB.Model(session).Updates(map[string]interface{}{
+		"version": session.Version, "user_auth_version": session.UserAuthVersion,
+	}).Error)
+	require.ErrorIs(t, writeUserSessionCache(session.cacheEntry(), time.Now().Add(-time.Millisecond)), errUserSessionCacheObservationStale)
+	require.NoError(t, confirmUserSessionActiveSnapshot(session))
+	now = now.Add(time.Duration(userCacheTTLSeconds()+1) * time.Second)
+
+	cached, err = GetUserSessionCached(session.SID)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, cached.Version)
+	assert.EqualValues(t, 2, cached.UserAuthVersion)
+}
+
 func TestSessionCacheLuaUsesAbsoluteActiveAndRelativeDenyExpiry(t *testing.T) {
 	setupUserSessionTest(t)
 	server := useUserCacheMiniRedis(t)

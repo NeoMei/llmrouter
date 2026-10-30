@@ -278,7 +278,8 @@ func (a *Adapter) ProjectCatalog(product string, models []CatalogSourceModel) (T
 					case constant.ChannelTypeSora, constant.ChannelTypeOpenAI:
 						supported = op.Policy == "sora_completed_seconds_v1"
 					case constant.ChannelTypeAli:
-						supported = op.Policy == "ali_wan26_t2v_billable_duration_v1"
+						p, configured := a.config.VideoPolicies["videos.create"][m.ID]
+						supported = configured && p.valid(m.ID, id) && p.UsagePolicy == "ali_wan26_t2v_cny6_v2" && op.Policy == p.UsagePolicy
 					case constant.ChannelTypeKling:
 						supported = op.Policy == "kling_final_units_v1"
 					case constant.ChannelTypeDoubaoVideo, constant.ChannelTypeVolcEngine:
@@ -375,6 +376,8 @@ func (a *Adapter) ProjectCatalog(product string, models []CatalogSourceModel) (T
 				op.DisabledReason = "managed_producer_policy_mismatch"
 			case op.BillingOperation == "embedding" && source.EmbeddingSpace == nil:
 				op.DisabledReason = "embedding_identity_unconfigured"
+			case id == "rerank.create" && !a.config.AllowAliRerank:
+				op.DisabledReason = "certified_knowledge_unavailable"
 			case (id == "embeddings.create" || id == "rerank.create" || id == "multimodal.embeddings.create") && !a.config.KnowledgePolicies[id][m.ID].valid(a.config, m.ID, id):
 				op.DisabledReason = "certified_knowledge_unavailable"
 			case (id == "embeddings.create" || id == "rerank.create" || id == "multimodal.embeddings.create") && op.Policy != "provider_reported_v1":

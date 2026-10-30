@@ -103,3 +103,43 @@ func TestNativeTaskConfirmedNoOutputReleasesLocalHoldOnce(t *testing.T) {
 	assert.Equal(t, "released", journal.State)
 	assert.False(t, task.NativePending)
 }
+
+func TestWanUnknownEvidenceRecoveryKeepsPlatformHold(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "wan-unknown.db")), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	old, observer, release := model.DB, PlatformTaskObserver, PlatformTaskRelease
+	model.DB = db
+	t.Cleanup(func() {
+		model.DB, PlatformTaskObserver, PlatformTaskRelease = old, observer, release
+		require.NoError(t, sqlDB.Close())
+	})
+	require.NoError(t, db.AutoMigrate(&model.Task{}))
+	p := metering.Price{Version: "metered_v2", Operation: "video", Policy: "ali_wan26_t2v_billable_duration_v1", Terms: []metering.Term{
+		{Key: "video_720p", Unit: "video_second", Price: metering.Rational{Numerator: "3", Denominator: "5"}},
+		{Key: "video_1080p", Unit: "video_second", Price: metering.Rational{Numerator: "1", Denominator: "1"}},
+	}}
+	for name, body := range map[string]string{
+		"expired":       `{"output":{"task_status":"UNKNOWN"}}`,
+		"contradictory": `{"output":{"task_status":"CANCELED"},"usage":{"video_count":1}}`,
+	} {
+		task := model.Task{TaskID: name, FundingOwner: "platform", Status: model.TaskStatusFailure, PrivateData: model.TaskPrivateData{BillingContext: &model.TaskBillingContext{NativePrice: &p, PlatformCallID: name, VideoResolution: "video_720p"}}}
+		require.NoError(t, prepareNativeTaskIntent(&task, []byte(body)))
+		require.NoError(t, db.Create(&task).Error)
+	}
+	var releases int
+	var observations int
+	PlatformTaskRelease = func(context.Context, string, string) error { releases++; return nil }
+	PlatformTaskObserver = func(_ context.Context, _, _ string, usage metering.Usage) error {
+		observations++
+		assert.NotEqual(t, "provider_confirmed_no_output", usage.Source)
+		return nil
+	}
+	recoverNativeTasks(context.Background())
+	assert.Zero(t, releases)
+	assert.Equal(t, 2, observations)
+	var pending int64
+	require.NoError(t, db.Model(&model.Task{}).Where("native_pending = ?", true).Count(&pending).Error)
+	assert.EqualValues(t, 2, pending)
+}

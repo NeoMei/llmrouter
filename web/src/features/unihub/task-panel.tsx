@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 
+import { useChatModels } from './chat-models'
 import { consumeChat } from './gateway'
 import type { ModelCredential, FundingMode } from './sdk'
 import { exactAmount, message } from './session'
@@ -41,7 +42,7 @@ export function TaskPanel(props: PanelProps) {
   }>()
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const [model, setModel] = useState(props.config.models[0] ?? '')
+  const [model, setModel] = useState('')
   const [funding, setFunding] = useState<FundingMode | ''>('')
   const mounted = useRef(true)
   useEffect(() => {
@@ -66,6 +67,22 @@ export function TaskPanel(props: PanelProps) {
       ),
     retry: false,
   })
+  const chatFunding =
+    funding ||
+    profile.data?.usage.default_funding_mode ||
+    profile.data?.usage.funding_modes[0] ||
+    ''
+  const chat = useChatModels(props, chatFunding)
+  const chatModels = chat.data?.models ?? []
+  const selectedModel = chatModels.includes(model)
+    ? model
+    : (chatModels[0] ?? '')
+  const selectedAsset =
+    funding === 'prepaid_cash'
+      ? 'CNY/6'
+      : funding === 'credits'
+        ? 'CREDIT/6'
+        : ''
   async function readReceipt(current: ModelCredential, id: string) {
     const response = await fetch(
       `/platform/v1/calls/${encodeURIComponent(id)}`,
@@ -129,12 +146,19 @@ export function TaskPanel(props: PanelProps) {
     const data = new FormData(form)
     try {
       if (!funding) throw new Error(t('Select funding mode explicitly'))
+      if (
+        !selectedModel ||
+        !chat.data?.models.includes(selectedModel) ||
+        selectedAsset !== chat.data.asset
+      ) {
+        throw new Error(t('No available models'))
+      }
       const task = crypto.randomUUID(),
         id = crypto.randomUUID()
       const current = await props.session.bound(() =>
         props.session.client.issueModelCredential(
           props.account.id,
-          [model],
+          [selectedModel],
           task,
           funding
         )
@@ -151,7 +175,7 @@ export function TaskPanel(props: PanelProps) {
           'X-UniHub-Task-ID': task,
         },
         body: JSON.stringify({
-          model,
+          model: selectedModel,
           messages: [{ role: 'user', content: String(data.get('prompt')) }],
           max_tokens: Number(data.get('max_tokens')),
           n: 1,
@@ -203,10 +227,13 @@ export function TaskPanel(props: PanelProps) {
           'Short-lived task credentials are not durable API keys. Text chat only; media, OCR and Responses are unavailable here.'
         )}
       </p>
-      {props.config.models.length === 0 ? (
+      {chat.data &&
+      (chatModels.length === 0 ||
+        (funding && selectedAsset !== chat.data.asset)) ? (
         <p role='status'>{t('No available models')}</p>
       ) : null}
       {profile.error ? <p role='alert'>{message(profile.error)}</p> : null}
+      {chat.error ? <p role='alert'>{message(chat.error)}</p> : null}
       <form
         className='grid gap-3'
         onSubmit={(e) => {
@@ -219,11 +246,11 @@ export function TaskPanel(props: PanelProps) {
           <select
             className='ml-2'
             aria-label={t('Model')}
-            value={model}
+            value={selectedModel}
             onChange={(e) => setModel(e.target.value)}
             required
           >
-            {props.config.models.map((id) => (
+            {chatModels.map((id) => (
               <option key={id}>{id}</option>
             ))}
           </select>
@@ -261,7 +288,12 @@ export function TaskPanel(props: PanelProps) {
         </label>
         <Submit
           text='Send new task'
-          busy={busy || !model || !profile.data?.usage.enabled}
+          busy={
+            busy ||
+            !selectedModel ||
+            !profile.data?.usage.enabled ||
+            (Boolean(funding) && selectedAsset !== chat.data?.asset)
+          }
         />
       </form>
       {grant ? (

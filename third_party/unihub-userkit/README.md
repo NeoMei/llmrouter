@@ -1,12 +1,32 @@
 # UniHub product user kit (source contract v0.1.0)
 
+## Private product finance transport
+
+`NewProductFinanceClient` is a server-only client for the bounded
+`/internal/v1/product-finance` API. It binds one UniHub origin and service
+credential, accepts only fixed finance method/path pairs, and sends a fresh
+`upa_` assertion in `X-UniHub-Actor-Authorization`. Do not use it in browser
+code or expose the service token or assertion to a browser. `Do` returns a
+bounded response and does not retry requests or follow redirects. Its private
+transport uses normal certificate verification, disables proxy configuration
+and connection reuse, and accepts no injected dialer or TLS override.
+
 Independent Go module (Go 1.23+):
 `github.com/NeoMei/UniHub/packages/userkit-go`. It imports no UniHub internals and
 contains no billing, password storage or OIDC password implementation. Browser signature/discovery validation uses coreos/go-oidc and x/oauth2 (Go 1.23).
 This task distributes source only; no module release/tag has been published.
 A future repository tag must use `packages/userkit-go/v0.x.y`. Pin an immutable
-commit or verified source snapshot until then. The repository has no declared
-license; do not infer redistribution permission or invent a license.
+commit or verified source snapshot until then. Once tagged:
+
+```sh
+git tag packages/userkit-go/v0.1.0 <commit-sha>
+git push origin packages/userkit-go/v0.1.0
+go get github.com/NeoMei/UniHub/packages/userkit-go@v0.1.0
+```
+
+The tag must sit on the commit that contains this module root. The repository
+is proprietary (see the top-level README): redistribution requires written
+permission, and no open-source license may be inferred.
 
 ```go
 func NewClient(Config) (*Client, error)

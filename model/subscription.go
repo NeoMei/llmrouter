@@ -721,7 +721,7 @@ func ExpireSubscriptionOrder(tradeNo string, expectedPaymentProvider string) err
 }
 
 // Admin bind (no payment). Creates a UserSubscription from a plan.
-func AdminBindSubscription(userId int, planId int, sourceNote string) (string, error) {
+func AdminBindSubscription(userId int, planId int, sourceNote string, realm ...string) (string, error) {
 	if userId <= 0 || planId <= 0 {
 		return "", errors.New("invalid userId or planId")
 	}
@@ -731,6 +731,9 @@ func AdminBindSubscription(userId int, planId int, sourceNote string) (string, e
 	}
 	groupChanged := false
 	err = DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockFundingManagementOwnerTx(tx, userId, realm); err != nil {
+			return err
+		}
 		// 与 CompleteSubscriptionOrder 一致：先锁用户行，再做购买次数检查。
 		var userRow User
 		if err := lockForUpdate(tx).Select("id").Where("id = ?", userId).First(&userRow).Error; err != nil {
@@ -950,7 +953,7 @@ func buildSubscriptionSummaries(subs []UserSubscription) []SubscriptionSummary {
 }
 
 // AdminInvalidateUserSubscription marks a user subscription as cancelled and ends it immediately.
-func AdminInvalidateUserSubscription(userSubscriptionId int) (string, error) {
+func AdminInvalidateUserSubscription(userSubscriptionId int, realm ...string) (string, error) {
 	if userSubscriptionId <= 0 {
 		return "", errors.New("invalid userSubscriptionId")
 	}
@@ -962,6 +965,11 @@ func AdminInvalidateUserSubscription(userSubscriptionId int) (string, error) {
 		var sub UserSubscription
 		if err := lockForUpdate(tx).
 			Where("id = ?", userSubscriptionId).First(&sub).Error; err != nil {
+			return err
+		}
+		// Match the original funding order: subscription before owner. The
+		// owner lock still fences enrollment before any mutation is written.
+		if err := lockFundingManagementOwnerTx(tx, sub.UserId, realm); err != nil {
 			return err
 		}
 		userId = sub.UserId
@@ -995,7 +1003,7 @@ func AdminInvalidateUserSubscription(userSubscriptionId int) (string, error) {
 }
 
 // AdminDeleteUserSubscription hard-deletes a user subscription.
-func AdminDeleteUserSubscription(userSubscriptionId int) (string, error) {
+func AdminDeleteUserSubscription(userSubscriptionId int, realm ...string) (string, error) {
 	if userSubscriptionId <= 0 {
 		return "", errors.New("invalid userSubscriptionId")
 	}
@@ -1007,6 +1015,11 @@ func AdminDeleteUserSubscription(userSubscriptionId int) (string, error) {
 		var sub UserSubscription
 		if err := lockForUpdate(tx).
 			Where("id = ?", userSubscriptionId).First(&sub).Error; err != nil {
+			return err
+		}
+		// Match the original funding order: subscription before owner. The
+		// owner lock still fences enrollment before any mutation is written.
+		if err := lockFundingManagementOwnerTx(tx, sub.UserId, realm); err != nil {
 			return err
 		}
 		userId = sub.UserId
@@ -1074,7 +1087,7 @@ func buildSubscriptionResetResult(plan *SubscriptionPlan, subs []UserSubscriptio
 	}
 }
 
-func adminResetUserSubscriptionsByPlanTx(tx *gorm.DB, userId int, plan *SubscriptionPlan, now int64, advanceResetTime bool) (*SubscriptionResetResult, error) {
+func adminResetUserSubscriptionsByPlanTx(tx *gorm.DB, userId int, plan *SubscriptionPlan, now int64, advanceResetTime bool, realm ...string) (*SubscriptionResetResult, error) {
 	if tx == nil || plan == nil {
 		return nil, errors.New("invalid reset args")
 	}
@@ -1088,23 +1101,7 @@ func adminResetUserSubscriptionsByPlanTx(tx *gorm.DB, userId int, plan *Subscrip
 	if len(subs) == 0 {
 		return nil, errors.New("该用户没有有效的此套餐订阅")
 	}
-	for i := range subs {
-		if err := resetUserSubscriptionTx(tx, &subs[i], plan, now, advanceResetTime); err != nil {
-			return nil, err
-		}
-	}
-	return buildSubscriptionResetResult(plan, subs, advanceResetTime), nil
-}
-
-func adminResetPlanSubscriptionsTx(tx *gorm.DB, plan *SubscriptionPlan, now int64, advanceResetTime bool) (*SubscriptionResetResult, error) {
-	if tx == nil || plan == nil {
-		return nil, errors.New("invalid reset args")
-	}
-	var subs []UserSubscription
-	if err := lockForUpdate(tx).
-		Where("plan_id = ? AND status = ? AND end_time > ?", plan.Id, "active", now).
-		Order("user_id asc, end_time asc, id asc").
-		Find(&subs).Error; err != nil {
+	if err := lockFundingManagementOwnerTx(tx, userId, realm); err != nil {
 		return nil, err
 	}
 	for i := range subs {
@@ -1115,7 +1112,46 @@ func adminResetPlanSubscriptionsTx(tx *gorm.DB, plan *SubscriptionPlan, now int6
 	return buildSubscriptionResetResult(plan, subs, advanceResetTime), nil
 }
 
-func AdminResetUserSubscriptionsByPlan(userId int, planId int, advanceResetTime bool) (*SubscriptionResetResult, error) {
+func adminResetPlanSubscriptionsTx(tx *gorm.DB, plan *SubscriptionPlan, now int64, advanceResetTime bool, realm ...string) (*SubscriptionResetResult, error) {
+	if tx == nil || plan == nil {
+		return nil, errors.New("invalid reset args")
+	}
+	var subs []UserSubscription
+	if err := lockForUpdate(tx).Where("plan_id = ? AND status = ? AND end_time > ?", plan.Id, "active", now).
+		Order("user_id asc, end_time asc, id asc").Find(&subs).Error; err != nil {
+		return nil, err
+	}
+	if len(realm) > 0 {
+		// Lock the selected subscriptions before their owners, matching OCR
+		// and legacy group mutations. All ownership checks precede writes.
+		allowed := make(map[int]bool)
+		selected := make([]UserSubscription, 0, len(subs))
+		for _, sub := range subs {
+			ok, checked := allowed[sub.UserId]
+			if !checked {
+				var owner User
+				if err := lockForUpdate(tx).First(&owner, sub.UserId).Error; err != nil {
+					return nil, err
+				}
+				ok = (owner.FundingRealm == NativeFundingLocalOnly) == (realm[0] == NativeFundingLocalOnly)
+				allowed[sub.UserId] = ok
+			}
+			if ok {
+				selected = append(selected, sub)
+			}
+		}
+		subs = selected
+	}
+
+	for i := range subs {
+		if err := resetUserSubscriptionTx(tx, &subs[i], plan, now, advanceResetTime); err != nil {
+			return nil, err
+		}
+	}
+	return buildSubscriptionResetResult(plan, subs, advanceResetTime), nil
+}
+
+func AdminResetUserSubscriptionsByPlan(userId int, planId int, advanceResetTime bool, realm ...string) (*SubscriptionResetResult, error) {
 	if userId <= 0 || planId <= 0 {
 		return nil, errors.New("invalid userId or planId")
 	}
@@ -1126,7 +1162,7 @@ func AdminResetUserSubscriptionsByPlan(userId int, planId int, advanceResetTime 
 		if err != nil {
 			return err
 		}
-		result, err = adminResetUserSubscriptionsByPlanTx(tx, userId, plan, now, advanceResetTime)
+		result, err = adminResetUserSubscriptionsByPlanTx(tx, userId, plan, now, advanceResetTime, realm...)
 		return err
 	})
 	if err != nil {
@@ -1135,7 +1171,7 @@ func AdminResetUserSubscriptionsByPlan(userId int, planId int, advanceResetTime 
 	return result, nil
 }
 
-func AdminResetPlanSubscriptions(planId int, advanceResetTime bool) (*SubscriptionResetResult, error) {
+func AdminResetPlanSubscriptions(planId int, advanceResetTime bool, realm ...string) (*SubscriptionResetResult, error) {
 	if planId <= 0 {
 		return nil, errors.New("invalid planId")
 	}
@@ -1146,7 +1182,7 @@ func AdminResetPlanSubscriptions(planId int, advanceResetTime bool) (*Subscripti
 		if err != nil {
 			return err
 		}
-		result, err = adminResetPlanSubscriptionsTx(tx, plan, now, advanceResetTime)
+		result, err = adminResetPlanSubscriptionsTx(tx, plan, now, advanceResetTime, realm...)
 		return err
 	})
 	if err != nil {
@@ -1444,7 +1480,7 @@ func RefundSubscriptionPreConsume(requestId string) error {
 			record.Status = "refunded"
 			return tx.Save(&record).Error
 		}
-		if err := PostConsumeUserSubscriptionDelta(record.UserSubscriptionId, -record.PreConsumed); err != nil {
+		if err := postConsumeUserSubscriptionDeltaTx(tx, record.UserSubscriptionId, -record.PreConsumed); err != nil {
 			return err
 		}
 		record.Status = "refunded"
@@ -1543,20 +1579,22 @@ func PostConsumeUserSubscriptionDelta(userSubscriptionId int, delta int64) error
 		return nil
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
-		var sub UserSubscription
-		if err := lockForUpdate(tx).
-			Where("id = ?", userSubscriptionId).
-			First(&sub).Error; err != nil {
-			return err
-		}
-		newUsed := sub.AmountUsed + delta
-		if newUsed < 0 {
-			newUsed = 0
-		}
-		if sub.AmountTotal > 0 && newUsed > sub.AmountTotal {
-			return fmt.Errorf("subscription used exceeds total, used=%d total=%d", newUsed, sub.AmountTotal)
-		}
-		sub.AmountUsed = newUsed
-		return tx.Save(&sub).Error
+		return postConsumeUserSubscriptionDeltaTx(tx, userSubscriptionId, delta)
 	})
+}
+
+func postConsumeUserSubscriptionDeltaTx(tx *gorm.DB, userSubscriptionId int, delta int64) error {
+	var sub UserSubscription
+	if err := lockForUpdate(tx).Where("id = ?", userSubscriptionId).First(&sub).Error; err != nil {
+		return err
+	}
+	newUsed := sub.AmountUsed + delta
+	if newUsed < 0 {
+		newUsed = 0
+	}
+	if sub.AmountTotal > 0 && newUsed > sub.AmountTotal {
+		return fmt.Errorf("subscription used exceeds total, used=%d total=%d", newUsed, sub.AmountTotal)
+	}
+	sub.AmountUsed = newUsed
+	return tx.Save(&sub).Error
 }

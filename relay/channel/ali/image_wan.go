@@ -27,6 +27,21 @@ func oaiFormEdit2WanxImageEdit(c *gin.Context, info *relaycommon.RelayInfo, requ
 	if wanInput.Images, err = getImageBase64sFromForm(c, "image"); err != nil {
 		return nil, fmt.Errorf("get image base64s from form failed: %w", err)
 	}
+	if request.Model == "wanx2.1-imageedit" || info.ChannelMeta != nil && info.UpstreamModelName == "wanx2.1-imageedit" {
+		if len(wanInput.Images) != 1 {
+			return nil, fmt.Errorf("wanx image edit requires exactly one base image")
+		}
+		wanInput.Function = "description_edit"
+		wanInput.BaseImageURL = wanInput.Images[0]
+		wanInput.Images = nil
+		if masks, maskErr := getImageBase64sFromForm(c, "mask"); maskErr == nil {
+			if len(masks) != 1 {
+				return nil, fmt.Errorf("wanx image edit requires exactly one mask image")
+			}
+			wanInput.Function = "description_edit_with_mask"
+			wanInput.MaskImageURL = masks[0]
+		}
+	}
 	//wanParams := WanImageParameters{
 	//	N: int(request.N),
 	//}

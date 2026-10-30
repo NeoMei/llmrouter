@@ -368,6 +368,41 @@ func FixAbility() (int, int, error) {
 	}
 	defer fixLock.Unlock()
 
+	// Managed producers require one atomic rebuild under the same parent locks.
+	var managedCount int64
+	if err := DB.Model(&Channel{}).Where("id IN ?", []int{102, 103}).Count(&managedCount).Error; err != nil {
+		return 0, 0, err
+	}
+	if managedCount > 0 && DB.Migrator().HasTable(&KnowledgeActiveBinding{}) {
+		rebuilt := 0
+		err := DB.Transaction(func(tx *gorm.DB) error {
+			if err := LockKnowledgeParents(tx, 0); err != nil {
+				return err
+			}
+			if err := retireKnowledgeChannels(tx, 102, 103); err != nil {
+				return err
+			}
+			var channels []Channel
+			if err := tx.Order("id").Find(&channels).Error; err != nil {
+				return err
+			}
+			if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&Ability{}).Error; err != nil {
+				return err
+			}
+			for i := range channels {
+				if err := channels[i].AddAbilities(tx); err != nil {
+					return err
+				}
+				rebuilt++
+			}
+			return nil
+		})
+		if err != nil {
+			return 0, rebuilt, err
+		}
+		InitChannelCache()
+		return rebuilt, 0, nil
+	}
 	// truncate abilities table
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		err := DB.Exec("DELETE FROM abilities").Error

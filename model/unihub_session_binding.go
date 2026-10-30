@@ -15,7 +15,10 @@ import (
 	userkit "github.com/NeoMei/UniHub/packages/userkit-go"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/internal/platformaccount"
+	"gorm.io/gorm"
 )
+
+var ErrUniHubSessionBindingAbsentOrExpired = errors.New("unihub session binding absent or expired")
 
 type UniHubProvisioner struct{}
 
@@ -87,15 +90,14 @@ func BindUniHubSession(sid string, userID int, a userkit.Access, bearer string, 
 }
 func OpenUniHubSession(sid string, userID int, c platformaccount.Config) (UniHubSessionBinding, string, error) {
 	var b UniHubSessionBinding
-	if e := DB.First(&b, "sid = ? AND user_id = ?", sid, userID).Error; e != nil {
-		return b, "", userkit.ErrDenied
+	if DB == nil {
+		return b, "", errors.New("session binding database unavailable")
 	}
-	instance := c.InstanceID
-	if instance == "" {
-		instance = "default"
-	}
-	if !c.Enabled || b.ExpiresAt <= time.Now().Unix() || b.Issuer != c.PublicOrigin || b.ProductID != c.ProductID || b.InstanceID != instance {
-		return b, "", userkit.ErrDenied
+	if e := DB.First(&b, "sid = ?", sid).Error; e != nil {
+		if errors.Is(e, gorm.ErrRecordNotFound) {
+			return b, "", errors.Join(userkit.ErrDenied, ErrUniHubSessionBindingAbsentOrExpired)
+		}
+		return b, "", e
 	}
 	aead, e := bindingAEAD()
 	if e != nil {
@@ -109,11 +111,78 @@ func OpenUniHubSession(sid string, userID int, c platformaccount.Config) (UniHub
 	if e != nil {
 		return b, "", userkit.ErrDenied
 	}
+	if b.SID != sid || b.UserID != userID {
+		return b, "", userkit.ErrDenied
+	}
+	instance := c.InstanceID
+	if instance == "" {
+		instance = "default"
+	}
+	if !c.Enabled || b.Issuer != c.PublicOrigin || b.ProductID != c.ProductID || b.InstanceID != instance {
+		return b, "", userkit.ErrDenied
+	}
+	// ExpiresAt is authenticated as AAD. Never call a modified or
+	// unverifiable timestamp proof of expiration before verifying the tag.
+	if b.ExpiresAt <= time.Now().Unix() {
+		return b, "", errors.Join(userkit.ErrDenied, ErrUniHubSessionBindingAbsentOrExpired)
+	}
 	return b, string(plain), nil
 }
 
 // PurgeUniHubSessionBindings removes expired/revoked encrypted proofs. No
 // expired binding is ever decryptable through OpenUniHubSession before cleanup.
 func PurgeUniHubSessionBindings(now int64) error {
-	return DB.Where("expires_at <= ? OR sid NOT IN (?)", now, DB.Model(&UserSession{}).Select("sid").Where("status = ? AND expires_at > ?", UserSessionStatusActive, now)).Delete(&UniHubSessionBinding{}).Error
+	if DB == nil {
+		return errors.New("session binding database unavailable")
+	}
+	aead, err := bindingAEAD()
+	if err != nil {
+		return err
+	}
+	var candidates []UniHubSessionBinding
+	if err := DB.Where("expires_at <= ? OR sid NOT IN (?)", now, DB.Model(&UserSession{}).Select("sid").Where("status = ? AND expires_at > ?", UserSessionStatusActive, now)).Find(&candidates).Error; err != nil {
+		return err
+	}
+	for _, candidate := range candidates {
+		err := DB.Transaction(func(tx *gorm.DB) error {
+			// SQLite has no row locks; take its writer lock before reading.
+			if tx.Dialector.Name() == "sqlite" {
+				if err := tx.Model(&UniHubSessionBinding{}).Where("sid = ?", candidate.SID).UpdateColumn("expires_at", gorm.Expr("expires_at")).Error; err != nil {
+					return err
+				}
+			}
+			var session UserSession
+			sessionErr := lockForUpdate(tx).First(&session, "sid = ?", candidate.SID).Error
+			if sessionErr != nil && !errors.Is(sessionErr, gorm.ErrRecordNotFound) {
+				return sessionErr
+			}
+			var current UniHubSessionBinding
+			if err := lockForUpdate(tx).First(&current, "sid = ?", candidate.SID).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return nil
+				}
+				return err
+			}
+			// Go equality is byte-exact, unlike a MySQL text comparison with a
+			// case-insensitive collation. Replacements are not this snapshot.
+			if current != candidate {
+				return nil
+			}
+			raw, err := base64.RawURLEncoding.DecodeString(current.Ciphertext)
+			if err != nil || len(raw) < aead.NonceSize() {
+				return nil
+			}
+			if _, err = aead.Open(nil, raw[:aead.NonceSize()], raw[aead.NonceSize():], current.aad()); err != nil {
+				return nil
+			}
+			if current.ExpiresAt > now && (sessionErr != nil || session.SID != current.SID || (session.Status == UserSessionStatusActive && session.ExpiresAt > now && session.RevokedAt == 0)) {
+				return nil
+			}
+			return tx.Delete(&current).Error
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

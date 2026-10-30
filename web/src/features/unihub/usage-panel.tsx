@@ -20,6 +20,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 
 import { formatQuantity } from '@/features/native-metering/contract'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { UniHubError } from './sdk'
 import { message, exactAmount } from './session'
@@ -33,22 +34,54 @@ export function UsagePanel(props: PanelProps) {
     queryFn: () =>
       props.session.bound(async () => {
         const sdk = props.session.client
-        if (finance) {
+        const actor = useAuthStore.getState().auth.user?.unihub_user_id
+        if (!actor || props.session.user?.id !== actor) {
+          throw new Error('Product identity proof rejected')
+        }
+        let summary
+        let calls
+        let pool = false
+        if (finance && props.session.canWrite) {
           try {
-            const [summary, calls] = await Promise.all([
+            ;[summary, calls] = await Promise.all([
               sdk.modelPoolUsage(props.account.id),
               sdk.modelPoolCalls(props.account.id),
             ])
-            return { summary, calls, pool: true }
+            pool = true
           } catch (e) {
             if (!(e instanceof UniHubError) || e.status !== 403) throw e
           }
         }
-        const [summary, calls] = await Promise.all([
-          sdk.usage(props.account.id),
-          sdk.calls(props.account.id),
-        ])
-        return { summary, calls, pool: false }
+        if (!summary || !calls) {
+          ;[summary, calls] = await Promise.all([
+            sdk.usage(props.account.id),
+            sdk.calls(props.account.id),
+          ])
+        }
+        const expectedVisibility = finance ? 'account' : 'actor'
+        for (const scope of [summary.scope, calls.scope]) {
+          if (
+            !scope ||
+            scope.account_id !== props.account.id ||
+            scope.visibility !== expectedVisibility ||
+            (!finance && scope.actor_id !== actor) ||
+            (!pool && scope.origin_product_id !== props.config.product_id)
+          ) {
+            throw new Error('UniHub session or payer changed')
+          }
+        }
+        if (
+          !Array.isArray(calls.items) ||
+          calls.items.some(
+            (call) =>
+              call.account_id !== props.account.id ||
+              (!finance && call.actor_id !== actor) ||
+              (!pool && call.origin_product_id !== props.config.product_id)
+          )
+        ) {
+          throw new Error('UniHub session or payer changed')
+        }
+        return { summary, calls, pool }
       }),
     retry: false,
   })
@@ -56,7 +89,7 @@ export function UsagePanel(props: PanelProps) {
     <Panel title='Usage and receipts'>
       {usage.isPending ? <p>{t('Loading')}</p> : null}
       {usage.error ? <p role='alert'>{message(usage.error)}</p> : null}
-      {usage.data ? (
+      {usage.data && !usage.isError ? (
         <>
           <p>
             {t(
@@ -99,8 +132,11 @@ export function UsagePanel(props: PanelProps) {
           <ul className='space-y-2'>
             {usage.data.calls.items.map((call) => (
               <li className='rounded border p-3' key={call.call_id}>
-                {call.call_id} · {call.origin_product_id} · {call.model} ·{' '}
-                {call.status}
+                {call.call_id} · {call.actor_id} · {call.origin_product_id} ·{' '}
+                {call.model} · {call.status} ·{' '}
+                {call.created_at
+                  ? new Date(call.created_at).toLocaleString()
+                  : '—'}
                 {call.usage?.metered ? (
                   <div>
                     <p>

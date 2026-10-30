@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -24,6 +25,9 @@ import (
 )
 
 const authIdentityContextKey = "auth_identity"
+const centralRealmContextKey = "authenticated_central_realm"
+
+func CentralRealmAuthenticated(c *gin.Context) bool { return c.GetBool(centralRealmContextKey) }
 
 type dashboardCredentialKind int
 
@@ -50,14 +54,22 @@ func authHelper(c *gin.Context, minRole int) {
 		writeDashboardAuthError(c, err)
 		return
 	}
-	if user.Status != common.UserStatusEnabled {
+	if user.Status != common.UserStatusEnabled && !c.GetBool(centralRealmContextKey) {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "AUTH_USER_DISABLED", "message": common.TranslateMessage(c, i18n.MsgAuthUserBanned)})
 		return
 	}
-	managed := platformaccount.RuntimeEnabled() || user.IdentitySource == model.UniHubIdentitySource
+	if !nativeAuthenticatorBoundary(c, user.Id) {
+		return
+	}
+	maintenance := !useAccessToken && nativePrivateMaintenanceRead(c, user.Id)
+	managed := (platformaccount.RuntimeEnabled() || user.IdentitySource == model.UniHubIdentitySource) && !maintenance && !NativeRealmAuthenticated(c)
 	if managed {
 		if platformaccount.RuntimeEnabled() {
-			if !LoadRuntimeAuthority(c, user.Id, user.AuthVersion) {
+			version := user.AuthVersion
+			if c.GetBool(centralRealmContextKey) {
+				version = identity.UserAuthVersion
+			}
+			if !LoadRuntimeAuthority(c, user.Id, version) {
 				return
 			}
 		} else {
@@ -141,13 +153,17 @@ func TryUserAuth() func(c *gin.Context) {
 			return
 		}
 		if credentialKind != dashboardCredentialUnmatched {
-			if platformaccount.RuntimeEnabled() {
-				if !LoadRuntimeAuthority(c, user.Id, user.AuthVersion) {
+			if platformaccount.RuntimeEnabled() && !NativeRealmAuthenticated(c) {
+				version := user.AuthVersion
+				if c.GetBool(centralRealmContextKey) {
+					version = identity.UserAuthVersion
+				}
+				if !LoadRuntimeAuthority(c, user.Id, version) {
 					return
 				}
 				p, _ := authz.ProductPrincipal(c)
 				user.Role = RoleFromAccess(p.Access)
-			} else if user.IdentitySource == model.UniHubIdentitySource {
+			} else if user.IdentitySource == model.UniHubIdentitySource && !NativeRealmAuthenticated(c) {
 				if !loadUniHubAuthority(c, identity) {
 					return
 				}
@@ -243,12 +259,31 @@ func classifyDashboardCredential(c *gin.Context) (*model.UserBase, service.AuthI
 		if err != nil {
 			return nil, service.AuthIdentity{}, dashboardCredentialInternal, err
 		}
-		_, user, err := service.ValidateLoginSession(identity)
+		session, user, err := service.ValidateLoginSession(identity)
 		if err != nil {
 			return nil, service.AuthIdentity{}, dashboardCredentialInternal, err
 		}
-		if err := validateProjectionCredential(user); err != nil {
+		if err := service.VerifyBrokerSource(c.Request.Context(), identity); err != nil {
 			return nil, service.AuthIdentity{}, dashboardCredentialInternal, err
+		}
+		if session.AuthRealm == model.CentralAuthRealm {
+			if session.LoginMethod == "unihub" {
+				if _, _, err := service.ResolveUniHubSession(c.Request.Context(), identity); err != nil {
+					return nil, service.AuthIdentity{}, dashboardCredentialInternal, service.ErrBrokerSourceUnavailable
+				}
+			} else if session.LoginMethod != "product_broker" && session.LoginMethod != "central_credential" {
+				return nil, service.AuthIdentity{}, dashboardCredentialInternal, service.ErrLoginSessionRevoked
+			}
+			c.Set(centralRealmContextKey, true)
+		}
+		native, err := authenticateNativeSession(c, identity)
+		if err != nil {
+			return nil, service.AuthIdentity{}, dashboardCredentialInternal, err
+		}
+		if !native {
+			if err := validateProjectionCredential(user); err != nil {
+				return nil, service.AuthIdentity{}, dashboardCredentialInternal, err
+			}
 		}
 		return user, identity, dashboardCredentialInternal, nil
 	}
@@ -259,11 +294,95 @@ func classifyDashboardCredential(c *gin.Context) (*model.UserBase, service.AuthI
 	if patUser == nil || patUser.Id <= 0 {
 		return nil, service.AuthIdentity{}, dashboardCredentialUnmatched, nil
 	}
+	native, nativeErr := model.IsNativeLoginCredential(c.Request.Context(), patUser.Id, "pat", raw)
+	{
+		var centralProof model.CentralLoginCredential
+		proofErr := model.DB.WithContext(c.Request.Context()).Where("user_id = ? AND kind = ?", patUser.Id, "pat").First(&centralProof).Error
+		if proofErr != nil && !errors.Is(proofErr, gorm.ErrRecordNotFound) {
+			return nil, service.AuthIdentity{}, dashboardCredentialPAT, service.ErrAuthStoreUnavailable
+		}
+		if proofErr == nil {
+			if os.Getenv("UNIHUB_INDEPENDENT_CENTRAL_REALM_ENABLED") != "true" {
+				return nil, service.AuthIdentity{}, dashboardCredentialPAT, service.ErrAuthStoreUnavailable
+			}
+			var nativeProof model.NativeLoginCredential
+			conflictErr := model.DB.WithContext(c.Request.Context()).Where("user_id = ? AND kind = ?", patUser.Id, "pat").First(&nativeProof).Error
+			if conflictErr == nil {
+				return nil, service.AuthIdentity{}, dashboardCredentialPAT, service.ErrAuthTokenInvalid
+			}
+			if !errors.Is(conflictErr, gorm.ErrRecordNotFound) {
+				return nil, service.AuthIdentity{}, dashboardCredentialPAT, service.ErrAuthStoreUnavailable
+			}
+			central, centralErr := model.IsCentralLoginCredential(c.Request.Context(), patUser.Id, "pat", raw)
+			if errors.Is(centralErr, model.ErrNativeCredentialUnverified) || (centralErr == nil && !central) {
+				return nil, service.AuthIdentity{}, dashboardCredentialPAT, service.ErrAuthTokenInvalid
+			}
+			if centralErr != nil {
+				return nil, service.AuthIdentity{}, dashboardCredentialPAT, service.ErrAuthStoreUnavailable
+			}
+			state, stateErr := model.ReadCentralAuthState(c.Request.Context(), patUser.Id)
+			if stateErr != nil || !state.Active {
+				return nil, service.AuthIdentity{}, dashboardCredentialPAT, service.ErrAuthStoreUnavailable
+			}
+			user, userErr := model.GetUserCache(patUser.Id)
+			if userErr != nil {
+				return nil, service.AuthIdentity{}, dashboardCredentialPAT, userErr
+			}
+			if projectionErr := validateProjectionCredential(user); projectionErr != nil {
+				return nil, service.AuthIdentity{}, dashboardCredentialPAT, projectionErr
+			}
+			c.Set(centralRealmContextKey, true)
+			return user, service.AuthIdentity{UserID: user.Id, UserAuthVersion: state.AuthVersion}, dashboardCredentialPAT, nil
+		}
+		if !native && nativeErr == nil {
+			// An unproven PAT may be a historical legacy credential. Do not
+			// downgrade it to legacy when this user has central-realm evidence.
+			// Each read must succeed: unavailable evidence is not absence.
+			var centralState model.CentralAuthState
+			stateErr := model.DB.WithContext(c.Request.Context()).Where("user_id = ?", patUser.Id).First(&centralState).Error
+			if stateErr == nil {
+				return nil, service.AuthIdentity{}, dashboardCredentialPAT, service.ErrAuthTokenInvalid
+			}
+			if !errors.Is(stateErr, gorm.ErrRecordNotFound) {
+				return nil, service.AuthIdentity{}, dashboardCredentialPAT, service.ErrAuthStoreUnavailable
+			}
+			var centralSession model.UserSession
+			sessionErr := model.DB.WithContext(c.Request.Context()).Where("user_id = ? AND auth_realm = ?", patUser.Id, model.CentralAuthRealm).First(&centralSession).Error
+			if sessionErr == nil {
+				return nil, service.AuthIdentity{}, dashboardCredentialPAT, service.ErrAuthTokenInvalid
+			}
+			if !errors.Is(sessionErr, gorm.ErrRecordNotFound) {
+				return nil, service.AuthIdentity{}, dashboardCredentialPAT, service.ErrAuthStoreUnavailable
+			}
+			var otherProof model.CentralLoginCredential
+			otherErr := model.DB.WithContext(c.Request.Context()).Where("user_id = ?", patUser.Id).First(&otherProof).Error
+			if otherErr == nil {
+				return nil, service.AuthIdentity{}, dashboardCredentialPAT, service.ErrAuthTokenInvalid
+			}
+			if !errors.Is(otherErr, gorm.ErrRecordNotFound) {
+				return nil, service.AuthIdentity{}, dashboardCredentialPAT, service.ErrAuthStoreUnavailable
+			}
+			var sessionProof model.CentralSessionCredential
+			bindingErr := model.DB.WithContext(c.Request.Context()).Where("user_id = ?", patUser.Id).First(&sessionProof).Error
+			if bindingErr == nil {
+				return nil, service.AuthIdentity{}, dashboardCredentialPAT, service.ErrAuthTokenInvalid
+			}
+			if !errors.Is(bindingErr, gorm.ErrRecordNotFound) {
+				return nil, service.AuthIdentity{}, dashboardCredentialPAT, service.ErrAuthStoreUnavailable
+			}
+		}
+	}
+	if nativeErr != nil {
+		return nil, service.AuthIdentity{}, dashboardCredentialPAT, nativeErr
+	}
+	if native {
+		c.Set(nativeRealmContextKey, true)
+	}
 	user, err := model.GetUserCache(patUser.Id)
 	if err != nil {
 		return nil, service.AuthIdentity{}, dashboardCredentialPAT, err
 	}
-	if err := validateProjectionCredential(user); err != nil {
+	if err := validateProjectionCredential(user); !native && err != nil {
 		return nil, service.AuthIdentity{}, dashboardCredentialPAT, err
 	}
 	return user, service.AuthIdentity{UserID: user.Id, UserAuthVersion: user.AuthVersion}, dashboardCredentialPAT, nil
@@ -310,6 +429,14 @@ func setDashboardAuthContext(c *gin.Context, user *model.UserBase, identity serv
 }
 
 func writeDashboardAuthError(c *gin.Context, err error) {
+	if errors.Is(err, service.ErrAuthStoreUnavailable) {
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"success": false, "code": "AUTH_STORE_UNAVAILABLE"})
+		return
+	}
+	if errors.Is(err, service.ErrBrokerSourceUnavailable) {
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"success": false, "code": "UNIHUB_SOURCE_UNAVAILABLE"})
+		return
+	}
 	if errors.Is(err, service.ErrAuthTokenExpired) {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "AUTH_TOKEN_EXPIRED", "message": common.TranslateMessage(c, i18n.MsgAuthNotLoggedIn)})
 		return
@@ -363,22 +490,47 @@ func TokenOrUserAuth() func(c *gin.Context) {
 				writeDashboardAuthError(c, err)
 				return
 			}
-			_, user, err := service.ValidateLoginSession(identity)
+			session, user, err := service.ValidateLoginSession(identity)
 			if err != nil {
 				writeDashboardAuthError(c, err)
 				return
 			}
-			if err := validateProjectionCredential(user); err != nil {
+			if err := service.VerifyBrokerSource(c.Request.Context(), identity); err != nil {
 				writeDashboardAuthError(c, err)
 				return
 			}
-			if platformaccount.RuntimeEnabled() {
-				if !LoadRuntimeAuthority(c, user.Id, user.AuthVersion) {
+			if session.AuthRealm == model.CentralAuthRealm {
+				if session.LoginMethod == "unihub" {
+					if _, _, err := service.ResolveUniHubSession(c.Request.Context(), identity); err != nil {
+						writeDashboardAuthError(c, service.ErrBrokerSourceUnavailable)
+						return
+					}
+				} else if session.LoginMethod != "product_broker" && session.LoginMethod != "central_credential" {
+					writeDashboardAuthError(c, service.ErrLoginSessionRevoked)
+					return
+				}
+				c.Set(centralRealmContextKey, true)
+			}
+			native, err := authenticateNativeSession(c, identity)
+			if err != nil {
+				writeDashboardAuthError(c, err)
+				return
+			}
+			if err := validateProjectionCredential(user); !native && err != nil {
+				writeDashboardAuthError(c, err)
+				return
+			}
+			if platformaccount.RuntimeEnabled() && !NativeRealmAuthenticated(c) {
+				version := user.AuthVersion
+				if c.GetBool(centralRealmContextKey) {
+					version = identity.UserAuthVersion
+				}
+				if !LoadRuntimeAuthority(c, user.Id, version) {
 					return
 				}
 				p, _ := authz.ProductPrincipal(c)
 				user.Role = RoleFromAccess(p.Access)
-			} else if user.IdentitySource == model.UniHubIdentitySource {
+			} else if user.IdentitySource == model.UniHubIdentitySource && !NativeRealmAuthenticated(c) {
 				if !loadUniHubAuthority(c, identity) {
 					return
 				}
@@ -416,7 +568,7 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 		parts := strings.Split(key, "-")
 		key = parts[0]
 
-		token, err := model.GetTokenByKey(key, false)
+		token, err := model.GetTokenByKey(key, true, true)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				c.JSON(http.StatusUnauthorized, gin.H{
@@ -455,11 +607,19 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 			c.Abort()
 			return
 		}
-		if err := validateProjectionCredential(userCache); err != nil {
+		native, nativeErr := model.NativeRealmTokenReadOnly(c.Request.Context(), token)
+		if nativeErr != nil {
+			writeDashboardAuthError(c, nativeErr)
+			return
+		}
+		if native {
+			c.Set(nativeRealmContextKey, true)
+		}
+		if err := validateProjectionCredential(userCache); !native && err != nil {
 			writeDashboardAuthError(c, err)
 			return
 		}
-		if platformaccount.RuntimeEnabled() || userCache.IdentitySource == model.UniHubIdentitySource {
+		if !native && (platformaccount.RuntimeEnabled() || userCache.IdentitySource == model.UniHubIdentitySource) {
 			if !LoadRuntimeAuthority(c, userCache.Id, userCache.AuthVersion) {
 				return
 			}
@@ -551,7 +711,7 @@ func tokenAuth(ownedJobRead bool) func(c *gin.Context) {
 		var err error
 		if ownedJobRead {
 			// Read current SQL identity instead of a possibly stale credential cache.
-			token, err = model.GetTokenByKey(key, true)
+			token, err = model.GetTokenByKey(key, true, true)
 			if err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
 					err = model.ErrTokenInvalid
@@ -586,6 +746,11 @@ func tokenAuth(ownedJobRead bool) func(c *gin.Context) {
 			return
 		}
 
+		native, nativeErr := model.NativeRealmToken(c.Request.Context(), token, ownedJobRead)
+		if nativeErr != nil {
+			abortWithOpenAiMessage(c, http.StatusUnauthorized, "native credential unavailable")
+			return
+		}
 		allowIps := token.GetIpLimits()
 		if len(allowIps) > 0 {
 			clientIp := c.ClientIP()
@@ -609,11 +774,27 @@ func tokenAuth(ownedJobRead bool) func(c *gin.Context) {
 				common.TranslateMessage(c, i18n.MsgDatabaseError))
 			return
 		}
-		if err := validateProjectionCredential(userCache); err != nil {
+		if err := validateProjectionCredential(userCache); !native && err != nil {
 			writeDashboardAuthError(c, err)
 			return
 		}
-		if platformaccount.RuntimeEnabled() || userCache.IdentitySource == model.UniHubIdentitySource {
+		if !native {
+			var owner model.User
+			if err := model.DB.WithContext(c.Request.Context()).First(&owner, token.UserId).Error; err != nil {
+				writeDashboardAuthError(c, err)
+				return
+			}
+			if owner.FundingRealm == model.NativeFundingLocalOnly {
+				abortWithOpenAiMessage(c, http.StatusForbidden, "native funding requires native credential")
+				return
+			}
+		}
+		if native {
+			c.Set(nativeRealmContextKey, true)
+			common.SetContextKey(c, constant.ContextKeyNativeRealm, true)
+		} else if nativeLocalLegacyToken(c, userCache.Id) {
+			common.SetContextKey(c, constant.ContextKeyNativeLocalLegacy, true)
+		} else if platformaccount.RuntimeEnabled() || userCache.IdentitySource == model.UniHubIdentitySource {
 			if !LoadRuntimeAuthority(c, userCache.Id, userCache.AuthVersion) {
 				return
 			}
@@ -677,7 +858,7 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 		allowed := false
 		if p, managed := authz.ProductPrincipal(c); managed {
 			allowed = RoleFromAccess(p.Access) >= common.RoleAdminUser && p.HasPermission("channel:operate")
-		} else if !platformaccount.RuntimeEnabled() {
+		} else if !platformaccount.RuntimeEnabled() || NativeRealmAuthenticated(c) {
 			allowed = model.IsAdmin(token.UserId)
 		}
 		if allowed {

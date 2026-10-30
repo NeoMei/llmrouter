@@ -26,6 +26,7 @@ import (
 type wanCancelAdaptor struct {
 	cancellations int
 	running       bool
+	responseBody  string
 }
 
 func (a *wanCancelAdaptor) Init(*relaycommon.RelayInfo) {}
@@ -40,6 +41,9 @@ func (a *wanCancelAdaptor) CancelTask(_, _, _, _ string) (*http.Response, error)
 	a.cancellations++
 	body := `{"output":{"task_id":"provider-wan","task_status":"CANCELED","results":[]},"usage":{"video_count":0}}`
 	status := http.StatusOK
+	if a.responseBody != "" {
+		body = a.responseBody
+	}
 	if a.running {
 		body = `{"code":"UnsupportedOperation","message":"task is running","request_id":"req-running"}`
 		status = http.StatusBadRequest
@@ -119,4 +123,27 @@ func TestPlatformWanRunningCancelRefusalKeepsHoldAndTaskPending(t *testing.T) {
 	require.NoError(t, model.DB.First(&unchanged, task.ID).Error)
 	assert.Equal(t, model.TaskStatus(model.TaskStatusQueued), unchanged.Status)
 	assert.False(t, unchanged.NativePending)
+}
+
+func TestPlatformWanCancelRejectsUnboundOrContradictoryReceipt(t *testing.T) {
+	for name, body := range map[string]string{
+		"wrong_task":   `{"output":{"task_id":"another-task","task_status":"CANCELED","results":[]},"usage":{"video_count":0}}`,
+		"missing_task": `{"output":{"task_status":"CANCELED","results":[]},"usage":{"video_count":0}}`,
+		"output_count": `{"output":{"task_id":"provider-wan","task_status":"CANCELED","results":[]},"usage":{"video_count":1}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, recorder, task := newWanCancelFixture(t, &wanCancelAdaptor{responseBody: body})
+			releases := 0
+			oldRelease := service.PlatformTaskRelease
+			service.PlatformTaskRelease = func(context.Context, string, string) error { releases++; return nil }
+			t.Cleanup(func() { service.PlatformTaskRelease = oldRelease })
+			PlatformTaskCancel(ctx)
+			assert.NotEqual(t, http.StatusOK, recorder.Code)
+			assert.Zero(t, releases)
+			var unchanged model.Task
+			require.NoError(t, model.DB.First(&unchanged, task.ID).Error)
+			assert.Equal(t, model.TaskStatus(model.TaskStatusQueued), unchanged.Status)
+			assert.False(t, unchanged.NativePending)
+		})
+	}
 }

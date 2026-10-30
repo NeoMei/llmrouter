@@ -23,7 +23,7 @@ var PlatformVideoMedia func(context.Context, string, string, int, int) (Platform
 
 func preparePlatformWanVideoArtifact(ctx context.Context, task *model.Task, sourceURL string) error {
 	bc := task.PrivateData.BillingContext
-	if task.FundingOwner != "platform" || bc == nil || bc.NativePrice == nil || bc.NativePrice.Policy != "ali_wan26_t2v_billable_duration_v1" || bc.PlatformCallID == "" {
+	if task.FundingOwner != "platform" || bc == nil || bc.NativePrice == nil || (bc.NativePrice.Policy != "ali_wan26_t2v_billable_duration_v1" && bc.NativePrice.Policy != "ali_wan26_t2v_cny6_v2") || bc.PlatformCallID == "" {
 		return nil
 	}
 	width, height, ok := wanVideoDimensions(bc.VideoResolution)

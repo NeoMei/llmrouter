@@ -26,15 +26,9 @@ import type { TwoFAStatus } from '../types'
 // Two-FA Hook
 // ============================================================================
 
-const DEFAULT_STATUS: TwoFAStatus = {
-  enabled: false,
-  locked: false,
-  backup_codes_remaining: 0,
-}
-
 export function useTwoFA(enabled = true) {
   const [loading, setLoading] = useState(true)
-  const [status, setStatus] = useState<TwoFAStatus>(DEFAULT_STATUS)
+  const [status, setStatus] = useState<TwoFAStatus | null>(null)
 
   const fetchStatus = useCallback(async () => {
     if (!enabled) return
@@ -42,12 +36,9 @@ export function useTwoFA(enabled = true) {
     try {
       setLoading(true)
       const response = await get2FAStatus()
-      if (response.success && response.data) {
-        setStatus(response.data)
-      }
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('Failed to fetch 2FA status:', error)
+      setStatus(response.success && response.data ? response.data : null)
+    } catch {
+      setStatus(null)
     } finally {
       setLoading(false)
     }

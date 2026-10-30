@@ -15,17 +15,18 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
-	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
 
 type uniHubRegressionFixture struct {
-	revoked     *atomic.Bool
-	forwarded   *atomic.Int32
-	unavailable *atomic.Bool
-	db          *gorm.DB
-	router      *gin.Engine
+	revoked        *atomic.Bool
+	forwarded      *atomic.Int32
+	unavailable    *atomic.Bool
+	accessCalls    *atomic.Int32
+	failAccessCall *atomic.Int32
+	db             *gorm.DB
+	router         *gin.Engine
 }
 type uniHubRegressionBundle struct {
 	Success bool `json:"success"`
@@ -44,12 +45,12 @@ func newUniHubRegressionFixture(t *testing.T) *uniHubRegressionFixture {
 	oldDB, oldRedis, oldSecret := model.DB, common.RedisEnabled, common.SessionSecret
 	oldSecure, oldTrusted := common.SessionCookieSecure, common.SessionCookieTrustedURLs
 	oldCritical, oldGlobal, oldMode := common.CriticalRateLimitEnable, common.GlobalApiRateLimitEnable, gin.Mode()
-	db, err := gorm.Open(sqlite.Open(t.TempDir()+"/matrix.db"), &gorm.Config{})
-	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.UniHubIdentityMapping{}, &model.UniHubSessionBinding{}))
+	db := nativeRealmFixtureDB(t, t.TempDir()+"/matrix.db")
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.CentralAuthState{}, &model.CentralLoginCredential{}, &model.CentralSessionCredential{}, &model.UniHubIdentityMapping{}, &model.UniHubSessionBinding{}))
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
 	model.DB, common.RedisEnabled, common.SessionSecret = db, false, "unihub-regression-test-secret"
+	nativeRealmFixtureCache(t)
 	common.SessionCookieSecure, common.SessionCookieTrustedURLs = true, nil
 	common.CriticalRateLimitEnable, common.GlobalApiRateLimitEnable = false, false
 	gin.SetMode(gin.TestMode)
@@ -63,6 +64,8 @@ func newUniHubRegressionFixture(t *testing.T) *uniHubRegressionFixture {
 	revoked := &atomic.Bool{}
 	forwarded := &atomic.Int32{}
 	unavailable := &atomic.Bool{}
+	accessCalls := &atomic.Int32{}
+	failAccessCall := &atomic.Int32{}
 	var upstream *httptest.Server
 	upstream = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Origin") != "" && r.Header.Get("Origin") != "https://dashboard.test" {
@@ -82,6 +85,11 @@ func newUniHubRegressionFixture(t *testing.T) *uniHubRegressionFixture {
 			}
 			_ = json.NewEncoder(w).Encode(gin.H{"kind": "product", "product_id": "llmrouter", "client_id": client, "instance_id": "default", "scopes": []string{"access:read"}})
 		case "/v1/me/product-access":
+			call := accessCalls.Add(1)
+			if failAccessCall.Load() == call {
+				w.WriteHeader(503)
+				return
+			}
 			if revoked.Load() {
 				w.WriteHeader(403)
 				return
@@ -148,7 +156,7 @@ func newUniHubRegressionFixture(t *testing.T) *uniHubRegressionFixture {
 	r.GET("/optional-native", middleware.TryUserAuth(), reached)
 	r.GET("/native-control", middleware.UserAuth(), reached)
 	r.GET("/admin-control", middleware.AdminAuth(), reached)
-	return &uniHubRegressionFixture{db: db, router: r, revoked: revoked, forwarded: forwarded, unavailable: unavailable}
+	return &uniHubRegressionFixture{db: db, router: r, revoked: revoked, forwarded: forwarded, unavailable: unavailable, accessCalls: accessCalls, failAccessCall: failAccessCall}
 }
 
 func (f *uniHubRegressionFixture) request(method, path, token string, cookie *http.Cookie) *httptest.ResponseRecorder {

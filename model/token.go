@@ -1,8 +1,11 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"math"
+	"slices"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -12,6 +15,11 @@ import (
 )
 
 type Token struct {
+	// QuotaPolicyGeneration serializes native policy edits with durable holds.
+	QuotaPolicyGeneration int64 `json:"-" gorm:"not null;default:0"`
+	QuotaStateRevision    int64 `json:"-" gorm:"-"`
+	CacheSchema           int   `json:"-" gorm:"-"`
+
 	Id                 int            `json:"id"`
 	UserId             int            `json:"user_id" gorm:"index"`
 	Key                string         `json:"key" gorm:"type:varchar(128);uniqueIndex"`
@@ -28,6 +36,7 @@ type Token struct {
 	UsedQuota          int            `json:"used_quota" gorm:"default:0"` // used quota
 	Group              string         `json:"group" gorm:"default:''"`
 	CrossGroupRetry    bool           `json:"cross_group_retry"` // 跨分组重试，仅auto分组有效
+	AuthRealm          string         `json:"-" gorm:"size:24"`
 	FundingAccountID   string         `json:"-" gorm:"size:128"`
 	Purpose            string         `json:"-" gorm:"type:varchar(32);index"`
 	BoundOrigin        string         `json:"-" gorm:"type:varchar(512)"`
@@ -81,11 +90,19 @@ func (token *Token) GetIpLimits() []string {
 	return ipLimits
 }
 
-func GetAllUserTokens(userId int, startIdx int, num int) ([]*Token, error) {
+func GetAllUserTokens(userId int, startIdx int, num int, realm ...string) ([]*Token, error) {
 	var tokens []*Token
 	var err error
-	err = DB.Where("user_id = ?", userId).Order("id desc").Limit(num).Offset(startIdx).Find(&tokens).Error
-	return tokens, err
+	err = tokenRealmQuery(DB, realm).Where("user_id = ?", userId).Order("id desc").Limit(num).Offset(startIdx).Find(&tokens).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, token := range tokens {
+		if err = token.overlayNativeQuotaForRead(); err != nil {
+			return nil, err
+		}
+	}
+	return tokens, nil
 }
 
 // sanitizeLikePattern 校验并清洗用户输入的 LIKE 搜索模式。
@@ -134,7 +151,7 @@ func validateLikePattern(input string) error {
 
 const searchHardLimit = 100
 
-func SearchUserTokens(userId int, keyword string, token string, offset int, limit int) (tokens []*Token, total int64, err error) {
+func SearchUserTokens(userId int, keyword string, token string, offset int, limit int, realm ...string) (tokens []*Token, total int64, err error) {
 	// model 层强制截断
 	if limit <= 0 || limit > searchHardLimit {
 		limit = searchHardLimit
@@ -151,7 +168,7 @@ func SearchUserTokens(userId int, keyword string, token string, offset int, limi
 	maxTokens := operation_setting.GetMaxUserTokens()
 	hasFuzzy := strings.Contains(keyword, "%") || strings.Contains(token, "%")
 	if hasFuzzy {
-		count, err := CountUserTokens(userId)
+		count, err := CountUserTokens(userId, realm...)
 		if err != nil {
 			common.SysLog("failed to count user tokens: " + err.Error())
 			return nil, 0, errors.New("获取令牌数量失败")
@@ -161,7 +178,7 @@ func SearchUserTokens(userId int, keyword string, token string, offset int, limi
 		}
 	}
 
-	baseQuery := DB.Model(&Token{}).Where("user_id = ?", userId)
+	baseQuery := tokenRealmQuery(DB, realm).Model(&Token{}).Where("user_id = ?", userId)
 
 	// 非空才加 LIKE 条件，空则跳过（不过滤该字段）
 	if keyword != "" {
@@ -191,6 +208,11 @@ func SearchUserTokens(userId int, keyword string, token string, offset int, limi
 	if err != nil {
 		common.SysError("failed to search tokens: " + err.Error())
 		return nil, 0, errors.New("搜索令牌失败")
+	}
+	for _, token := range tokens {
+		if err = token.overlayNativeQuotaForRead(); err != nil {
+			return nil, 0, err
+		}
 	}
 	return tokens, total, nil
 }
@@ -235,13 +257,16 @@ func ValidateUserToken(key string) (token *Token, err error) {
 	return nil, fmt.Errorf("%w: %v", ErrDatabase, err)
 }
 
-func GetTokenByIds(id int, userId int) (*Token, error) {
+func GetTokenByIds(id int, userId int, realm ...string) (*Token, error) {
 	if id == 0 || userId == 0 {
 		return nil, errors.New("id 或 userId 为空！")
 	}
 	token := Token{Id: id, UserId: userId}
 	var err error = nil
-	err = DB.First(&token, "id = ? and user_id = ?", id, userId).Error
+	err = tokenRealmQuery(DB, realm).First(&token, "id = ? and user_id = ?", id, userId).Error
+	if err == nil {
+		err = token.overlayNativeQuotaForRead()
+	}
 	return &token, err
 }
 
@@ -252,14 +277,25 @@ func GetTokenById(id int) (*Token, error) {
 	token := Token{Id: id}
 	var err error = nil
 	err = DB.First(&token, "id = ?", id).Error
+	if err == nil {
+		err = token.overlayNativeQuotaForRead()
+	}
 	return &token, err
 }
 
-func GetTokenByKey(key string, fromDB bool) (token *Token, err error) {
+func GetTokenByKey(key string, fromDB bool, readOnly ...bool) (token *Token, err error) {
 	if !fromDB && common.RedisEnabled {
 		// Try Redis first
 		token, err := cacheGetTokenByKey(key)
-		if err == nil {
+		if err == nil && token.AuthRealm == NativeFundingLocalOnly {
+			remain, used, balanceErr := NativeTokenQuotaBalance(context.Background(), token.Id, token.QuotaPolicyGeneration)
+			if balanceErr == nil {
+				token.RemainQuota, token.UsedQuota = remain, used
+				return token, nil
+			}
+			// A generation change or missing activation must consult current
+			// SQL policy. Cached zero cannot hide a committed native refund.
+		} else if err == nil {
 			return token, nil
 		}
 		// Don't return error - fall through to DB
@@ -267,6 +303,22 @@ func GetTokenByKey(key string, fromDB bool) (token *Token, err error) {
 	token = &Token{}
 	if err = DB.Where(commonKeyCol+" = ?", key).First(token).Error; err != nil {
 		return nil, err
+	}
+	if token.AuthRealm == NativeFundingLocalOnly {
+		remain, used, balanceErr := NativeTokenQuotaBalance(context.Background(), token.Id, token.QuotaPolicyGeneration)
+		if errors.Is(balanceErr, ErrNativeQuotaConflict) {
+			if err = DB.Where(commonKeyCol+" = ?", key).First(token).Error; err != nil {
+				return nil, err
+			}
+			remain, used, balanceErr = NativeTokenQuotaBalance(context.Background(), token.Id, token.QuotaPolicyGeneration)
+		}
+		if balanceErr != nil {
+			if len(readOnly) > 0 && readOnly[0] && errors.Is(balanceErr, ErrNativeQuotaNotEnrolled) {
+				return token, nil
+			}
+			return nil, balanceErr
+		}
+		token.RemainQuota, token.UsedQuota = remain, used
 	}
 	if common.RedisEnabled {
 		// 冷缓存时用数据库快照初始化；已存在的哈希只刷新 TTL，
@@ -279,23 +331,111 @@ func GetTokenByKey(key string, fromDB bool) (token *Token, err error) {
 }
 
 func (token *Token) Insert() error {
-	var err error
-	err = DB.Create(token).Error
-	return err
+	if token.AuthRealm != NativeFundingLocalOnly {
+		return DB.Create(token).Error
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var protocol NativeTokenQuotaProtocol
+		if err := lockForUpdate(tx).First(&protocol, 1).Error; err != nil {
+			return ErrNativeQuotaNotEnrolled
+		}
+		if protocol.Version != 1 || protocol.CutoverEvidence == "" {
+			return ErrNativeQuotaNotEnrolled
+		}
+		if err := tx.Create(token).Error; err != nil {
+			return err
+		}
+		state := NativeTokenQuotaState{TokenID: token.Id, RemainQuota: token.RemainQuota, UsedQuota: token.UsedQuota, PolicyGeneration: token.QuotaPolicyGeneration, Revision: 1, ProjectedRevision: 1, ImportEvidence: protocol.ManifestSHA256}
+		return tx.Create(&state).Error
+	})
 }
 
 func DeleteExpiredChatCredentials(userID int, now int64) error {
 	return DB.Unscoped().Where("user_id = ? AND purpose = ? AND expired_time < ?", userID, "chat_embed", now).Delete(&Token{}).Error
 }
 
-// Update Make sure your token's fields is completed, because this will update non-zero values
-func (token *Token) Update() (err error) {
+// Update explicitly replaces the remaining quota policy as an absolute value.
+// Metadata-only callers must use their narrower mutation scope instead.
+func (token *Token) Update(realm ...string) error {
+	return token.updatePolicy([]string{"name", "status", "expired_time", "remain_quota", "unlimited_quota", "model_limits_enabled", "model_limits", "allow_ips", "group", "cross_group_retry"}, true, realm...)
+}
+
+func (token *Token) UpdateStatus(realm ...string) error {
+	return token.updatePolicy([]string{"status"}, false, realm...)
+}
+
+func (token *Token) UpdateMetadata(realm ...string) error {
+	return token.updatePolicy([]string{"name", "expired_time", "model_limits_enabled", "model_limits", "allow_ips", "group", "cross_group_retry"}, false, realm...)
+}
+
+func (token *Token) updatePolicy(fields []string, replaceQuota bool, realm ...string) (err error) {
+	if len(realm) == 0 {
+		var current Token
+		if err := DB.Select("id", "auth_realm").First(&current, token.Id).Error; err != nil {
+			return err
+		}
+		if current.AuthRealm == NativeFundingLocalOnly {
+			return token.updatePolicy(fields, replaceQuota, NativeFundingLocalOnly)
+		}
+	}
+	if len(realm) > 0 {
+		return DB.Transaction(func(tx *gorm.DB) error {
+			var owner User
+			if err := lockForUpdate(tx).First(&owner, token.UserId).Error; err != nil {
+				return err
+			}
+			var current Token
+			if tx.Dialector.Name() == "sqlite" {
+				if err := tx.Model(&Token{}).Where("id = ?", token.Id).UpdateColumn("quota_policy_generation", gorm.Expr("quota_policy_generation")).Error; err != nil {
+					return err
+				}
+			}
+			if err := lockForUpdate(tokenRealmQuery(tx, realm)).First(&current, "id = ? AND user_id = ?", token.Id, token.UserId).Error; err != nil {
+				return err
+			}
+			if !slices.Contains(fields, "status") {
+				token.Status = current.Status
+			}
+			if !replaceQuota {
+				token.UnlimitedQuota = current.UnlimitedQuota
+			}
+			if current.AuthRealm == NativeFundingLocalOnly && current.QuotaPolicyGeneration == math.MaxInt64 {
+				return errors.New("token quota policy generation exhausted")
+			}
+			if err := invalidateTokenCacheForMutation(current.Key); err != nil {
+				return err
+			}
+			if err := tx.Model(&current).Select(fields).Updates(token).Error; err != nil {
+				return err
+			}
+			if current.AuthRealm == NativeFundingLocalOnly {
+				state, err := nativeQuotaState(tx, current)
+				if err != nil {
+					return err
+				}
+				if state.Revision == math.MaxInt64 {
+					return ErrNativeQuotaConflict
+				}
+				if replaceQuota {
+					state.RemainQuota = token.RemainQuota
+				}
+				state.PolicyGeneration++
+				state.Revision++
+				state.ProjectedRevision = state.Revision
+				if err = tx.Save(&state).Error; err != nil {
+					return err
+				}
+				token.RemainQuota, token.UsedQuota, token.QuotaPolicyGeneration = state.RemainQuota, state.UsedQuota, state.PolicyGeneration
+				return tx.Model(&current).Updates(map[string]any{"quota_policy_generation": state.PolicyGeneration, "remain_quota": state.RemainQuota, "used_quota": state.UsedQuota}).Error
+			}
+			return nil
+		})
+	}
 	// 写库前失效缓存并设置 fence，防止并发读者把过期快照重新写回缓存。
 	if cacheErr := invalidateTokenCacheForMutation(token.Key); cacheErr != nil {
 		common.SysLog("failed to invalidate token cache before update: " + cacheErr.Error())
 	}
-	return DB.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
-		"model_limits_enabled", "model_limits", "allow_ips", "group", "cross_group_retry").Updates(token).Error
+	return DB.Model(token).Select(fields).Updates(token).Error
 }
 
 func (token *Token) SelectUpdate() (err error) {
@@ -340,25 +480,45 @@ func DisableModelLimits(tokenId int) error {
 	}
 	token.ModelLimitsEnabled = false
 	token.ModelLimits = ""
-	return token.Update()
+	return token.updatePolicy([]string{"model_limits_enabled", "model_limits"}, false)
 }
 
-func DeleteTokenById(id int, userId int) (err error) {
-	// Why we need userId here? In case user want to delete other's token.
-	if id == 0 || userId == 0 {
-		return errors.New("id 或 userId 为空！")
+func DeleteTokenById(id int, userId int, realm ...string) error {
+	if id <= 0 || userId <= 0 {
+		return gorm.ErrRecordNotFound
 	}
-	token := Token{Id: id, UserId: userId}
-	err = DB.Where(token).First(&token).Error
+	if len(realm) > 0 {
+		count, err := BatchDeleteTokens([]int{id}, userId, realm...)
+		if err != nil {
+			return err
+		}
+		if count != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	}
+	token, err := GetTokenByIds(id, userId)
 	if err != nil {
 		return err
 	}
 	return token.Delete()
 }
 
-func IncreaseTokenQuota(tokenId int, key string, quota int) (err error) {
+func IncreaseTokenQuota(tokenId int, key string, quota int, operationIDs ...string) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
+	}
+	var token Token
+	if err = DB.First(&token, tokenId).Error; err != nil {
+		return err
+	}
+	if token.AuthRealm == NativeFundingLocalOnly {
+		operationID := common.GetUUID()
+		if len(operationIDs) > 0 {
+			operationID = operationIDs[0]
+		}
+		_, err = nativeQuotaOperation(tokenId, key, operationID, "", "credit", quota)
+		return err
 	}
 	if managed, e := managedProductToken(tokenId); e != nil {
 		return e
@@ -392,9 +552,21 @@ func increaseTokenQuota(id int, quota int) (err error) {
 	return err
 }
 
-func DecreaseTokenQuota(id int, key string, quota int) (err error) {
+func DecreaseTokenQuota(id int, key string, quota int, operationIDs ...string) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
+	}
+	var token Token
+	if err = DB.First(&token, id).Error; err != nil {
+		return err
+	}
+	if token.AuthRealm == NativeFundingLocalOnly {
+		operationID := common.GetUUID()
+		if len(operationIDs) > 0 {
+			operationID = operationIDs[0]
+		}
+		_, err = nativeQuotaOperation(id, key, operationID, "", "debit", quota)
+		return err
 	}
 	if managed, e := managedProductToken(id); e != nil {
 		return e
@@ -427,22 +599,29 @@ func decreaseTokenQuota(id int, quota int) (err error) {
 }
 
 // CountUserTokens returns total number of tokens for the given user, used for pagination
-func CountUserTokens(userId int) (int64, error) {
+func CountUserTokens(userId int, realm ...string) (int64, error) {
 	var total int64
-	err := DB.Model(&Token{}).Where("user_id = ?", userId).Count(&total).Error
+	err := tokenRealmQuery(DB, realm).Model(&Token{}).Where("user_id = ?", userId).Count(&total).Error
 	return total, err
 }
 
 // BatchDeleteTokens 删除指定用户的一组令牌，返回成功删除数量
-func BatchDeleteTokens(ids []int, userId int) (int, error) {
+func BatchDeleteTokens(ids []int, userId int, realm ...string) (int, error) {
 	if len(ids) == 0 {
 		return 0, errors.New("ids 不能为空！")
 	}
 
 	tx := DB.Begin()
+	if len(realm) > 0 {
+		var owner User
+		if err := lockForUpdate(tx).First(&owner, userId).Error; err != nil {
+			tx.Rollback()
+			return 0, err
+		}
+	}
 
 	var tokens []Token
-	if err := tx.Where("user_id = ? AND id IN (?)", userId, ids).Find(&tokens).Error; err != nil {
+	if err := lockForUpdate(tokenRealmQuery(tx, realm)).Where("user_id = ? AND id IN (?)", userId, ids).Find(&tokens).Error; err != nil {
 		tx.Rollback()
 		return 0, err
 	}
@@ -450,7 +629,7 @@ func BatchDeleteTokens(ids []int, userId int) (int, error) {
 		common.SysLog("failed to invalidate token cache before batch delete: " + err.Error())
 	}
 
-	if err := tx.Where("user_id = ? AND id IN (?)", userId, ids).Delete(&Token{}).Error; err != nil {
+	if err := tokenRealmQuery(tx, realm).Where("user_id = ? AND id IN (?)", userId, ids).Delete(&Token{}).Error; err != nil {
 		tx.Rollback()
 		return 0, err
 	}
@@ -462,9 +641,9 @@ func BatchDeleteTokens(ids []int, userId int) (int, error) {
 	return len(tokens), nil
 }
 
-func GetTokenKeysByIds(ids []int, userId int) ([]Token, error) {
+func GetTokenKeysByIds(ids []int, userId int, realm ...string) ([]Token, error) {
 	var tokens []Token
-	err := DB.Select("id", commonKeyCol).
+	err := tokenRealmQuery(DB, realm).Select("id", commonKeyCol, "auth_realm").
 		Where("user_id = ? AND id IN (?)", userId, ids).
 		Find(&tokens).Error
 	return tokens, err
@@ -504,4 +683,36 @@ func invalidateTokensCache(tokens []Token) error {
 		}
 	}
 	return firstErr
+}
+
+// tokenRealmQuery scopes dashboard credential operations at SQL selection.
+func tokenRealmQuery(db *gorm.DB, realm []string) *gorm.DB {
+	if len(realm) == 0 {
+		return db
+	}
+	if realm[0] == NativeFundingLocalOnly {
+		return db.Where("auth_realm = ?", NativeFundingLocalOnly)
+	}
+	if realm[0] == CentralAuthRealm {
+		return db.Where("auth_realm = ?", CentralAuthRealm)
+	}
+	return db.Where("auth_realm IS NULL OR auth_realm = ?", "")
+}
+
+// Management reads show admitted holds/refunds before the batch projection.
+// This is a display snapshot, never authorization to replace a balance in a
+// metadata mutation; updatePolicy makes that decision under its own row lock.
+func (token *Token) overlayNativeQuotaForRead() error {
+	if token.AuthRealm != NativeFundingLocalOnly {
+		return nil
+	}
+	remain, used, err := NativeTokenQuotaBalance(context.Background(), token.Id, token.QuotaPolicyGeneration)
+	if errors.Is(err, ErrNativeQuotaNotEnrolled) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	token.RemainQuota, token.UsedQuota = remain, used
+	return nil
 }

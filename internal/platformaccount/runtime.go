@@ -13,6 +13,34 @@ import (
 
 func RuntimeEnabled() bool { return os.Getenv("UNIHUB_PRODUCT_RUNTIME_ENABLED") == "true" }
 
+// FinanceEnabled is a separate deployment gate; a runtime identity alone
+// does not authorize access to financial operations.
+func FinanceEnabled() bool {
+	return RuntimeEnabled() && os.Getenv("UNIHUB_PRODUCT_FINANCE_ENABLED") == "true"
+}
+
+func FinanceClient(config Config) (*userkit.ProductFinanceClient, error) {
+	if !FinanceEnabled() {
+		return nil, errors.New("central product finance disabled")
+	}
+	product := os.Getenv("UNIHUB_PRODUCT_ID")
+	if product == "" {
+		product = "llmrouter"
+	}
+	origin := os.Getenv("UNIHUB_PRODUCT_API_ORIGIN")
+	if origin == "" {
+		origin = os.Getenv("UNIHUB_ORIGIN")
+	}
+	instance := os.Getenv("UNIHUB_PRODUCT_INSTANCE_ID")
+	if instance == "" {
+		instance = "default"
+	}
+	if strings.TrimRight(origin, "/") != strings.TrimRight(config.APIOrigin, "/") || product != config.ProductID || instance != config.InstanceID {
+		return nil, errors.New("central product finance scope mismatch")
+	}
+	return userkit.NewProductFinanceClient(userkit.ProductFinanceConfig{BaseURL: origin, ProductID: product, InstanceID: instance, ServiceToken: os.Getenv("UNIHUB_PRODUCT_RUNTIME_TOKEN")})
+}
+
 // RuntimeClient is shared by identity and financial adapters. Product and
 // instance are fixed deployment settings, never selected from request bodies.
 func RuntimeClient() (*userkit.RuntimeClient, error) {

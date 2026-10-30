@@ -27,6 +27,9 @@ var commonFalseVal string
 var logKeyCol string
 var logGroupCol string
 
+// InitDatabaseColumns refreshes SQL dialect quoting after a database binding.
+func InitDatabaseColumns() { initCol() }
+
 func initCol() {
 	// init common column names
 	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
@@ -261,13 +264,23 @@ func migrateDB() error {
 	err := DB.AutoMigrate(
 		&Channel{},
 		&Token{},
+		&NativeTokenQuotaProtocol{},
+		&NativeTokenQuotaState{},
+		&NativeTokenQuotaOperation{},
+		&NativeTokenQuotaSession{},
+		&NativeTokenFundingOperation{},
 		&User{},
 		&UserSession{},
+		&CentralAuthState{},
 		&AuthFlow{},
 		&ExternalIdentityClaim{},
 		&UniHubIdentityMapping{},
 		&UniHubSessionBinding{},
+		&ProductBrokerSessionProof{},
 		&PasskeyCredential{},
+		&NativeLoginCredential{},
+		&CentralLoginCredential{},
+		&CentralSessionCredential{},
 		&Option{},
 		&Redemption{},
 		&Ability{},
@@ -321,7 +334,7 @@ func migrateDB() error {
 		&UpstreamAccountPool{},
 		&UpstreamAccountMember{},
 		&UpstreamAccountState{},
-		&ClientModelRoute{},
+		&KnowledgeActiveBinding{}, &KnowledgeRoutePin{}, &ClientModelRoute{},
 		&ClientModelTarget{},
 	)
 	if err != nil {
@@ -358,13 +371,23 @@ func migrateDBFast() error {
 	}{
 		{&Channel{}, "Channel"},
 		{&Token{}, "Token"},
+		{&NativeTokenQuotaProtocol{}, "NativeTokenQuotaProtocol"},
+		{&NativeTokenQuotaState{}, "NativeTokenQuotaState"},
+		{&NativeTokenQuotaOperation{}, "NativeTokenQuotaOperation"},
+		{&NativeTokenQuotaSession{}, "NativeTokenQuotaSession"},
+		{&NativeTokenFundingOperation{}, "NativeTokenFundingOperation"},
 		{&User{}, "User"},
 		{&UserSession{}, "UserSession"},
+		{&CentralLoginCredential{}, "CentralLoginCredential"},
+		{&CentralSessionCredential{}, "CentralSessionCredential"},
+		{&CentralAuthState{}, "CentralAuthState"},
 		{&AuthFlow{}, "AuthFlow"},
 		{&ExternalIdentityClaim{}, "ExternalIdentityClaim"},
 		{&UniHubIdentityMapping{}, "UniHubIdentityMapping"},
 		{&UniHubSessionBinding{}, "UniHubSessionBinding"},
+		{&ProductBrokerSessionProof{}, "ProductBrokerSessionProof"},
 		{&PasskeyCredential{}, "PasskeyCredential"},
+		{&NativeLoginCredential{}, "NativeLoginCredential"},
 		{&Option{}, "Option"},
 		{&Redemption{}, "Redemption"},
 		{&Ability{}, "Ability"},
@@ -416,6 +439,8 @@ func migrateDBFast() error {
 		{&UpstreamAccountPool{}, "UpstreamAccountPool"},
 		{&UpstreamAccountMember{}, "UpstreamAccountMember"},
 		{&UpstreamAccountState{}, "UpstreamAccountState"},
+		{&KnowledgeActiveBinding{}, "KnowledgeActiveBinding"},
+		{&KnowledgeRoutePin{}, "KnowledgeRoutePin"},
 		{&ClientModelRoute{}, "ClientModelRoute"},
 		{&ClientModelTarget{}, "ClientModelTarget"},
 	}

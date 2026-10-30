@@ -147,11 +147,11 @@ func (s *ProductFundingStore) Import(ctx context.Context, id int, payer, batch s
 	}
 	var a ProductFundingAccount
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var user User
-		if err := lockForUpdate(tx).First(&user, id).Error; err != nil {
+		user, err := lockCentralFundingOwnerTx(tx, id)
+		if err != nil {
 			return err
 		}
-		err := lockForUpdate(tx).First(&a, "user_id = ?", id).Error
+		err = lockForUpdate(tx).First(&a, "user_id = ?", id).Error
 		if err == nil {
 			if a.ScopeDigest == "" || a.ScopeDigest != s.ScopeDigest() || a.AccountID != payer || a.BatchID != batch || a.CutoverEvidence != evidence {
 				return ErrProductFundingConflict
@@ -185,6 +185,9 @@ func (s *ProductFundingStore) Import(ctx context.Context, id int, payer, batch s
 		return ErrProductFundingPending
 	}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if _, err := lockCentralFundingOwnerTx(tx, id); err != nil {
+			return err
+		}
 		var current ProductFundingAccount
 		if err := lockForUpdate(tx).First(&current, "user_id = ?", id).Error; err != nil {
 			return err
@@ -216,12 +219,12 @@ func (s *ProductFundingStore) ActivateZero(ctx context.Context, id int, payer st
 		return ErrProductFundingConflict
 	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var u User
-		if err := lockForUpdate(tx).First(&u, id).Error; err != nil {
+		u, err := lockCentralFundingOwnerTx(tx, id)
+		if err != nil {
 			return err
 		}
 		var a ProductFundingAccount
-		err := tx.First(&a, "user_id = ?", id).Error
+		err = tx.First(&a, "user_id = ?", id).Error
 		if err == nil {
 			if a.ScopeDigest == "" || a.ScopeDigest != s.ScopeDigest() || a.AccountID != payer || a.State != "central" {
 				return ErrProductFundingConflict
@@ -370,12 +373,18 @@ func productTokenDelta(tx *gorm.DB, id, charge int) error {
 }
 
 func productTokenApplyDelta(tx *gorm.DB, id, charge int, postpaid bool) error {
-	if id == 0 || charge == 0 {
+	if id == 0 {
 		return nil
 	}
 	var token Token
 	if err := lockForUpdate(tx).Unscoped().First(&token, id).Error; err != nil {
 		return err
+	}
+	if token.AuthRealm == NativeFundingLocalOnly {
+		return ErrProductFundingConflict
+	}
+	if charge == 0 {
+		return nil
 	}
 	remain, used := int64(token.RemainQuota)-int64(charge), int64(token.UsedQuota)+int64(charge)
 	if (charge > 0 && !postpaid && !token.UnlimitedQuota && token.RemainQuota < charge) || remain < int64(common.MinQuota) || remain > int64(common.MaxQuota) || used < 0 || used > int64(common.MaxQuota) {
@@ -642,25 +651,59 @@ func (s *ProductFundingStore) Recover(ctx context.Context) error {
 }
 
 func ProductFundingState(ctx context.Context, id int) (string, error) {
-	if DB == nil {
+	// Preserve the legacy global facade during process initialization and on
+	// installations where the central funding schema is not enabled.
+	if DB == nil || (!platformaccount.RuntimeEnabled() && !DB.Migrator().HasTable(&ProductFundingAccount{})) {
 		return "local", nil
 	}
-	if !platformaccount.RuntimeEnabled() && !DB.Migrator().HasTable(&ProductFundingAccount{}) {
-		return "local", nil
+	return productFundingStateForDB(ctx, DB, id)
+}
+
+// An owned store must make its funding decision using that same database.
+// Missing owner metadata or SQL errors never authorize a local-wallet fallback.
+func productFundingStateForDB(ctx context.Context, db *gorm.DB, id int) (string, error) {
+	if db == nil {
+		return "", ErrProductFundingPending
 	}
-	var a ProductFundingAccount
-	err := DB.WithContext(ctx).First(&a, "user_id = ?", id).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		var user User
-		if e := DB.WithContext(ctx).Select("id", "product_registration_pending").First(&user, id).Error; e != nil {
-			return "", e
+	hasFundingSchema := platformaccount.RuntimeEnabled()
+	if !hasFundingSchema {
+		// HasTable discards schema-query errors. Only confirmed absence may
+		// select the legacy local payer on an owned database.
+		var query string
+		switch db.Dialector.Name() {
+		case "sqlite":
+			query = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?"
+		case "mysql":
+			query = "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ? AND table_type = 'BASE TABLE'"
+		case "postgres":
+			query = "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = ? AND table_type = 'BASE TABLE'"
+		default:
+			return "", ErrProductFundingPending
 		}
-		if user.ProductRegistrationPending {
-			return "provisioning", nil
+		var count int64
+		if err := db.WithContext(ctx).Raw(query, db.NamingStrategy.TableName("ProductFundingAccount")).Row().Scan(&count); err != nil {
+			return "", err
 		}
-		return "local", nil
+		hasFundingSchema = count > 0
 	}
-	return a.State, err
+	if hasFundingSchema {
+		var account ProductFundingAccount
+		err := db.WithContext(ctx).First(&account, "user_id = ?", id).Error
+		if err == nil {
+			return account.State, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", err
+		}
+	}
+	var user User
+	if err := db.WithContext(ctx).Select("id", "product_registration_pending").First(&user, id).Error; err != nil {
+		return "", err
+	}
+	if user.ProductRegistrationPending {
+		return "provisioning", nil
+	}
+	return "local", nil
 }
 
 func EnsureProductFunding(ctx context.Context, id int) error {
@@ -712,7 +755,14 @@ func RefreshProductBalance(ctx context.Context, user *User) error {
 }
 
 func ProductFundingStoreForUser(ctx context.Context, id int) (*ProductFundingStore, bool, error) {
-	state, err := ProductFundingState(ctx, id)
+	if DB == nil || (!platformaccount.RuntimeEnabled() && !DB.Migrator().HasTable(&ProductFundingAccount{})) {
+		return nil, false, nil
+	}
+	return productFundingStoreForDB(ctx, DB, id)
+}
+
+func productFundingStoreForDB(ctx context.Context, db *gorm.DB, id int) (*ProductFundingStore, bool, error) {
+	state, err := productFundingStateForDB(ctx, db, id)
 	if err != nil {
 		return nil, false, err
 	}
@@ -722,13 +772,17 @@ func ProductFundingStoreForUser(ctx context.Context, id int) (*ProductFundingSto
 	if state != "central" {
 		return nil, true, ErrProductFundingPending
 	}
-	s, err := productFundingStore()
-	return s, true, err
+	client, err := platformaccount.RuntimeClient()
+	if err != nil || client == nil {
+		return nil, true, ErrProductFundingPending
+	}
+	return NewProductFundingStore(db, client), true, nil
 }
 
 // Receipt creation is shared with native/OCR funding adapters and migrations.
 func RegisterProductFundingModels(db *gorm.DB) error {
-	return db.AutoMigrate(&ProductFundingAccount{}, &ProductRuntimeCall{}, &ProductLegacyFundingLease{}, &ProductFundingTopUp{})
+	return db.AutoMigrate(&NativeTokenQuotaProtocol{}, &NativeTokenQuotaState{}, &NativeTokenQuotaOperation{}, &NativeTokenQuotaSession{},
+		&NativeTokenFundingOperation{}, &ProductFundingAccount{}, &ProductRuntimeCall{}, &ProductLegacyFundingLease{}, &ProductFundingTopUp{})
 }
 
 // Explicit table creation is kept separate from account activation. Starting the

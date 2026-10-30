@@ -216,3 +216,184 @@ test('global clear advances anonymous authentication epoch and fences pending lo
   clearAuthentication(false)
   assert.notEqual(getAuthEpoch(), captured)
 })
+
+test('same user SID and authorization version changes invalidate payer, secrets and in-flight work', async () => {
+  const { useAuthStore } = await import('@/stores/auth-store')
+  const { createProductSession } = await import('../session')
+  const sessionView = {
+    sid: 'sid-a',
+    current: true,
+    login_method: 'product_broker',
+    ip: '',
+    user_agent: '',
+    created_at: 1,
+    last_active_at: 1,
+    expires_at: 4_000_000_000,
+  }
+  const user = {
+    id: 42,
+    username: 'member',
+    role: 1,
+    identity_source: 'unihub',
+    unihub_user_id: 'subject-a',
+  }
+  const token = (sv: number, uv: number) =>
+    `e30.${Buffer.from(JSON.stringify({ sv, uv })).toString('base64url')}.signature`
+  const bundle = {
+    access_token: token(1, 1),
+    token_type: 'Bearer',
+    access_expires_at: 4_000_000_000,
+    user,
+    session: sessionView,
+  }
+  useAuthStore.getState().auth.setBundle(bundle)
+  const session = createProductSession({
+    enabled: true,
+    public_origin: 'https://hub.test',
+    client_id: 'c',
+    redirect_uri: 'https://app.test/unihub',
+    product_id: 'llmrouter',
+    models: [],
+  })
+  session.user = { id: 'subject-a', name: 'Member', email: '' }
+  session.csrfToken = 'old-csrf'
+  session.account = 'old-payer'
+  session.intents.set(
+    'old-payer',
+    new FinancialIntent('old-payer', 'recharge', { amount: '1' })
+  )
+  let resolve!: (value: string) => void
+  const pending = session.bound(
+    () =>
+      new Promise<string>((done) => {
+        resolve = done
+      })
+  )
+  useAuthStore
+    .getState()
+    .auth.setBundle({ ...bundle, session: { ...sessionView, sid: 'sid-b' } })
+  resolve('old data')
+  await assert.rejects(pending, /changed/)
+  assert.equal(session.csrfToken, '')
+  assert.equal(session.account, '')
+  assert.equal(session.intents.size, 0)
+  session.user = { id: 'subject-a', name: 'Member', email: '' }
+  session.csrfToken = 'csrf2'
+  useAuthStore.getState().auth.setBundle({
+    ...bundle,
+    session: { ...sessionView, sid: 'sid-b' },
+    access_token: token(2, 1),
+  })
+  assert.equal(session.user, null)
+  assert.equal(session.csrfToken, '')
+  session.user = { id: 'subject-a', name: 'Member', email: '' }
+  useAuthStore.getState().auth.setBundle({
+    ...bundle,
+    session: { ...sessionView, sid: 'sid-b' },
+    access_token: token(2, 2),
+  })
+  assert.equal(session.user, null)
+  useAuthStore.getState().auth.reset()
+})
+
+test('a late revoked response from the previous SID cannot sign out a new session', async () => {
+  const { useAuthStore } = await import('@/stores/auth-store')
+  const { refreshProductAccess } = await import('../session')
+  const expiry = Math.floor(Date.now() / 1000) + 600
+  const user = {
+    id: 42,
+    username: 'member',
+    role: 1,
+    identity_source: 'unihub',
+    unihub_user_id: 'subject-a',
+  }
+  const view = {
+    sid: 'sid-old',
+    current: true,
+    login_method: 'unihub',
+    ip: '',
+    user_agent: '',
+    created_at: 1,
+    last_active_at: 1,
+    expires_at: expiry,
+  }
+  const bundle = {
+    access_token: 'old-token',
+    token_type: 'Bearer',
+    access_expires_at: expiry,
+    user,
+    session: view,
+  }
+  useAuthStore.getState().auth.setBundle(bundle)
+  const originalFetch = globalThis.fetch
+  let finish!: (response: Response) => void
+  globalThis.fetch = () =>
+    new Promise<Response>((resolve) => {
+      finish = resolve
+    })
+  try {
+    const pending = refreshProductAccess()
+    await Promise.resolve()
+    useAuthStore.getState().auth.setBundle({
+      ...bundle,
+      access_token: 'new-token',
+      session: { ...view, sid: 'sid-new' },
+    })
+    finish(new Response('{}', { status: 401 }))
+    await assert.rejects(pending, /changed/)
+    assert.equal(useAuthStore.getState().auth.session?.sid, 'sid-new')
+  } finally {
+    globalThis.fetch = originalFetch
+    useAuthStore.getState().auth.reset()
+  }
+})
+
+test('revoked payer access clears payer resources and pending intents without clearing another session', async () => {
+  const { UniHubError } = await import('../sdk')
+  const session = new ProductSession(
+    new UniHubClient({
+      baseUrl: 'https://hub.test',
+      clientId: 'c',
+      redirectUri: 'https://app.test/unihub',
+    })
+  )
+  session.user = { id: 'subject-a', name: 'Member', email: '' }
+  session.select('payer')
+  session.csrfToken = 'csrf'
+  session.intents.set(
+    'payer',
+    new FinancialIntent('payer', 'recharge', { amount: '1' })
+  )
+  await assert.rejects(
+    session.bound(async () => {
+      throw new UniHubError(403, 'revoked', {})
+    })
+  )
+  assert.equal(session.account, '')
+  assert.equal(session.csrfToken, '')
+  assert.equal(session.intents.size, 0)
+  assert.equal(session.user?.id, 'subject-a')
+})
+
+test('a late forbidden response from a previous payer cannot clear the newly selected payer', async () => {
+  const { UniHubError } = await import('../sdk')
+  const session = new ProductSession(
+    new UniHubClient({
+      baseUrl: 'https://hub.test',
+      clientId: 'c',
+      redirectUri: 'https://app.test/unihub',
+    })
+  )
+  session.select('payer-a')
+  let reject!: (error: Error) => void
+  const pending = session.bound(
+    () =>
+      new Promise<never>((_resolve, failure) => {
+        reject = failure
+      })
+  )
+  session.select('payer-b')
+  reject(new UniHubError(403, 'old-forbidden', {}))
+  await assert.rejects(pending)
+  assert.equal(session.account, 'payer-b')
+})

@@ -106,15 +106,16 @@ func TestUniHubTechnicalUsageReadsLogicalCallsWithoutLocalBilling(t *testing.T) 
 	assert.Contains(t, w.Body.String(), `"username":"other"`)
 }
 
-func TestProductLogReaderRedactsNativeMoneyWithoutChangingNativeAdminReads(t *testing.T) {
+func TestProductLogReaderExcludesNativeHistoryWhileNativeAdminReads(t *testing.T) {
 	f := newUniHubRegressionFixture(t)
 	t.Setenv("NATIVE_PUBLIC_ACCESS", "true")
 	require.NoError(t, f.db.AutoMigrate(&platformbilling.Call{}, &platformbilling.Attempt{}, &model.Log{}, &model.QuotaData{}, &model.Channel{}))
+	require.NoError(t, model.RegisterProductFundingModels(f.db))
 	previousLogDB := model.LOG_DB
 	model.LOG_DB = f.db
 	t.Cleanup(func() { model.LOG_DB = previousLogDB })
 	reader, _ := decodeUniHubBundle(t, f.request("POST", "/api/unihub/session", "product-viewer", nil))
-	native := model.User{Username: "native-payer", Role: common.RoleRootUser, Status: common.UserStatusEnabled, AuthVersion: 1, Quota: 555000}
+	native := model.User{Username: "native-payer", Role: common.RoleRootUser, Status: common.UserStatusEnabled, AuthVersion: 1, Quota: 555000, FundingRealm: model.NativeFundingLocalOnly, FundingRealmEvidence: "reviewed", NativePassword: true}
 	require.NoError(t, f.db.Create(&native).Error)
 	now := time.Now().Unix()
 	log := model.Log{UserId: native.Id, Username: native.Username, CreatedAt: now, Type: model.LogTypeConsume, ModelName: "legacy-private-price", Quota: 123456, PromptTokens: 25, CompletionTokens: 15, Group: "default", RequestId: "native-consumption"}
@@ -125,23 +126,10 @@ func TestProductLogReaderRedactsNativeMoneyWithoutChangingNativeAdminReads(t *te
 	for _, path := range []string{"/api/data/", "/api/data/users", "/api/data/flow", "/api/log/"} {
 		w := f.request("GET", path+query, reader.Data.AccessToken, nil)
 		require.Equal(t, 200, w.Code, w.Body.String())
-		assert.Contains(t, w.Body.String(), `"quota":0`, path)
 		assert.NotContains(t, w.Body.String(), "123456", path)
-		if path == "/api/log/" {
-			var response struct {
-				Data struct {
-					Items []model.Log `json:"items"`
-				} `json:"data"`
-			}
-			require.NoError(t, common.Unmarshal(w.Body.Bytes(), &response))
-			require.Len(t, response.Data.Items, 1)
-			assert.Equal(t, 25, response.Data.Items[0].PromptTokens)
-			var other map[string]any
-			require.NoError(t, common.UnmarshalJsonStr(response.Data.Items[0].Other, &other))
-			assert.Equal(t, false, other["financial_details"])
-		} else {
-			assert.Contains(t, w.Body.String(), `"count":2`, path)
-		}
+		assert.NotContains(t, w.Body.String(), "legacy-private-price", path)
+		assert.NotContains(t, w.Body.String(), "native-consumption", path)
+		assert.NotContains(t, w.Body.String(), "native-payer", path)
 	}
 	var storedLog model.Log
 	var storedData model.QuotaData
@@ -149,7 +137,7 @@ func TestProductLogReaderRedactsNativeMoneyWithoutChangingNativeAdminReads(t *te
 	require.NoError(t, f.db.First(&storedData, data.Id).Error)
 	assert.Equal(t, 123456, storedLog.Quota)
 	assert.Equal(t, 123456, storedData.Quota)
-	bundle, err := service.CreateLoginSession(native.Id, "password", "", "")
+	bundle, err := service.CreateNativeLoginSessionAtAuthVersion(native.Id, 1, "password", "", "")
 	require.NoError(t, err)
 	for _, path := range []string{"/api/data/", "/api/data/users", "/api/data/flow", "/api/log/"} {
 		w := f.request("GET", path+query, bundle.AccessToken, nil)

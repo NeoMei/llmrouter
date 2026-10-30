@@ -149,6 +149,12 @@ func Redeem(key string, userId int) (quota int, err error) {
 	}
 	common.RandomSleep()
 	err = DB.Transaction(func(tx *gorm.DB) error {
+		// Match central activation/import: User -> business receipt -> funding
+		// account. Ownership cannot change between selecting and crediting it.
+		var owner User
+		if err := lockForUpdate(tx).First(&owner, userId).Error; err != nil {
+			return err
+		}
 		err := lockForUpdate(tx).Where(keyCol+" = ?", key).First(redemption).Error
 		if err != nil {
 			return errors.New("无效的兑换码")

@@ -11,8 +11,9 @@ import (
 	"errors"
 	_ "golang.org/x/image/webp"
 	"image"
+	"image/color"
 	_ "image/jpeg"
-	_ "image/png"
+	"image/png"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -94,6 +95,9 @@ func (p ImagePolicy) valid(model, wire string) bool {
 	case "dashscope.images.generate":
 		return p.ChannelType == constant.ChannelTypeAli && p.Origin == "https://dashscope.aliyuncs.com" && p.APIVersion == "v1" && (p.UpstreamModel == "qwen-image-2.0" || p.UpstreamModel == "qwen-image-2.0-pro")
 	case "images.edits.create":
+		if p.ChannelType == constant.ChannelTypeAli {
+			return p.Origin == "https://dashscope.aliyuncs.com" && p.APIVersion == "v1" && p.UpstreamModel == "wanx2.1-imageedit" && p.MaxInputImages == 1 && len(p.ResourceOrigins) > 0
+		}
 		return p.ChannelType == constant.ChannelTypeOpenAI && p.Origin == "https://api.openai.com" && p.APIVersion == "v1"
 	default:
 		if p.ChannelType == constant.ChannelTypeAli {
@@ -170,6 +174,56 @@ func imageData(p ImagePolicy, data string) (ImageOutput, error) {
 	}
 	return imageBytes(p, raw, strings.TrimSuffix(strings.TrimPrefix(prefix, "data:"), ";base64"))
 }
+
+// wanMask converts the OpenAI transparent edit region to DashScope's opaque
+// white edit region. Reject partial transparency rather than changing its area.
+func wanMask(p ImagePolicy, raw []byte) ([]byte, error) {
+	if len(raw) < 26 || !bytes.Equal(raw[:8], []byte("\x89PNG\r\n\x1a\n")) {
+		return nil, ErrInvalid
+	}
+	colorType := raw[25]
+	hasAlpha := colorType == 4 || colorType == 6
+	if colorType == 0 || colorType == 2 || colorType == 3 {
+		for offset := 8; offset+12 <= len(raw); {
+			length := uint64(binary.BigEndian.Uint32(raw[offset : offset+4]))
+			end := uint64(offset) + 12 + length
+			if end > uint64(len(raw)) {
+				return nil, ErrInvalid
+			}
+			if string(raw[offset+4:offset+8]) == "tRNS" {
+				hasAlpha = true
+			}
+			offset = int(end)
+		}
+	}
+	if !hasAlpha {
+		return nil, ErrInvalid
+	}
+	source, err := png.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return nil, ErrInvalid
+	}
+	bounds := source.Bounds()
+	mask := image.NewGray(bounds)
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			_, _, _, alpha := source.At(x, y).RGBA()
+			switch alpha {
+			case 0:
+				mask.SetGray(x, y, color.Gray{Y: 255})
+			case 0xffff:
+				mask.SetGray(x, y, color.Gray{Y: 0})
+			default:
+				return nil, ErrInvalid
+			}
+		}
+	}
+	var encoded bytes.Buffer
+	if png.Encode(&encoded, mask) != nil || encoded.Len() > p.MaxImageBytes {
+		return nil, ErrInvalid
+	}
+	return encoded.Bytes(), nil
+}
 func parseImageOperation(p ImagePolicy, wire WireOperation, ct string, body []byte) (operationRequest, error) {
 	bad := operationRequest{}
 	if !p.valid(p.PublicModel, wire.ID) || int64(len(body)) > p.MaxBodyBytes {
@@ -231,6 +285,14 @@ func parseImageOperation(p ImagePolicy, wire WireOperation, ct string, body []by
 				if e != nil {
 					return bad, e
 				}
+				if p.ChannelType == constant.ChannelTypeAli && name == "mask" {
+					if part.Header.Get("Content-Type") != "image/png" {
+						return bad, ErrInvalid
+					}
+					if _, e = wanMask(p, data); e != nil {
+						return bad, e
+					}
+				}
 				if name == "image" {
 					primary = &fact
 				} else {
@@ -250,7 +312,10 @@ func parseImageOperation(p ImagePolicy, wire WireOperation, ct string, body []by
 				parts = append(parts, partRecord{Name: name, Data: string(data)})
 			}
 		}
-		if primary == nil || p.MaxInputImages < 1 || (mask != nil && (primary.Width != mask.Width || primary.Height != mask.Height)) {
+		if primary == nil || p.MaxInputImages < 1 || (mask != nil && (primary.Width != mask.Width || primary.Height != mask.Height)) || (p.ChannelType == constant.ChannelTypeAli && mask == nil) {
+			return bad, ErrInvalid
+		}
+		if p.ChannelType == constant.ChannelTypeAli && (primary.Width < 512 || primary.Width > 4096 || primary.Height < 512 || primary.Height > 4096) {
 			return bad, ErrInvalid
 		}
 		canonical, e = common.Marshal(parts)
@@ -409,7 +474,9 @@ func parseImageOperation(p ImagePolicy, wire WireOperation, ct string, body []by
 			req = parameters
 		} else {
 			fields := "model prompt n size quality style response_format background output_format output_compression moderation user image mask"
-			if p.ChannelType == constant.ChannelTypeAli {
+			if p.ChannelType == constant.ChannelTypeAli && wire.ID == "images.edits.create" {
+				fields = "model prompt n image mask"
+			} else if p.ChannelType == constant.ChannelTypeAli {
 				fields = "model prompt n size response_format seed watermark prompt_extend stream"
 				text, ok := req["prompt"].(string)
 				if !ok || len(text) > 1300 || req["stream"] == true || !protocolBools(req, "prompt_extend") || !protocolEnum(req, "response_format", "url") {
@@ -509,6 +576,9 @@ func parseImageOperation(p ImagePolicy, wire WireOperation, ct string, body []by
 			return bad, ErrInvalid
 		}
 		if quantity < 1 || quantity > p.MaxImages {
+			return bad, ErrInvalid
+		}
+		if p.ChannelType == constant.ChannelTypeAli && wire.ID == "images.edits.create" && (quantity != 1 || utf8.RuneCountInString(req["prompt"].(string)) > 800) {
 			return bad, ErrInvalid
 		}
 	}
@@ -766,6 +836,96 @@ func ObserveImageResult(p ImagePolicy, raw []byte, fetch func(string) ([]byte, s
 	result.SHA256 = hex.EncodeToString(sum[:])
 	return result, nil
 }
+
+// ObserveWanMaskedEdit accepts only the certified terminal task envelope. The
+// provider task ID is an immutable submission binding, never client input.
+func ObserveWanMaskedEdit(p ImagePolicy, providerTaskID string, raw []byte, fetch func(string) ([]byte, string, error)) (ImageResult, error) {
+	result := ImageResult{}
+	if !p.valid(p.PublicModel, "images.edits.create") || p.ChannelType != constant.ChannelTypeAli || providerTaskID == "" || len(raw) == 0 || int64(len(raw)) > p.MaxBodyBytes || !utf8.Valid(raw) || fetch == nil {
+		return result, ErrInvalid
+	}
+	var envelope map[string]any
+	if common.UnmarshalUnique(raw, &envelope) != nil || !protocolKeys(envelope, "output usage request_id") {
+		return result, ErrInvalid
+	}
+	output, ok := envelope["output"].(map[string]any)
+	if !ok || !protocolKeys(output, "task_id task_status results task_metrics submit_time scheduled_time end_time") || output["task_id"] != providerTaskID || output["task_status"] != "SUCCEEDED" {
+		return result, ErrInvalid
+	}
+	items, ok := output["results"].([]any)
+	if !ok || len(items) < 1 || len(items) > p.MaxImages {
+		return result, ErrInvalid
+	}
+	usage, ok := envelope["usage"].(map[string]any)
+	if !ok || !protocolKeys(usage, "image_count") {
+		return result, ErrInvalid
+	}
+	count, err := confirmedCount(usage["image_count"])
+	if err != nil || count != len(items) {
+		return result, ErrInvalid
+	}
+	if metrics, exists := output["task_metrics"]; exists {
+		m, ok := metrics.(map[string]any)
+		if !ok || !protocolKeys(m, "TOTAL SUCCEEDED FAILED") {
+			return result, ErrInvalid
+		}
+		total, e1 := confirmedCount(m["TOTAL"])
+		succeeded, e2 := confirmedCount(m["SUCCEEDED"])
+		failed, e3 := confirmedCount(m["FAILED"])
+		if e1 != nil || e2 != nil || e3 != nil || total != count || succeeded != count || failed != 0 {
+			return result, ErrInvalid
+		}
+	}
+	data := make([]any, 0, len(items))
+	seen := map[string]bool{}
+	for _, item := range items {
+		part, ok := item.(map[string]any)
+		if !ok || !protocolKeys(part, "url") {
+			return result, ErrInvalid
+		}
+		location, ok := part["url"].(string)
+		if !ok {
+			return result, ErrInvalid
+		}
+		u, e := url.Parse(location)
+		allowed := false
+		for _, origin := range p.ResourceOrigins {
+			allowed = allowed || (e == nil && u.Scheme+"://"+u.Host == origin)
+		}
+		if !allowed || u.User != nil || u.Fragment != "" {
+			return result, ErrInvalid
+		}
+		bytes, mimeType, e := fetch(location)
+		if e != nil {
+			return result, e
+		}
+		fact, e := imageBytes(p, bytes, mimeType)
+		if e != nil || seen[fact.SHA256] {
+			return result, ErrInvalid
+		}
+		seen[fact.SHA256] = true
+		result.Outputs = append(result.Outputs, fact)
+		data = append(data, map[string]any{"b64_json": base64.StdEncoding.EncodeToString(bytes)})
+	}
+	result.Body, err = common.Marshal(map[string]any{"data": data})
+	if err != nil || int64(len(result.Body)) > p.MaxBodyBytes {
+		return ImageResult{}, ErrInvalid
+	}
+	result.Usage, err = common.Marshal(usage)
+	if err != nil {
+		return ImageResult{}, ErrInvalid
+	}
+	evidence, err := common.Marshal(struct {
+		Usage   json.RawMessage
+		Outputs []ImageOutput
+	}{result.Usage, result.Outputs})
+	if err != nil {
+		return ImageResult{}, ErrInvalid
+	}
+	sum := sha256.Sum256(evidence)
+	result.SHA256 = hex.EncodeToString(sum[:])
+	return result, nil
+}
 func (a *Adapter) ImagePolicy(model, wire string) (ImagePolicy, bool) {
 	p, ok := a.config.ImagePolicies[wire][model]
 	return p, ok && p.valid(model, wire)
@@ -809,6 +969,39 @@ func (s *Session) ImageBody() (body []byte, ct, path string, err error) {
 		var parts []struct{ Name, Filename, MIME, Data string }
 		if common.UnmarshalUnique(s.canonical, &parts) != nil {
 			return nil, "", "", ErrInvalid
+		}
+		if p.ChannelType == constant.ChannelTypeAli {
+			input := map[string]any{"function": "description_edit_with_mask"}
+			parameters := map[string]any{"n": 1}
+			for _, part := range parts {
+				switch part.Name {
+				case "prompt":
+					input["prompt"] = part.Data
+				case "image":
+					input["base_image_url"] = "data:" + part.MIME + ";base64," + part.Data
+				case "mask":
+					raw, err := base64.StdEncoding.Strict().DecodeString(part.Data)
+					if err != nil {
+						return nil, "", "", ErrInvalid
+					}
+					mask, err := wanMask(p, raw)
+					if err != nil {
+						return nil, "", "", err
+					}
+					input["mask_image_url"] = "data:image/png;base64," + base64.StdEncoding.EncodeToString(mask)
+				case "n":
+					n, err := strconv.Atoi(part.Data)
+					if err != nil {
+						return nil, "", "", ErrInvalid
+					}
+					parameters["n"] = n
+				}
+			}
+			body, e = common.Marshal(map[string]any{"model": p.UpstreamModel, "input": input, "parameters": parameters})
+			if e != nil || int64(len(body)) > p.MaxBodyBytes {
+				return nil, "", "", ErrInvalid
+			}
+			return body, "application/json", "/api/v1/services/aigc/image2image/image-synthesis", nil
 		}
 		var b bytes.Buffer
 		w := multipart.NewWriter(&b)
@@ -894,13 +1087,15 @@ func (s *Session) ObserveImages(ctx context.Context, r ImageResult) error {
 	expectedMIME := ""
 	var original map[string]any
 	if p.WireOperation == "images.edits.create" {
-		var parts []struct{ Name, Filename, MIME, Data string }
-		if common.UnmarshalUnique(s.canonical, &parts) != nil {
-			return ErrInvalid
-		}
-		for _, part := range parts {
-			if part.Name == "output_format" {
-				expectedMIME = "image/" + part.Data
+		if p.ChannelType != constant.ChannelTypeAli {
+			var parts []struct{ Name, Filename, MIME, Data string }
+			if common.UnmarshalUnique(s.canonical, &parts) != nil {
+				return ErrInvalid
+			}
+			for _, part := range parts {
+				if part.Name == "output_format" {
+					expectedMIME = "image/" + part.Data
+				}
 			}
 		}
 	} else {
@@ -966,9 +1161,140 @@ func (s *Session) ObserveImages(ctx context.Context, r ImageResult) error {
 		return saved.Error
 	}
 	if saved.RowsAffected != 1 {
-		return ErrConflict
+		var existing Call
+		if err := s.adapter.db.WithContext(ctx).First(&existing, "call_id = ?", s.call.CallID).Error; err != nil {
+			return ErrConflict
+		}
+		if existing.ImageObservation != string(observation) {
+			if p.ChannelType == constant.ChannelTypeAli && p.WireOperation == "images.edits.create" && existing.ImageObservation != "" {
+				if err := s.adapter.db.WithContext(ctx).Model(&Call{}).Where("call_id = ? AND image_observation = ?", existing.CallID, existing.ImageObservation).Update("evidence_conflict", true).Error; err != nil {
+					return err
+				}
+			}
+			return ErrConflict
+		}
 	}
 	return s.ObserveMetering(ctx, u)
+}
+
+// WanImageTask verifies ownership before exposing the provider binding or any
+// saved result. The current channel must still match the frozen certificate.
+func (a *Adapter) WanImageTask(ctx context.Context, credential, taskID, callID string) (Call, ImagePolicy, error) {
+	row, err := a.Task(ctx, credential, taskID, callID)
+	if err != nil || row.Operation != "image_edit" || row.WireOperation != "images.edits.create" || row.ProviderTaskID == "" {
+		return Call{}, ImagePolicy{}, ErrInvalid
+	}
+	s := &Session{adapter: a, call: row}
+	p, err := s.ImagePolicy()
+	if err != nil || p.ChannelType != constant.ChannelTypeAli || p.UpstreamModel != "wanx2.1-imageedit" {
+		return Call{}, ImagePolicy{}, ErrInvalid
+	}
+	var attempt Attempt
+	if err := a.db.WithContext(ctx).Where("call_id = ?", callID).Order("id DESC").First(&attempt).Error; err != nil || attempt.ChannelID != p.ChannelID {
+		return Call{}, ImagePolicy{}, ErrInvalid
+	}
+	return row, p, nil
+}
+
+// WanImageTaskForRecovery is service-only: the worker may poll only an
+// existing, frozen provider binding and must never resubmit a paid request.
+func (a *Adapter) WanImageTaskForRecovery(ctx context.Context, callID string) (Call, ImagePolicy, error) {
+	if !a.Enabled() || !stableID.MatchString(callID) {
+		return Call{}, ImagePolicy{}, ErrInvalid
+	}
+	var row Call
+	if err := a.db.WithContext(ctx).First(&row, "call_id = ?", callID).Error; err != nil {
+		return Call{}, ImagePolicy{}, ErrInvalid
+	}
+	instance := row.InstanceID
+	if instance == "" {
+		instance = "default"
+	}
+	if instance != a.config.InstanceID || row.EvidenceConflict || row.Operation != "image_edit" || row.WireOperation != "images.edits.create" || row.ProviderTaskID == "" || (row.Status != "UNKNOWN" && !(row.Status == "SETTLE_PENDING" && row.ImageObservation != "")) {
+		return Call{}, ImagePolicy{}, ErrInvalid
+	}
+	p, err := (&Session{adapter: a, call: row}).ImagePolicy()
+	if err != nil || p.ChannelType != constant.ChannelTypeAli || p.UpstreamModel != "wanx2.1-imageedit" {
+		return Call{}, ImagePolicy{}, ErrInvalid
+	}
+	var attempt Attempt
+	if err = a.db.WithContext(ctx).Where("call_id = ?", callID).Order("id DESC").First(&attempt).Error; err != nil || attempt.ChannelID != p.ChannelID || attempt.Status != "DISPATCHED" {
+		return Call{}, ImagePolicy{}, ErrInvalid
+	}
+	return row, p, nil
+}
+
+func (a *Adapter) CompleteWanImage(ctx context.Context, row Call, result ImageResult) error {
+	var current Call
+	if err := a.db.WithContext(ctx).First(&current, "call_id = ? AND provider_task_id = ? AND digest = ?", row.CallID, row.ProviderTaskID, row.Digest).Error; err != nil {
+		return ErrInvalid
+	}
+	s := &Session{adapter: a, call: current}
+	if err := s.ObserveImages(ctx, result); err != nil {
+		return err
+	}
+	if err := s.Finish(ctx); err != nil {
+		return err
+	}
+	if err := a.db.WithContext(ctx).First(&current, "call_id = ?", row.CallID).Error; err != nil {
+		return err
+	}
+	if current.EvidenceConflict {
+		return ErrConflict
+	}
+	if current.Status != "SETTLED" {
+		return ErrPending
+	}
+	return nil
+}
+
+// ReleaseWanImage fences a no-output terminal against a concurrently saved
+// image observation before writing the durable refund intent.
+func (a *Adapter) ReleaseWanImage(ctx context.Context, row Call) error {
+	var current Call
+	if err := a.db.WithContext(ctx).First(&current, "call_id = ? AND provider_task_id = ? AND digest = ?", row.CallID, row.ProviderTaskID, row.Digest).Error; err != nil {
+		return ErrInvalid
+	}
+	if current.Status == "RELEASED" {
+		return nil
+	}
+	if current.Status == "RELEASE_PENDING" {
+		return a.deliver(ctx, current)
+	}
+	intent, err := common.Marshal(map[string]string{"reason": "provider_confirmed_no_output"})
+	if err != nil {
+		return err
+	}
+	saved := a.db.WithContext(ctx).Model(&Call{}).Where("call_id = ? AND provider_task_id = ? AND digest = ? AND status = ? AND evidence = ? AND evidence_conflict = ? AND image_observation = ?", row.CallID, row.ProviderTaskID, row.Digest, "UNKNOWN", "", false, "").Updates(map[string]any{"status": "RELEASE_PENDING", "intent": string(intent)})
+	if saved.Error != nil {
+		return saved.Error
+	}
+	if saved.RowsAffected != 1 {
+		return ErrConflict
+	}
+	current.Status = "RELEASE_PENDING"
+	current.Intent = string(intent)
+	return a.deliver(ctx, current)
+}
+
+func (a *Adapter) RecoverWanImage(ctx context.Context, row Call) ([]byte, error) {
+	if row.ImageObservation == "" {
+		return nil, ErrPending
+	}
+	var observation struct {
+		Usage        json.RawMessage
+		Outputs      []ImageOutput
+		SHA256       string
+		NativeResult json.RawMessage
+	}
+	if common.UnmarshalUnique([]byte(row.ImageObservation), &observation) != nil || len(observation.NativeResult) == 0 || len(observation.Outputs) == 0 {
+		return nil, ErrInvalid
+	}
+	result := ImageResult{Usage: observation.Usage, Outputs: observation.Outputs, SHA256: observation.SHA256, Body: observation.NativeResult}
+	if err := a.CompleteWanImage(ctx, row, result); err != nil {
+		return nil, err
+	}
+	return result.Body, nil
 }
 func (a *Adapter) ImageReplay(ctx context.Context, credential, task, id string, wire WireOperation, ct string, body []byte) (bool, error) {
 	if !a.Enabled() || !IsImageWire(wire.ID) || !stableID.MatchString(id) || !stableID.MatchString(task) || !IsModelCredential(credential) {

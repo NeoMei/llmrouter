@@ -844,7 +844,7 @@ func SearchAllTopUps(keyword string, pageInfo *common.PageInfo) (topups []*TopUp
 }
 
 // ManualCompleteTopUp 管理员手动完成订单并给用户充值
-func ManualCompleteTopUp(tradeNo string, callerIp string) error {
+func ManualCompleteTopUp(tradeNo string, callerIp string, realm ...string) error {
 	if tradeNo == "" {
 		return errors.New("未提供订单号")
 	}
@@ -864,6 +864,10 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 		// 行级锁，避免并发补单
 		if err := lockForUpdate(tx).Where(refCol+" = ?", tradeNo).First(topUp).Error; err != nil {
 			return errors.New("充值订单不存在")
+		}
+
+		if err := lockFundingManagementOwnerTx(tx, topUp.UserId, realm); err != nil {
+			return err
 		}
 
 		// 幂等处理：已成功直接返回

@@ -46,7 +46,7 @@ type frozenVideo struct {
 func (p VideoPolicy) valid(model, wire string) bool {
 	hash, err := hex.DecodeString(p.ChannelKeySHA256)
 	origin, originErr := url.Parse(p.Origin)
-	if err != nil || len(hash) != 32 || p.Version != "video_v1" || p.PublicModel != model || !protocolString(model) || p.WireOperation != wire || p.ChannelID < 1 || p.UpstreamModel == "" || originErr != nil || origin.Scheme != "https" || origin.Host == "" || origin.Path != "" || origin.RawQuery != "" || origin.User != nil || origin.Fragment != "" || p.MaxSeconds < 1 || p.MaxSeconds > 300 || p.MaxVideoBytes < 1 || p.MaxVideoBytes > 64<<20 || len(p.RateIDs) == 0 {
+	if err != nil || len(hash) != 32 || (p.Version != "video_v1" && p.Version != "video_v2") || p.PublicModel != model || !protocolString(model) || p.WireOperation != wire || p.ChannelID < 1 || p.UpstreamModel == "" || originErr != nil || origin.Scheme != "https" || origin.Host == "" || origin.Path != "" || origin.RawQuery != "" || origin.User != nil || origin.Fragment != "" || p.MaxSeconds < 1 || p.MaxSeconds > 300 || p.MaxVideoBytes < 1 || p.MaxVideoBytes > 64<<20 || len(p.RateIDs) == 0 {
 		return false
 	}
 	for asset, rate := range p.RateIDs {
@@ -68,7 +68,14 @@ func (p VideoPolicy) valid(model, wire string) bool {
 			return false
 		}
 	}
-	return wire == "videos.create" && p.ChannelType == constant.ChannelTypeAli && p.UpstreamModel == "wan2.6-t2v" && p.Origin == "https://dashscope.aliyuncs.com" && p.APIVersion == "dashscope-video-v1" && p.UsagePolicy == "ali_wan26_t2v_billable_duration_v1" && slices.Equal(p.Resolutions, []string{"720P", "1080P"})
+	commonTarget := wire == "videos.create" && p.ChannelType == constant.ChannelTypeAli && p.UpstreamModel == "wan2.6-t2v" && p.Origin == "https://dashscope.aliyuncs.com" && p.APIVersion == "dashscope-video-v1" && slices.Equal(p.Resolutions, []string{"720P", "1080P"})
+	if !commonTarget {
+		return false
+	}
+	if p.Version == "video_v1" && p.UsagePolicy == "ali_wan26_t2v_billable_duration_v1" {
+		return true
+	} // immutable historical snapshots
+	return p.Version == "video_v2" && p.PublicModel == "wan2.6-t2v" && p.UsagePolicy == "ali_wan26_t2v_cny6_v2" && len(p.RateIDs) == 1 && p.RateIDs["CNY/6"] != "" && p.MaxSeconds <= 15
 }
 
 func wanVideoResolution(size string) (resolution, measurementKey string, ok bool) {
@@ -115,7 +122,7 @@ func parseVideoOperation(p VideoPolicy, contentType string, body []byte) (operat
 		secondsValue = json.Number(text)
 	}
 	seconds, err := confirmedCount(secondsValue)
-	if err != nil || seconds < 1 || seconds > p.MaxSeconds {
+	if err != nil || seconds < 1 || seconds > p.MaxSeconds || (p.Version == "video_v2" && seconds < 2) {
 		return result, ErrInvalid
 	}
 	canonical, err := common.Marshal(request)
@@ -131,15 +138,15 @@ func parseVideoOperation(p VideoPolicy, contentType string, body []byte) (operat
 }
 
 func validWanVideoPrice(price metering.Price) bool {
-	if price.Version != "metered_v2" || price.Operation != "video" || price.Policy != "ali_wan26_t2v_billable_duration_v1" || len(price.Terms) != 2 || metering.ValidatePrice(price) != nil {
+	if price.Version != "metered_v2" || price.Operation != "video" || !metering.WanCashTierPolicy(price.Policy) || len(price.Terms) != 2 || metering.ValidatePrice(price) != nil {
 		return false
 	}
 	expected := map[string]metering.Rational{
-		"video_720p":  {Numerator: "3", Denominator: "5"},
-		"video_1080p": {Numerator: "1", Denominator: "1"},
+		"video_720p":  {Numerator: "600000", Denominator: "1"},
+		"video_1080p": {Numerator: "1000000", Denominator: "1"},
 	}
 	for _, term := range price.Terms {
-		if term.Unit != "video_second" || expected[term.Key] != term.Price {
+		if term.Unit != "video_second" || expected[term.Key] != term.Price || term.Step != nil || term.Minimum != nil {
 			return false
 		}
 	}

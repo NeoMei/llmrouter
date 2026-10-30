@@ -103,14 +103,13 @@ func getImageBase64sFromForm(c *gin.Context, fieldName string) ([]string, error)
 	var imageFiles []*multipart.FileHeader
 	var exists bool
 
-	// First check for standard "image" field
-	if imageFiles, exists = mf.File["image"]; !exists || len(imageFiles) == 0 {
-		// If not found, check for "image[]" field
-		if imageFiles, exists = mf.File["image[]"]; !exists || len(imageFiles) == 0 {
-			// If still not found, iterate through all fields to find any that start with "image["
+	// Accept the requested field in either normal or array notation.
+	if imageFiles, exists = mf.File[fieldName]; !exists || len(imageFiles) == 0 {
+		if imageFiles, exists = mf.File[fieldName+"[]"]; !exists || len(imageFiles) == 0 {
+			// If still not found, iterate through indexed fields for this name.
 			foundArrayImages := false
-			for fieldName, files := range mf.File {
-				if strings.HasPrefix(fieldName, "image[") && len(files) > 0 {
+			for name, files := range mf.File {
+				if strings.HasPrefix(name, fieldName+"[") && len(files) > 0 {
 					foundArrayImages = true
 					imageFiles = append(imageFiles, files...)
 				}

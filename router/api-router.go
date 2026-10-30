@@ -72,6 +72,7 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			userRoute.POST("/auth/refresh", middleware.SessionCookieOriginGuard(), middleware.AuthRefreshRateLimit(), middleware.DisableCache(), controller.RefreshAuth)
 			userRoute.POST("/auth/logout", middleware.SessionCookieOriginGuard(), middleware.AuthLogoutRateLimit(), middleware.DisableCache(), controller.AuthLogout)
+			userRoute.GET("/auth/session-options", middleware.SessionOptionsOriginGuard(), middleware.AuthRefreshRateLimit(), middleware.DisableCache(), controller.SessionOptions)
 			userRoute.POST("/register", middleware.NativePublicBoundary(), middleware.CriticalRateLimit(), anonymousRequestBodyLimit, middleware.TurnstileCheck(), controller.Register)
 			userRoute.POST("/login", middleware.NativePublicBoundary(), middleware.CriticalRateLimit(), middleware.DisableCache(), anonymousRequestBodyLimit, middleware.TurnstileCheck(), controller.Login)
 			userRoute.POST("/login/2fa", middleware.NativePublicBoundary(), middleware.CriticalRateLimit(), middleware.DisableCache(), anonymousRequestBodyLimit, controller.Verify2FALogin)
@@ -96,6 +97,7 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.PUT("/self", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.UpdateSelf)
 				selfRoute.DELETE("/self", controller.DeleteSelf)
 				nativeSelfRoute.GET("/token", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit("access-token"), middleware.DisableCache(), controller.GenerateAccessToken)
+				nativeSelfRoute.DELETE("/token", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit("access-token"), middleware.DisableCache(), controller.RevokeAccessToken)
 				selfRoute.POST("/chat-credential", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.CreateChatCredential)
 				selfRoute.GET("/passkey", controller.PasskeyStatus)
 				selfRoute.POST("/passkey/register/begin", middleware.DisableCache(), controller.PasskeyRegisterBegin)

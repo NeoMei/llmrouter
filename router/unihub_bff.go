@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -28,7 +29,7 @@ var uniHubBFFRoutes = []struct {
 }{
 	{"GET", regexp.MustCompile(`^/v1/(me|accounts|capabilities|invitations|products|catalog|billing-presets)$`)},
 	{"POST", regexp.MustCompile(`^/v1/accounts$`)},
-	{"GET", regexp.MustCompile(`^/v1/products/[A-Za-z0-9_-]+/billing-profile$`)},
+	{"GET", regexp.MustCompile(`^/v1/products/[A-Za-z0-9_-]+/(billing-profile|model-consistency)$`)},
 	{"POST", regexp.MustCompile(`^/v1/invitations/[A-Za-z0-9_-]+/accept$`)},
 	{"GET", regexp.MustCompile(`^/v1/accounts/[A-Za-z0-9_-]+/(members|invitations|subscriptions|wallets|recharges|operations|orders|settings|resources|calls|usage/summary|model-pool/calls|model-pool/usage/summary)$`)},
 	{"GET", regexp.MustCompile(`^/v1/accounts/[A-Za-z0-9_-]+/(api-keys|usage-budget)$`)},
@@ -69,21 +70,92 @@ func registerUniHubBFF(r *gin.Engine, config platformaccount.Config) {
 		}
 		userData := controller.CurrentProductUserData(c, user)
 		userData["permissions"] = gin.H{"admin_permissions": authz.RequestCapabilities(c)}
-		c.JSON(200, gin.H{"user": userData, "access": p.Access, "permissions": gin.H{"admin_permissions": authz.RequestCapabilities(c)}, "csrf_token": uniHubCSRF(identity.SessionID)})
+		financeAccess := gin.H{"available": false}
+		current, _, e := service.ValidateLoginSession(identity)
+		if e == nil && current.LoginMethod == "unihub" && config.Enabled {
+			oidc, _, resolveErr := service.ResolveUniHubSession(c.Request.Context(), identity)
+			if resolveErr == nil && oidc.Access.ExpiresAt > time.Now().Unix() && oidc.Access.Subject == p.Access.Subject && oidc.Access.Issuer == p.Access.Issuer && oidc.Access.ProductID == p.Access.ProductID && oidc.Access.InstanceID == p.Access.InstanceID {
+				financeAccess = gin.H{"available": true, "transport": "oidc", "central_user_id": oidc.Access.Subject, "expires_at": min(oidc.Access.ExpiresAt, p.Access.ExpiresAt, current.ExpiresAt)}
+			}
+		} else if e == nil && platformaccount.FinanceEnabled() {
+			proof, proofErr := runtimeFinanceActor(c.Request.Context(), identity, p, config)
+			client, clientErr := platformaccount.FinanceClient(config)
+			if proofErr == nil && clientErr == nil {
+				expires := min(proof.ActorExpiresAt, proof.Access.ExpiresAt, p.Access.ExpiresAt, current.ExpiresAt)
+				if current.LoginMethod == "product_broker" {
+					bound, _, sourceErr := model.OpenBrokerSourceProof(identity.SessionID, identity.UserID, p.Access.Subject, config)
+					if sourceErr != nil {
+						proofErr = sourceErr
+					} else {
+						expires = min(expires, bound.ExpiresAt)
+					}
+				}
+				if proofErr == nil {
+					result, readErr := client.Do(c.Request.Context(), http.MethodGet, "/me", nil, proof.ActorToken, nil, "")
+					var central struct {
+						ID string `json:"id"`
+					}
+					_, _, sessionErr := service.ValidateLoginSession(identity)
+					if readErr == nil && result.StatusCode == http.StatusOK && common.UnmarshalUnique(result.Body, &central) == nil && central.ID == p.Access.Subject && expires > time.Now().Unix() && sessionErr == nil {
+						financeAccess = gin.H{"available": true, "transport": "runtime_actor", "central_user_id": central.ID, "expires_at": expires}
+						// Read readiness does not imply write authority: the center reports
+						// current service capability separately from registered client scopes.
+						capsResult, capsErr := client.Do(c.Request.Context(), http.MethodGet, "/capabilities", nil, proof.ActorToken, nil, "")
+						var caps struct {
+							Kind         string   `json:"kind"`
+							ProductID    string   `json:"product_id"`
+							InstanceID   string   `json:"instance_id"`
+							ClientID     string   `json:"client_id"`
+							FinanceWrite bool     `json:"finance_write"`
+							Scopes       []string `json:"scopes"`
+						}
+						writeScopes := []string{}
+						if capsErr == nil && capsResult.StatusCode == http.StatusOK && common.UnmarshalUnique(capsResult.Body, &caps) == nil && caps.Kind == "product" && caps.ProductID == config.ProductID && caps.InstanceID == config.InstanceID && caps.ClientID != "" && caps.FinanceWrite {
+							for _, scope := range caps.Scopes {
+								if scope == "model-credentials:write" || scope == "settings:write" || scope == "recharges:write" {
+									writeScopes = append(writeScopes, scope)
+								}
+							}
+						}
+						financeAccess["write_scopes"] = writeScopes
+					}
+				}
+			}
+		}
+		if _, _, err := service.ValidateLoginSession(identity); err != nil || p.Access.ExpiresAt <= time.Now().Unix() {
+			c.Status(http.StatusUnauthorized)
+			return
+		}
+		if err := service.VerifyBrokerSource(c.Request.Context(), identity); err != nil {
+			if errors.Is(err, service.ErrLoginSessionRevoked) {
+				c.Status(http.StatusUnauthorized)
+			} else {
+				c.Status(http.StatusServiceUnavailable)
+			}
+			return
+		}
+		if expires, ok := financeAccess["expires_at"].(int64); ok && expires <= time.Now().Unix() {
+			financeAccess = gin.H{"available": false}
+		}
+		c.JSON(200, gin.H{"user": userData, "access": p.Access, "permissions": gin.H{"admin_permissions": authz.RequestCapabilities(c)}, "csrf_token": uniHubCSRF(identity.SessionID), "finance_access": financeAccess})
 	})
 	r.Any("/api/unihub/bff/*path", middleware.UserAuth(), func(c *gin.Context) {
 		c.Header("Cache-Control", "no-store")
 		identity, ok := middleware.GetSessionAuthIdentity(c)
-		if !config.Enabled || !ok {
+		if !ok {
 			c.Status(401)
 			return
 		}
 		// Reject ambiguity rather than selecting a convenient header value.
-		for _, h := range []string{"Authorization", "Content-Type", "Idempotency-Key", "Origin", "X-UniHub-CSRF"} {
+		for _, h := range []string{"Authorization", "Content-Type", "Idempotency-Key", "Origin", "X-UniHub-CSRF", "X-UniHub-Actor-Authorization"} {
 			if len(c.Request.Header.Values(h)) > 1 {
 				c.Status(400)
 				return
 			}
+		}
+		if len(c.Request.Header.Values("X-UniHub-Actor-Authorization")) != 0 {
+			c.Status(403)
+			return
 		}
 		path := c.Param("path")
 		allowed := false
@@ -109,16 +181,69 @@ func registerUniHubBFF(r *gin.Engine, config platformaccount.Config) {
 				return
 			}
 		}
-		// Authority is resolved again immediately before forwarding. A product block
-		// stops account/finance proxy calls as well as native management.
-		_, bearer, e := service.ResolveUniHubSession(c.Request.Context(), identity)
-		if e != nil {
-			c.Status(401)
-			return
-		}
 		body, e := io.ReadAll(io.LimitReader(c.Request.Body, (1<<20)+1))
 		if e != nil || len(body) > 1<<20 {
 			c.Status(413)
+			return
+		}
+		session, _, e := service.ValidateLoginSession(identity)
+		if e != nil {
+			c.Status(http.StatusUnauthorized)
+			return
+		}
+		if session.LoginMethod != "unihub" {
+			if !platformaccount.FinanceEnabled() || !runtimeFinanceRoute(c.Request.Method, path) {
+				c.Status(http.StatusForbidden)
+				return
+			}
+			principal, present := authz.ProductPrincipal(c)
+			if !present {
+				c.Status(http.StatusUnauthorized)
+				return
+			}
+			proof, proofErr := runtimeFinanceActor(c.Request.Context(), identity, principal, config)
+			client, clientErr := platformaccount.FinanceClient(config)
+			if proofErr != nil || clientErr != nil {
+				c.Status(http.StatusServiceUnavailable)
+				return
+			}
+			query, queryErr := url.ParseQuery(c.Request.URL.RawQuery)
+			if queryErr != nil {
+				c.Status(http.StatusBadRequest)
+				return
+			}
+			result, sendErr := client.Do(c.Request.Context(), c.Request.Method, strings.TrimPrefix(path, "/v1"), query, proof.ActorToken, body, c.GetHeader("Idempotency-Key"))
+			if sendErr != nil {
+				c.Status(http.StatusBadGateway)
+				return
+			}
+			_, _, sessionErr := service.ValidateLoginSession(identity)
+			sourceErr := service.VerifyBrokerSource(c.Request.Context(), identity)
+			if sessionErr != nil || sourceErr != nil || proof.ActorExpiresAt <= time.Now().Unix() || proof.Access.ExpiresAt <= time.Now().Unix() || model.VerifyUniHubIdentityBinding(identity.UserID, proof.Access.Issuer, proof.Access.Subject) != nil {
+				if c.Request.Method == http.MethodGet {
+					if sourceErr != nil && !errors.Is(sourceErr, service.ErrLoginSessionRevoked) {
+						c.Status(http.StatusServiceUnavailable)
+					} else {
+						c.Status(http.StatusUnauthorized)
+					}
+				} else {
+					// The central operation may already have committed. Never claim
+					// it failed or expose a secret after the session was revoked.
+					c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "finance_result_unavailable"})
+				}
+				return
+			}
+			c.Data(result.StatusCode, "application/json", result.Body)
+			return
+		}
+		if !config.Enabled {
+			c.Status(http.StatusUnauthorized)
+			return
+		}
+		// OIDC sessions retain the original user-bearer authorization lane.
+		_, bearer, e := service.ResolveUniHubSession(c.Request.Context(), identity)
+		if e != nil {
+			c.Status(http.StatusUnauthorized)
 			return
 		}
 		target := config.APIOrigin + path

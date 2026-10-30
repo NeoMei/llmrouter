@@ -151,7 +151,10 @@ function ScopedApiKeysPanel(props: PanelProps) {
   const currentModeAllowed =
     !!mode && !!profile.data?.usage.funding_modes.includes(mode as FundingMode)
   const canCreate =
-    props.session.canWrite &&
+    props.session.canFinanceWrite(
+      'model-credentials:write',
+      props.account.id
+    ) &&
     profileReady &&
     resourcesReady &&
     keysReady &&
@@ -215,7 +218,16 @@ function ScopedApiKeysPanel(props: PanelProps) {
     }
   }
   async function revoke(id: string) {
-    if (busy || !keysReady || !props.session.canWrite) return
+    if (
+      busy ||
+      !keysReady ||
+      !props.session.canFinanceWrite(
+        'model-credentials:write',
+        props.account.id
+      )
+    ) {
+      return
+    }
     setBusy(true)
     setError('')
     setSecret('')
@@ -239,7 +251,7 @@ function ScopedApiKeysPanel(props: PanelProps) {
   async function saveBudget(total: string, perCall: string) {
     if (
       busy ||
-      !props.session.canWrite ||
+      !props.session.canFinanceWrite('settings:write', props.account.id) ||
       !budgetReady ||
       !profileReady ||
       !resourcesReady ||
@@ -479,7 +491,11 @@ function ScopedApiKeysPanel(props: PanelProps) {
                         : t('Never')}
                     </td>
                     <td>
-                      {!key.revoked_at && props.session.canWrite ? (
+                      {!key.revoked_at &&
+                      props.session.canFinanceWrite(
+                        'model-credentials:write',
+                        props.account.id
+                      ) ? (
                         <Button
                           variant='outline'
                           disabled={busy}
@@ -516,7 +532,10 @@ function ScopedApiKeysPanel(props: PanelProps) {
               {t('Reserved')}:{' '}
               {exactAmount(budget.data.held, budget.data.asset)}
             </p>
-            {props.session.canWrite ? (
+            {props.session.canFinanceWrite(
+              'settings:write',
+              props.account.id
+            ) ? (
               <BudgetForm
                 key={`${mode}:${budget.data.version}`}
                 budget={budget.data}

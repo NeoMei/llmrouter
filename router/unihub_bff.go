@@ -98,6 +98,26 @@ func registerUniHubBFF(r *gin.Engine, config platformaccount.Config) {
 					_, _, sessionErr := service.ValidateLoginSession(identity)
 					if readErr == nil && result.StatusCode == http.StatusOK && common.UnmarshalUnique(result.Body, &central) == nil && central.ID == p.Access.Subject && expires > time.Now().Unix() && sessionErr == nil {
 						financeAccess = gin.H{"available": true, "transport": "runtime_actor", "central_user_id": central.ID, "expires_at": expires}
+						// Read readiness does not imply write authority: the center reports
+						// current service capability separately from registered client scopes.
+						capsResult, capsErr := client.Do(c.Request.Context(), http.MethodGet, "/capabilities", nil, proof.ActorToken, nil, "")
+						var caps struct {
+							Kind         string   `json:"kind"`
+							ProductID    string   `json:"product_id"`
+							InstanceID   string   `json:"instance_id"`
+							ClientID     string   `json:"client_id"`
+							FinanceWrite bool     `json:"finance_write"`
+							Scopes       []string `json:"scopes"`
+						}
+						writeScopes := []string{}
+						if capsErr == nil && capsResult.StatusCode == http.StatusOK && common.UnmarshalUnique(capsResult.Body, &caps) == nil && caps.Kind == "product" && caps.ProductID == config.ProductID && caps.InstanceID == config.InstanceID && caps.ClientID != "" && caps.FinanceWrite {
+							for _, scope := range caps.Scopes {
+								if scope == "model-credentials:write" || scope == "settings:write" || scope == "recharges:write" {
+									writeScopes = append(writeScopes, scope)
+								}
+							}
+						}
+						financeAccess["write_scopes"] = writeScopes
 					}
 				}
 			}
@@ -113,6 +133,9 @@ func registerUniHubBFF(r *gin.Engine, config platformaccount.Config) {
 				c.Status(http.StatusServiceUnavailable)
 			}
 			return
+		}
+		if expires, ok := financeAccess["expires_at"].(int64); ok && expires <= time.Now().Unix() {
+			financeAccess = gin.H{"available": false}
 		}
 		c.JSON(200, gin.H{"user": userData, "access": p.Access, "permissions": gin.H{"admin_permissions": authz.RequestCapabilities(c)}, "csrf_token": uniHubCSRF(identity.SessionID), "finance_access": financeAccess})
 	})

@@ -49,6 +49,10 @@ export function BillingPanel(props: PanelProps) {
   const [quote, setQuote] = useState<Quote | null>(null)
   const finance = ['owner', 'billing_admin'].includes(props.account.role)
   const financeWrite = finance && props.session.canWrite
+  const rechargeWrite = props.session.canFinanceWrite(
+    'recharges:write',
+    props.account.id
+  )
   const resources = useQuery({
     queryKey: ['resources', props.account.id],
     queryFn: () =>
@@ -86,7 +90,7 @@ export function BillingPanel(props: PanelProps) {
   }, [commercialReady])
   async function perform(original: FinancialIntent) {
     if (
-      !financeWrite ||
+      !(original.kind === 'recharge' ? rechargeWrite : financeWrite) ||
       !resourcesReady ||
       (original.kind !== 'recharge' && !commercialReady)
     ) {
@@ -227,7 +231,7 @@ export function BillingPanel(props: PanelProps) {
   }
   async function settleSandbox(recharge: Recharge) {
     if (
-      !financeWrite ||
+      !rechargeWrite ||
       !resourcesReady ||
       resources.data?.payments.mode !== 'sandbox' ||
       recharge.account_id !== props.account.id ||
@@ -391,7 +395,7 @@ export function BillingPanel(props: PanelProps) {
       ) : null}
       {finance ? (
         <>
-          {financeWrite ? (
+          {rechargeWrite ? (
             <form
               className='flex flex-wrap items-end gap-2'
               onSubmit={(e) => {
@@ -415,7 +419,8 @@ export function BillingPanel(props: PanelProps) {
               />
             </form>
           ) : null}
-          {financeWrite && intent ? (
+          {intent &&
+          (intent.kind === 'recharge' ? rechargeWrite : financeWrite) ? (
             <div role='status' className='space-y-2 rounded border p-3'>
               <p>
                 {t(
@@ -496,7 +501,7 @@ export function BillingPanel(props: PanelProps) {
             busy={busy}
             read={() => void queryResult(result)}
           />
-          {financeWrite &&
+          {rechargeWrite &&
           resourcesReady &&
           resources.data?.payments.mode === 'sandbox' &&
           isRecharge(result) &&

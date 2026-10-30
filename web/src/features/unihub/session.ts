@@ -64,6 +64,7 @@ export class ProductSession {
   account = ''
   epoch = 0
   csrfToken = ''
+  financeWriteScopes: string[] = []
   financeExpiresAt = 0
   financeTransport: '' | 'oidc' | 'runtime_actor' = ''
   restorePromise: Promise<void> | null = null
@@ -93,6 +94,7 @@ export class ProductSession {
     this.csrfToken = ''
     this.financeExpiresAt = 0
     this.financeTransport = ''
+    this.financeWriteScopes = []
     this.restorePromise = null
     this.select('')
     this.onClear()
@@ -108,11 +110,51 @@ export class ProductSession {
       (this.financeExpiresAt === 0 || this.financeExpiresAt > Date.now() / 1000)
     )
   }
+  canFinanceWrite(scope: string, account = this.account): boolean {
+    const selected = this.accounts.find((item) => item.id === account)
+    if (!selected || account !== this.account) return false
+    if (
+      scope !== 'model-credentials:write' &&
+      !['owner', 'billing_admin'].includes(selected.role)
+    ) {
+      return false
+    }
+    return (
+      this.canWrite ||
+      (this.financeTransport === 'runtime_actor' &&
+        this.financeExpiresAt > Date.now() / 1000 &&
+        this.financeWriteScopes.includes(scope))
+    )
+  }
+  canFinanceRequest(method: string, path: string): boolean {
+    const match = /^\/v1\/accounts\/([A-Za-z0-9_-]+)\/(.+)$/.exec(path)
+    if (!match) return false
+    const [, account, resource] = match
+    let scope = ''
+    if (
+      (method === 'POST' && resource === 'api-keys') ||
+      (method === 'DELETE' && /^api-keys\/[A-Za-z0-9_-]+$/.test(resource))
+    ) {
+      scope = 'model-credentials:write'
+    }
+    if (method === 'PUT' && resource === 'usage-budget') {
+      scope = 'settings:write'
+    }
+    if (
+      method === 'POST' &&
+      (resource === 'recharges' ||
+        /^recharges\/[A-Za-z0-9_-]+\/sandbox-settle$/.test(resource))
+    ) {
+      scope = 'recharges:write'
+    }
+    return scope !== '' && this.canFinanceWrite(scope, account)
+  }
   acceptFinanceAccess(data: ProductAccessSnapshot): void {
     const auth = useAuthStore.getState().auth
     const proof = data.finance_access
     if (!proof && auth.session?.login_method === 'unihub') {
       // Older deployments already validate the OIDC-bound session on every BFF request.
+      this.financeWriteScopes = []
       this.financeTransport = 'oidc'
       this.financeExpiresAt = 0
       return
@@ -135,6 +177,15 @@ export class ProductSession {
         'UniHub account access is unavailable for this browser session. Contact the administrator.'
       )
     }
+    this.financeWriteScopes = Array.isArray(proof.write_scopes)
+      ? proof.write_scopes.filter((scope) =>
+          [
+            'model-credentials:write',
+            'settings:write',
+            'recharges:write',
+          ].includes(scope)
+        )
+      : []
     this.financeTransport = proof.transport
     this.financeExpiresAt = proof.expires_at
     clearTimeout(this.timer)
@@ -144,6 +195,7 @@ export class ProductSession {
         this.csrfToken = ''
         this.financeExpiresAt = 0
         this.financeTransport = ''
+        this.financeWriteScopes = []
         this.accounts = []
         this.select('')
         this.onForbidden(
@@ -262,7 +314,11 @@ export function createProductSession(config: ProductConfig): ProductSession {
       }
       const headers = new Headers(init?.headers)
       const method = (init?.method ?? 'GET').toUpperCase()
-      if (!session.canWrite && method !== 'GET') {
+      if (
+        !session.canWrite &&
+        method !== 'GET' &&
+        !session.canFinanceRequest(method, source.pathname)
+      ) {
         throw new Error(
           'UniHub account access is read only for this browser session.'
         )
@@ -276,8 +332,17 @@ export function createProductSession(config: ProductConfig): ProductSession {
       if (epoch !== session.epoch) {
         throw new Error('UniHub session or payer changed')
       }
+      if (
+        !session.canWrite &&
+        method !== 'GET' &&
+        !session.canFinanceRequest(method, source.pathname)
+      ) {
+        throw new Error(
+          'UniHub account access is read only for this browser session.'
+        )
+      }
       headers.set('Authorization', native.Authorization ?? '')
-      if (init?.method !== 'GET') {
+      if (method !== 'GET') {
         headers.set('X-UniHub-CSRF', session.csrfToken)
       }
       result = await fetch(
@@ -344,6 +409,7 @@ export interface ProductAccessSnapshot {
     transport?: string
     central_user_id?: string
     expires_at?: number
+    write_scopes?: string[]
   }
 }
 export async function refreshProductAccess(): Promise<ProductAccessSnapshot> {

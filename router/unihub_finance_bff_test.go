@@ -43,6 +43,10 @@ func TestBrokerFinanceBFFUsesFreshActorAndScopedRoutes(t *testing.T) {
 	token := "upa_" + strings.Repeat("a", 64)
 	revoked := false
 	sourceRevoked := false
+	financeWritable := true
+	capabilityMode := "current"
+	financeRole := "owner"
+	writeCalls := 0
 	revokeDuringFinance := false
 	revokeSourceDuringFinance := false
 	var sentKey string
@@ -81,6 +85,13 @@ func TestBrokerFinanceBFFUsesFreshActorAndScopedRoutes(t *testing.T) {
 			return
 		}
 		financeCalls++
+		if r.Method != http.MethodGet {
+			writeCalls++
+			if !financeWritable || strings.Contains(r.URL.Path, "/accounts/other/") || (financeRole == "member" && !strings.Contains(r.URL.Path, "/api-keys")) {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+		}
 		if revokeSourceDuringFinance {
 			sourceRevoked = true
 		}
@@ -90,6 +101,22 @@ func TestBrokerFinanceBFFUsesFreshActorAndScopedRoutes(t *testing.T) {
 				w.WriteHeader(500)
 				return
 			}
+		}
+		if r.URL.Path == "/internal/v1/product-finance/capabilities" {
+			caps := gin.H{"kind": "product", "product_id": "llmrouter", "instance_id": "default", "client_id": "finance-client", "finance_write": financeWritable, "scopes": []string{"model-credentials:write", "settings:write", "recharges:write"}}
+			if capabilityMode == "legacy" {
+				delete(caps, "finance_write")
+			}
+			if capabilityMode == "cross-product" {
+				caps["product_id"] = "other"
+			}
+			raw, marshalErr := common.Marshal(caps)
+			if marshalErr != nil {
+				w.WriteHeader(500)
+				return
+			}
+			_, _ = w.Write(raw)
+			return
 		}
 		if r.URL.Path == "/internal/v1/product-finance/me" {
 			_, _ = w.Write([]byte(`{"id":"member"}`))
@@ -102,6 +129,14 @@ func TestBrokerFinanceBFFUsesFreshActorAndScopedRoutes(t *testing.T) {
 		if r.URL.Path == "/internal/v1/product-finance/accounts/payer/recharges" && r.Method == http.MethodPost {
 			_, _ = io.Copy(io.Discard, r.Body)
 			_, _ = w.Write([]byte(`{"id":"order"}`))
+			return
+		}
+		if r.URL.Path == "/internal/v1/product-finance/accounts/payer/api-keys" && r.Method == http.MethodPost || r.URL.Path == "/internal/v1/product-finance/accounts/payer/usage-budget" && r.Method == http.MethodPut || r.URL.Path == "/internal/v1/product-finance/accounts/payer/recharges/order/sandbox-settle" && r.Method == http.MethodPost {
+			_, _ = w.Write([]byte(`{"id":"fixture-result"}`))
+			return
+		}
+		if r.URL.Path == "/internal/v1/product-finance/accounts/payer/api-keys/key" && r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		w.WriteHeader(404)
@@ -144,6 +179,7 @@ func TestBrokerFinanceBFFUsesFreshActorAndScopedRoutes(t *testing.T) {
 	}
 	require.NoError(t, common.Unmarshal(access.Body.Bytes(), &data))
 	require.True(t, data.Finance.Available)
+	assert.Contains(t, access.Body.String(), `"write_scopes":["model-credentials:write","settings:write","recharges:write"]`)
 	assert.Equal(t, "member", data.Finance.CentralID)
 	assert.Greater(t, data.Finance.Expires, time.Now().Unix())
 	assert.NotContains(t, access.Body.String(), token)
@@ -173,7 +209,55 @@ func TestBrokerFinanceBFFUsesFreshActorAndScopedRoutes(t *testing.T) {
 	require.NoError(t, common.Unmarshal(brokerAccess.Body.Bytes(), &brokerFinance))
 	assert.LessOrEqual(t, brokerFinance.Finance.Expires, sourceExpiry)
 	assert.Equal(t, http.StatusOK, request("GET", "/api/unihub/bff/v1/accounts", "", "", "", nil).Code)
+	financeWritable = false
+	readOnlyAccess := request("GET", "/api/unihub/access", "", "", "", nil)
+	require.Equal(t, http.StatusOK, readOnlyAccess.Code)
+	assert.Contains(t, readOnlyAccess.Body.String(), `"write_scopes":[]`)
+	financeWritable = true
+	for _, mode := range []string{"legacy", "cross-product"} {
+		capabilityMode = mode
+		denied := request("GET", "/api/unihub/access", "", "", "", nil)
+		require.Equal(t, 200, denied.Code)
+		assert.Contains(t, denied.Body.String(), `"write_scopes":[]`, mode)
+	}
+	capabilityMode = "current"
+	var brokerCSRF struct {
+		CSRF string `json:"csrf_token"`
+	}
+	require.NoError(t, common.Unmarshal(brokerAccess.Body.Bytes(), &brokerCSRF))
+	for _, action := range []struct {
+		method, path string
+		status       int
+	}{
+		{"POST", "api-keys", 200}, {"DELETE", "api-keys/key", 204}, {"PUT", "usage-budget", 200}, {"POST", "recharges", 200}, {"POST", "recharges/order/sandbox-settle", 200},
+	} {
+		t.Run("broker-write-"+action.path, func(t *testing.T) {
+			body := `{}`
+			if action.method == "DELETE" {
+				body = ""
+			}
+			var headers http.Header
+			if action.path == "recharges" {
+				headers = http.Header{"Idempotency-Key": []string{"fixture-action"}}
+			}
+			result := request(action.method, "/api/unihub/bff/v1/accounts/payer/"+action.path, body, brokerCSRF.CSRF, "https://dashboard.test", headers)
+			require.Equal(t, action.status, result.Code, result.Body.String())
+		})
+	}
+	beforeWrites := writeCalls
+	assert.Equal(t, 403, request("POST", "/api/unihub/bff/v1/accounts/payer/invitations", `{}`, brokerCSRF.CSRF, "https://dashboard.test", nil).Code)
+	assert.Equal(t, beforeWrites, writeCalls, "unlisted broker write never reaches center")
+	assert.Equal(t, 403, request("POST", "/api/unihub/bff/v1/accounts/other/api-keys", `{}`, brokerCSRF.CSRF, "https://dashboard.test", nil).Code)
+	financeWritable = false
+	assert.Equal(t, 403, request("POST", "/api/unihub/bff/v1/accounts/payer/api-keys", `{}`, brokerCSRF.CSRF, "https://dashboard.test", nil).Code)
+	financeWritable = true
+	financeRole = "member"
+	assert.Equal(t, 403, request("PUT", "/api/unihub/bff/v1/accounts/payer/usage-budget", `{}`, brokerCSRF.CSRF, "https://dashboard.test", nil).Code)
+	financeRole = "owner"
 	sourceRevoked = true
+	beforeWrites = writeCalls
+	assert.NotEqual(t, 200, request("POST", "/api/unihub/bff/v1/accounts/payer/api-keys", `{}`, brokerCSRF.CSRF, "https://dashboard.test", nil).Code)
+	assert.Equal(t, beforeWrites, writeCalls, "revoked source denies financial mutation before dispatch")
 	beforeBroker = financeCalls
 	assert.Equal(t, http.StatusServiceUnavailable, request("GET", "/api/unihub/bff/v1/accounts", "", "", "", nil).Code)
 	assert.Equal(t, beforeBroker, financeCalls, "revoked central source cannot reach finance")

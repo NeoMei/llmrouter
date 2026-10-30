@@ -5,6 +5,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ConfigFromEnv takes an injected environment reader. No credentials or service
@@ -14,6 +15,13 @@ func ConfigFromEnv(get func(string) string) (Config, error) {
 	c.InstanceID = strings.TrimSpace(get("UNIHUB_PRODUCT_INSTANCE_ID"))
 	if c.InstanceID == "" {
 		c.InstanceID = "default"
+	}
+	if raw := get("UNIHUB_KNOWLEDGE_SETTLED_RESULT_RECOVERY_GRACE_SECONDS"); raw != "" {
+		seconds, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || seconds < 0 || seconds > 82800 || strconv.FormatInt(seconds, 10) != raw {
+			return c, ErrInvalid
+		}
+		c.KnowledgeSettledResultRecoveryGrace = time.Duration(seconds) * time.Second
 	}
 	if !c.Enabled {
 		return c, nil

@@ -235,7 +235,7 @@ func (v *knowledgeResultVault) authorizedResultWithEvidence(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		if stored.BindingVersion != 2 || stored.AttemptID != initial.AttemptID || stored.ExpiresAt <= v.now().UnixMilli() || len(stored.Ciphertext) < aead.NonceSize() {
+		if stored.BindingVersion != 2 || stored.AttemptID != initial.AttemptID || v.effectiveReadDeadline(stored) <= v.now().UnixMilli() || len(stored.Ciphertext) < aead.NonceSize() {
 			return ErrPending
 		}
 		if !second.ExpiresAt.After(time.Now()) || second.ActorExpiresAt <= v.now().Unix() || ctx.Err() != nil {
@@ -250,6 +250,16 @@ func (v *knowledgeResultVault) authorizedResultWithEvidence(ctx context.Context,
 		if common.UnmarshalUnique([]byte(row.MediaSnapshot), &frozen) != nil || frozen.Policy.ChannelID != attempt.ChannelID {
 			return ErrInvalid
 		}
+		if stored.ExpiresAt <= v.now().UnixMilli() {
+			resultExpires = v.effectiveReadDeadline(stored)
+			if knowledgeSettledFinancialIntent(row) != nil || !validKnowledgeResultBinding(row, attempt, frozen) {
+				return ErrInvalid
+			}
+			current, err := a.ResolveManagedBinding(tx, row.OriginProductID, row.Model, row.WireOperation, frozen.Binding.PolicyDigest)
+			if err != nil || !reflect.DeepEqual(current, *frozen.Binding) {
+				return ErrInvalid
+			}
+		}
 		aad, err := knowledgeResultStoredAAD(row, stored)
 		if err != nil {
 			return ErrInvalid
@@ -259,7 +269,7 @@ func (v *knowledgeResultVault) authorizedResultWithEvidence(ctx context.Context,
 			return ErrInvalid
 		}
 		if receipt != nil && ApprovedKnowledgePair(row.Model, row.WireOperation) {
-			value, e := historicalKnowledgeReceipt(row, attempt, frozen, second, output, stored.ExpiresAt, v.now().Unix())
+			value, e := historicalKnowledgeReceipt(row, attempt, frozen, second, output, resultExpires, v.now().Unix())
 			if e != nil {
 				return e
 			}

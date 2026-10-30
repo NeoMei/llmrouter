@@ -113,6 +113,9 @@ type Session struct {
 var stableID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
 
 func New(db *gorm.DB, c Config) (*Adapter, error) {
+	if c.KnowledgeSettledResultRecoveryGrace < 0 || c.KnowledgeSettledResultRecoveryGrace > 23*time.Hour || c.KnowledgeSettledResultRecoveryGrace%time.Second != 0 {
+		return nil, ErrInvalid
+	}
 	c.KnowledgePolicies = cloneKnowledgePolicies(c.KnowledgePolicies)
 	c.InstanceID = strings.TrimSpace(c.InstanceID)
 	if c.InstanceID == "" {
@@ -190,6 +193,9 @@ func New(db *gorm.DB, c Config) (*Adapter, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+	if a.knowledgeResults != nil {
+		a.knowledgeResults.settledRecoveryGrace = c.KnowledgeSettledResultRecoveryGrace
 	}
 	if err = a.initNativeHistory(context.Background()); err != nil {
 		return nil, err

@@ -106,6 +106,8 @@ type Config struct {
 	AllowAliRerank      bool
 	// Separate opt-in requires a knowledge producer and versioned keyring.
 	EnableKnowledgeResultRead bool `json:"-"`
+	// Optional extra retention for authenticated, bound SETTLED result reads.
+	KnowledgeSettledResultRecoveryGrace time.Duration
 	// The single key is retained for old in-process fixtures. Deployments use
 	// versioned keys that must be kept across restarts and rotations.
 	AliEmbeddingResultKey           []byte            `json:"-"`

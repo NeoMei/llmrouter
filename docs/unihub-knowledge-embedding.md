@@ -31,6 +31,38 @@ an enabled producer and versioned keyring. A task capability alone does not prov
 logged-in user or account membership, and central authorization must also address
 the interval between result authorization and a concurrent revocation.
 
+## Settled result recovery retention
+
+Captured output has a one-hour default expiry. The optional deployment setting
+`UNIHUB_KNOWLEDGE_SETTLED_RESULT_RECOVERY_GRACE_SECONDS` accepts a canonical
+integer from `0` through `82800` (23 hours); it defaults to `0`. With the current
+one-hour capture TTL, the largest effective recovery window is 24 hours after
+capture. This is an explicit retention policy for encrypted, already paid
+results, not a change to an old row's expiry. Deploy it consistently across nodes.
+
+Only the authenticated result-read path can use the additional window, and only
+for a binding-v2 `SETTLED` result with intact ciphertext. It rechecks the current
+actor and task credential, authoritative settlement and exact charge, original
+attempt and financial AAD, and the unchanged active managed policy/route binding.
+Its new receipt expires within 30 seconds and is clipped to the current actor,
+credential and effective recovery deadline. Expired credentials or receipts do
+not become valid. Original `expires_at`, ciphertext and AAD remain unchanged.
+Legacy/internal capture reads retain their original expiry. UNKNOWN, missing
+usage, unbound, conflicting or already cleared results cannot be recovered or
+redispatched through this policy.
+
+Bounded expiry cleanup retains a verified local paid-v2 result only while this
+window remains open, after checking its AEAD, financial intent and original
+attempt. Cleanup never contacts a provider or changes a call, hold or charge;
+content delivery still requires the separate current central authority checks.
+At the effective deadline, normal ciphertext cleanup applies. Enabling a grace
+cannot restore ciphertext already removed. Cleanup scheduling remains separate.
+
+This nonsecret setting changes the operator approval configuration fingerprint,
+but does not alter the durable managed knowledge pin's policy/route fingerprint
+or authorize a new activation. A deployment must read back its configured value
+and existing bindings before accepting a recovered result.
+
 ## Certified catalog and identity origins
 
 A valid knowledge certificate supplies the fixed `provider_reported_v1` usage

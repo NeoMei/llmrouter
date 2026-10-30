@@ -52,14 +52,15 @@ type knowledgeResultActive struct {
 func (knowledgeResultActive) TableName() string { return "platform_knowledge_result_active" }
 
 type knowledgeResultVault struct {
-	db         *gorm.DB
-	active     string
-	keys       map[string]cipher.AEAD
-	digestKeys map[string][]byte
-	aead       cipher.AEAD
-	sealKey    []byte
-	ttl        time.Duration
-	now        func() time.Time
+	db                   *gorm.DB
+	active               string
+	keys                 map[string]cipher.AEAD
+	digestKeys           map[string][]byte
+	aead                 cipher.AEAD
+	sealKey              []byte
+	ttl                  time.Duration
+	settledRecoveryGrace time.Duration
+	now                  func() time.Time
 }
 
 var knowledgeKeyID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,32}$`)
@@ -379,6 +380,16 @@ func (v *knowledgeResultVault) purgeExpired(ctx context.Context, limit int, afte
 			}
 			if _, err = aead.Open(nil, item.Ciphertext[:aead.NonceSize()], item.Ciphertext[aead.NonceSize():], aad); err != nil {
 				return ErrInvalid
+			}
+			// Retain only authenticated v2 paid output during the explicit grace.
+			// Cleanup performs no authority/provider requests; delivery still
+			// verifies the current actor and authoritative settlement separately.
+			if v.settledRecoveryGrace > 0 && item.BindingVersion == 2 && v.effectiveReadDeadline(item) > now && knowledgeSettledFinancialIntent(row) == nil {
+				var attempt Attempt
+				var frozen frozenKnowledge
+				if tx.First(&attempt, "id = ? AND call_id = ?", item.AttemptID, row.CallID).Error == nil && attempt.Status == "DISPATCHED" && common.UnmarshalUnique([]byte(row.MediaSnapshot), &frozen) == nil && frozen.Policy.ChannelID == attempt.ChannelID && validKnowledgeResultBinding(row, attempt, frozen) {
+					return nil
+				}
 			}
 			saved := tx.Model(&knowledgeResultRow{}).Where("call_id = ? AND expires_at = ? AND ciphertext = ? AND COALESCE(binding_version, 0) = ? AND COALESCE(attempt_id, 0) = ? AND COALESCE(observation_tag, '') = ? AND COALESCE(key_id, '') = ?", item.CallID, item.ExpiresAt, item.Ciphertext, item.BindingVersion, item.AttemptID, item.ObservationTag, item.KeyID).Update("ciphertext", nil)
 			if saved.Error != nil {

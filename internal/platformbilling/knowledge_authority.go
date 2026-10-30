@@ -80,7 +80,10 @@ func (a *Adapter) ReadKnowledgeIndexAuthority(ctx context.Context, original, acc
 	if a == nil || !a.Enabled() || a.client == nil || (!OriginalKnowledgeActor(original) || original == a.client.token) || !stableID.MatchString(account) {
 		return IndexReadAuthority{}, denied
 	}
-	issuer := strings.TrimSuffix(a.config.Origin, "/")
+	issuer := strings.TrimSuffix(a.config.IdentityIssuer, "/")
+	if issuer == "" {
+		issuer = strings.TrimSuffix(a.config.Origin, "/")
+	}
 	if issuer == "" {
 		return IndexReadAuthority{}, ErrPending
 	}

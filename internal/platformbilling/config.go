@@ -83,6 +83,14 @@ func ConfigFromEnv(get func(string) string) (Config, error) {
 		}
 	}
 	c.Origin = get("UNIHUB_ORIGIN")
+	if publicOrigin := get("UNIHUB_PRODUCT_PUBLIC_ORIGIN"); publicOrigin != "" {
+		c.IdentityIssuer = strings.TrimRight(publicOrigin, "/")
+		if !validIdentityIssuer(c.IdentityIssuer) {
+			return c, ErrInvalid
+		}
+	} else {
+		c.IdentityIssuer = strings.TrimRight(c.Origin, "/")
+	}
 	c.ServiceToken = get("UNIHUB_MODEL_SERVICE_TOKEN")
 	c.Group = get("UNIHUB_ROUTING_GROUP")
 	var err error

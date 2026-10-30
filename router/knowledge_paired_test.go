@@ -982,3 +982,40 @@ func TestPairedFixwaveVerifiedProductSendBoundary(t *testing.T) {
 		})
 	}
 }
+
+func TestPairedKnowledgePublicIssuerPreservesActivatedPins(t *testing.T) {
+	for _, embedding := range []bool{false, true} {
+		t.Run(fmt.Sprintf("embedding=%t", embedding), func(t *testing.T) {
+			f := newPairedFixture(t, embedding)
+			f.refusePaid = true
+			var beforePins []model.KnowledgeRoutePin
+			var beforeActive []model.KnowledgeActiveBinding
+			require.NoError(t, f.db.Order("pin").Find(&beforePins).Error)
+			require.NoError(t, f.db.Order("origin_product_id").Find(&beforeActive).Error)
+			require.Len(t, beforePins, 2)
+			cfg := f.config
+			cfg.IdentityIssuer = "https://unihub.quukk.com"
+			f.accessIssuer = cfg.IdentityIssuer
+			node, err := platformbilling.New(f.db, cfg)
+			require.NoError(t, err)
+			InstallKnowledgeBindings(node)
+			for _, active := range beforeActive {
+				f.product = active.OriginProductID
+				route, err := node.ReadCurrentKnowledgeRoute(context.Background(), "original-actor", "account", f.name, f.wire, active.ActivePin)
+				require.NoError(t, err)
+				assert.Equal(t, active.ActivePin, route.PolicyDigest)
+				assert.Equal(t, active.RouteGeneration, route.RouteGeneration)
+			}
+			var afterPins []model.KnowledgeRoutePin
+			var afterActive []model.KnowledgeActiveBinding
+			require.NoError(t, f.db.Order("pin").Find(&afterPins).Error)
+			require.NoError(t, f.db.Order("origin_product_id").Find(&afterActive).Error)
+			assert.Equal(t, beforePins, afterPins)
+			assert.Equal(t, beforeActive, afterActive)
+			assert.Zero(t, f.sends)
+			assert.Zero(t, f.reserves)
+			assert.Zero(t, f.settles)
+			assert.Zero(t, f.verifies)
+		})
+	}
+}

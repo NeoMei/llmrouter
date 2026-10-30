@@ -1220,6 +1220,9 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 	}
 
 	client := clientForRequest(c, relayInfo)
+	if relayInfo.PlatformMode && relayInfo.PlatformBilling != nil && relayInfo.PlatformBilling.PinnedKnowledge() {
+		client = relayInfo.PlatformBilling.PinnedKnowledgeProduct()
+	}
 	var routes []model.ClientModelRoute
 	var targets []model.ClientModelTarget
 	if err := model.DB.Where("enabled = ?", true).Find(&routes).Error; err != nil {

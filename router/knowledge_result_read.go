@@ -42,11 +42,12 @@ func registerKnowledgeResultRead(routes gin.IRoutes, adapter *platformbilling.Ad
 				return
 			}
 		}
-		result, err := adapter.KnowledgeResult(c.Request.Context(), strings.TrimPrefix(actor, "Bearer "), strings.TrimPrefix(auth, "Bearer "), task, c.Param("callID"))
+		result, err := adapter.KnowledgeResultWithEvidence(c.Request.Context(), strings.TrimPrefix(actor, "Bearer "), strings.TrimPrefix(auth, "Bearer "), task, c.Param("callID"))
 		if err != nil {
 			c.AbortWithStatus(http.StatusNotFound)
 			return
 		}
-		c.Data(http.StatusOK, "application/json", result)
+		c.Header("X-UniHub-Knowledge-Receipt", result.Header)
+		c.Data(http.StatusOK, "application/json", result.RawBytes)
 	})
 }

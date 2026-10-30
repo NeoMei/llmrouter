@@ -169,7 +169,23 @@ func (a *Adapter) admitWireOperation(ctx context.Context, credential, task, id s
 		return nil, err
 	}
 	var grant Claims
-	if err = a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": req.Model, "instance_id": a.config.InstanceID, "wire_operation": wire.ID}, &grant); err != nil {
+	pinned, _ := ctx.Value(pinnedKnowledgeContextKey{}).(*pinnedKnowledgeAdmission)
+	if ApprovedKnowledgePair(req.Model, wire.ID) {
+		if pinned == nil || pinned.binding.Model != req.Model || pinned.binding.WireOperation != wire.ID {
+			return nil, ErrInvalid
+		}
+		grant = pinned.grant.Claims
+		var frozen frozenKnowledge
+		if common.UnmarshalUnique([]byte(req.MediaSnapshot), &frozen) != nil {
+			return nil, ErrInvalid
+		}
+		frozen.Binding = &pinned.binding
+		encoded, e := common.Marshal(frozen)
+		if e != nil {
+			return nil, e
+		}
+		req.MediaSnapshot = string(encoded)
+	} else if err = a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": req.Model, "instance_id": a.config.InstanceID, "wire_operation": wire.ID}, &grant); err != nil {
 		return nil, err
 	}
 	if a.validateModelCredential(credential, task, req.Model, grant) != nil || !allowsWire(grant, req.Model, wire.ID) {
@@ -441,7 +457,7 @@ func (a *Adapter) admitWireOperation(ctx context.Context, credential, task, id s
 	row.RateSnapshot = string(snapshot)
 	row.RateID = chosen.ID
 	row.Amount = amount
-	if protectedKnowledge {
+	if protectedKnowledge && pinned == nil {
 		if err = a.sealKnowledgeSnapshot(&row); err != nil {
 			return nil, err
 		}
@@ -449,6 +465,11 @@ func (a *Adapter) admitWireOperation(ctx context.Context, credential, task, id s
 	var created *gorm.DB
 	if protectedKnowledge {
 		err = a.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if pinned != nil {
+				if err := a.preparePinnedCallTx(tx, &row, pinned); err != nil {
+					return err
+				}
+			}
 			if err := a.knowledgeResults.checkWriter(tx); err != nil {
 				return err
 			}
@@ -488,7 +509,7 @@ func (a *Adapter) admitWireOperation(ctx context.Context, credential, task, id s
 		return nil, ErrPending
 	}
 	row.Status = "RESERVED"
-	return &Session{adapter: a, call: row, safeFailure: true, canonical: req.Canonical}, nil
+	return &Session{adapter: a, call: row, safeFailure: true, canonical: req.Canonical, knowledgeAdmission: pinned}, nil
 }
 
 func meteredReserve(price metering.Price, req operationRequest) (string, error) {

@@ -523,6 +523,15 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 			return nil, e
 		}
 	}
+	if info.PlatformMode && info.PlatformBilling != nil && info.PlatformBilling.PinnedKnowledge() {
+		boundedClient := *client
+		boundedClient.Jar = nil
+		boundedClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		client = &boundedClient
+		if err := info.PlatformBilling.ClaimPinnedKnowledgeSend(c.Request.Context(), info.ChannelId, info.ResolvedModelNameOrOrigin(), info.ApiKey, req); err != nil {
+			return nil, err
+		}
+	}
 	sendContext := c.Request.Context()
 	var cancelSend context.CancelFunc
 	if info.PlatformMode && info.PlatformBilling != nil && (info.PlatformBilling.AliEmbeddingV4() || info.PlatformBilling.AliRerank()) {

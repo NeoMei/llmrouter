@@ -185,6 +185,11 @@ func ChannelAccountManagement(ctx context.Context, db *gorm.DB, channel *Channel
 // transaction serializes this with other credential writers.
 func WithAccountManagementChannel(ctx context.Context, db *gorm.DB, id int, apply func(*gorm.DB, *Channel) error) error {
 	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if id == 102 || id == 103 {
+			if err := LockKnowledgeParents(tx, 0); err != nil {
+				return err
+			}
+		}
 		if tx.Dialector.Name() == "sqlite" {
 			if err := tx.Model(&Channel{}).Where("id = ?", id).UpdateColumn("id", gorm.Expr("id")).Error; err != nil {
 				return err

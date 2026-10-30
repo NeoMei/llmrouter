@@ -59,12 +59,16 @@ func readKnowledgeAuthority(ctx context.Context, c *client, method, path string,
 		request.Header.Set("X-UniHub-Actor-Authorization", "Bearer "+actorAccess)
 	}
 	h := *c.http
+	h.Jar = nil
 	h.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	response, err := h.Do(request)
 	if err != nil {
 		return ErrPending
 	}
 	defer response.Body.Close()
+	if response.StatusCode == 401 || response.StatusCode == 403 {
+		return &remoteError{status: 403}
+	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
 	if err != nil || len(data) > 1<<20 || response.StatusCode < 200 || response.StatusCode >= 300 || common.UnmarshalUnique(data, out) != nil {
 		return ErrPending
@@ -153,6 +157,10 @@ func (a *Adapter) KnowledgeResult(ctx context.Context, actorAccess, credential, 
 }
 
 func (v *knowledgeResultVault) authorizedResult(ctx context.Context, a *Adapter, actorAccess, credential, task, id string) ([]byte, error) {
+	return v.authorizedResultWithEvidence(ctx, a, actorAccess, credential, task, id, nil)
+}
+
+func (v *knowledgeResultVault) authorizedResultWithEvidence(ctx context.Context, a *Adapter, actorAccess, credential, task, id string, receipt *KnowledgeReceipt) ([]byte, error) {
 	if v == nil || a == nil || a.db == nil || !a.Enabled() || a.client == nil || actorAccess == "" || len(actorAccess) > 8192 || strings.ContainsAny(actorAccess, " \t\r\n") || !stableID.MatchString(id) || !stableID.MatchString(task) || !strings.HasPrefix(credential, "uh_model_") || !IsModelCredential(credential) {
 		return nil, ErrInvalid
 	}
@@ -249,6 +257,13 @@ func (v *knowledgeResultVault) authorizedResult(ctx context.Context, a *Adapter,
 		output, err = aead.Open(nil, stored.Ciphertext[:aead.NonceSize()], stored.Ciphertext[aead.NonceSize():], aad)
 		if err != nil {
 			return ErrInvalid
+		}
+		if receipt != nil && ApprovedKnowledgePair(row.Model, row.WireOperation) {
+			value, e := historicalKnowledgeReceipt(row, attempt, frozen, second, output, stored.ExpiresAt, v.now().Unix())
+			if e != nil {
+				return e
+			}
+			*receipt = value
 		}
 		return nil
 	})

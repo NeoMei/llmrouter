@@ -33,6 +33,7 @@ type KnowledgePolicy struct {
 	RateIDs           map[string]string   `json:"rate_ids"`
 }
 type frozenKnowledge struct {
+	Binding        *ManagedBinding `json:"managed_binding,omitempty"`
 	Facts          json.RawMessage `json:"media_facts,omitempty"`
 	Policy         KnowledgePolicy `json:"knowledge_policy"`
 	Body           json.RawMessage `json:"effective_body,omitempty"`

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/internal/knowledgebinding"
 	ci "github.com/QuantumNous/new-api/internal/platformbilling/continuityindex"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -86,6 +87,8 @@ type Attempt struct {
 func (Attempt) TableName() string { return "platform_model_attempts" }
 
 type Adapter struct {
+	bindingResolver  func(*gorm.DB, string, string, string) (ManagedBinding, string, error)
+	bindingRotator   func(*gorm.DB, string) error
 	knowledgeResults *knowledgeResultVault
 	history          *ci.Index
 	historyResolver  NativeHistoryResolver
@@ -94,21 +97,23 @@ type Adapter struct {
 	client           *client
 }
 type Session struct {
-	nativeSend    string
-	canonical     []byte
-	adapter       *Adapter
-	call          Call
-	attempt       Attempt
-	requestTariff bool
-	confirmed     *Usage
-	safeFailure   bool
-	uncertain     bool
-	err           error
+	knowledgeAdmission *pinnedKnowledgeAdmission
+	nativeSend         string
+	canonical          []byte
+	adapter            *Adapter
+	call               Call
+	attempt            Attempt
+	requestTariff      bool
+	confirmed          *Usage
+	safeFailure        bool
+	uncertain          bool
+	err                error
 }
 
 var stableID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
 
 func New(db *gorm.DB, c Config) (*Adapter, error) {
+	c.KnowledgePolicies = cloneKnowledgePolicies(c.KnowledgePolicies)
 	c.InstanceID = strings.TrimSpace(c.InstanceID)
 	if c.InstanceID == "" {
 		c.InstanceID = "default"
@@ -170,7 +175,7 @@ func New(db *gorm.DB, c Config) (*Adapter, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = db.AutoMigrate(&Call{}, &Attempt{}); err != nil {
+	if err = db.AutoMigrate(&Call{}, &Attempt{}, &knowledgebinding.KnowledgeActiveBinding{}, &knowledgebinding.KnowledgeRoutePin{}); err != nil {
 		return nil, err
 	}
 	if c.AllowAliEmbeddingV4 || c.AllowAliRerank {
@@ -399,6 +404,12 @@ func compareCall(old, row Call) error {
 	return ErrDuplicate
 }
 func (s *Session) Dispatch(ctx context.Context, channel int) error {
+	if s.PinnedKnowledge() {
+		if channel != s.knowledgeAdmission.binding.ChannelID {
+			return ErrConflict
+		}
+		return nil
+	}
 	if IsImageWire(s.WireOperation().ID) {
 		p, e := s.ImagePolicy()
 		if e != nil || p.ChannelID != channel {
@@ -462,6 +473,9 @@ func (s *Session) Dispatch(ctx context.Context, channel int) error {
 	return nil
 }
 func (s *Session) Rejected() {
+	if s.PinnedKnowledge() {
+		return
+	}
 	if s.attempt.ID == 0 {
 		return
 	}

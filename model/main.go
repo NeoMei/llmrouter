@@ -334,7 +334,7 @@ func migrateDB() error {
 		&UpstreamAccountPool{},
 		&UpstreamAccountMember{},
 		&UpstreamAccountState{},
-		&ClientModelRoute{},
+		&KnowledgeActiveBinding{}, &KnowledgeRoutePin{}, &ClientModelRoute{},
 		&ClientModelTarget{},
 	)
 	if err != nil {
@@ -439,6 +439,8 @@ func migrateDBFast() error {
 		{&UpstreamAccountPool{}, "UpstreamAccountPool"},
 		{&UpstreamAccountMember{}, "UpstreamAccountMember"},
 		{&UpstreamAccountState{}, "UpstreamAccountState"},
+		{&KnowledgeActiveBinding{}, "KnowledgeActiveBinding"},
+		{&KnowledgeRoutePin{}, "KnowledgeRoutePin"},
 		{&ClientModelRoute{}, "ClientModelRoute"},
 		{&ClientModelTarget{}, "ClientModelTarget"},
 	}

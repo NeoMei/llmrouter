@@ -10,7 +10,10 @@ import (
 // knowledgeSnapshotAAD binds ciphertext to the immutable request identity and
 // certified producer policy. A database row cannot donate its body to another
 // call, actor, payer or producer.
-func knowledgeSnapshotAAD(row Call, policy KnowledgePolicy) ([]byte, error) {
+func knowledgeSnapshotAAD(row Call, policy KnowledgePolicy, binding ...*ManagedBinding) ([]byte, error) {
+	if len(binding) > 0 && binding[0] != nil {
+		return common.Marshal([]any{"platform-knowledge-input-pinned-v1", row.CallID, row.ActorID, row.AccountID, row.OriginProductID, row.InstanceID, row.TaskID, row.Model, row.Digest, row.WireOperation, policy, binding[0]})
+	}
 	return common.Marshal([]any{"platform-knowledge-input-v1", row.CallID, row.ActorID, row.AccountID, row.OriginProductID, row.InstanceID, row.TaskID, row.Model, row.Digest, row.WireOperation, policy})
 }
 
@@ -22,7 +25,7 @@ func (a *Adapter) sealKnowledgeSnapshot(row *Call) error {
 	if common.UnmarshalUnique([]byte(row.MediaSnapshot), &f) != nil || (f.Policy.Version != "knowledge_ali_text_v1" && row.WireOperation != "rerank.create") || len(f.Body) == 0 || len(f.BodyCiphertext) != 0 || f.BodyKeyID != "" {
 		return ErrInvalid
 	}
-	aad, err := knowledgeSnapshotAAD(*row, f.Policy)
+	aad, err := knowledgeSnapshotAAD(*row, f.Policy, f.Binding)
 	if err != nil {
 		return ErrInvalid
 	}
@@ -62,7 +65,7 @@ func (a *Adapter) knowledgeSnapshot(row Call) (frozenKnowledge, error) {
 	if aead == nil || len(f.BodyCiphertext) < aead.NonceSize() {
 		return frozenKnowledge{}, ErrInvalid
 	}
-	aad, err := knowledgeSnapshotAAD(row, f.Policy)
+	aad, err := knowledgeSnapshotAAD(row, f.Policy, f.Binding)
 	if err != nil {
 		return frozenKnowledge{}, ErrInvalid
 	}

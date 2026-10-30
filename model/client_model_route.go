@@ -4,15 +4,16 @@ package model
 // Aliases and Metadata are JSON strings so the record remains portable across
 // all databases supported by new-api.
 type ClientModelRoute struct {
-	Id          int    `json:"id" gorm:"primaryKey"`
-	PublicId    string `json:"public_id" gorm:"size:191;uniqueIndex;not null"`
-	DisplayName string `json:"display_name" gorm:"size:191;not null"`
-	Client      string `json:"client" gorm:"size:32;index;not null;default:all"`
-	Aliases     string `json:"aliases" gorm:"type:text"`
-	Metadata    string `json:"metadata" gorm:"type:text"`
-	Enabled     bool   `json:"enabled" gorm:"index;not null;default:true"`
-	CreatedTime int64  `json:"created_time"`
-	UpdatedTime int64  `json:"updated_time"`
+	KnowledgeGeneration string `json:"knowledge_generation,omitempty" gorm:"size:64"`
+	Id                  int    `json:"id" gorm:"primaryKey"`
+	PublicId            string `json:"public_id" gorm:"size:191;uniqueIndex;not null"`
+	DisplayName         string `json:"display_name" gorm:"size:191;not null"`
+	Client              string `json:"client" gorm:"size:32;index;not null;default:all"`
+	Aliases             string `json:"aliases" gorm:"type:text"`
+	Metadata            string `json:"metadata" gorm:"type:text"`
+	Enabled             bool   `json:"enabled" gorm:"index;not null;default:true"`
+	CreatedTime         int64  `json:"created_time"`
+	UpdatedTime         int64  `json:"updated_time"`
 }
 
 func (ClientModelRoute) TableName() string { return "client_model_routes" }

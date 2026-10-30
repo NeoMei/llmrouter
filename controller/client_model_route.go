@@ -31,16 +31,17 @@ type clientModelRoutePayload struct {
 }
 
 type clientModelRouteResponse struct {
-	ID          int                       `json:"id"`
-	PublicID    string                    `json:"public_id"`
-	DisplayName string                    `json:"display_name"`
-	Client      string                    `json:"client"`
-	Aliases     []string                  `json:"aliases"`
-	Metadata    string                    `json:"metadata,omitempty"`
-	Enabled     bool                      `json:"enabled"`
-	CreatedTime int64                     `json:"created_time"`
-	UpdatedTime int64                     `json:"updated_time"`
-	Targets     []model.ClientModelTarget `json:"targets"`
+	KnowledgeGeneration string                    `json:"knowledge_generation,omitempty"`
+	ID                  int                       `json:"id"`
+	PublicID            string                    `json:"public_id"`
+	DisplayName         string                    `json:"display_name"`
+	Client              string                    `json:"client"`
+	Aliases             []string                  `json:"aliases"`
+	Metadata            string                    `json:"metadata,omitempty"`
+	Enabled             bool                      `json:"enabled"`
+	CreatedTime         int64                     `json:"created_time"`
+	UpdatedTime         int64                     `json:"updated_time"`
+	Targets             []model.ClientModelTarget `json:"targets"`
 }
 
 type clientModelRouteChannelOption struct {
@@ -75,7 +76,7 @@ func ListClientModelRoutes(c *gin.Context) {
 	for _, route := range routes {
 		aliases := decodeRouteAliases(route.Aliases)
 		result = append(result, clientModelRouteResponse{
-			ID: route.Id, PublicID: route.PublicId, DisplayName: route.DisplayName,
+			ID: route.Id, PublicID: route.PublicId, DisplayName: route.DisplayName, KnowledgeGeneration: route.KnowledgeGeneration,
 			Client: route.Client, Aliases: aliases, Metadata: route.Metadata,
 			Enabled: route.Enabled, CreatedTime: route.CreatedTime, UpdatedTime: route.UpdatedTime,
 			Targets: byRoute[route.Id],
@@ -343,7 +344,7 @@ func loadClientModelRouteResponse(tx *gorm.DB, id int) (clientModelRouteResponse
 		return clientModelRouteResponse{}, err
 	}
 	return clientModelRouteResponse{
-		ID: route.Id, PublicID: route.PublicId, DisplayName: route.DisplayName,
+		ID: route.Id, PublicID: route.PublicId, DisplayName: route.DisplayName, KnowledgeGeneration: route.KnowledgeGeneration,
 		Client: route.Client, Aliases: decodeRouteAliases(route.Aliases), Metadata: route.Metadata,
 		Enabled: route.Enabled, CreatedTime: route.CreatedTime, UpdatedTime: route.UpdatedTime, Targets: targets,
 	}, nil

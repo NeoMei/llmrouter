@@ -198,7 +198,7 @@ func registerUniHubSSO(r *gin.Engine, config platformaccount.Config) {
 			return
 		}
 		service.WriteRefreshCookie(c, bundle.RefreshToken)
-		c.Redirect(303, proof.ReturnTo)
+		c.Redirect(303, returnToWithSession(proof.ReturnTo, bundle.Session.SID))
 	})
 }
 func createUniHubSession(c *gin.Context, a userkit.Access, bearer string) (*service.AuthBundle, error) {
@@ -222,16 +222,31 @@ func createUniHubSession(c *gin.Context, a userkit.Access, bearer string) (*serv
 			logger.LogWarn(c.Request.Context(), "unihub_session_failure stage=runtime_bind")
 			return nil, err
 		}
-		if err = reconcileSSOUser(c, userID); err != nil {
-			logger.LogWarn(c.Request.Context(), "unihub_session_failure stage=runtime_identity")
+		owner, err := model.GetUserById(userID, false)
+		if err != nil {
 			return nil, err
 		}
-		if err = model.EnsureProductFunding(c.Request.Context(), userID); err != nil && !errors.Is(err, model.ErrProductFundingMigration) {
-			logger.LogWarn(c.Request.Context(), "unihub_session_failure stage=runtime_funding")
-			return nil, err
+		if owner.FundingRealm != model.NativeFundingLocalOnly {
+			if err = reconcileSSOUser(c, userID); err != nil {
+				logger.LogWarn(c.Request.Context(), "unihub_session_failure stage=runtime_identity")
+				return nil, err
+			}
+			if err = model.EnsureProductFunding(c.Request.Context(), userID); err != nil && !errors.Is(err, model.ErrProductFundingMigration) {
+				logger.LogWarn(c.Request.Context(), "unihub_session_failure stage=runtime_funding")
+				return nil, err
+			}
 		}
 	}
-	bundle, e := service.CreateUniHubLoginSession(userID, a.ExpiresAt, c.ClientIP(), c.Request.UserAgent())
+	owner, e := model.GetUserById(userID, false)
+	if e != nil {
+		return nil, e
+	}
+	var bundle *service.AuthBundle
+	if owner.FundingRealm == model.NativeFundingLocalOnly {
+		bundle, e = service.CreateCentralSessionFromVerifiedSource(c.Request.Context(), userID, a, "unihub", a.ExpiresAt, c.ClientIP(), c.Request.UserAgent())
+	} else {
+		bundle, e = service.CreateUniHubLoginSession(userID, a.ExpiresAt, c.ClientIP(), c.Request.UserAgent())
+	}
 	if e != nil {
 		logger.LogWarn(c.Request.Context(), "unihub_session_failure stage=session_create")
 		return nil, e

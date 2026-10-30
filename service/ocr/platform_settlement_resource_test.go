@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/model"
 	base "github.com/QuantumNous/new-api/service"
 	"github.com/stretchr/testify/assert"
@@ -20,6 +21,8 @@ func TestPlatformOCRExistingOutputGrantRequiresSettlement(t *testing.T) {
 	defer server.Close()
 	svc, _ := serviceFixture(t, server)
 	ctx := context.Background()
+	require.NoError(t, svc.db.AutoMigrate(&platformbilling.Call{}))
+	require.NoError(t, svc.db.Create(&platformbilling.Call{CallID: "call", OriginProductID: "fixture-product"}).Error)
 	job := model.OCRJob{ID: "job", Funding: "platform", PlatformCallID: "call", CreatedAt: time.Now().Unix()}
 	require.NoError(t, svc.db.Create(&job).Error)
 	output, err := svc.storeResource(ctx, job.ID, "image", "image/png", []byte("output"), time.Now().Add(time.Hour).Unix())
@@ -54,4 +57,18 @@ func TestPlatformOCRExistingOutputGrantRequiresSettlement(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, reader.Close())
 	assert.Equal(t, "output", string(raw))
+	// The original call's product controls output access. Input grants remain
+	// usable for an already dispatched supplier until their normal expiry.
+	require.NoError(t, svc.db.Model(&platformbilling.Call{}).Where("call_id = ?", "call").Update("origin_product_id", "superwagie").Error)
+	_, _, err = svc.OpenGrantedResource(ctx, job.ID, output.ID, out.Query().Get("token"))
+	require.Error(t, err)
+	reader, _, err = svc.OpenGrantedResource(ctx, job.ID, input.ID, in.Query().Get("token"))
+	require.NoError(t, err)
+	raw, err = io.ReadAll(reader)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+	assert.Equal(t, "input", string(raw))
+	require.NoError(t, svc.db.Delete(&platformbilling.Call{}, "call_id = ?", "call").Error)
+	_, _, err = svc.OpenGrantedResource(ctx, job.ID, output.ID, out.Query().Get("token"))
+	require.Error(t, err)
 }

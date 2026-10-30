@@ -177,7 +177,7 @@ func TestUniHubSSORetriesDiscoveryAfterOutage(t *testing.T) {
 	require.Contains(t, recovered.Header().Get("Location"), f.issuer+"/authorize?")
 	assert.EqualValues(t, 2, f.discoveryCalls.Load())
 	complete := f.callback(t, recovered)
-	assert.Equal(t, "/channels", complete.Header().Get("Location"))
+	requireSessionRedirect(t, complete, "/channels")
 	assert.Contains(t, strings.Join(complete.Header().Values("Set-Cookie"), "\n"), service.RefreshCookieName+"=")
 }
 
@@ -192,7 +192,7 @@ func TestUniHubSSOReturnsToKeysWithNativeAccessDisabledOrEnabled(t *testing.T) {
 			require.Equal(t, http.StatusSeeOther, login.Code)
 			complete := f.callback(t, login)
 			require.Equal(t, http.StatusSeeOther, complete.Code)
-			require.Equal(t, "/keys", complete.Header().Get("Location"))
+			requireSessionRedirect(t, complete, "/keys")
 			require.Contains(t, strings.Join(complete.Header().Values("Set-Cookie"), "\n"), service.RefreshCookieName+"=")
 			invalid := httptest.NewRecorder()
 			f.router.ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:58119/api/unihub/login?return_to=/api/token/secrets", nil))
@@ -220,12 +220,12 @@ func TestUniHubSSOConcurrentInitializationPreservesCallbacks(t *testing.T) {
 	// A new login while a callback runs must keep the original transaction store.
 	go func() { responses <- f.login(context.Background()) }()
 	first := f.callback(t, logins[0])
-	assert.Equal(t, "/channels", first.Header().Get("Location"))
+	requireSessionRedirect(t, first, "/channels")
 	logins = append(logins[1:], <-responses)
 	for _, login := range logins {
 		complete := f.callback(t, login)
 		assert.Equal(t, http.StatusSeeOther, complete.Code)
-		assert.Equal(t, "/channels", complete.Header().Get("Location"))
+		requireSessionRedirect(t, complete, "/channels")
 		assert.Contains(t, strings.Join(complete.Header().Values("Set-Cookie"), "\n"), service.RefreshCookieName+"=")
 	}
 	assert.EqualValues(t, 1, f.discoveryCalls.Load())
@@ -272,5 +272,5 @@ func TestUniHubSSODiscoveryWaiterCanCancel(t *testing.T) {
 	recovered := f.login(context.Background())
 	require.Contains(t, recovered.Header().Get("Location"), f.issuer+"/authorize?")
 	assert.EqualValues(t, 2, f.discoveryCalls.Load())
-	assert.Equal(t, "/channels", f.callback(t, recovered).Header().Get("Location"))
+	requireSessionRedirect(t, f.callback(t, recovered), "/channels")
 }

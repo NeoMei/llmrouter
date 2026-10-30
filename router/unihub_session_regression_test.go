@@ -46,7 +46,7 @@ func newUniHubRegressionFixture(t *testing.T) *uniHubRegressionFixture {
 	oldSecure, oldTrusted := common.SessionCookieSecure, common.SessionCookieTrustedURLs
 	oldCritical, oldGlobal, oldMode := common.CriticalRateLimitEnable, common.GlobalApiRateLimitEnable, gin.Mode()
 	db := nativeRealmFixtureDB(t, t.TempDir()+"/matrix.db")
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.UniHubIdentityMapping{}, &model.UniHubSessionBinding{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.CentralAuthState{}, &model.CentralLoginCredential{}, &model.CentralSessionCredential{}, &model.UniHubIdentityMapping{}, &model.UniHubSessionBinding{}))
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
 	model.DB, common.RedisEnabled, common.SessionSecret = db, false, "unihub-regression-test-secret"

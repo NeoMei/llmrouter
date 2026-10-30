@@ -100,6 +100,11 @@ func readWanImage(c *gin.Context, a *platformbilling.Adapter) {
 		c.AbortWithStatus(http.StatusNotFound)
 		return
 	}
+	// The image polling response includes result bytes when the task finishes.
+	if superwagiePrivateResultBlocked(row) {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
 	pollWanImage(c, a, row, policy)
 }
 

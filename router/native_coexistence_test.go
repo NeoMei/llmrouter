@@ -104,7 +104,7 @@ func TestNativeCoexistenceKeepsOriginalProductResourcesAndPermissionGates(t *tes
 	for _, tc := range []struct {
 		method, path string
 		want         int
-	}{{"GET", "/api/user/topup/self", 200}, {"GET", "/api/native-billing/self", 200}, {"GET", "/api/token/", 200}, {"GET", "/api/user/", 403}, {"POST", "/api/channel/1/key", 403}, {"POST", "/v1/chat/completions", 204}} {
+	}{{"GET", "/api/user/topup/self", 403}, {"GET", "/api/native-billing/self", 200}, {"GET", "/api/token/", 200}, {"GET", "/api/user/", 403}, {"POST", "/api/channel/1/key", 403}, {"POST", "/v1/chat/completions", 204}} {
 		got := f.request(tc.method, tc.path, bundle.Data.AccessToken, nil)
 		require.Equal(t, tc.want, got.Code, got.Body.String())
 	}

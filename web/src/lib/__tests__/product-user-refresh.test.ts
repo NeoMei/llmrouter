@@ -105,14 +105,35 @@ test('a late previous-session self response cannot replace the current user', as
   }
 })
 
-test('temporary self endpoint failure preserves authentication while definitive denial clears it', async () => {
+test('self endpoint authority outages and permission denials preserve the session until recovery', async () => {
   const original = globalThis.fetch
   login()
   try {
     globalThis.fetch = async () => new Response(null, { status: 503 })
     await assert.rejects(refreshProductUser())
     assert.equal(useAuthStore.getState().auth.user?.id, 7)
-    globalThis.fetch = async () => new Response(null, { status: 403 })
+    for (const [status, code] of [
+      [401, 'UNIHUB_AUTHORITY_UNAVAILABLE'],
+      [403, 'UNIHUB_PERMISSION_DENIED'],
+    ] as const) {
+      globalThis.fetch = async () =>
+        Response.json({ success: false, code }, { status })
+      await assert.rejects(refreshProductUser())
+      assert.equal(useAuthStore.getState().auth.user?.id, 7)
+      assert.equal(useAuthStore.getState().auth.session?.sid, 'current')
+    }
+    globalThis.fetch = async () =>
+      Response.json({
+        success: true,
+        data: { id: 7, username: 'user', role: 1 },
+      })
+    await refreshProductUser()
+    assert.equal(useAuthStore.getState().auth.user?.role, 1)
+    globalThis.fetch = async () =>
+      Response.json(
+        { success: false, code: 'AUTH_SESSION_REVOKED' },
+        { status: 401 }
+      )
     await assert.rejects(refreshProductUser())
     assert.equal(useAuthStore.getState().auth.user, null)
   } finally {

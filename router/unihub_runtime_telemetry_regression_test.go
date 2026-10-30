@@ -22,7 +22,8 @@ import (
 func TestRuntimeTelemetryUsesVerifiedActorAndPreservesNativeHistory(t *testing.T) {
 	f := newUniHubRegressionFixture(t)
 	t.Setenv("NATIVE_PUBLIC_ACCESS", "true")
-	require.NoError(t, f.db.AutoMigrate(&model.ProductAuthLifecycle{}, &model.Log{}, &model.Channel{}, &platformbilling.Call{}, &platformbilling.Attempt{}))
+	require.NoError(t, model.RegisterProductFundingModels(f.db))
+	require.NoError(t, f.db.AutoMigrate(&model.ProductAuthLifecycle{}, &model.Log{}, &model.QuotaData{}, &model.Channel{}, &platformbilling.Call{}, &platformbilling.Attempt{}))
 	oldLog := model.LOG_DB
 	model.LOG_DB = f.db
 	t.Cleanup(func() { model.LOG_DB = oldLog })
@@ -31,14 +32,14 @@ func TestRuntimeTelemetryUsesVerifiedActorAndPreservesNativeHistory(t *testing.T
 	t.Cleanup(func() { platformaccount.Configure(config) })
 
 	managed := model.User{Username: "runtime-member", AffCode: "runtime-member", AuthVersion: 1, Status: common.UserStatusEnabled, Role: common.RoleRootUser}
-	native := model.User{Username: "native-user", AffCode: "native-user", AuthVersion: 1, Status: common.UserStatusEnabled, Role: common.RoleRootUser}
+	native := model.User{Username: "native-user", AffCode: "native-user", AuthVersion: 1, Status: common.UserStatusEnabled, Role: common.RoleRootUser, FundingRealm: model.NativeFundingLocalOnly, FundingRealmEvidence: "reviewed", NativePassword: true}
 	require.NoError(t, f.db.Create(&managed).Error)
 	require.NoError(t, f.db.Create(&native).Error)
 	_, err = model.BindUniHubIdentity(platformaccount.Identity{Issuer: config.PublicOrigin, User: platformaccount.User{ID: "central-member"}}, managed.Id)
 	require.NoError(t, err)
 	managedSession, err := service.CreateLoginSession(managed.Id, "password", "", "")
 	require.NoError(t, err)
-	nativeSession, err := service.CreateLoginSession(native.Id, "password", "", "")
+	nativeSession, err := service.CreateNativeLoginSessionAtAuthVersion(native.Id, 1, "password", "", "")
 	require.NoError(t, err)
 
 	role := 1
@@ -75,6 +76,8 @@ func TestRuntimeTelemetryUsesVerifiedActorAndPreservesNativeHistory(t *testing.T
 	} {
 		require.NoError(t, f.db.Create(&log).Error)
 	}
+	require.NoError(t, f.db.Create(&model.QuotaData{UserID: managed.Id, Username: managed.Username, ModelName: "legacy-private-model", CreatedAt: now.Unix(), Count: 3, TokenUsed: 42}).Error)
+	require.NoError(t, f.db.Create(&model.QuotaData{UserID: native.Id, Username: native.Username, ModelName: "native-private-model", CreatedAt: now.Unix(), Count: 4, TokenUsed: 49}).Error)
 	query := fmt.Sprintf("?start_timestamp=%d&end_timestamp=%d&actor_id=other&account_id=other-account&user_id=%d&username=other", now.Unix()-60, now.Unix()+60, native.Id)
 	for _, enabled := range []bool{false, true} {
 		t.Run(fmt.Sprintf("runtime_product_enabled_%t", enabled), func(t *testing.T) {
@@ -86,7 +89,7 @@ func TestRuntimeTelemetryUsesVerifiedActorAndPreservesNativeHistory(t *testing.T
 			require.Equal(t, 200, response.Code, response.Body.String())
 			assert.Contains(t, response.Body.String(), "own-central")
 			assert.Contains(t, response.Body.String(), "SETTLED")
-			assert.Contains(t, response.Body.String(), "own-native-history")
+			assert.NotContains(t, response.Body.String(), "own-native-history")
 			var body struct {
 				Success bool `json:"success"`
 				Data    struct {
@@ -96,7 +99,7 @@ func TestRuntimeTelemetryUsesVerifiedActorAndPreservesNativeHistory(t *testing.T
 			}
 			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
 			require.True(t, body.Success)
-			require.Equal(t, 3, body.Data.Total)
+			require.Equal(t, 2, body.Data.Total)
 			found := make(map[string]bool)
 			for _, entry := range body.Data.Items {
 				if entry.RequestId != "own-central" && entry.RequestId != "own-stream" {
@@ -127,6 +130,12 @@ func TestRuntimeTelemetryUsesVerifiedActorAndPreservesNativeHistory(t *testing.T
 			for _, hidden := range []string{"other-central", "other-instance", "other-native-history", "987654", "12345", "private-content"} {
 				assert.NotContains(t, response.Body.String(), hidden)
 			}
+			for _, path := range []string{"/api/data/self", "/api/data/flow/self"} {
+				usage := f.request("GET", path+query, managedSession.AccessToken, nil)
+				require.Equal(t, http.StatusOK, usage.Code, usage.Body.String())
+				assert.NotContains(t, usage.Body.String(), "legacy-private-model", path)
+				assert.NotContains(t, usage.Body.String(), "native-private-model", path)
+			}
 			assert.Equal(t, 403, f.request("GET", "/api/log/"+query, managedSession.AccessToken, nil).Code, "native root must not grant central log:read")
 		})
 	}
@@ -134,14 +143,34 @@ func TestRuntimeTelemetryUsesVerifiedActorAndPreservesNativeHistory(t *testing.T
 	response := f.request("GET", "/api/log/?start_timestamp="+strconv.FormatInt(now.Unix()-60, 10)+"&end_timestamp="+strconv.FormatInt(now.Unix()+60, 10), managedSession.AccessToken, nil)
 	require.Equal(t, 200, response.Code, response.Body.String())
 	assert.Contains(t, response.Body.String(), "other-central")
-	assert.Contains(t, response.Body.String(), "other-native-history")
+	assert.NotContains(t, response.Body.String(), "other-native-history")
+	assert.NotContains(t, response.Body.String(), "own-native-history")
 	assert.NotContains(t, response.Body.String(), "other-instance")
 	assert.NotContains(t, response.Body.String(), "45678")
 	role, permissions = 1, []string{"product:use"}
 	assert.Equal(t, 403, f.request("GET", "/api/log/", managedSession.AccessToken, nil).Code)
 
-	// With central runtime disabled, a native principal retains its own native log and quota.
+	// Explicitly authenticated native sessions retain their own history even with runtime enabled.
+	response = f.request("GET", "/api/log/self", nativeSession.AccessToken, nil)
+	require.Equal(t, 200, response.Code, response.Body.String())
+	assert.Contains(t, response.Body.String(), "other-native-history")
+	response = f.request("GET", "/api/data/self"+query, nativeSession.AccessToken, nil)
+	require.Equal(t, 200, response.Code, response.Body.String())
+	assert.Contains(t, response.Body.String(), "native-private-model")
+	assert.NotContains(t, response.Body.String(), "legacy-private-model")
+
+	// Once product authority is unavailable, the LEGACY SID has no proof of
+	// native provenance and must not fall through to the local tables.
 	t.Setenv("UNIHUB_PRODUCT_RUNTIME_ENABLED", "false")
+	for _, path := range []string{"/api/log/self", "/api/data/self"} {
+		denied := f.request("GET", path+query, managedSession.AccessToken, nil)
+		require.NotEqual(t, http.StatusOK, denied.Code, denied.Body.String())
+		assert.NotContains(t, denied.Body.String(), "own-native-history")
+		assert.NotContains(t, denied.Body.String(), "legacy-private-model")
+	}
+
+	// With central runtime disabled, a native principal retains its own native log and quota.
+
 	response = f.request("GET", "/api/log/self", nativeSession.AccessToken, nil)
 	require.Equal(t, 200, response.Code, response.Body.String())
 	assert.Contains(t, response.Body.String(), "other-native-history")

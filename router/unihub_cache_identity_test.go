@@ -40,7 +40,7 @@ func TestUniHubSSORedisIdentitySurvivesRefreshAndAccess(t *testing.T) {
 
 	callback := f.callback(t, f.login(context.Background()))
 	require.Equal(t, http.StatusSeeOther, callback.Code)
-	require.Equal(t, "/channels", callback.Header().Get("Location"))
+	requireSessionRedirect(t, callback, "/channels")
 	var refreshCookie *http.Cookie
 	for _, cookie := range callback.Result().Cookies() {
 		if cookie.Name == service.RefreshCookieName {

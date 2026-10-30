@@ -1,5 +1,16 @@
 {
   "translation": {
+    "Two-factor authentication is managed by UniHub.": "Xác thực hai yếu tố được quản lý bởi UniHub.",
+    "Two-factor authentication status is temporarily unavailable.": "Trạng thái xác thực hai yếu tố tạm thời không khả dụng.",
+    "Password and account deletion are managed by UniHub.": "Mật khẩu và việc xóa tài khoản được quản lý bởi UniHub.",
+    "Switch account": "Chuyển tài khoản",
+    "Local account": "Tài khoản cục bộ",
+    "Central account": "Tài khoản trung tâm",
+    "No other signed-in account": "Không có tài khoản đăng nhập khác",
+    "Session access is blocked by the server origin configuration. Please contact your administrator, then retry.": "Cấu hình nguồn của máy chủ đang chặn phiên. Hãy liên hệ quản trị viên rồi thử lại.",
+    "Account choices temporarily unavailable": "Danh sách tài khoản tạm thời không khả dụng",
+    "Try again": "Thử lại",
+    "Unable to switch account": "Không thể chuyển tài khoản",
     "Settle sandbox recharge": "Hoàn tất nạp tiền thử nghiệm",
     "UniHub account access is unavailable for this browser session. Contact the administrator.": "Phiên trình duyệt này không thể truy cập tài khoản UniHub. Vui lòng liên hệ quản trị viên.",
     "For UniHub accounts, local log date ranges must not exceed 30 days.": "Với tài khoản UniHub, khoảng ngày của nhật ký cục bộ không được vượt quá 30 ngày.",

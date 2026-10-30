@@ -186,13 +186,46 @@ func (t *TwoFA) IsLocked() bool {
 
 // CreatePendingTwoFASetupBackupCodes stores recovery codes for an unverified
 // setup. Regeneration for an enabled factor must advance auth_version.
-func CreatePendingTwoFASetupBackupCodes(userId int, codes []string) error {
+func CreatePendingTwoFASetupBackupCodes(userId, pendingID int, secret string, codes []string) error {
 	return DB.Transaction(func(tx *gorm.DB) error {
 		var pending TwoFA
-		if err := lockForUpdate(tx).Where("user_id = ? AND is_enabled = ?", userId, false).First(&pending).Error; err != nil {
+		if err := lockForUpdate(tx).Where("id = ? AND user_id = ? AND is_enabled = ?", pendingID, userId, false).First(&pending).Error; err != nil {
 			return err
 		}
+		if secret == "" || pending.Secret != secret {
+			return errors.New("2FA待验证设置已更改")
+		}
 		return replaceBackupCodesWithTx(tx, userId, codes)
+	})
+}
+
+// ReplacePendingTwoFASetup commits the pending secret and its recovery codes
+// together while serializing replacements and enrollment on the user row.
+func ReplacePendingTwoFASetup(userID int, secret string, codes []string) error {
+	if userID <= 0 || secret == "" || len(codes) == 0 {
+		return errors.New("无效的2FA待验证设置")
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if _, err := lockTwoFASecurityUser(tx, userID); err != nil {
+			return err
+		}
+		var existing TwoFA
+		err := lockForUpdate(tx).Where("user_id = ?", userID).First(&existing).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		if err == nil {
+			if existing.IsEnabled {
+				return ErrTwoFAAlreadyEnabled
+			}
+			if err := tx.Unscoped().Delete(&existing).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Create(&TwoFA{UserId: userID, Secret: secret}).Error; err != nil {
+			return err
+		}
+		return replaceBackupCodesWithTx(tx, userID, codes)
 	})
 }
 
@@ -216,6 +249,9 @@ func replaceBackupCodesWithTx(tx *gorm.DB, userId int, codes []string) error {
 // credentials and advances the user's authentication version.
 func ReplaceBackupCodesWithAuthVersion(userId int, codes []string) error {
 	if err := DB.Transaction(func(tx *gorm.DB) error {
+		if _, err := lockTwoFASecurityUser(tx, userId); err != nil {
+			return err
+		}
 		var enabled TwoFA
 		if err := lockForUpdate(tx).Where("user_id = ? AND is_enabled = ?", userId, true).First(&enabled).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -278,6 +314,9 @@ func GetUnusedBackupCodeCount(userId int) (int, error) {
 // every access token issued against the previous security configuration.
 func DisableTwoFAWithAuthVersion(userId int) error {
 	if err := DB.Transaction(func(tx *gorm.DB) error {
+		if _, err := lockTwoFASecurityUser(tx, userId); err != nil {
+			return err
+		}
 		var twoFA TwoFA
 		if err := lockForUpdate(tx).Where("user_id = ? AND is_enabled = ?", userId, true).First(&twoFA).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -305,6 +344,9 @@ func (t *TwoFA) EnableWithAuthVersion() error {
 		return errors.New("2FA记录ID不能为空")
 	}
 	if err := DB.Transaction(func(tx *gorm.DB) error {
+		if _, err := lockTwoFASecurityUser(tx, t.UserId); err != nil {
+			return err
+		}
 		var pending TwoFA
 		if err := lockForUpdate(tx).Where("id = ? AND user_id = ? AND is_enabled = ?", t.Id, t.UserId, false).First(&pending).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {

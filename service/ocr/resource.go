@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/model"
 	base "github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/objectstore"
@@ -75,6 +76,14 @@ func (s *Service) OpenGrantedResource(ctx context.Context, jobID, resourceID, gr
 	snapshot, err := s.billing.Inspect(ctx, jobID)
 	if err != nil {
 		return nil, info, model.ErrOCRGrant
+	}
+	if snapshot.Job.Funding == "platform" && r.Kind != "input" {
+		// Old OCR grants are bearer URLs. A settlement receipt is insufficient
+		// to authorize SuperWagie output after the original actor is revoked.
+		var call platformbilling.Call
+		if s.db.WithContext(ctx).Select("origin_product_id").Where("call_id = ?", snapshot.Job.PlatformCallID).First(&call).Error != nil || call.OriginProductID == "superwagie" {
+			return nil, info, model.ErrOCRGrant
+		}
 	}
 	if snapshot.Job.Funding == "platform" && r.Kind != "input" && (base.PlatformTaskSettlementCheck == nil || base.PlatformTaskSettlementCheck(ctx, snapshot.Job.PlatformCallID) != nil) {
 		return nil, info, model.ErrOCRGrant

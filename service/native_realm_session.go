@@ -30,7 +30,7 @@ func IsNativeLoginSession(ctx context.Context, identity AuthIdentity) (bool, err
 	if err != nil {
 		return false, err
 	}
-	if session.AuthRealm == "" {
+	if session.AuthRealm == "" || session.AuthRealm == model.CentralAuthRealm {
 		return false, nil
 	}
 	if session.AuthRealm != model.NativeFundingLocalOnly || session.UserID != identity.UserID || session.Version != identity.SessionVersion || session.UserAuthVersion != identity.UserAuthVersion || session.Status != model.UserSessionStatusActive || session.ExpiresAt <= time.Now().Unix() || session.RevokedAt != 0 {

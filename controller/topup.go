@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
@@ -529,6 +530,12 @@ func RequestAmount(c *gin.Context) {
 }
 
 func GetUserTopUps(c *gin.Context) {
+	// Historical rows do not carry a reliable realm. An authenticated product
+	// principal must not inherit a shared owner's native payment history.
+	if _, managed := authz.ProductPrincipal(c); managed {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "TOPUP_REALM_UNAVAILABLE"})
+		return
+	}
 	userId := c.GetInt("id")
 	pageInfo := common.GetPageQuery(c)
 	keyword := c.Query("keyword")
@@ -559,6 +566,12 @@ func GetUserTopUps(c *gin.Context) {
 
 // GetAllTopUps 管理员获取全平台充值记录
 func GetAllTopUps(c *gin.Context) {
+	// Historical top-up rows do not carry a trusted realm, so product
+	// authority cannot distinguish native financial records from its own.
+	if _, managed := authz.ProductPrincipal(c); managed {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "TOPUP_REALM_UNAVAILABLE"})
+		return
+	}
 	pageInfo := common.GetPageQuery(c)
 	keyword := c.Query("keyword")
 

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"os"
 
 	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
@@ -34,6 +35,18 @@ func SetNativeLoginCredentialTx(tx *gorm.DB, userID int, kind, value, realm stri
 		return ErrNativeCredentialUnverified
 	}
 	if kind == "" || len(kind) > 128 {
+		return ErrNativeCredentialUnverified
+	}
+	if tx.Migrator().HasTable(&CentralLoginCredential{}) {
+		var central CentralLoginCredential
+		err := tx.Where("user_id = ? AND kind = ?", userID, kind).First(&central).Error
+		if err == nil {
+			return ErrNativeCredentialUnverified
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+	} else if os.Getenv("UNIHUB_INDEPENDENT_CENTRAL_REALM_ENABLED") == "true" {
 		return ErrNativeCredentialUnverified
 	}
 	if value == "" {

@@ -18,6 +18,7 @@ import (
 
 func TestPrivateNativeMaintenanceLimitsScope(t *testing.T) {
 	f := newUniHubRegressionFixture(t)
+	model.InitDatabaseColumns()
 	t.Setenv("UNIHUB_PRODUCT_RUNTIME_ENABLED", "true")
 	t.Setenv("NATIVE_PRIVATE_MAINTENANCE_ENABLED", "true")
 	require.NoError(t, f.db.AutoMigrate(&model.ProductFundingAccount{}, &model.ProductAuthLifecycle{}, &model.Token{}, &model.TwoFA{}, &model.Log{}))
@@ -62,8 +63,9 @@ func TestPrivateNativeMaintenanceLimitsScope(t *testing.T) {
 	assert.Contains(t, self.Body.String(), `"quota":42`)
 	assert.Contains(t, self.Body.String(), `"role":10`)
 	history := request("GET", "/api/log/self", bundle.AccessToken, true, "")
-	require.Equal(t, http.StatusOK, history.Code, history.Body.String())
-	assert.Contains(t, history.Body.String(), `"success":true`)
+	// Private listener proves maintenance access but not the provenance of
+	// an older session or unclassified history rows.
+	require.Equal(t, http.StatusServiceUnavailable, history.Code, history.Body.String())
 	assert.NotEqual(t, http.StatusOK, request("GET", "/api/token/", bundle.AccessToken, false, "").Code)
 	// A search oracle over key prefixes would reveal a masked key one byte at a time.
 	assert.NotEqual(t, http.StatusOK, request("GET", "/api/token/search?token=maintenance%25", bundle.AccessToken, true, "").Code)
@@ -88,6 +90,23 @@ func TestPrivateNativeMaintenanceLimitsScope(t *testing.T) {
 		}
 	}
 	require.NotNil(t, refreshCookie)
+	t.Setenv("UNIHUB_INDEPENDENT_CENTRAL_REALM_ENABLED", "true")
+	optionsReq := httptest.NewRequest(http.MethodGet, "https://dashboard.test/api/user/auth/session-options", nil)
+	optionsReq.Header.Set("Origin", "https://dashboard.test")
+	optionsReq.Header.Set("X-Forwarded-For", "127.0.0.1")
+	optionsReq.AddCookie(refreshCookie)
+	publicOptions := httptest.NewRecorder()
+	f.router.ServeHTTP(publicOptions, optionsReq)
+	assert.NotContains(t, publicOptions.Body.String(), "local-maintainer", "forwarded address is not a private listener")
+	optionsReq = optionsReq.WithContext(context.WithValue(optionsReq.Context(), http.LocalAddrContextKey, &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 3001}))
+	privateOptions := httptest.NewRecorder()
+	f.router.ServeHTTP(privateOptions, optionsReq)
+	require.Contains(t, privateOptions.Body.String(), "local-maintainer", privateOptions.Body.String())
+	t.Setenv("NATIVE_PRIVATE_MAINTENANCE_ENABLED", "false")
+	deniedPrivate := httptest.NewRecorder()
+	f.router.ServeHTTP(deniedPrivate, optionsReq)
+	assert.NotContains(t, deniedPrivate.Body.String(), "local-maintainer")
+	t.Setenv("NATIVE_PRIVATE_MAINTENANCE_ENABLED", "true")
 	forgedRefresh := httptest.NewRequest(http.MethodPost, "https://dashboard.test/api/user/auth/refresh", nil)
 	forgedRefresh.Header.Set("Origin", "https://dashboard.test")
 	forgedRefresh.AddCookie(&http.Cookie{Name: service.RefreshCookieName, Value: refreshCookie.Value + "forged"})

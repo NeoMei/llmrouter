@@ -2988,3 +2988,112 @@ test('sandbox settlement stays unavailable while payment configuration refresh i
   release()
   await expect(settle).toBeVisible()
 })
+
+test('signed-out browser explicitly switches to a cookie-verified account without prior local history', async ({
+  page,
+}) => {
+  await fixture(page)
+  await page.addInitScript(() => {
+    if (!sessionStorage.getItem('switch-test-initialized')) {
+      sessionStorage.setItem('switch-test-initialized', '1')
+      sessionStorage.setItem('new-api:auth:selected-sid:v1', '')
+      localStorage.removeItem('new-api:auth:recent-sids:v1')
+      localStorage.removeItem('new-api:auth:selected-sid:v1')
+    }
+  })
+  const requests: string[] = []
+  const silentLogins: string[] = []
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === '/api/unihub/login') {
+      silentLogins.push(request.url())
+    }
+  })
+  let fail = true
+  const expires = Math.floor(Date.now() / 1000) + 300
+  await page.route('**/api/user/auth/session-options', (route) =>
+    route.fulfill({
+      json: {
+        success: true,
+        data: {
+          sessions: [
+            {
+              sid: 'sid-central',
+              realm: 'central',
+              display_name: 'Verified central user',
+            },
+          ],
+          unavailable: false,
+        },
+      },
+    })
+  )
+  await page.route('**/api/user/auth/refresh', (route) => {
+    const sid = route.request().headers()['x-auth-session'] ?? ''
+    requests.push(sid)
+    if (fail || sid !== 'sid-central') {
+      return route.fulfill({ status: 503, json: { success: false } })
+    }
+    return route.fulfill({
+      json: {
+        success: true,
+        data: {
+          access_token: 'synthetic-access',
+          token_type: 'Bearer',
+          access_expires_at: expires,
+          user: { id: 42, username: 'central-user', role: 1 },
+          session: {
+            sid: 'sid-central',
+            current: true,
+            login_method: 'unihub',
+            ip: '',
+            user_agent: '',
+            created_at: 1,
+            last_active_at: 1,
+            expires_at: expires,
+          },
+        },
+      },
+    })
+  })
+  await page.goto('/sign-in')
+  const account = page
+    .locator('div')
+    .filter({ hasText: 'Verified central user' })
+    .filter({
+      has: page.getByRole('button', { name: /Switch account|切换账号/ }),
+    })
+    .last()
+  await expect(page.getByText('Verified central user')).toBeVisible()
+  await page.screenshot({ path: '/tmp/llmrouter-account-switch-desktop.png' })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(account.getByRole('button')).toBeVisible()
+  await page.screenshot({ path: '/tmp/llmrouter-account-switch-mobile.png' })
+  expect(requests).toEqual([])
+  expect(silentLogins).toEqual([])
+  await account.getByRole('button').click()
+  await expect(
+    page
+      .getByRole('alert')
+      .filter({ hasText: /Unable to switch account|无法切换账号/ })
+  ).toBeVisible()
+  expect(
+    await page.evaluate(() =>
+      sessionStorage.getItem('new-api:auth:selected-sid:v1')
+    )
+  ).toBe('')
+  expect(requests).toEqual(['sid-central'])
+  fail = false
+  await Promise.all([
+    page.waitForURL('**/dashboard'),
+    account.getByRole('button').click(),
+  ])
+  await expect.poll(() => requests.length).toBeGreaterThanOrEqual(2)
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        sessionStorage.getItem('new-api:auth:selected-sid:v1')
+      )
+    )
+    .toBe('sid-central')
+  expect(requests.every((sid) => sid === 'sid-central')).toBe(true)
+})

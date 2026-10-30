@@ -70,9 +70,13 @@ export async function createApiKey(
 
 // Update an existing API key
 export async function updateApiKey(
-  data: ApiKeyFormData & { id: number }
+  data: ApiKeyFormData & { id: number },
+  options?: { preserveQuota: boolean }
 ): Promise<ApiResponse<ApiKey>> {
-  const res = await api.put('/api/token/', data)
+  const path = options?.preserveQuota
+    ? '/api/token/?preserve_quota=true'
+    : '/api/token/'
+  const res = await api.put(path, data)
   return res.data
 }
 

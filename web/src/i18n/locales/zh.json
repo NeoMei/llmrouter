@@ -1,5 +1,16 @@
 {
   "translation": {
+    "Two-factor authentication is managed by UniHub.": "双重身份验证由 UniHub 管理。",
+    "Two-factor authentication status is temporarily unavailable.": "暂时无法获取双重身份验证状态。",
+    "Password and account deletion are managed by UniHub.": "密码和账户删除由 UniHub 管理。",
+    "Switch account": "切换账号",
+    "Local account": "本地账号",
+    "Central account": "中心账号",
+    "No other signed-in account": "没有其他已登录账号",
+    "Session access is blocked by the server origin configuration. Please contact your administrator, then retry.": "服务器来源配置阻止了会话访问。请联系管理员修复配置后重试。",
+    "Account choices temporarily unavailable": "账号列表暂时不可用",
+    "Try again": "重试",
+    "Unable to switch account": "无法切换账号",
     "Settle sandbox recharge": "结算沙箱充值",
     "UniHub account access is unavailable for this browser session. Contact the administrator.": "当前浏览器会话无法访问 UniHub 账户，请联系管理员。",
     "For UniHub accounts, local log date ranges must not exceed 30 days.": "UniHub 账户的本地日志日期范围不得超过 30 天。",

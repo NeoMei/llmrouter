@@ -22,8 +22,10 @@ import { useTranslation } from 'react-i18next'
 
 import { silentProductLoginURL } from '@/features/unihub/sso'
 import { useStatus } from '@/hooks/use-status'
+import { isSessionSelectionCleared } from '@/lib/auth-selection'
 
 import { AuthLayout } from '../auth-layout'
+import { AccountSwitchCard } from '../components/account-switch-card'
 import { TermsFooter } from '../components/terms-footer'
 import { UserAuthForm } from './components/user-auth-form'
 
@@ -33,6 +35,7 @@ export function SignIn() {
   const { status } = useStatus()
 
   useEffect(() => {
+    if (isSessionSelectionCleared()) return
     const controller = new AbortController()
     void fetch('/api/unihub/config', {
       credentials: 'same-origin',
@@ -86,6 +89,8 @@ export function SignIn() {
         </div>
 
         <UserAuthForm redirectTo={redirect} />
+
+        <AccountSwitchCard />
 
         <TermsFooter
           variant='sign-in'

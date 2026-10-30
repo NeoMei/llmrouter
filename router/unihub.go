@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/gin-gonic/gin"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -86,7 +87,9 @@ func SetUniHubRouter(r *gin.Engine, c platformaccount.Config) {
 			return
 		}
 		local.Role = middleware.RoleFromAccess(access)
-		user := controller.BuildSelfUserData(local)
+		authz.SetProductPrincipal(ctx, userkit.Principal{LocalUser: userkit.LocalUser{ID: strconv.Itoa(local.Id)}, Access: access})
+		user := controller.CurrentProductUserData(ctx, local)
+		user["authentication_realm"] = bundle.Session.AuthenticationRealm
 		user["permissions"] = gin.H{"admin_permissions": permissionsForAccess(access)}
 
 		service.WriteRefreshCookie(ctx, bundle.RefreshToken)

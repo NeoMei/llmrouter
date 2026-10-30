@@ -45,7 +45,8 @@ function OAuthComponent() {
             const target = getProductLoginDestination(
               res.data.central_session_handoff,
               search?.redirect,
-              window.location.origin
+              window.location.origin,
+              res.data.session.sid
             )
             if (res.data.central_session_handoff === true) {
               window.location.replace(target)

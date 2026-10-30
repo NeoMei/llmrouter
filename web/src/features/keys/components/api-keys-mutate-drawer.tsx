@@ -136,6 +136,8 @@ export function ApiKeysMutateDrawer({
     defaultValues: getApiKeyFormDefaultValues(defaultUseAutoGroup),
   })
 
+  const dirtyFields = form.formState.dirtyFields
+
   // Load existing data when updating
   useEffect(() => {
     if (open && isUpdate && currentRow) {
@@ -173,10 +175,16 @@ export function ApiKeysMutateDrawer({
       const basePayload = transformFormDataToPayload(data)
 
       if (isUpdate && currentRow) {
-        const result = await updateApiKey({
-          ...basePayload,
-          id: currentRow.id,
-        })
+        const result = await updateApiKey(
+          {
+            ...basePayload,
+            id: currentRow.id,
+          },
+          {
+            preserveQuota:
+              !dirtyFields.remain_quota_dollars && !dirtyFields.unlimited_quota,
+          }
+        )
         if (result.success) {
           toast.success(t(SUCCESS_MESSAGES.API_KEY_UPDATED))
           onOpenChange(false)

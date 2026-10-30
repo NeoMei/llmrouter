@@ -48,6 +48,7 @@ type imageGatewayFixture struct {
 	downloads        atomic.Int64
 	settleFail       atomic.Bool
 	wire, kind       string
+	originProduct    string
 	img              []byte
 	providerReceived chan struct{}
 	providerRelease  chan struct{}
@@ -59,7 +60,7 @@ func newImageGatewayFixture(t *testing.T, kind, hubOrigin, token, dbPath string)
 	t.Helper()
 	enableUniHubBoundary(t)
 	gin.SetMode(gin.TestMode)
-	f := &imageGatewayFixture{kind: kind}
+	f := &imageGatewayFixture{kind: kind, originProduct: "fixture-product"}
 	if kind == "wan-edit-cancel" {
 		f.providerReceived = make(chan struct{})
 		f.providerRelease = make(chan struct{})
@@ -137,17 +138,25 @@ func newImageGatewayFixture(t *testing.T, kind, hubOrigin, token, dbPath string)
 			var out any
 			switch r.URL.Path {
 			case "/internal/v1/model-credentials/verify":
+				var verify map[string]string
+				require.NoError(t, common.DecodeJson(r.Body, &verify))
 				allowed := wire
 				if kind == "gemini-text-grant" {
 					allowed = "gemini.generate"
 				}
-				out = platformbilling.Claims{CredentialKind: "task", ID: "original-credential", Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: "superwagie", InstanceID: "default", Models: []string{"image-model"}, Operations: map[string][]string{"image-model": {allowed}}, TaskID: "image-task", ExpiresAt: time.Now().Add(time.Hour), Asset: "CNY/6", FundingMode: "prepaid_cash"}
+				credentialKind := "task"
+				taskID := "image-task"
+				if verify["token"] == "uh_key_image_fixture" {
+					credentialKind = "api_key"
+					taskID = ""
+				}
+				out = platformbilling.Claims{CredentialKind: credentialKind, ID: "original-credential", Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: f.originProduct, InstanceID: "default", Models: []string{"image-model"}, Operations: map[string][]string{"image-model": {allowed}}, TaskID: taskID, ExpiresAt: time.Now().Add(time.Hour), Asset: "CNY/6", FundingMode: "prepaid_cash"}
 			case "/internal/v1/rates":
 				out = []platformbilling.Rate{rate}
 			case "/internal/v1/calls/reserve":
 				var in map[string]string
 				require.NoError(t, common.DecodeJson(r.Body, &in))
-				remote = platformbilling.RemoteCall{WireOperation: in["wire_operation"], CallID: in["call_id"], ActorID: "actor", AccountID: "account", OriginProductID: "superwagie", InstanceID: "default", CredentialID: "original-credential", RequestDigest: in["request_digest"], Rate: rate, ChargeAsset: "CNY/6", FundingMode: "prepaid_cash", FundingProductID: "llmrouter", Held: in["amount"], Status: "RESERVED"}
+				remote = platformbilling.RemoteCall{WireOperation: in["wire_operation"], CallID: in["call_id"], ActorID: "actor", AccountID: "account", OriginProductID: f.originProduct, InstanceID: "default", CredentialID: "original-credential", RequestDigest: in["request_digest"], Rate: rate, ChargeAsset: "CNY/6", FundingMode: "prepaid_cash", FundingProductID: "llmrouter", Held: in["amount"], Status: "RESERVED"}
 				out = remote
 			case "/internal/v1/calls/image-call/settle":
 				if kind == "wan-edit-conflict" {

@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"errors"
 	userkit "github.com/NeoMei/UniHub/packages/userkit-go"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/internal/platformaccount"
@@ -69,12 +68,17 @@ func LoadRuntimeAuthority(c *gin.Context, localID int, authVersion int64) bool {
 	}
 	v, e := platformaccount.IdentityForLocal(c.Request.Context(), strconv.Itoa(localID))
 	if e != nil {
-		status := http.StatusServiceUnavailable
-		var failure *userkit.RuntimeError
-		if errors.As(e, &failure) && (failure.Status == 401 || failure.Status == 403 || failure.Status == 404) {
-			status = http.StatusUnauthorized
+		// Runtime service errors do not establish that this user's session was
+		// revoked. Deny the request while keeping recovery possible.
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"success": false, "code": "UNIHUB_AUTHORITY_UNAVAILABLE"})
+		return false
+	}
+	if CentralRealmAuthenticated(c) && !v.Access.Active {
+		if e := model.RecordCentralAuthDenial(c.Request.Context(), localID, v); e != nil {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"success": false, "code": "UNIHUB_AUTHORITY_UNAVAILABLE"})
+			return false
 		}
-		c.AbortWithStatusJSON(status, gin.H{"success": false, "code": "UNIHUB_AUTHORITY_UNAVAILABLE"})
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "AUTH_USER_DISABLED"})
 		return false
 	}
 	if authVersion > 0 && v.AuthVersion != authVersion {

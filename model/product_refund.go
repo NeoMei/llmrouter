@@ -57,6 +57,15 @@ func (s *ProductFundingStore) Refund(ctx context.Context, callID, key string, am
 		if call.ScopeDigest == "" || call.ScopeDigest != s.ScopeDigest() {
 			return ErrProductFundingConflict
 		}
+		if call.TokenID > 0 {
+			var token Token
+			if err := lockForUpdate(tx).Unscoped().First(&token, call.TokenID).Error; err != nil {
+				return err
+			}
+			if token.AuthRealm == NativeFundingLocalOnly {
+				return ErrProductFundingConflict
+			}
+		}
 		parentID := callID
 		var segment ProductCallChargeSegment
 		if e := tx.First(&segment, "call_id = ?", callID).Error; e == nil {
@@ -120,6 +129,15 @@ func (s *ProductFundingStore) resumeProductRefund(ctx context.Context, id string
 	if call.ScopeDigest == "" || call.ScopeDigest != s.ScopeDigest() {
 		return ErrProductFundingConflict
 	}
+	if call.TokenID > 0 {
+		var token Token
+		if err := s.db.WithContext(ctx).Unscoped().First(&token, call.TokenID).Error; err != nil {
+			return err
+		}
+		if token.AuthRealm == NativeFundingLocalOnly {
+			return ErrProductFundingConflict
+		}
+	}
 	out, e := s.client.Refund(ctx, receipt.CallID, userkit.RuntimeRefundRequest{RequestKey: receipt.ID, Amount: strconv.Itoa(receipt.Amount), Reason: receipt.Reason})
 	if e != nil {
 		return e
@@ -146,6 +164,9 @@ func (s *ProductFundingStore) resumeProductRefund(ctx context.Context, id string
 			var token Token
 			if e := lockForUpdate(tx).Unscoped().First(&token, call.TokenID).Error; e != nil {
 				return e
+			}
+			if token.AuthRealm == NativeFundingLocalOnly {
+				return ErrProductFundingConflict
 			}
 			remain := int64(token.RemainQuota) + int64(receipt.Amount)
 			if remain > int64(common.MaxQuota) {

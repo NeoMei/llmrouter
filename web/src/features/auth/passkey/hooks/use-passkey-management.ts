@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import i18next from 'i18next'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
 import {
@@ -31,8 +31,8 @@ import {
   beginPasskeyRegistration,
   deletePasskey,
   finishPasskeyRegistration,
-  getPasskeyStatus,
 } from '../api'
+import { createPasskeyStatusLoader } from '../status-loader'
 import type { PasskeyStatus } from '../types'
 
 interface UsePasskeyManagementOptions {
@@ -49,27 +49,34 @@ export function usePasskeyManagement(
   const [registering, setRegistering] = useState(false)
   const [removing, setRemoving] = useState(false)
   const [supported, setSupported] = useState(false)
+  const loadStatus = useRef(createPasskeyStatusLoader()).current
 
-  const fetchStatus = useCallback(async () => {
-    try {
+  const fetchStatus = useCallback(
+    async (fresh = false) => {
       setLoading(true)
-      const res = await getPasskeyStatus()
-      if (res.success) {
-        setStatus(res.data ?? null)
-        onStatusChange?.(res.data ?? null)
-      } else {
+      const result = await loadStatus(fresh)
+      if (!result.current) return
+      try {
+        if ('error' in result) throw result.error
+        const res = result.response
+        if (res.success) {
+          setStatus(res.data ?? null)
+          onStatusChange?.(res.data ?? null)
+        } else {
+          setStatus(null)
+          toast.error(res.message || i18next.t('Failed to load Passkey status'))
+        }
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error('[Passkey] Failed to fetch status', error)
+        toast.error(i18next.t('Failed to load Passkey status'))
         setStatus(null)
-        toast.error(res.message || i18next.t('Failed to load Passkey status'))
+      } finally {
+        setLoading(false)
       }
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[Passkey] Failed to fetch status', error)
-      toast.error(i18next.t('Failed to load Passkey status'))
-      setStatus(null)
-    } finally {
-      setLoading(false)
-    }
-  }, [onStatusChange])
+    },
+    [loadStatus, onStatusChange]
+  )
 
   useEffect(() => {
     fetchStatus()
@@ -139,7 +146,7 @@ export function usePasskeyManagement(
         }
 
         toast.success(i18next.t('Passkey registered successfully'))
-        await fetchStatus()
+        await fetchStatus(true)
         return true
       } catch (error: unknown) {
         if (error instanceof DOMException && error.name === 'NotAllowedError') {
@@ -172,7 +179,7 @@ export function usePasskeyManagement(
         }
 
         toast.success(i18next.t('Passkey removed successfully'))
-        await fetchStatus()
+        await fetchStatus(true)
         return true
       } catch (error) {
         // eslint-disable-next-line no-console

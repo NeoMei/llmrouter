@@ -76,7 +76,7 @@ func TestNativeOAuthAndPasskeyBindingLifecycle(t *testing.T) {
 	assert.Zero(t, count)
 }
 
-func TestNativeRealmBulkSubscriptionResetRejectsMixedOwnersAtomically(t *testing.T) {
+func TestNativeRealmBulkSubscriptionResetPartitionsMixedOwners(t *testing.T) {
 	_, db, _ := productFundingFixture(t)
 	old := DB
 	DB = db
@@ -90,17 +90,17 @@ func TestNativeRealmBulkSubscriptionResetRejectsMixedOwnersAtomically(t *testing
 	for _, id := range []int{42, 43} {
 		require.NoError(t, db.Create(&UserSubscription{UserId: id, PlanId: plan.Id, Status: "active", EndTime: now + 1000, AmountTotal: 100, AmountUsed: 40}).Error)
 	}
-	for _, realm := range []string{"", NativeFundingLocalOnly} {
-		_, err := AdminResetPlanSubscriptions(plan.Id, false, realm)
-		require.Error(t, err)
-		var subs []UserSubscription
-		require.NoError(t, db.Find(&subs).Error)
-		for _, sub := range subs {
-			assert.EqualValues(t, 40, sub.AmountUsed)
-		}
-	}
-	require.NoError(t, db.Where("user_id = ?", 43).Delete(&UserSubscription{}).Error)
 	result, err := AdminResetPlanSubscriptions(plan.Id, false, NativeFundingLocalOnly)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.ResetCount)
+	var native, central UserSubscription
+	require.NoError(t, db.Where("user_id = ?", 42).First(&native).Error)
+	require.NoError(t, db.Where("user_id = ?", 43).First(&central).Error)
+	assert.Zero(t, native.AmountUsed)
+	assert.EqualValues(t, 40, central.AmountUsed)
+	result, err = AdminResetPlanSubscriptions(plan.Id, false, "")
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.ResetCount)
+	require.NoError(t, db.First(&central, central.Id).Error)
+	assert.Zero(t, central.AmountUsed)
 }

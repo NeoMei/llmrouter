@@ -1,13 +1,13 @@
 package model
 
 import (
-	"context"
+	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"math/rand"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"gorm.io/gorm"
 )
@@ -52,8 +52,7 @@ func HasCheckedInToday(userId int) (bool, error) {
 }
 
 // UserCheckin 执行用户签到
-// MySQL 和 PostgreSQL 使用事务保证原子性
-// SQLite 不支持嵌套事务，使用顺序操作 + 手动回滚
+// 签到记录与本地额度或中央奖励命令在同一事务内提交。
 func UserCheckin(userId int) (*Checkin, error) {
 	setting := operation_setting.GetCheckinSetting()
 	if !setting.Enabled {
@@ -83,19 +82,12 @@ func UserCheckin(userId int) (*Checkin, error) {
 		CreatedAt:    time.Now().Unix(),
 	}
 
-	// 根据数据库类型选择不同的策略
-	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
-		// SQLite 不支持嵌套事务，使用顺序操作 + 手动回滚
-		return userCheckinWithoutTransaction(checkin, userId, quotaAwarded)
-	}
-
-	// MySQL 和 PostgreSQL 支持事务，使用事务保证原子性
 	return userCheckinWithTransaction(checkin, userId, quotaAwarded)
 }
 
-// userCheckinWithTransaction 使用事务执行签到（适用于 MySQL 和 PostgreSQL）
+// userCheckinWithTransaction 使用事务执行签到。
 func userCheckinWithTransaction(checkin *Checkin, userId int, quotaAwarded int) (*Checkin, error) {
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	apply := func(tx *gorm.DB) error {
 		// Match activation/import lock order: owner before receipt and funding account.
 		var owner User
 		if err := lockForUpdate(tx).First(&owner, userId).Error; err != nil {
@@ -107,12 +99,26 @@ func userCheckinWithTransaction(checkin *Checkin, userId int, quotaAwarded int) 
 			return errors.New("签到失败，请稍后重试")
 		}
 
-		handled, err := QueueProductCreditAward(tx, userId, "checkin", fmt.Sprintf("%d:%s", userId, checkin.CheckinDate), quotaAwarded, map[string]any{"user_id": userId, "date": checkin.CheckinDate, "quota": quotaAwarded})
-		if err != nil {
-			return err
+		// The original SQLite backend also permits an explicit local funding
+		// account. Resolve it inside this transaction rather than using the
+		// former pre-transaction funding read.
+		sqliteLocal := false
+		if tx.Dialector.Name() == "sqlite" && tx.Migrator().HasTable(&ProductFundingAccount{}) {
+			var account ProductFundingAccount
+			err := tx.First(&account, "user_id = ?", userId).Error
+			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			sqliteLocal = err == nil && account.State == "local"
 		}
-		if handled {
-			return nil
+		if !sqliteLocal {
+			handled, err := QueueProductCreditAward(tx, userId, "checkin", fmt.Sprintf("%d:%s", userId, checkin.CheckinDate), quotaAwarded, map[string]any{"user_id": userId, "date": checkin.CheckinDate, "quota": quotaAwarded})
+			if err != nil {
+				return err
+			}
+			if handled {
+				return nil
+			}
 		}
 
 		// 步骤2: 在事务中增加用户额度
@@ -122,40 +128,32 @@ func userCheckinWithTransaction(checkin *Checkin, userId int, quotaAwarded int) 
 		}
 
 		return nil
-	})
+	}
+	var err error
+	if DB.Dialector.Name() == "sqlite" {
+		err = DB.Connection(func(conn *gorm.DB) error {
+			txErr := conn.Transaction(apply)
+			if txErr != nil {
+				// SQLite COMMIT BUSY/deferred-constraint errors can leave the
+				// driver transaction open after database/sql has closed its Tx.
+				// Keep this connection pinned until it is rolled back or discarded.
+				if rollbackErr := conn.Exec("ROLLBACK").Error; rollbackErr != nil {
+					if pinned, ok := conn.Statement.ConnPool.(*sql.Conn); ok {
+						_ = pinned.Raw(func(any) error { return driver.ErrBadConn })
+					}
+				}
+			}
+			return txErr
+		})
+	} else {
+		err = DB.Transaction(apply)
+	}
 
 	if err != nil {
 		return nil, err
 	}
 
 	syncProductCreditResult(userId, quotaAwarded, "checkin")
-
-	return checkin, nil
-}
-
-// userCheckinWithoutTransaction 不使用事务执行签到（适用于 SQLite）
-func userCheckinWithoutTransaction(checkin *Checkin, userId int, quotaAwarded int) (*Checkin, error) {
-	state, err := ProductFundingState(context.Background(), userId)
-	if err != nil {
-		return nil, err
-	}
-	if state != "local" {
-		return userCheckinWithTransaction(checkin, userId, quotaAwarded)
-	}
-
-	// 步骤1: 创建签到记录
-	// 数据库有唯一约束 (user_id, checkin_date)，可以防止并发重复签到
-	if err := DB.Create(checkin).Error; err != nil {
-		return nil, errors.New("签到失败，请稍后重试")
-	}
-
-	// 步骤2: 增加用户额度
-	// 使用 db=true 强制直接写入数据库，不使用批量更新
-	if err := IncreaseUserQuota(userId, quotaAwarded, true); err != nil {
-		// 如果增加额度失败，需要回滚签到记录
-		DB.Delete(checkin)
-		return nil, errors.New("签到失败：更新额度出错")
-	}
 
 	return checkin, nil
 }

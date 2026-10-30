@@ -137,7 +137,11 @@ func (b *productBrowserBridge) startHandoff(c *gin.Context) {
 	}
 	// SameSite=Strict refresh credentials are sent only on this same-origin start.
 	// Rotating the refresh secret proves the original browser; an SID alone cannot.
-	raw, e := c.Cookie(service.RefreshCookieName)
+	expectedSID := strings.TrimSpace(c.GetHeader("X-Auth-Session"))
+	if expectedSID == "" {
+		expectedSID = strings.TrimSpace(c.Query("auth_session"))
+	}
+	cookieName, raw, e := service.SelectRefreshCookie(c, expectedSID)
 	if e != nil {
 		c.Status(401)
 		return
@@ -152,10 +156,15 @@ func (b *productBrowserBridge) startHandoff(c *gin.Context) {
 		c.Status(http.StatusUnauthorized)
 		return
 	}
+	if native, nativeErr := service.IsNativeLoginSession(c.Request.Context(), identity); nativeErr != nil || native {
+		service.WriteRefreshCookie(c, bundle.RefreshToken)
+		c.Status(http.StatusForbidden)
+		return
+	}
 	if e = service.VerifyBrokerSource(c.Request.Context(), identity); e != nil {
 		if errors.Is(e, service.ErrLoginSessionRevoked) {
 			_, _ = model.RevokeUserSession(identity.UserID, identity.SessionID, "broker_source_revoked")
-			service.ClearRefreshCookie(c)
+			service.ClearNamedRefreshCookie(c, cookieName)
 			c.Status(http.StatusUnauthorized)
 		} else {
 			service.WriteRefreshCookie(c, bundle.RefreshToken)
@@ -168,7 +177,7 @@ func (b *productBrowserBridge) startHandoff(c *gin.Context) {
 		c.Status(503)
 		return
 	}
-	if _, e = platformaccount.AuthenticateLocal(c.Request.Context(), strconv.Itoa(user.Id), user.AuthVersion, "session"); e != nil {
+	if _, e = platformaccount.AuthenticateLocal(c.Request.Context(), strconv.Itoa(user.Id), identity.UserAuthVersion, "session"); e != nil {
 		c.Status(401)
 		return
 	}
@@ -264,8 +273,13 @@ func (b *productBrowserBridge) callback(c *gin.Context) bool {
 		c.Status(401)
 		return true
 	}
-	if _, e = service.ValidateSessionReference(c.Request.Context(), flow.UserId, flow.SessionId); e != nil {
+	flowIdentity, e := service.ValidateSessionReference(c.Request.Context(), flow.UserId, flow.SessionId)
+	if e != nil {
 		c.Status(401)
+		return true
+	}
+	if native, nativeErr := service.IsNativeLoginSession(c.Request.Context(), flowIdentity); nativeErr != nil || native {
+		c.Status(http.StatusForbidden)
 		return true
 	}
 	if c.Query("handoff_done") == "1" {
@@ -294,7 +308,7 @@ func (b *productBrowserBridge) callback(c *gin.Context) bool {
 		c.Status(401)
 		return true
 	}
-	actor, e := platformaccount.AuthenticateLocal(c.Request.Context(), strconv.Itoa(user.Id), user.AuthVersion, "session")
+	actor, e := platformaccount.AuthenticateLocal(c.Request.Context(), strconv.Itoa(user.Id), flowIdentity.UserAuthVersion, "session")
 	if e != nil {
 		c.Status(401)
 		return true
@@ -371,15 +385,29 @@ func (b *productBrowserBridge) completeBroker(c *gin.Context) {
 		productBrowserFailure(c, state.ReturnTo, state.Silent == nil || *state.Silent)
 		return
 	}
-	if e = reconcileSSOUser(c, userID); e != nil {
+	owner, e := model.GetUserById(userID, false)
+	if e != nil {
 		productBrowserFailure(c, state.ReturnTo, state.Silent == nil || *state.Silent)
 		return
 	}
-	if e = model.EnsureProductFunding(c.Request.Context(), userID); e != nil && !errors.Is(e, model.ErrProductFundingMigration) {
-		productBrowserFailure(c, state.ReturnTo, state.Silent == nil || *state.Silent)
-		return
+	if owner.FundingRealm != model.NativeFundingLocalOnly {
+		if e = reconcileSSOUser(c, userID); e != nil {
+			productBrowserFailure(c, state.ReturnTo, state.Silent == nil || *state.Silent)
+			return
+		}
 	}
-	bundle, e := service.CreateLoginSession(userID, "product_broker", c.ClientIP(), c.Request.UserAgent())
+	if owner.FundingRealm != model.NativeFundingLocalOnly {
+		if e = model.EnsureProductFunding(c.Request.Context(), userID); e != nil && !errors.Is(e, model.ErrProductFundingMigration) {
+			productBrowserFailure(c, state.ReturnTo, state.Silent == nil || *state.Silent)
+			return
+		}
+	}
+	var bundle *service.AuthBundle
+	if owner.FundingRealm == model.NativeFundingLocalOnly {
+		bundle, e = service.CreateCentralSessionFromVerifiedSource(c.Request.Context(), userID, grant.Access, "product_broker", grant.SourceProofExpiresAt, c.ClientIP(), c.Request.UserAgent())
+	} else {
+		bundle, e = service.CreateLoginSession(userID, "product_broker", c.ClientIP(), c.Request.UserAgent())
+	}
 	if e != nil {
 		productBrowserFailure(c, state.ReturnTo, state.Silent == nil || *state.Silent)
 		return
@@ -390,7 +418,22 @@ func (b *productBrowserBridge) completeBroker(c *gin.Context) {
 		return
 	}
 	service.WriteRefreshCookie(c, bundle.RefreshToken)
-	c.Redirect(303, state.ReturnTo)
+	c.Redirect(303, returnToWithSession(state.ReturnTo, bundle.Session.SID))
+}
+
+func returnToWithSession(target, sid string) string {
+	safe, ok := safeProductBrowserReturn(target)
+	if !ok {
+		return "/"
+	}
+	u, err := url.Parse(safe)
+	if err != nil {
+		return "/"
+	}
+	q := u.Query()
+	q.Set("__auth_session", sid)
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 func reconcileSSOUser(c *gin.Context, userID int) error {

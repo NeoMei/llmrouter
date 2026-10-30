@@ -1,5 +1,16 @@
 {
   "translation": {
+    "Two-factor authentication is managed by UniHub.": "Двухфакторная аутентификация управляется в UniHub.",
+    "Two-factor authentication status is temporarily unavailable.": "Статус двухфакторной аутентификации временно недоступен.",
+    "Password and account deletion are managed by UniHub.": "Пароль и удаление учётной записи управляются в UniHub.",
+    "Switch account": "Сменить аккаунт",
+    "Local account": "Локальный аккаунт",
+    "Central account": "Центральный аккаунт",
+    "No other signed-in account": "Нет других активных аккаунтов",
+    "Session access is blocked by the server origin configuration. Please contact your administrator, then retry.": "Настройки источников сервера блокируют сеанс. Обратитесь к администратору и повторите попытку.",
+    "Account choices temporarily unavailable": "Список аккаунтов временно недоступен",
+    "Try again": "Повторить",
+    "Unable to switch account": "Не удалось сменить аккаунт",
     "Settle sandbox recharge": "Завершить тестовое пополнение",
     "UniHub account access is unavailable for this browser session. Contact the administrator.": "Доступ к аккаунту UniHub в этом сеансе недоступен. Обратитесь к администратору.",
     "For UniHub accounts, local log date ranges must not exceed 30 days.": "Для аккаунтов UniHub период локальных журналов не должен превышать 30 дней.",

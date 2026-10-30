@@ -34,6 +34,30 @@ func SessionCookieOriginGuard() gin.HandlerFunc {
 	}
 }
 
+func SessionOptionsOriginGuard() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		fetchSite := c.GetHeader("Sec-Fetch-Site")
+		origin, ok := requestBrowserOrigin(c.Request)
+		scheme := "http"
+		if c.Request.TLS != nil {
+			scheme = "https"
+		}
+		own, err := common.NormalizeOrigin(scheme + "://" + c.Request.Host)
+		matched := err == nil && subtle.ConstantTimeCompare([]byte(origin), []byte(own)) == 1
+		// Behind TLS termination the request scheme may be http while the
+		// browser origin is https. A configured trusted origin is accepted only
+		// with the browser's explicit same-origin Fetch Metadata assertion.
+		if fetchSite == "same-origin" && isAllowedSessionOrigin(c.Request, origin) {
+			matched = true
+		}
+		if (fetchSite != "" && fetchSite != "same-origin") || !ok || !matched {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "AUTH_ORIGIN_FORBIDDEN"})
+			return
+		}
+		c.Next()
+	}
+}
+
 func requestBrowserOrigin(request *http.Request) (string, bool) {
 	originValues := request.Header.Values("Origin")
 	if len(originValues) > 1 {

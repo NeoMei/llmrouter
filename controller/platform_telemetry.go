@@ -9,7 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/internal/platformaccount"
 	"github.com/QuantumNous/new-api/internal/platformbilling"
-	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/gin-gonic/gin"
@@ -20,7 +20,24 @@ import (
 func productTelemetry(c *gin.Context, allActors bool) (service.PlatformTelemetry, bool, bool) {
 	p, projected := authz.ProductPrincipal(c)
 	if !projected {
-		return service.PlatformTelemetry{}, false, false
+		// UserAuth establishes native PAT provenance against the current owner
+		// and credential. A PAT may read native telemetry without becoming a
+		// browser session or gaining session-management authority.
+		if middleware.NativeRealmAuthenticated(c) {
+			if c.GetBool("use_access_token") {
+				identity, ok := middleware.GetAuthIdentity(c)
+				if ok && identity.UserID > 0 && identity.UserID == c.GetInt("id") && identity.UserAuthVersion > 0 && identity.SessionID == "" {
+					return service.PlatformTelemetry{}, false, false
+				}
+			} else if identity, ok := middleware.GetSessionAuthIdentity(c); ok {
+				native, err := service.IsNativeLoginSession(c.Request.Context(), identity)
+				if err == nil && native {
+					return service.PlatformTelemetry{}, false, false
+				}
+			}
+		}
+		c.AbortWithStatus(http.StatusServiceUnavailable)
+		return service.PlatformTelemetry{}, true, false
 	}
 	config, err := platformaccount.Current()
 	if err != nil || (!config.Enabled && !platformaccount.RuntimeEnabled()) || !p.Access.Active || p.Access.ExpiresAt <= time.Now().Unix() || p.Access.Subject == "" || p.Access.Issuer != config.PublicOrigin || p.Access.ProductID != config.ProductID || p.Access.InstanceID != config.InstanceID {
@@ -57,38 +74,9 @@ func serveProductTelemetryLogs(c *gin.Context, allActors bool) bool {
 		return projected
 	}
 	logs := telemetry.Logs
-	// Management and login events still live in LogDB; retain that history while
-	// platform model calls are read directly from their authoritative journal.
-	if model.LOG_DB != nil && model.LOG_DB.Migrator().HasTable(&model.Log{}) {
-		start, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
-		end, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
-		kind, _ := strconv.Atoi(c.Query("type"))
-		var local []*model.Log
-		var err error
-		if allActors {
-			channel, _ := strconv.Atoi(c.Query("channel"))
-			local, _, err = model.GetAllLogs(kind, start, end, c.Query("model_name"), c.Query("username"), c.Query("token_name"), 0, 10000, channel, c.Query("group"), c.Query("request_id"), c.Query("upstream_request_id"))
-		} else {
-			local, _, err = model.GetUserLogs(c.GetInt("id"), kind, start, end, c.Query("model_name"), c.Query("token_name"), 0, 10000, c.Query("group"), c.Query("request_id"), c.Query("upstream_request_id"))
-		}
-		if err != nil {
-			common.ApiError(c, err)
-			return true
-		}
-		centralIDs := make(map[string]bool)
-		for _, log := range logs {
-			centralIDs[log.RequestId] = true
-		}
-		for _, log := range local {
-			if centralIDs[log.RequestId] {
-				continue
-			}
-			log.Content, log.Ip, log.UpstreamRequestId = "", "", ""
-			log.Quota = 0
-			log.Other = common.MapToJsonStr(map[string]any{"financial_details": false})
-			logs = append(logs, log)
-		}
-	}
+	// Product principals have no trustworthy realm attribution for legacy
+	// local rows. Only native authentication may read those rows through the
+	// native handler; product telemetry is sourced solely from its journal.
 	sort.SliceStable(logs, func(i, j int) bool {
 		if logs[i].CreatedAt == logs[j].CreatedAt {
 			return logs[i].RequestId > logs[j].RequestId
@@ -117,58 +105,12 @@ func serveProductQuotaTelemetry(c *gin.Context, allActors bool, view string) boo
 	if !projected || !ok {
 		return projected
 	}
-	if !model.DB.Migrator().HasTable(&model.QuotaData{}) {
-		if view == "flow" {
-			common.ApiSuccess(c, telemetry.FlowData)
-		} else if view == "users" {
-			common.ApiSuccess(c, telemetry.UserData)
-		} else {
-			common.ApiSuccess(c, telemetry.QuotaData)
-		}
-		return true
-	}
-	start, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
-	end, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
-	if end == 0 {
-		end = time.Now().Unix()
-	}
-	if start == 0 {
-		start = end - 2592000
-	}
 	if view == "flow" {
-		userID, role := c.GetInt("id"), common.RoleCommonUser
-		if allActors {
-			userID, role = 0, common.RoleAdminUser
-		}
-		local, err := model.GetFlowQuotaData(start, end, c.Query("username"), userID, role)
-		if err != nil {
-			common.ApiError(c, err)
-			return true
-		}
-		for _, row := range local {
-			row.Quota = 0
-		}
-		common.ApiSuccess(c, append(telemetry.FlowData, local...))
-		return true
+		common.ApiSuccess(c, telemetry.FlowData)
+	} else if view == "users" {
+		common.ApiSuccess(c, telemetry.UserData)
+	} else {
+		common.ApiSuccess(c, telemetry.QuotaData)
 	}
-	var local []*model.QuotaData
-	var err error
-	switch {
-	case view == "users":
-		local, err = model.GetQuotaDataGroupByUser(start, end)
-		telemetry.QuotaData = telemetry.UserData
-	case allActors:
-		local, err = model.GetAllQuotaDates(start, end, c.Query("username"))
-	default:
-		local, err = model.GetQuotaDataByUserId(c.GetInt("id"), start, end)
-	}
-	if err != nil {
-		common.ApiError(c, err)
-		return true
-	}
-	for _, row := range local {
-		row.Quota = 0
-	}
-	common.ApiSuccess(c, append(telemetry.QuotaData, local...))
 	return true
 }

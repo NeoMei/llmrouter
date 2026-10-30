@@ -115,7 +115,7 @@ func NativeRealmUser(ctx context.Context, userID int) (*User, error) {
 	if err := DB.WithContext(ctx).First(&user, userID).Error; err != nil {
 		return nil, err
 	}
-	if user.FundingRealm != NativeFundingLocalOnly || user.FundingRealmEvidence == "" || !user.NativePassword || user.ProductRegistrationPending || user.ProductJITPending {
+	if user.FundingRealm != NativeFundingLocalOnly || user.FundingRealmEvidence == "" || !user.NativePassword || user.ProductRegistrationPending || user.ProductJITPending || user.IdentitySource == ProductIdentityPending {
 		return nil, ErrNativeCredentialUnverified
 	}
 	state, err := ProductFundingState(ctx, userID)
@@ -169,11 +169,19 @@ func nativeRealmToken(ctx context.Context, authenticated *Token, ownedRead, hist
 	if user.Status != common.UserStatusEnabled {
 		return false, ErrNativeCredentialUnverified
 	}
+	remain, used, err := NativeTokenQuotaBalance(ctx, current.Id, current.QuotaPolicyGeneration)
+	if err != nil {
+		if !errors.Is(err, ErrNativeQuotaNotEnrolled) || (!ownedRead && !historyRead) {
+			return false, err
+		}
+		// Unenrolled keys retain their original history/receipt reads. This
+		// SQL projection is display data and never authorizes a new dispatch.
+		remain, used = current.RemainQuota, current.UsedQuota
+	}
 	// Use current restrictions even when a pre-mutation cache snapshot survived.
 	authenticated.UnlimitedQuota = current.UnlimitedQuota
-	if !current.UnlimitedQuota && authenticated.RemainQuota > current.RemainQuota {
-		authenticated.RemainQuota = current.RemainQuota
-	}
+	authenticated.RemainQuota, authenticated.UsedQuota = remain, used
+	authenticated.QuotaPolicyGeneration = current.QuotaPolicyGeneration
 	authenticated.AllowIps = current.AllowIps
 	authenticated.ModelLimitsEnabled = current.ModelLimitsEnabled
 	authenticated.ModelLimits = current.ModelLimits

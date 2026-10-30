@@ -1,8 +1,11 @@
 package middleware
 
 import (
+	"errors"
+	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -10,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestNativeRealmSelfWritersRequireNativeSession(t *testing.T) {
@@ -45,6 +49,72 @@ func TestNativeRealmSelfWritersRequireNativeSession(t *testing.T) {
 	require.NoError(t, model.DB.First(&current, user.Id).Error)
 	assert.Equal(t, user.AuthVersion, current.AuthVersion)
 	assert.Equal(t, common.UserStatusEnabled, current.Status)
+}
+
+func TestPATRealmClassificationKeepsNativeLegacyAndRejectsConflicts(t *testing.T) {
+	setupDashboardAuthMiddlewareTest(t)
+	require.NoError(t, model.RegisterProductFundingModels(model.DB))
+	require.NoError(t, model.DB.AutoMigrate(&model.UniHubIdentityMapping{}, &model.NativeLoginCredential{}, &model.CentralLoginCredential{}, &model.CentralSessionCredential{}, &model.CentralAuthState{}))
+	t.Setenv("UNIHUB_INDEPENDENT_CENTRAL_REALM_ENABLED", "true")
+	t.Setenv("UNIHUB_PRODUCT_RUNTIME_ENABLED", "false")
+	nativeUser := createMiddlewarePATUser(t, "native-pat-review", "native-pat-value")
+	require.NoError(t, model.DB.Model(nativeUser).Updates(map[string]any{"funding_realm": model.NativeFundingLocalOnly, "funding_realm_evidence": "reviewed", "native_password": true}).Error)
+	require.NoError(t, model.UpdateUserAccessToken(nativeUser.Id, "native-pat-value", model.NativeFundingLocalOnly))
+	legacyUser := createMiddlewarePATUser(t, "legacy-pat-review", "legacy-pat-value")
+	r := gin.New()
+	r.GET("/protected", UserAuth(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	request := func(token string) int {
+		req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w.Code
+	}
+	require.Equal(t, http.StatusNoContent, request("native-pat-value"))
+	require.Equal(t, http.StatusNoContent, request("legacy-pat-value"))
+	for _, evidence := range []struct {
+		name  string
+		value any
+	}{
+		{"central state", &model.CentralAuthState{UserID: legacyUser.Id, AuthVersion: 1, Active: true}},
+		{"central session", &model.UserSession{SID: "evidence-central", UserID: legacyUser.Id, AuthRealm: model.CentralAuthRealm, Status: model.UserSessionStatusActive, ExpiresAt: time.Now().Unix() + 600}},
+		{"other central credential", &model.CentralLoginCredential{UserID: legacyUser.Id, Kind: "passkey", Digest: "proof", BindingID: "binding", AuthVersion: 1}},
+		{"central session credential", &model.CentralSessionCredential{SID: "evidence-proof", UserID: legacyUser.Id, Kind: "pat", Digest: "proof"}},
+	} {
+		require.NoError(t, model.DB.Create(evidence.value).Error, evidence.name)
+		require.Equal(t, http.StatusUnauthorized, request("legacy-pat-value"), evidence.name)
+		require.NoError(t, model.DB.Delete(evidence.value).Error, evidence.name)
+		require.Equal(t, http.StatusNoContent, request("legacy-pat-value"), evidence.name)
+	}
+	require.NoError(t, model.DB.Create(&model.CentralLoginCredential{UserID: nativeUser.Id, Kind: "pat", Digest: "conflict", BindingID: "conflict", AuthVersion: 1}).Error)
+	require.Equal(t, http.StatusUnauthorized, request("native-pat-value"), "two realm proofs cannot be resolved by preference")
+	require.NoError(t, model.DB.Where("user_id = ? AND kind = ?", nativeUser.Id, "pat").Delete(&model.CentralLoginCredential{}).Error)
+	require.NoError(t, model.DB.Callback().Query().Before("gorm:query").Register("test:pat_proof_store_error", func(tx *gorm.DB) {
+		if tx.Statement.Table == "central_login_credentials" {
+			tx.AddError(errors.New("proof store unavailable"))
+		}
+	}))
+	require.Equal(t, http.StatusServiceUnavailable, request("native-pat-value"))
+	require.Equal(t, http.StatusServiceUnavailable, request("legacy-pat-value"))
+	require.NoError(t, model.DB.Callback().Query().Remove("test:pat_proof_store_error"))
+	require.Equal(t, http.StatusNoContent, request("native-pat-value"))
+	require.Equal(t, http.StatusNoContent, request("legacy-pat-value"))
+	for _, table := range []string{"central_auth_states", "user_sessions", "central_session_credentials"} {
+		callback := "test:pat_evidence_store_error:" + table
+		require.NoError(t, model.DB.Callback().Query().Before("gorm:query").Register(callback, func(tx *gorm.DB) {
+			if tx.Statement.Table == table {
+				tx.AddError(errors.New("evidence store unavailable"))
+			}
+		}))
+		require.Equal(t, http.StatusServiceUnavailable, request("legacy-pat-value"), table)
+		require.NoError(t, model.DB.Callback().Query().Remove(callback))
+		require.Equal(t, http.StatusNoContent, request("legacy-pat-value"), table)
+	}
+	t.Setenv("UNIHUB_INDEPENDENT_CENTRAL_REALM_ENABLED", "false")
+	require.Equal(t, http.StatusNoContent, request("native-pat-value"))
+	require.Equal(t, http.StatusNoContent, request("legacy-pat-value"))
+	require.NoError(t, model.DB.Create(&model.CentralAuthState{UserID: legacyUser.Id, AuthVersion: 1, Active: true}).Error)
+	require.Equal(t, http.StatusUnauthorized, request("legacy-pat-value"), "disabled flag must not erase central evidence")
 }
 
 func TestNativeRealmNewPATUsesExplicitServerBinding(t *testing.T) {

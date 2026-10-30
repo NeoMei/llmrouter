@@ -42,6 +42,7 @@ type ocrGatewayFixture struct {
 	now                                        time.Time
 	sends, polls, reserves, settles, downloads int
 	variant                                    string
+	originProduct                              string
 	denySettlementRead                         bool
 	runtime                                    *ocr.Runtime
 	image                                      []byte
@@ -67,7 +68,7 @@ func newOCRGatewayFixture(t *testing.T, variant, hubOrigin, serviceToken, dbPath
 	enableUniHubBoundary(t)
 	require.NoError(t, i18n.Init())
 	gin.SetMode(gin.TestMode)
-	f := &ocrGatewayFixture{now: time.Now().UTC(), variant: variant}
+	f := &ocrGatewayFixture{now: time.Now().UTC(), variant: variant, originProduct: "fixture-product"}
 	var imageBytes bytes.Buffer
 	require.NoError(t, png.Encode(&imageBytes, image.NewRGBA(image.Rect(0, 0, 2, 2))))
 	f.image = imageBytes.Bytes()
@@ -132,14 +133,14 @@ func newOCRGatewayFixture(t *testing.T, variant, hubOrigin, serviceToken, dbPath
 			var out any
 			switch r.URL.Path {
 			case "/internal/v1/model-credentials/verify":
-				out = platformbilling.Claims{CredentialKind: "task", ID: "original-credential", Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: "superwagie", InstanceID: "default", Models: []string{"ocr-model"}, Operations: map[string][]string{"ocr-model": {wire}}, TaskID: "ocr-task", ExpiresAt: time.Now().Add(time.Hour), Asset: "CNY/6", FundingMode: "prepaid_cash"}
+				out = platformbilling.Claims{CredentialKind: "task", ID: "original-credential", Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: f.originProduct, InstanceID: "default", Models: []string{"ocr-model"}, Operations: map[string][]string{"ocr-model": {wire}}, TaskID: "ocr-task", ExpiresAt: time.Now().Add(time.Hour), Asset: "CNY/6", FundingMode: "prepaid_cash"}
 			case "/internal/v1/rates":
 				out = []platformbilling.Rate{rate}
 			case "/internal/v1/calls/reserve":
 				f.reserves++
 				var in map[string]string
 				require.NoError(t, common.DecodeJson(r.Body, &in))
-				remote = platformbilling.RemoteCall{WireOperation: in["wire_operation"], CallID: in["call_id"], ActorID: "actor", AccountID: "account", OriginProductID: "superwagie", InstanceID: "default", CredentialID: "original-credential", RequestDigest: in["request_digest"], Rate: rate, ChargeAsset: "CNY/6", FundingMode: "prepaid_cash", FundingProductID: "llmrouter", Held: in["amount"], Status: "RESERVED"}
+				remote = platformbilling.RemoteCall{WireOperation: in["wire_operation"], CallID: in["call_id"], ActorID: "actor", AccountID: "account", OriginProductID: f.originProduct, InstanceID: "default", CredentialID: "original-credential", RequestDigest: in["request_digest"], Rate: rate, ChargeAsset: "CNY/6", FundingMode: "prepaid_cash", FundingProductID: "llmrouter", Held: in["amount"], Status: "RESERVED"}
 				out = remote
 			case "/internal/v1/calls/ocr-call/release":
 				remote.Status = "RELEASED"

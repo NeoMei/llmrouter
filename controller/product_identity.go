@@ -11,12 +11,15 @@ import (
 	"github.com/gin-gonic/gin"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 func productIdentityError(c *gin.Context, e error) {
 	status := http.StatusServiceUnavailable
+	// Runtime 401 may describe the service credential rather than the user.
+	// Keep sessions retryable until the authority provides unambiguous evidence.
 	var failure *userkit.RuntimeError
-	if errors.As(e, &failure) && (failure.Status == 401 || failure.Status == 403 || failure.Status == 404 || failure.Status == 409) {
+	if errors.As(e, &failure) && (failure.Status == 403 || failure.Status == 404 || failure.Status == 409) {
 		status = failure.Status
 	}
 	c.AbortWithStatusJSON(status, gin.H{"success": false, "code": "PRODUCT_IDENTITY_UNAVAILABLE", "message": "Product identity authority is unavailable"})
@@ -61,7 +64,7 @@ func completePendingProductIdentity(c *gin.Context, u *model.User) error {
 	return nil
 }
 
-func applyCurrentProductIdentity(c *gin.Context, u *model.User, authenticate bool) error {
+func applyCurrentProductIdentity(c *gin.Context, u *model.User, authenticate bool, independentVersion ...int64) error {
 	if !platformaccount.RuntimeEnabled() {
 		return nil
 	}
@@ -81,7 +84,11 @@ func applyCurrentProductIdentity(c *gin.Context, u *model.User, authenticate boo
 	if e != nil {
 		return e
 	}
-	if current.AuthVersion != u.AuthVersion {
+	expectedVersion := u.AuthVersion
+	if len(independentVersion) > 0 {
+		expectedVersion = independentVersion[0]
+	}
+	if current.AuthVersion != expectedVersion {
 		return userkit.ErrDenied
 	}
 	if current.Access.Subject == "" || current.Access.User.ID != current.Binding.UserID || current.Access.Subject != current.Binding.UserID {
@@ -101,9 +108,35 @@ func applyCurrentProductIdentity(c *gin.Context, u *model.User, authenticate boo
 	return nil
 }
 
-func productSelfData(c *gin.Context, u *model.User) map[string]interface{} {
-	data := buildSelfUserData(u)
+func productSelfData(c *gin.Context, u *model.User, nativeScope ...bool) map[string]interface{} {
+	native := middleware.NativeRealmAuthenticated(c) || len(nativeScope) > 0 && nativeScope[0]
+	data := buildRealmSelfUserData(u, native)
+	// Realm is derived from authenticated session state, never the shared user
+	// projection. PATs and other credentials do not carry a browser realm.
+	realm := "UNKNOWN"
+	if middleware.CentralRealmAuthenticated(c) {
+		realm = model.CentralAuthRealm
+	} else if native {
+		realm = model.NativeFundingLocalOnly
+	} else if identity, ok := middleware.GetSessionAuthIdentity(c); ok && identity.UserID == u.Id {
+		realm = "LEGACY"
+	}
+	data["authentication_realm"] = realm
 	if p, ok := authz.ProductPrincipal(c); ok {
+		if u.FundingRealm == model.NativeFundingLocalOnly && !native {
+			name := strings.TrimSpace(p.Access.User.Name)
+			if name == "" {
+				name = p.Access.Subject
+			}
+			data["username"] = name
+			data["display_name"] = p.Access.User.Name
+			data["email"] = p.Access.User.Email
+			if p.Access.Active {
+				data["status"] = common.UserStatusEnabled
+			} else {
+				data["status"] = common.UserStatusDisabled
+			}
+		}
 		data["role"] = middleware.RoleFromAccess(p.Access)
 		permissions := calculateUserPermissions(middleware.RoleFromAccess(p.Access))
 		permissions["admin_permissions"] = authz.RequestCapabilities(c)
@@ -120,7 +153,15 @@ func mutateProductIdentity(c *gin.Context, target int, in userkit.ProductIdentit
 	if e = model.SyncProductAuthVersions(c.Request.Context(), actor.Id); e != nil {
 		return userkit.ProductIdentity{}, e
 	}
-	proof, e := platformaccount.AuthenticateLocal(c.Request.Context(), strconv.Itoa(actor.Id), actor.AuthVersion, "session")
+	version := actor.AuthVersion
+	if middleware.CentralRealmAuthenticated(c) {
+		identity, ok := middleware.GetSessionAuthIdentity(c)
+		if !ok || identity.UserID != actor.Id {
+			return userkit.ProductIdentity{}, userkit.ErrDenied
+		}
+		version = identity.UserAuthVersion
+	}
+	proof, e := platformaccount.AuthenticateLocal(c.Request.Context(), strconv.Itoa(actor.Id), version, "session")
 	if e != nil {
 		return userkit.ProductIdentity{}, e
 	}

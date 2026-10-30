@@ -331,7 +331,7 @@ func TestBrokerExchangeCreatesOriginalSessionAndKeepsExistingLocalUserID(t *test
 	done := httptest.NewRecorder()
 	r.ServeHTTP(done, request)
 	require.Equal(t, 303, done.Code, done.Body.String())
-	require.Equal(t, "/profile", done.Header().Get("Location"))
+	requireSessionRedirect(t, done, "/profile")
 	require.Equal(t, 1, exchanges)
 	require.Equal(t, 1, binds)
 	var refresh *http.Cookie

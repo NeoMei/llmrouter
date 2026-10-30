@@ -16,9 +16,14 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-func checkinRealmFixture(t *testing.T) (*gorm.DB, *ProductFundingStore) {
+func checkinRealmFixture(t *testing.T, driverName ...string) (*gorm.DB, *ProductFundingStore) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(t.TempDir()+"/checkin.db?_pragma=busy_timeout(0)"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	dialect := sqlite.Dialector{DSN: t.TempDir() + "/checkin.db?_pragma=busy_timeout(0)"}
+	if len(driverName) > 0 {
+		dialect.DriverName = driverName[0]
+		dialect.DSN += "&_pragma=foreign_keys(1)"
+	}
+	db, err := gorm.Open(dialect, &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
 	conn, err := db.DB()
 	require.NoError(t, err)
@@ -185,9 +190,9 @@ func TestUserCheckinSQLiteConcurrentEntryAwardsOnce(t *testing.T) {
 	close(release)
 	first, second := <-results, <-results
 	require.NoError(t, db.Callback().Query().Remove(callback))
-	// With busy_timeout(0), the original multi-statement SQLite flow may reject
-	// both contenders. It must never award twice or leave a receipt/credit for a
-	// failed entry. Preserve four connections so failures stay observable.
+	// With busy_timeout(0), competing SQLite transactions may reject both
+	// contenders. They must roll back without an award, stranded receipt, or
+	// poisoned connection. Preserve four connections so failures stay observable.
 	t.Logf("concurrent outcomes: first=%v second=%v", first, second)
 	succeeded := 0
 	for _, result := range []error{first, second} {

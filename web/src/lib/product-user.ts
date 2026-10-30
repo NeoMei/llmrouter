@@ -38,9 +38,11 @@ export async function refreshProductUser(): Promise<void> {
     redirect: 'error',
     signal: AbortSignal.timeout(10000),
   })
-  const payload = response.ok
-    ? ((await response.json()) as { success?: boolean; data?: AuthUser })
-    : null
+  const payload = (await response.json().catch(() => null)) as {
+    success?: boolean
+    data?: AuthUser
+    code?: string
+  } | null
   const current = useAuthStore.getState().auth
   if (
     epoch !== getAuthEpoch() ||
@@ -50,7 +52,14 @@ export async function refreshProductUser(): Promise<void> {
     return
   }
   if (!response.ok) {
-    if (response.status === 401 || response.status === 403) {
+    if (
+      response.status === 401 &&
+      [
+        'AUTH_SESSION_REVOKED',
+        'AUTH_USER_DISABLED',
+        'AUTH_USER_VERSION_REVOKED',
+      ].includes(payload?.code ?? '')
+    ) {
       clearAuthentication()
     }
     throw new Error('Product user refresh unavailable')

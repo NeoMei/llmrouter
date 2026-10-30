@@ -32,6 +32,9 @@ func runtimeFinanceActor(ctx context.Context, identity service.AuthIdentity, pri
 	if err != nil {
 		return userkit.ProductIdentity{}, errRuntimeFinanceAuthority
 	}
+	if session.AuthRealm == model.NativeFundingLocalOnly {
+		return userkit.ProductIdentity{}, errRuntimeFinanceAuthority
+	}
 	if session.LoginMethod == "product_broker" {
 		if err := service.VerifyBrokerSource(ctx, identity); err != nil {
 			return userkit.ProductIdentity{}, errRuntimeFinanceAuthority

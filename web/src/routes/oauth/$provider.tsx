@@ -33,7 +33,7 @@ import {
   OAUTH_BIND_RESULT_MESSAGE,
 } from '@/features/auth/constants'
 import {
-  getProductLoginDestination,
+  getOAuthCallbackDestination,
   sanitizeAuthRedirect,
 } from '@/features/auth/lib/auth-redirect'
 import {
@@ -190,8 +190,8 @@ function OAuthCallback() {
           applyAuthBundle(response.data.data)
           if (response.data.data.central_session_handoff === true) {
             window.location.replace(
-              getProductLoginDestination(
-                true,
+              getOAuthCallbackDestination(
+                response.data.data,
                 search.redirect,
                 window.location.origin
               )

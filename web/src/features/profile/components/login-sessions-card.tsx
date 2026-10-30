@@ -43,6 +43,7 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { clearAuthenticatedClientState } from '@/lib/api'
+import { clearSelectedSession } from '@/lib/auth-selection'
 import type { LoginSession } from '@/stores/auth-store'
 
 import {
@@ -107,6 +108,9 @@ export function LoginSessionsCard() {
       }
     },
     onSuccess: async () => {
+      for (const session of sessionsQuery.data ?? []) {
+        if (!session.current) clearSelectedSession(session.sid)
+      }
       setConfirmOthers(false)
       toast.success(t('Other sessions signed out'))
       await queryClient.invalidateQueries({ queryKey: sessionQueryKey })

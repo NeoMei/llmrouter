@@ -18,7 +18,7 @@ const (
 	UserSessionStatusRevoking = "revoking"
 	UserSessionStatusRevoked  = "revoked"
 
-	userSessionCacheSchema      = 1
+	userSessionCacheSchema      = 2
 	userSessionListLimit        = 100
 	userSessionRevokeBatchSize  = 500
 	userSessionCleanupScanLimit = 1000
@@ -70,6 +70,7 @@ func (session *UserSession) AfterFind(_ *gorm.DB) error {
 
 type userSessionCacheEntry struct {
 	SID             string
+	AuthRealm       string
 	UserID          int
 	Version         int64
 	UserAuthVersion int64
@@ -88,6 +89,7 @@ type userSessionCacheEntry struct {
 func (session *UserSession) cacheEntry() *userSessionCacheEntry {
 	return &userSessionCacheEntry{
 		SID:             session.SID,
+		AuthRealm:       session.AuthRealm,
 		UserID:          session.UserID,
 		Version:         session.Version,
 		UserAuthVersion: session.UserAuthVersion,
@@ -107,6 +109,7 @@ func (session *UserSession) cacheEntry() *userSessionCacheEntry {
 func (entry *userSessionCacheEntry) session() *UserSession {
 	return &UserSession{
 		SID:             entry.SID,
+		AuthRealm:       entry.AuthRealm,
 		UserID:          entry.UserID,
 		Version:         entry.Version,
 		UserAuthVersion: entry.UserAuthVersion,
@@ -152,7 +155,7 @@ func CreateUserSession(session *UserSession) error {
 		session.CreatedAt = now
 	}
 	cacheDeadline := userSessionCacheDeadline()
-	if session.AuthRealm != "" && session.AuthRealm != NativeFundingLocalOnly {
+	if session.AuthRealm != "" && session.AuthRealm != NativeFundingLocalOnly && session.AuthRealm != CentralAuthRealm {
 		return ErrUserSessionInvalid
 	}
 	if err := DB.Transaction(func(tx *gorm.DB) error {
@@ -161,7 +164,16 @@ func CreateUserSession(session *UserSession) error {
 			if err := lockForUpdate(tx).First(&owner, session.UserID).Error; err != nil {
 				return err
 			}
-			if owner.FundingRealm != NativeFundingLocalOnly || !owner.NativePassword || owner.FundingRealmEvidence == "" || owner.Status != common.UserStatusEnabled || owner.AuthVersion != session.UserAuthVersion || owner.ProductRegistrationPending || owner.ProductJITPending {
+			if owner.FundingRealm != NativeFundingLocalOnly || !owner.NativePassword || owner.FundingRealmEvidence == "" || owner.Status != common.UserStatusEnabled || owner.AuthVersion != session.UserAuthVersion || owner.ProductRegistrationPending || owner.ProductJITPending || owner.IdentitySource == ProductIdentityPending {
+				return ErrUserSessionInvalid
+			}
+		}
+		if session.AuthRealm == CentralAuthRealm {
+			var state CentralAuthState
+			if err := lockForUpdate(tx).First(&state, "user_id = ?", session.UserID).Error; err != nil {
+				return err
+			}
+			if !state.Active || state.AuthVersion != session.UserAuthVersion || state.BindingID == "" {
 				return ErrUserSessionInvalid
 			}
 		}
@@ -340,7 +352,7 @@ redis.call('HSET', KEYS[1],
   'UserAuthVersion', ARGV[4], 'Status', ARGV[5],
   'LoginMethod', ARGV[6], 'IP', ARGV[7], 'UserAgent', ARGV[8],
   'CreatedAt', ARGV[9], 'LastActiveAt', ARGV[10], 'ExpiresAt', ARGV[11],
-  'RevokedAt', ARGV[12], 'RevokedReason', ARGV[13], 'CacheSchema', ARGV[14])
+  'RevokedAt', ARGV[12], 'RevokedReason', ARGV[13], 'CacheSchema', ARGV[14], 'AuthRealm', ARGV[16])
 if ARGV[5] == 'active' then
   redis.call('PEXPIREAT', KEYS[1], ARGV[15])
 else
@@ -350,7 +362,7 @@ return 1`
 	result, err := common.RDB.Eval(context.Background(), script, []string{userSessionCacheKey(entry.SID)},
 		entry.SID, entry.UserID, entry.Version, entry.UserAuthVersion, entry.Status,
 		entry.LoginMethod, entry.IP, entry.UserAgent, entry.CreatedAt, entry.LastActiveAt,
-		entry.ExpiresAt, entry.RevokedAt, entry.RevokedReason, entry.CacheSchema, redisExpiration,
+		entry.ExpiresAt, entry.RevokedAt, entry.RevokedReason, entry.CacheSchema, redisExpiration, entry.AuthRealm,
 	).Int()
 	if err != nil {
 		return err
@@ -415,8 +427,19 @@ func ListActiveUserSessions(userID int, currentSID string, now int64, realm ...s
 		now = time.Now().Unix()
 	}
 	var authVersion int64
-	if err := DB.Model(&User{}).Where("id = ?", userID).Select("auth_version").Find(&authVersion).Error; err != nil {
-		return nil, err
+	if len(realm) > 0 && realm[0] == CentralAuthRealm {
+		state, err := ReadCentralAuthState(context.Background(), userID)
+		if err != nil {
+			return nil, err
+		}
+		if !state.Active {
+			return nil, ErrUserSessionInactive
+		}
+		authVersion = state.AuthVersion
+	} else {
+		if err := DB.Model(&User{}).Where("id = ?", userID).Select("auth_version").Find(&authVersion).Error; err != nil {
+			return nil, err
+		}
 	}
 	if authVersion <= 0 {
 		return nil, ErrUserSessionInvalid
@@ -486,8 +509,8 @@ func RotateUserSessionRefresh(userID int, sid, presentedHash, nextHash string, n
 
 		if hmac.Equal([]byte(session.RefreshHash), []byte(presentedHash)) {
 			result := DB.Model(&UserSession{}).
-				Where("sid = ? AND user_id = ? AND status = ? AND revoked_at = ? AND expires_at > ? AND refresh_hash = ?",
-					sid, userID, UserSessionStatusActive, 0, now, presentedHash).
+				Where("sid = ? AND user_id = ? AND status = ? AND revoked_at = ? AND expires_at > ? AND refresh_hash = ? AND version = ? AND user_auth_version = ?",
+					sid, userID, UserSessionStatusActive, 0, now, presentedHash, session.Version, session.UserAuthVersion).
 				Updates(map[string]interface{}{
 					"previous_refresh_hash": session.RefreshHash,
 					"previous_valid_until":  now + graceSeconds,
@@ -500,22 +523,33 @@ func RotateUserSessionRefresh(userID int, sid, presentedHash, nextHash string, n
 			if result.RowsAffected == 0 {
 				continue
 			}
-			session.PreviousRefreshHash = session.RefreshHash
-			session.PreviousValidUntil = now + graceSeconds
-			session.RefreshHash = nextHash
-			session.LastActiveAt = now
-			if err := writeUserSessionCache(session.cacheEntry(), cacheDeadline); err != nil {
-				if errors.Is(err, errUserSessionCacheObservationStale) {
-					if confirmErr := confirmUserSessionActiveSnapshot(&session); confirmErr != nil {
-						return nil, confirmErr
+			// A security transaction can retain this SID at a newer version
+			// after our CAS commits. Return its coherent SQL snapshot so the
+			// committed refresh secret is paired with current access claims.
+			rotated, err := readRotatedUserSession(&session, nextHash, now)
+			if err != nil {
+				return nil, err
+			}
+			if err := writeUserSessionCache(rotated.cacheEntry(), cacheDeadline); err != nil {
+				if errors.Is(err, errUserSessionCacheObservationStale) || errors.Is(err, ErrUserSessionInactive) {
+					// Cache publication may lose to a second security transaction.
+					// Never overwrite a deny fence; an active newer cache is not
+					// evidence that the retained SID or its new secret was revoked.
+					if common.RedisEnabled {
+						_, cacheErr := getUserSessionCache(sid)
+						if errors.Is(cacheErr, ErrUserSessionInactive) {
+							return nil, cacheErr
+						}
+						if errors.Is(err, ErrUserSessionInactive) && cacheErr != nil {
+							return nil, err
+						}
 					}
-				} else if errors.Is(err, ErrUserSessionInactive) {
-					return nil, err
+					return readRotatedUserSession(rotated, nextHash, now)
 				} else {
 					common.SysLog("failed to update rotated user session cache: " + err.Error())
 				}
 			}
-			return &session, nil
+			return rotated, nil
 		}
 
 		if session.PreviousRefreshHash == "" || !hmac.Equal([]byte(session.PreviousRefreshHash), []byte(presentedHash)) {
@@ -554,6 +588,19 @@ func RotateUserSessionRefresh(userID int, sid, presentedHash, nextHash string, n
 		return nil, ErrUserSessionRefreshReuse
 	}
 	return nil, ErrUserSessionRefreshInvalid
+}
+
+// readRotatedUserSession only recovers the exact committed winner. It cannot
+// reactivate a revoked SID, cross realms, or disclose a different rotation.
+func readRotatedUserSession(previous *UserSession, nextHash string, now int64) (*UserSession, error) {
+	var current UserSession
+	if err := DB.Where("sid = ? AND user_id = ?", previous.SID, previous.UserID).First(&current).Error; err != nil {
+		return nil, err
+	}
+	if current.Status != UserSessionStatusActive || current.RevokedAt != 0 || current.ExpiresAt <= max(now, time.Now().Unix()) || current.AuthRealm != previous.AuthRealm || current.Version < previous.Version || current.UserAuthVersion < previous.UserAuthVersion || !hmac.Equal([]byte(current.RefreshHash), []byte(nextHash)) {
+		return nil, ErrUserSessionInactive
+	}
+	return &current, nil
 }
 
 func RevokeUserSession(userID int, sid, reason string, realm ...string) (bool, error) {
@@ -721,7 +768,9 @@ func RevokeOtherUserSessions(userID int, currentSID, reason string, realm ...str
 }
 
 func RevokeAllUserSessions(userID int, reason string) (int64, error) {
-	return revokeUserSessions(userID, "", reason)
+	// Existing callers mutate the product's local authenticators or account;
+	// central-issued sessions have their own independently managed lifecycle.
+	return revokeUserSessions(userID, "", reason, "LOCAL_AUTHENTICATORS")
 }
 
 func revokeUserSessions(userID int, excludedSID, reason string, realm ...string) (int64, error) {
@@ -731,7 +780,13 @@ func revokeUserSessions(userID int, excludedSID, reason string, realm ...string)
 	now := time.Now().Unix()
 	var totalAffected int64
 	for {
-		query := tokenRealmQuery(DB, realm).Where("user_id = ? AND status = ? AND expires_at > ?", userID, UserSessionStatusActive, now)
+		query := DB
+		if len(realm) > 0 && realm[0] == "LOCAL_AUTHENTICATORS" {
+			query = query.Where("auth_realm IS NULL OR auth_realm <> ?", CentralAuthRealm)
+		} else {
+			query = tokenRealmQuery(query, realm)
+		}
+		query = query.Where("user_id = ? AND status = ? AND expires_at > ?", userID, UserSessionStatusActive, now)
 		if excludedSID != "" {
 			query = query.Where("sid <> ?", excludedSID)
 		}

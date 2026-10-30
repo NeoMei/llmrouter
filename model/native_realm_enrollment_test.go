@@ -116,6 +116,7 @@ func TestNativeRealmUnknownKeyCannotSpendLocalFunding(t *testing.T) {
 	require.NoError(t, db.First(&token, 7).Error)
 	token.UnlimitedQuota = true // stale cache before a server-side restriction
 	require.NoError(t, db.Model(&Token{}).Where("id = ?", 7).Updates(map[string]any{"unlimited_quota": false, "remain_quota": 0}).Error)
+	enrollNativeQuotaFixture(t, 7)
 	ok, err := TryReserveTokenQuota(7, token.Key, 1, true)
 	require.NoError(t, err)
 	assert.False(t, ok)
@@ -156,4 +157,14 @@ func TestNativeRealmReadOnlyPreservesHistoricalKeyPolicy(t *testing.T) {
 		_, err = NativeRealmToken(context.Background(), &token, true)
 		require.Error(t, err, "paid-job reads still require unexpired credentials")
 	}
+}
+
+func TestNativeRealmRejectsPendingIdentityEvenWhenFlagsAreClear(t *testing.T) {
+	_, db, _ := productFundingFixture(t)
+	old := DB
+	DB = db
+	t.Cleanup(func() { DB = old })
+	require.NoError(t, db.Model(&User{}).Where("id = ?", 42).Updates(map[string]any{"funding_realm": NativeFundingLocalOnly, "funding_realm_evidence": "reviewed", "native_password": true, "identity_source": ProductIdentityPending, "product_registration_pending": false, "product_jit_pending": false}).Error)
+	_, err := NativeRealmUser(context.Background(), 42)
+	require.Error(t, err)
 }

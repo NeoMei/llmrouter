@@ -61,7 +61,7 @@ func newPoolHTTPFixture(t *testing.T) *poolHTTPFixture {
 	previousSel, previousLoader := gateway.GlobalKeySel, gateway.GlobalLoader
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "admin.db")+"?_pragma=busy_timeout(5000)"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.User{}, &model.UserSession{}, &model.CasbinRule{}, &model.AuthzRole{}, &model.Log{}, &model.UpstreamAccountPool{}, &model.UpstreamAccountMember{}, &model.UpstreamAccountState{}, &model.ProviderProfile{}, &model.ProviderModel{}, &model.ProviderKeyPool{}))
+	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.User{}, &model.UserSession{}, &model.CentralAuthState{}, &model.CentralLoginCredential{}, &model.CentralSessionCredential{}, &model.CasbinRule{}, &model.AuthzRole{}, &model.Log{}, &model.UpstreamAccountPool{}, &model.UpstreamAccountMember{}, &model.UpstreamAccountState{}, &model.ProviderProfile{}, &model.ProviderModel{}, &model.ProviderKeyPool{}))
 	model.DB, model.LOG_DB = db, db
 	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	common.RedisEnabled = false

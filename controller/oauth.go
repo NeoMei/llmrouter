@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -59,7 +60,7 @@ func GenerateOAuthCode(c *gin.Context) {
 			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "绑定操作需要登录"})
 			return
 		}
-		if !middleware.RequireNativeOwnerRealm(c, identity.UserID) {
+		if !middleware.CentralRealmAuthenticated(c) && !middleware.RequireNativeOwnerRealm(c, identity.UserID) {
 			return
 		}
 		userID = identity.UserID
@@ -135,7 +136,7 @@ func HandleOAuth(c *gin.Context) {
 			})
 			return
 		}
-		if !middleware.RequireNativeOwnerRealm(c, identity.UserID) {
+		if !middleware.CentralRealmAuthenticated(c) && !middleware.RequireNativeOwnerRealm(c, identity.UserID) {
 			return
 		}
 		consumeMatch.UserId = identity.UserID
@@ -226,19 +227,21 @@ func HandleOAuth(c *gin.Context) {
 		productIdentityError(c, e)
 		return
 	}
-	// 8. Check user status
-	if user.Status != common.UserStatusEnabled {
-		common.ApiErrorI18n(c, i18n.MsgOAuthUserBanned)
-		return
-	}
-
 	kind := provider.ProviderUserIDColumn()
 	if generic, ok := provider.(*oauth.GenericOAuthProvider); ok {
 		kind = "oauth:" + strconv.Itoa(generic.GetProviderId())
 	}
 	native, err := model.IsNativeLoginCredential(c.Request.Context(), user.Id, kind, oauthUser.ProviderUserID)
 	if err != nil {
-		common.ApiError(c, err)
+		central, centralErr := model.IsCentralLoginCredential(c.Request.Context(), user.Id, kind, oauthUser.ProviderUserID)
+		if centralErr != nil || !central {
+			common.ApiError(c, err)
+			return
+		}
+		c.Set("central_credential_kind", kind)
+		c.Set("central_credential_value", oauthUser.ProviderUserID)
+	} else if user.Status != common.UserStatusEnabled {
+		common.ApiErrorI18n(c, i18n.MsgOAuthUserBanned)
 		return
 	}
 	if native {
@@ -289,6 +292,34 @@ func handleOAuthBind(c *gin.Context, provider oauth.Provider, pendingFlow *model
 	}
 
 	userId := pendingFlow.UserId
+	if middleware.CentralRealmAuthenticated(c) {
+		if _, err := service.ValidateSessionReference(c.Request.Context(), userId, pendingFlow.SessionId); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		err = model.DB.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+			if generic, ok := provider.(*oauth.GenericOAuthProvider); ok {
+				providerID := generic.GetProviderId()
+				kind := "oauth:" + strconv.Itoa(providerID)
+				return model.SetCentralLoginCredentialTx(tx, userId, pendingFlow.SessionId, kind, oauthUser.ProviderUserID, func(tx *gorm.DB) error {
+					return tx.Create(&model.UserOAuthBinding{UserId: userId, ProviderId: providerID, ProviderUserId: oauthUser.ProviderUserID}).Error
+				})
+			}
+			column := provider.ProviderUserIDColumn()
+			if column != "github_id" && column != "discord_id" && column != "oidc_id" {
+				return model.ErrNativeCredentialUnverified
+			}
+			return model.SetCentralLoginCredentialTx(tx, userId, pendingFlow.SessionId, column, oauthUser.ProviderUserID, func(tx *gorm.DB) error {
+				return tx.Model(&model.User{}).Where("id = ?", userId).Update(column, oauthUser.ProviderUserID).Error
+			})
+		})
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		common.ApiSuccessI18n(c, i18n.MsgOAuthBindSuccess, gin.H{"action": "bind"})
+		return
+	}
 
 	// Handle binding based on provider type
 	if genericProvider, ok := provider.(*oauth.GenericOAuthProvider); ok {
@@ -343,7 +374,7 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 					user.Id, legacyID, oauthUser.ProviderUserID))
 				if err := user.UpdateGitHubId(oauthUser.ProviderUserID); err != nil {
 					common.SysError(fmt.Sprintf("[OAuth] Failed to migrate user %d: %s", user.Id, err.Error()))
-					// Continue with login even if migration fails
+					return nil, err
 				}
 				return user, nil
 			}

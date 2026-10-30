@@ -206,19 +206,20 @@ func TryReserveUserQuota(id int, quota int) (bool, error) {
 
 // TryReserveTokenQuota atomically checks and deducts a token quota. Unlimited
 // tokens skip the balance check but still update remain/used accounting.
-func TryReserveTokenQuota(id int, key string, quota int, unlimited bool) (bool, error) {
+func TryReserveTokenQuota(id int, key string, quota int, unlimited bool, operationIDs ...string) (bool, error) {
 	var token Token
 	if err := DB.First(&token, id).Error; err != nil {
 		return false, err
 	}
 	if token.AuthRealm == NativeFundingLocalOnly {
-		if token.Key != key || token.Status != common.TokenStatusEnabled || (token.ExpiredTime != -1 && token.ExpiredTime <= common.GetTimestamp()) {
+		if token.Key != key || token.FundingAccountID != "" || token.Status != common.TokenStatusEnabled || (token.ExpiredTime != -1 && token.ExpiredTime <= common.GetTimestamp()) {
 			return false, ErrNativeCredentialUnverified
 		}
-		unlimited = token.UnlimitedQuota
-		if !unlimited && token.RemainQuota < quota {
-			return false, nil
+		operationID := common.GetUUID()
+		if len(operationIDs) > 0 {
+			operationID = operationIDs[0]
 		}
+		return nativeQuotaOperation(id, key, operationID, "", "reserve", quota)
 	}
 	return tryReserveTokenQuota(id, key, quota, unlimited)
 }

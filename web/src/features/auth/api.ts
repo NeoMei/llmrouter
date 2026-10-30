@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import axios from 'axios'
 
 import { api, refreshAuthentication, type RefreshOutcome } from '@/lib/api'
+import { isSessionSelectionCleared, readSelectedSession } from '@/lib/auth-selection'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { getAffiliateCode } from './lib/storage'
@@ -72,8 +73,9 @@ export async function executeLogout(
   runtime: LogoutRuntime,
   allowMismatchRecovery = true
 ): Promise<ApiResponse> {
+  const requestedSID = runtime.getExpectedSID()
   try {
-    return await runtime.request(runtime.getExpectedSID())
+    return await runtime.request(requestedSID)
   } catch (error: unknown) {
     const code = axios.isAxiosError(error)
       ? error.response?.data?.code
@@ -85,7 +87,10 @@ export async function executeLogout(
       code === 'AUTH_SESSION_MISMATCH'
     ) {
       const outcome = await runtime.refresh()
-      if (outcome.kind === 'authenticated') {
+      if (
+        outcome.kind === 'authenticated' &&
+        outcome.bundle.session.sid === requestedSID
+      ) {
         return executeLogout(runtime, false)
       }
       if (outcome.kind === 'anonymous') {
@@ -98,8 +103,12 @@ export async function executeLogout(
 
 // User logout
 export async function logout(): Promise<ApiResponse> {
+  if (!useAuthStore.getState().auth.session && isSessionSelectionCleared()) {
+    return { success: true, message: '' }
+  }
   return executeLogout({
-    getExpectedSID: () => useAuthStore.getState().auth.session?.sid,
+    getExpectedSID: () =>
+      useAuthStore.getState().auth.session?.sid ?? readSelectedSession(),
     request: async (sid) => {
       const res = await api.post('/api/user/auth/logout', undefined, {
         headers: sid ? { 'X-Auth-Session': sid } : undefined,

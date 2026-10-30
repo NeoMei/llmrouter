@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -14,6 +15,44 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNativeOAuthLoginNeverRequestsCentralHandoff(t *testing.T) {
+	f := newUniHubRegressionFixture(t)
+	for key, value := range map[string]string{"UNIHUB_PRODUCT_RUNTIME_ENABLED": "true", "UNIHUB_PRODUCT_PUBLIC_ORIGIN": "https://identity.test", "UNIHUB_PRODUCT_API_ORIGIN": "https://identity.test", "UNIHUB_PRODUCT_ID": "llmrouter", "UNIHUB_PRODUCT_INSTANCE_ID": "default", "UNIHUB_PRODUCT_CLIENT_ID": "client", "UNIHUB_PRODUCT_REDIRECT_URI": "https://dashboard.test/api/unihub/callback", "NATIVE_PUBLIC_ACCESS": "true"} {
+		t.Setenv(key, value)
+	}
+	require.NoError(t, model.RegisterProductFundingModels(f.db))
+	require.NoError(t, f.db.AutoMigrate(&model.NativeLoginCredential{}, &model.ProductAuthLifecycle{}, &model.AuthFlow{}, &model.Log{}))
+	oldLog := model.LOG_DB
+	model.LOG_DB = f.db
+	t.Cleanup(func() { model.LOG_DB = oldLog })
+	user := model.User{Username: "native-login", AffCode: "native-login", Password: "unused", Role: 1, Status: 1, AuthVersion: 1, FundingRealm: model.NativeFundingLocalOnly, FundingRealmEvidence: "reviewed", NativePassword: true}
+	require.NoError(t, f.db.Create(&user).Error)
+	require.NoError(t, model.UpdateUserBindColumn(user.Id, "oidc_id", "synthetic-provider-subject", model.NativeFundingLocalOnly))
+	oauth.Register("native-login-fixture", &nativeRealmOAuthProvider{})
+	t.Cleanup(func() { oauth.Unregister("native-login-fixture") })
+	req := httptest.NewRequest(http.MethodPost, "https://dashboard.test/api/oauth/state", strings.NewReader(`{"provider":"native-login-fixture","intent":"login"}`))
+	req.Header.Set("Content-Type", "application/json")
+	state := httptest.NewRecorder()
+	f.router.ServeHTTP(state, req)
+	var flow struct {
+		Data struct {
+			Token string `json:"flow_token"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(state.Body.Bytes(), &flow))
+	require.NotEmpty(t, flow.Data.Token)
+	response := f.request(http.MethodGet, "/api/oauth/native-login-fixture?state="+flow.Data.Token+"&code=local", "", nil)
+	var result struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Handoff bool `json:"central_session_handoff"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+	require.True(t, result.Success, response.Body.String())
+	require.False(t, result.Data.Handoff)
+}
 
 type nativeRealmOAuthProvider struct{}
 

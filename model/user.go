@@ -164,6 +164,9 @@ func UpdateUserAccessToken(id int, token string, realm ...string) error {
 		if err := SetNativeLoginCredentialTx(tx, id, "pat", token, scope); err != nil {
 			return err
 		}
+		if token == "" {
+			return tx.Model(&User{}).Where("id = ?", id).Update("access_token", nil).Error
+		}
 		return tx.Model(&User{}).Where("id = ?", id).Update("access_token", token).Error
 	})
 }
@@ -230,6 +233,9 @@ func UpdateUserBindColumn(userId int, column string, value string, realm ...stri
 			scope = realm[0]
 		}
 		if err := SetNativeLoginCredentialTx(tx, userId, column, value, scope); err != nil {
+			return err
+		}
+		if err := guardLegacyCentralSecurityTx(tx, userId, scope); err != nil {
 			return err
 		}
 		return tx.Model(&User{}).Where("id = ?", userId).Update(column, value).Error
@@ -412,7 +418,17 @@ func GetMaxUserId() int {
 	return user.Id
 }
 
-func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (users []*User, total int64, err error) {
+func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) ([]*User, int64, error) {
+	return getAllUsersScoped(pageInfo, false, sortOptions...)
+}
+
+// GetProductUsers stays closed until profiles have independently verified
+// realm ownership and enrollment is serialized with disclosure.
+func GetProductUsers(_ *common.PageInfo, _ ...UserSortOptions) ([]*User, int64, error) {
+	return nil, 0, ErrNativeCredentialUnverified
+}
+
+func getAllUsersScoped(pageInfo *common.PageInfo, excludeNative bool, sortOptions ...UserSortOptions) (users []*User, total int64, err error) {
 	// Start transaction
 	tx := DB.Begin()
 	if tx.Error != nil {
@@ -424,8 +440,12 @@ func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (use
 		}
 	}()
 
+	query := tx.Unscoped().Model(&User{})
+	if excludeNative {
+		query = query.Where("funding_realm IS NULL OR funding_realm <> ?", NativeFundingLocalOnly)
+	}
 	// Get total count within transaction
-	err = tx.Unscoped().Model(&User{}).Count(&total).Error
+	err = query.Count(&total).Error
 	if err != nil {
 		tx.Rollback()
 		return nil, 0, err
@@ -433,7 +453,7 @@ func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (use
 
 	// Get paginated users within same transaction
 	order := resolveUserSortOptions(sortOptions)
-	err = order.Apply(tx.Unscoped()).Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Omit("password", "access_token").Find(&users).Error
+	err = order.Apply(query).Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Omit("password", "access_token").Find(&users).Error
 	if err != nil {
 		tx.Rollback()
 		return nil, 0, err
@@ -448,6 +468,15 @@ func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (use
 }
 
 func SearchUsers(keyword string, group string, role *int, status *int, startIdx int, num int, sortOptions ...UserSortOptions) ([]*User, int64, error) {
+	return searchUsersScoped(keyword, group, role, status, startIdx, num, false, sortOptions...)
+}
+
+// SearchProductUsers remains closed for the same ownership ambiguity.
+func SearchProductUsers(_ string, _ string, _ *int, _ *int, _ int, _ int, _ ...UserSortOptions) ([]*User, int64, error) {
+	return nil, 0, ErrNativeCredentialUnverified
+}
+
+func searchUsersScoped(keyword string, group string, role *int, status *int, startIdx int, num int, excludeNative bool, sortOptions ...UserSortOptions) ([]*User, int64, error) {
 	var users []*User
 	var total int64
 	var err error
@@ -465,6 +494,9 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 
 	// 构建基础查询
 	query := tx.Unscoped().Model(&User{})
+	if excludeNative {
+		query = query.Where("funding_realm IS NULL OR funding_realm <> ?", NativeFundingLocalOnly)
+	}
 
 	// 构建搜索条件
 	likeCondition := "username LIKE ? OR email LIKE ? OR display_name LIKE ?"
@@ -813,7 +845,12 @@ func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 	}
 	newUser := *user
 	current := User{}
-	if err = tx.First(&current, user.Id).Error; err != nil {
+	if tx.Dialector.Name() == "sqlite" {
+		if err = tx.Model(&User{}).Where("id = ?", user.Id).UpdateColumn("auth_version", gorm.Expr("auth_version")).Error; err != nil {
+			return err
+		}
+	}
+	if err = lockForUpdate(tx).First(&current, user.Id).Error; err != nil {
 		return err
 	}
 	// Updates(struct) ignores zero values. Match that behavior when deciding
@@ -841,6 +878,10 @@ func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 		"funding_realm",
 		"funding_realm_evidence",
 		"native_password",
+		"identity_source",
+		"unihub_user_id",
+		"product_registration_pending",
+		"product_jit_pending",
 	).Updates(newUser).Error; err != nil {
 		return err
 	}
@@ -1090,7 +1131,27 @@ func (user *User) UpdateGitHubId(newGitHubId string) error {
 	if user.Id == 0 {
 		return errors.New("user id is empty")
 	}
-	return DB.Model(user).Update("github_id", newGitHubId).Error
+	return DB.Transaction(func(tx *gorm.DB) error {
+		// Serialize with realm enrollment on SQLite, which has no FOR UPDATE.
+		if tx.Dialector.Name() == "sqlite" {
+			if err := tx.Model(&User{}).Where("id = ?", user.Id).UpdateColumn("github_id", gorm.Expr("github_id")).Error; err != nil {
+				return err
+			}
+		}
+		var current User
+		if err := lockForUpdate(tx).First(&current, user.Id).Error; err != nil {
+			return err
+		}
+		// Existing shared slots have no proof that this migration belongs to
+		// either realm. Never change an enrolled owner's binding on that basis.
+		if current.FundingRealm == NativeFundingLocalOnly || current.GitHubId != user.GitHubId {
+			return ErrNativeCredentialUnverified
+		}
+		if err := guardLegacyCentralSecurityTx(tx, user.Id, ""); err != nil {
+			return err
+		}
+		return tx.Model(&User{}).Where("id = ?", user.Id).Update("github_id", newGitHubId).Error
+	})
 }
 
 func (user *User) FillUserByDiscordId() error {

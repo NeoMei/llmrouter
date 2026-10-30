@@ -214,7 +214,7 @@ func TestNativeRealmPostgresRedisBatchAcceptance(t *testing.T) {
 	require.True(t, common.RedisEnabled)
 	require.True(t, common.BatchUpdateEnabled)
 	t.Run("native_wallet_session_refund", func(t *testing.T) { nativeRealmRealExercise(t, db, client) })
-	t.Fatal("acceptance incomplete: admission limits, restart and cross-process recovery are not yet verified")
+	t.Run("native_quota_policy_process_restart", func(t *testing.T) { nativeQuotaRealExercise(t, db, client, pgurl.String()) })
 }
 
 func nativeRealmLoopback(host string) bool {
@@ -341,6 +341,10 @@ func nativeRealmRealExercise(t *testing.T, db *gorm.DB, client *redis.Client) {
 	require.NoError(t, err)
 	mHash := sha256.Sum256(raw)
 	require.NoError(t, model.EnrollNativeRealm(context.Background(), db, raw, hex.EncodeToString(mHash[:])))
+	quotaRaw, err := common.Marshal(model.NativeTokenQuotaManifest{Version: 1, CutoverEvidence: strings.Repeat("a", 64), Tokens: []model.NativeTokenQuotaImport{{TokenID: token.Id, UserID: user.Id, KeySHA256: hex.EncodeToString(kHash[:]), RemainQuota: token.RemainQuota, UsedQuota: token.UsedQuota, Status: token.Status, ExpiredTime: token.ExpiredTime, PolicyGeneration: token.QuotaPolicyGeneration, UnlimitedQuota: token.UnlimitedQuota}}})
+	require.NoError(t, err)
+	quotaHash := sha256.Sum256(quotaRaw)
+	require.NoError(t, model.ImportNativeTokenQuota(context.Background(), db, quotaRaw, hex.EncodeToString(quotaHash[:])))
 	var calls atomic.Int32
 	var fail atomic.Bool
 	supplier := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -492,9 +496,13 @@ func nativeRealmRealExercise(t *testing.T, db *gorm.DB, client *redis.Client) {
 	// writer after the real management mutation and fence were published.
 	require.NoError(t, client.HSet(context.Background(), cacheKey, "Id", token.Id, "UserId", token.UserId, "Status", token.Status, "ExpiredTime", -1, "Name", "original", "Group", "default", "UsedQuota", 20).Err())
 	require.NoError(t, client.HSet(context.Background(), cacheKey, "UnlimitedQuota", "true", "RemainQuota", "100000").Err())
+	require.NoError(t, client.HSet(context.Background(), cacheKey, "CacheSchema", 2, "AuthRealm", model.NativeFundingLocalOnly, "QuotaPolicyGeneration", 0, "QuotaStateRevision", 1).Err())
+	rawUnlimited, err := client.HGet(context.Background(), cacheKey, "UnlimitedQuota").Result()
+	require.NoError(t, err)
+	require.Equal(t, "true", rawUnlimited, "the actual Redis hash contains the delayed unlimited snapshot")
 	stale, err := model.GetTokenByKey(token.Key, false)
 	require.NoError(t, err)
-	require.True(t, stale.UnlimitedQuota, "the Redis read must actually observe the stale unlimited flag")
+	require.False(t, stale.UnlimitedQuota, "durable policy generation must reject that stale cached policy before authentication")
 	fail.Store(false)
 	beforeLimitCalls := calls.Load()
 	limited := request("POST", "/v1/chat/completions", "sk-"+token.Key, chatBody)

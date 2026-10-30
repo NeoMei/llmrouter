@@ -41,6 +41,11 @@ func TestMain(m *testing.M) {
 		&AuthFlow{},
 		&ExternalIdentityClaim{},
 		&Token{},
+		&NativeTokenQuotaProtocol{},
+		&NativeTokenQuotaState{},
+		&NativeTokenQuotaOperation{},
+		&NativeTokenQuotaSession{},
+		&NativeTokenFundingOperation{},
 		&PasskeyCredential{},
 		&TwoFA{},
 		&TwoFABackupCode{},
@@ -74,6 +79,11 @@ func truncateTables(t *testing.T) {
 		DB.Exec("DELETE FROM passkey_credentials")
 		DB.Exec("DELETE FROM two_fa_backup_codes")
 		DB.Exec("DELETE FROM two_fas")
+		DB.Exec("DELETE FROM native_token_funding_operations")
+		DB.Exec("DELETE FROM native_token_quota_sessions")
+		DB.Exec("DELETE FROM native_token_quota_operations")
+		DB.Exec("DELETE FROM native_token_quota_states")
+		DB.Exec("DELETE FROM native_token_quota_protocols")
 		DB.Exec("DELETE FROM tokens")
 		DB.Exec("DELETE FROM user_oauth_bindings")
 		DB.Exec("DELETE FROM users")

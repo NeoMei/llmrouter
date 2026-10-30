@@ -962,22 +962,15 @@ func AdminInvalidateUserSubscription(userSubscriptionId int, realm ...string) (s
 	downgradeGroup := ""
 	var userId int
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		var targetSubscription UserSubscription
-		if len(realm) > 0 {
-			if err := tx.First(&targetSubscription, userSubscriptionId).Error; err != nil {
-				return err
-			}
-			if err := lockFundingManagementOwnerTx(tx, targetSubscription.UserId, realm); err != nil {
-				return err
-			}
-		}
 		var sub UserSubscription
 		if err := lockForUpdate(tx).
 			Where("id = ?", userSubscriptionId).First(&sub).Error; err != nil {
 			return err
 		}
-		if len(realm) > 0 && sub.UserId != targetSubscription.UserId {
-			return ErrNativeCredentialUnverified
+		// Match the original funding order: subscription before owner. The
+		// owner lock still fences enrollment before any mutation is written.
+		if err := lockFundingManagementOwnerTx(tx, sub.UserId, realm); err != nil {
+			return err
 		}
 		userId = sub.UserId
 		if err := tx.Model(&sub).Updates(map[string]interface{}{
@@ -1019,22 +1012,15 @@ func AdminDeleteUserSubscription(userSubscriptionId int, realm ...string) (strin
 	downgradeGroup := ""
 	var userId int
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		var targetSubscription UserSubscription
-		if len(realm) > 0 {
-			if err := tx.First(&targetSubscription, userSubscriptionId).Error; err != nil {
-				return err
-			}
-			if err := lockFundingManagementOwnerTx(tx, targetSubscription.UserId, realm); err != nil {
-				return err
-			}
-		}
 		var sub UserSubscription
 		if err := lockForUpdate(tx).
 			Where("id = ?", userSubscriptionId).First(&sub).Error; err != nil {
 			return err
 		}
-		if len(realm) > 0 && sub.UserId != targetSubscription.UserId {
-			return ErrNativeCredentialUnverified
+		// Match the original funding order: subscription before owner. The
+		// owner lock still fences enrollment before any mutation is written.
+		if err := lockFundingManagementOwnerTx(tx, sub.UserId, realm); err != nil {
+			return err
 		}
 		userId = sub.UserId
 		target, err := downgradeUserGroupForSubscriptionTx(tx, &sub, now)
@@ -1101,7 +1087,7 @@ func buildSubscriptionResetResult(plan *SubscriptionPlan, subs []UserSubscriptio
 	}
 }
 
-func adminResetUserSubscriptionsByPlanTx(tx *gorm.DB, userId int, plan *SubscriptionPlan, now int64, advanceResetTime bool) (*SubscriptionResetResult, error) {
+func adminResetUserSubscriptionsByPlanTx(tx *gorm.DB, userId int, plan *SubscriptionPlan, now int64, advanceResetTime bool, realm ...string) (*SubscriptionResetResult, error) {
 	if tx == nil || plan == nil {
 		return nil, errors.New("invalid reset args")
 	}
@@ -1115,6 +1101,9 @@ func adminResetUserSubscriptionsByPlanTx(tx *gorm.DB, userId int, plan *Subscrip
 	if len(subs) == 0 {
 		return nil, errors.New("该用户没有有效的此套餐订阅")
 	}
+	if err := lockFundingManagementOwnerTx(tx, userId, realm); err != nil {
+		return nil, err
+	}
 	for i := range subs {
 		if err := resetUserSubscriptionTx(tx, &subs[i], plan, now, advanceResetTime); err != nil {
 			return nil, err
@@ -1127,49 +1116,33 @@ func adminResetPlanSubscriptionsTx(tx *gorm.DB, plan *SubscriptionPlan, now int6
 	if tx == nil || plan == nil {
 		return nil, errors.New("invalid reset args")
 	}
-	query := tx.Where("plan_id = ? AND status = ? AND end_time > ?", plan.Id, "active", now)
-	if len(realm) > 0 {
-		// Snapshot target membership, then lock owners in ID order before any
-		// subscription row. Concurrent additions are outside this reset's set.
-		var targets []UserSubscription
-		if err := query.Select("id", "user_id").Order("user_id asc, id asc").Find(&targets).Error; err != nil {
-			return nil, err
-		}
-		ids := make([]int, 0, len(targets))
-		owners := make(map[int]bool)
-		for _, target := range targets {
-			ids = append(ids, target.Id)
-			if owners[target.UserId] {
-				continue
-			}
-			var owner User
-			if err := lockForUpdate(tx).First(&owner, target.UserId).Error; err != nil {
-				return nil, err
-			}
-			if (owner.FundingRealm == NativeFundingLocalOnly) != (realm[0] == NativeFundingLocalOnly) {
-				return nil, ErrNativeCredentialUnverified
-			}
-			owners[target.UserId] = true
-		}
-		query = tx.Where("plan_id = ? AND status = ? AND end_time > ?", plan.Id, "active", now).Where("id IN ?", ids)
-		var subs []UserSubscription
-		if err := lockForUpdate(query).Order("user_id asc, end_time asc, id asc").Find(&subs).Error; err != nil {
-			return nil, err
-		}
-		for i := range subs {
-			if !owners[subs[i].UserId] {
-				return nil, ErrNativeCredentialUnverified
-			}
-			if err := resetUserSubscriptionTx(tx, &subs[i], plan, now, advanceResetTime); err != nil {
-				return nil, err
-			}
-		}
-		return buildSubscriptionResetResult(plan, subs, advanceResetTime), nil
-	}
 	var subs []UserSubscription
-	if err := lockForUpdate(query).Order("user_id asc, end_time asc, id asc").Find(&subs).Error; err != nil {
+	if err := lockForUpdate(tx).Where("plan_id = ? AND status = ? AND end_time > ?", plan.Id, "active", now).
+		Order("user_id asc, end_time asc, id asc").Find(&subs).Error; err != nil {
 		return nil, err
 	}
+	if len(realm) > 0 {
+		// Lock the selected subscriptions before their owners, matching OCR
+		// and legacy group mutations. All ownership checks precede writes.
+		allowed := make(map[int]bool)
+		selected := make([]UserSubscription, 0, len(subs))
+		for _, sub := range subs {
+			ok, checked := allowed[sub.UserId]
+			if !checked {
+				var owner User
+				if err := lockForUpdate(tx).First(&owner, sub.UserId).Error; err != nil {
+					return nil, err
+				}
+				ok = (owner.FundingRealm == NativeFundingLocalOnly) == (realm[0] == NativeFundingLocalOnly)
+				allowed[sub.UserId] = ok
+			}
+			if ok {
+				selected = append(selected, sub)
+			}
+		}
+		subs = selected
+	}
+
 	for i := range subs {
 		if err := resetUserSubscriptionTx(tx, &subs[i], plan, now, advanceResetTime); err != nil {
 			return nil, err
@@ -1185,14 +1158,11 @@ func AdminResetUserSubscriptionsByPlan(userId int, planId int, advanceResetTime 
 	var result *SubscriptionResetResult
 	now := GetDBTimestamp()
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		if err := lockFundingManagementOwnerTx(tx, userId, realm); err != nil {
-			return err
-		}
 		plan, err := getSubscriptionPlanByIdTx(tx, planId)
 		if err != nil {
 			return err
 		}
-		result, err = adminResetUserSubscriptionsByPlanTx(tx, userId, plan, now, advanceResetTime)
+		result, err = adminResetUserSubscriptionsByPlanTx(tx, userId, plan, now, advanceResetTime, realm...)
 		return err
 	})
 	if err != nil {

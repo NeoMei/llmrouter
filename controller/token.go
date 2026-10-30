@@ -301,6 +301,14 @@ func DeleteToken(c *gin.Context) {
 func UpdateToken(c *gin.Context) {
 	userId := c.GetInt("id")
 	statusOnly := c.Query("status_only")
+	preserveQuota := false
+	if values, present := c.Request.URL.Query()["preserve_quota"]; present {
+		if len(values) != 1 || values[0] != "true" || statusOnly != "" {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		preserveQuota = true
+	}
 	token := model.Token{}
 	err := c.ShouldBindJSON(&token)
 	if err != nil {
@@ -343,15 +351,23 @@ func UpdateToken(c *gin.Context) {
 		// If you add more fields, please also update token.Update()
 		cleanToken.Name = token.Name
 		cleanToken.ExpiredTime = token.ExpiredTime
-		cleanToken.RemainQuota = token.RemainQuota
-		cleanToken.UnlimitedQuota = token.UnlimitedQuota
+		if !preserveQuota {
+			cleanToken.RemainQuota = token.RemainQuota
+			cleanToken.UnlimitedQuota = token.UnlimitedQuota
+		}
 		cleanToken.ModelLimitsEnabled = token.ModelLimitsEnabled
 		cleanToken.ModelLimits = token.ModelLimits
 		cleanToken.AllowIps = token.AllowIps
 		cleanToken.Group = token.Group
 		cleanToken.CrossGroupRetry = token.CrossGroupRetry
 	}
-	err = cleanToken.Update(tokenRequestRealm(c))
+	if statusOnly != "" {
+		err = cleanToken.UpdateStatus(tokenRequestRealm(c))
+	} else if preserveQuota {
+		err = cleanToken.UpdateMetadata(tokenRequestRealm(c))
+	} else {
+		err = cleanToken.Update(tokenRequestRealm(c))
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return

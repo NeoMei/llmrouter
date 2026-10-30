@@ -20,6 +20,14 @@ import type { QueryClient } from '@tanstack/react-query'
 import axios from 'axios'
 import { t } from 'i18next'
 
+import {
+  clearSelectedSession,
+  consumeReturnedSession,
+  isSessionSelectionCleared,
+  listSelectableSessions,
+  readSelectedSession,
+  selectSession,
+} from '@/lib/auth-selection'
 import { publishAuthSessionEvent } from '@/lib/auth-session-sync'
 import {
   useAuthStore,
@@ -41,6 +49,13 @@ export class AuthRefreshUnavailableError extends Error {
   constructor() {
     super('Session restoration is temporarily unavailable')
     this.name = 'AuthRefreshUnavailableError'
+  }
+}
+
+export class AuthOriginUnavailableError extends AuthRefreshUnavailableError {
+  constructor() {
+    super()
+    this.name = 'AuthOriginUnavailableError'
   }
 }
 
@@ -85,10 +100,21 @@ const authClient = axios.create({
 
 const refreshRaceDelays = [80, 200, 500] as const
 let refreshPromise: Promise<RefreshOutcome> | null = null
+let refreshGeneration: number | null = null
 let authEpoch = 0
+let authGeneration = 0
+let authRotationEpoch = 0
 
 export function getAuthEpoch(): number {
   return authEpoch
+}
+
+export function getAuthGeneration(): number {
+  return authGeneration
+}
+
+export function getAuthRotationEpoch(): number {
+  return authRotationEpoch
 }
 
 class AuthRefreshSupersededError extends Error {
@@ -160,10 +186,18 @@ function isAuthTokenRotation(value: unknown): value is AuthTokenRotation {
 
 export function applyAuthBundle(
   bundle: AuthBundle,
-  synchronizeTabs = true
+  synchronizeTabs = true,
+  preserveGeneration = false
 ): void {
   const previousSID = useAuthStore.getState().auth.session?.sid
   authEpoch += 1
+  if (!preserveGeneration || previousSID !== bundle.session.sid) {
+    authGeneration += 1
+  }
+  selectSession(
+    bundle.session.sid,
+    synchronizeTabs || listSelectableSessions().length === 0
+  )
   useAuthStore.getState().auth.setBundle(bundle)
   if (synchronizeTabs && previousSID !== bundle.session.sid) {
     publishAuthSessionEvent('authenticated', bundle.session.sid)
@@ -183,6 +217,7 @@ export function applyAuthRotation(value: unknown): void {
     throw new AuthRotationError('Authentication rotation session mismatch')
   }
 
+  authRotationEpoch += 1
   applyAuthBundle(
     {
       access_token: value.access_token,
@@ -191,7 +226,8 @@ export function applyAuthRotation(value: unknown): void {
       session: value.session,
       user: auth.user,
     },
-    false
+    false,
+    true
   )
 }
 
@@ -199,8 +235,10 @@ export function clearAuthentication(
   synchronizeTabs = true,
   bootstrapState: AuthBootstrapState = 'complete'
 ): void {
-  const sid = useAuthStore.getState().auth.session?.sid
+  const sid = useAuthStore.getState().auth.session?.sid ?? readSelectedSession()
   authEpoch += 1
+  authGeneration += 1
+  if (sid) clearSelectedSession(sid)
   useAuthStore.getState().auth.reset(bootstrapState)
   if (synchronizeTabs && sid) {
     publishAuthSessionEvent('signed_out', sid)
@@ -226,10 +264,7 @@ export function createRefreshRunner(
     kind: 'transient_error',
     error: new AuthRefreshSupersededError(),
   })
-  const run = async (
-    raceAttempt: number,
-    allowMismatchRetry: boolean
-  ): Promise<RefreshOutcome> => {
+  const run = async (raceAttempt: number): Promise<RefreshOutcome> => {
     if (runtime.isCurrent && !runtime.isCurrent()) return superseded()
     const response = await runtime.request(runtime.getExpectedSID())
     if (runtime.isCurrent && !runtime.isCurrent()) return superseded()
@@ -246,19 +281,23 @@ export function createRefreshRunner(
       const delay = refreshRaceDelays[raceAttempt]
       if (delay !== undefined) {
         await runtime.wait(delay)
-        return run(raceAttempt + 1, allowMismatchRetry)
+        return run(raceAttempt + 1)
       }
       runtime.clear(false)
       return { kind: 'out_of_sync', code }
     }
 
     if (response.status === 409 && code === 'AUTH_SESSION_MISMATCH') {
-      if (allowMismatchRetry) {
-        runtime.clear(false, 'idle')
-        return run(0, false)
-      }
       runtime.clear(false)
       return { kind: 'out_of_sync', code }
+    }
+
+    if (response.status === 403 && code === 'AUTH_ORIGIN_FORBIDDEN') {
+      runtime.markTransient()
+      return {
+        kind: 'transient_error',
+        error: new AuthOriginUnavailableError(),
+      }
     }
 
     if (response.status === 401) {
@@ -281,7 +320,7 @@ export function createRefreshRunner(
     }
   }
 
-  return () => run(0, true)
+  return () => run(0)
 }
 
 async function requestRefresh(
@@ -306,12 +345,86 @@ async function requestRefresh(
   }
 }
 
+export function createSessionSwitcher(runtime: {
+  allowed: () => readonly string[]
+  request: (sid: string) => Promise<AuthRefreshHTTPResponse>
+  accept: (bundle: AuthBundle) => void
+  isCurrent: () => boolean
+}): (sid: string) => Promise<RefreshOutcome> {
+  return async (sid) => {
+    if (!runtime.allowed().includes(sid)) {
+      return { kind: 'out_of_sync', code: 'AUTH_SESSION_NOT_SELECTED' }
+    }
+    const response = await runtime.request(sid)
+    if (!runtime.isCurrent()) {
+      return {
+        kind: 'transient_error',
+        error: new AuthRefreshSupersededError(),
+      }
+    }
+    const data = isRecord(response.data) ? response.data : undefined
+    const bundle = data?.data
+    if (
+      response.status === 200 &&
+      data?.success === true &&
+      isAuthBundle(bundle) &&
+      bundle.session.sid === sid
+    ) {
+      runtime.accept(bundle)
+      return { kind: 'authenticated', bundle }
+    }
+    if (response.status === 403 && data?.code === 'AUTH_ORIGIN_FORBIDDEN') {
+      return {
+        kind: 'transient_error',
+        error: new AuthOriginUnavailableError(),
+      }
+    }
+    if (!response.status || response.status >= 500 || response.status === 429) {
+      return {
+        kind: 'transient_error',
+        error: response.error ?? response.data,
+      }
+    }
+    return {
+      kind: 'out_of_sync',
+      code:
+        typeof data?.code === 'string' ? data.code : 'AUTH_SESSION_MISMATCH',
+    }
+  }
+}
+
+export async function switchAuthenticationSession(
+  sid: string,
+  verifiedSessions?: readonly string[]
+): Promise<RefreshOutcome> {
+  const epoch = authEpoch
+  const switchSession = createSessionSwitcher({
+    allowed: () => verifiedSessions ?? listSelectableSessions(),
+    request: requestRefresh,
+    accept: (bundle) => applyAuthBundle(bundle),
+    isCurrent: () => authEpoch === epoch,
+  })
+  try {
+    if (typeof navigator === 'undefined' || !navigator.locks) {
+      return switchSession(sid)
+    }
+    return await navigator.locks.request(
+      'new-api:auth-refresh',
+      { mode: 'exclusive' },
+      () => switchSession(sid)
+    )
+  } catch (error: unknown) {
+    return { kind: 'transient_error', error }
+  }
+}
+
 function runRefresh(refreshEpoch: number): Promise<RefreshOutcome> {
   return createRefreshRunner({
     request: requestRefresh,
-    getExpectedSID: () => useAuthStore.getState().auth.session?.sid,
+    getExpectedSID: () =>
+      useAuthStore.getState().auth.session?.sid ?? readSelectedSession(),
     parseBundle: (value) => (isAuthBundle(value) ? value : null),
-    acceptBundle: (bundle) => applyAuthBundle(bundle, false),
+    acceptBundle: (bundle) => applyAuthBundle(bundle, false, true),
     clear: (synchronizeTabs, bootstrapState) => {
       if (!synchronizeTabs && bootstrapState === 'idle') {
         useAuthStore.getState().auth.reset('idle')
@@ -344,11 +457,19 @@ async function performRefreshWithBrowserLock(
 }
 
 export function refreshAuthentication(): Promise<RefreshOutcome> {
-  if (!refreshPromise) {
+  if (!useAuthStore.getState().auth.session && isSessionSelectionCleared()) {
+    return Promise.resolve({ kind: 'anonymous' })
+  }
+  if (!refreshPromise || refreshGeneration !== authGeneration) {
     const refreshEpoch = authEpoch
-    refreshPromise = performRefreshWithBrowserLock(refreshEpoch).finally(() => {
-      refreshPromise = null
+    refreshGeneration = authGeneration
+    const pending = performRefreshWithBrowserLock(refreshEpoch).finally(() => {
+      if (refreshPromise === pending) {
+        refreshPromise = null
+        refreshGeneration = null
+      }
     })
+    refreshPromise = pending
   }
   return refreshPromise
 }
@@ -374,6 +495,15 @@ function currentValidAuthBundle(): AuthBundle | null {
 }
 
 export async function bootstrapAuthentication(): Promise<RefreshOutcome> {
+  const returnedSID = consumeReturnedSession()
+  if (
+    returnedSID &&
+    useAuthStore.getState().auth.session?.sid !== returnedSID
+  ) {
+    authEpoch += 1
+    authGeneration += 1
+    useAuthStore.getState().auth.reset('idle')
+  }
   const bundle = currentValidAuthBundle()
   if (bundle) {
     useAuthStore.getState().auth.setBootstrapState('complete')

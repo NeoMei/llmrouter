@@ -40,8 +40,10 @@ func TestPrivateRuntimeBrokerSessionRequiresBoundCurrentAuthority(t *testing.T) 
 	enabled := true
 	sourceStatus := http.StatusNoContent
 	removeDuringVerify := false
+	sourceCalls := 0
 	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/internal/v1/product-runtime/identity/browser/source/verify" {
+			sourceCalls++
 			if removeDuringVerify {
 				if err := f.db.Where("sid = ?", broker.Session.SID).Delete(&model.ProductBrokerSessionProof{}).Error; err != nil {
 					w.WriteHeader(500)
@@ -70,6 +72,18 @@ func TestPrivateRuntimeBrokerSessionRequiresBoundCurrentAuthority(t *testing.T) 
 	t.Cleanup(hub.Close)
 	t.Setenv("UNIHUB_ORIGIN", hub.URL)
 	t.Setenv("NATIVE_PUBLIC_ACCESS", "false")
+	t.Setenv("UNIHUB_INDEPENDENT_CENTRAL_REALM_ENABLED", "true")
+	brokerCookie := &http.Cookie{Name: service.RefreshCookieName, Value: broker.RefreshToken}
+	beforeCalls := sourceCalls
+	options := f.request("GET", "/api/user/auth/session-options", "", brokerCookie)
+	require.GreaterOrEqual(t, sourceCalls-beforeCalls, 2, "source is verified before and after the runtime lookup")
+	require.Contains(t, options.Body.String(), broker.Session.SID, options.Body.String())
+	require.Contains(t, options.Body.String(), `"realm":"legacy"`)
+	enabled = false
+	deniedOptions := f.request("GET", "/api/user/auth/session-options", "", brokerCookie)
+	require.NotContains(t, deniedOptions.Body.String(), broker.Session.SID)
+	require.Contains(t, deniedOptions.Body.String(), `"unavailable":true`)
+	enabled = true
 	response := f.request("GET", "/api/log/self", broker.AccessToken, nil)
 	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
 	assert.NotContains(t, response.Body.String(), "UNIHUB_SESSION_REQUIRED")
@@ -134,6 +148,8 @@ func TestPrivateRuntimeBrokerSessionRequiresBoundCurrentAuthority(t *testing.T) 
 	assert.NotContains(t, revokedRefresh.Body.String(), "access_token")
 	enabled = true
 	removeDuringVerify = true
+	removedOptions := f.request("GET", "/api/user/auth/session-options", "", rotated)
+	assert.NotContains(t, removedOptions.Body.String(), broker.Session.SID, "source proof removal cannot leave a selectable session")
 	assert.Equal(t, http.StatusUnauthorized, f.request("GET", "/api/log/self", broker.AccessToken, nil).Code, "proof removed during verification must not authorize")
 }
 

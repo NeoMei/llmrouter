@@ -88,7 +88,11 @@ func TestManagedKeyStandardChatUsesOnlyCentralBilling(t *testing.T) {
 			if input["token"] == "uh_key_wrongmodel" {
 				models = []string{"different"}
 			}
-			out = platformbilling.Claims{Operations: map[string][]string{"managed-test": {"chat.completions.create"}}, ID: input["token"] + "-id", CredentialKind: "api_key", InstanceID: instance, Audience: "llmrouter", ActorID: "actor", AccountID: "payer", OriginProductID: "client", Models: models, ExpiresAt: time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)}
+			origin := "client"
+			if input["token"] == "uh_key_superwagie" {
+				origin = "superwagie"
+			}
+			out = platformbilling.Claims{Operations: map[string][]string{"managed-test": {"chat.completions.create"}}, ID: input["token"] + "-id", CredentialKind: "api_key", InstanceID: instance, Audience: "llmrouter", ActorID: "actor", AccountID: "payer", OriginProductID: origin, Models: models, ExpiresAt: time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)}
 		case "/internal/v1/rates":
 			out = []platformbilling.Rate{rate}
 		case "/internal/v1/calls/reserve":
@@ -245,6 +249,18 @@ func TestManagedKeyStandardChatUsesOnlyCentralBilling(t *testing.T) {
 	}
 	assert.Equal(t, 404, send(http.MethodGet, "/v1/videos/public-video-id", "uh_key_other", "").Code)
 	assert.Equal(t, 409, send(http.MethodGet, "/v1/videos/public-video-id/content", "uh_key_valid", "").Code)
+	privateCall := platformbilling.Call{CallID: "private-video", CredentialID: "uh_key_superwagie-id", ActorID: "actor", AccountID: "payer", OriginProductID: "superwagie", InstanceID: "instance-a", TaskID: "private-task", Model: "managed-test", Operation: "video", ProviderTaskID: "private-supplier", Status: "UNKNOWN"}
+	require.NoError(t, db.Create(&privateCall).Error)
+	require.NoError(t, db.Create(&model.Task{TaskID: "private-public-id", PlatformCallID: privateCall.CallID, FundingOwner: "platform", Status: model.TaskStatusQueued, Progress: "0%", PrivateData: model.TaskPrivateData{UpstreamTaskID: "private-supplier"}}).Error)
+	for _, path := range []string{"/v1/videos/private-video/result", "/v1/videos/private-public-id/content", "/platform/v1/videos/private-video/result"} {
+		assert.Equal(t, 404, send(http.MethodGet, path, "uh_key_superwagie", "").Code, path)
+	}
+	assert.Equal(t, 200, send(http.MethodGet, "/v1/videos/private-video", "uh_key_superwagie", "").Code)
+	privateOCR := platformbilling.Call{CallID: "private-ocr", CredentialID: "uh_key_superwagie-id", ActorID: "actor", AccountID: "payer", OriginProductID: "superwagie", InstanceID: "instance-a", TaskID: "private-ocr-task", Model: "managed-test", Operation: "ocr", WireMode: "paddle-native-v1", ProviderTaskID: "private-ocr-supplier", Status: "UNKNOWN"}
+	require.NoError(t, db.Create(&privateOCR).Error)
+	for _, path := range []string{"/v1/ocr/private-ocr/result", "/v1/ocr/private-ocr/content", "/api/v2/ocr/jobs/private-ocr"} {
+		assert.Equal(t, 404, send(http.MethodGet, path, "uh_key_superwagie", "").Code, path)
+	}
 	receipt := send(http.MethodGet, "/platform/v1/calls/"+call.CallID, "uh_key_valid", "")
 	require.Equal(t, 200, receipt.Code, receipt.Body.String())
 	assert.Contains(t, receipt.Body.String(), `"status":"SETTLED"`)

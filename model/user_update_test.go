@@ -290,6 +290,7 @@ func TestInsertKeepsBlankPasswordForPasswordlessUser(t *testing.T) {
 
 func TestUpdateUserBindColumnOnlyTouchesTheBindingColumn(t *testing.T) {
 	truncateTables(t)
+	require.NoError(t, DB.AutoMigrate(&CentralAuthState{}, &CentralLoginCredential{}, &CentralSessionCredential{}))
 
 	user := createUserBindTestUser(t)
 	require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Updates(map[string]interface{}{
@@ -310,6 +311,7 @@ func TestUpdateUserBindColumnOnlyTouchesTheBindingColumn(t *testing.T) {
 
 func TestUpdateUserBindColumnPreservesRestrictiveChange(t *testing.T) {
 	truncateTables(t)
+	require.NoError(t, DB.AutoMigrate(&CentralAuthState{}, &CentralLoginCredential{}, &CentralSessionCredential{}))
 
 	user := createUserBindTestUser(t)
 	require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).

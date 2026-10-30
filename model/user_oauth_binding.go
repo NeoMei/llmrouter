@@ -122,6 +122,9 @@ func UpdateUserOAuthBinding(userId, providerId int, subject string, realm ...str
 		if err := SetNativeLoginCredentialTx(tx, userId, "oauth:"+strconv.Itoa(providerId), subject, scope); err != nil {
 			return err
 		}
+		if err := guardLegacyCentralSecurityTx(tx, userId, scope); err != nil {
+			return err
+		}
 		var binding UserOAuthBinding
 		err := tx.Where("user_id = ? AND provider_id = ?", userId, providerId).First(&binding).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -145,6 +148,9 @@ func DeleteUserOAuthBinding(userId, providerId int, realm ...string) error {
 			scope = realm[0]
 		}
 		if err := SetNativeLoginCredentialTx(tx, userId, "oauth:"+strconv.Itoa(providerId), "", scope); err != nil {
+			return err
+		}
+		if err := guardLegacyCentralSecurityTx(tx, userId, scope); err != nil {
 			return err
 		}
 		return tx.Where("user_id = ? AND provider_id = ?", userId, providerId).Delete(&UserOAuthBinding{}).Error

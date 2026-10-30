@@ -46,6 +46,7 @@ type wanVideoGatewayFixture struct {
 	cfg                                         platformbilling.Config
 	sends, fetches, downloads, cancels, settles int
 	variant                                     string
+	originProduct                               string
 	denySettlementRead                          bool
 	mp4                                         []byte
 }
@@ -67,7 +68,7 @@ func newWanVideoGatewayFixtureWithHub(t *testing.T, variant, hubOrigin, serviceT
 	enableUniHubBoundary(t)
 	gin.SetMode(gin.TestMode)
 	require.NoError(t, i18n.Init())
-	f := &wanVideoGatewayFixture{variant: variant}
+	f := &wanVideoGatewayFixture{variant: variant, originProduct: "fixture-product"}
 	if variant == "1080" {
 		f.mp4 = wanVideoTestFile(t, "wan1080.mp4")
 	} else {
@@ -212,13 +213,13 @@ func newWanVideoGatewayFixtureWithHub(t *testing.T, variant, hubOrigin, serviceT
 			var out any
 			switch r.URL.Path {
 			case "/internal/v1/model-credentials/verify":
-				out = platformbilling.Claims{CredentialKind: "task", ID: "original-credential", Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: "superwagie", InstanceID: "default", Models: []string{"wan2.6-t2v"}, Operations: map[string][]string{"wan2.6-t2v": {"videos.create"}}, TaskID: "wan-task", ExpiresAt: time.Now().Add(time.Hour), Asset: "CNY/6", FundingMode: "prepaid_cash"}
+				out = platformbilling.Claims{CredentialKind: "task", ID: "original-credential", Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: f.originProduct, InstanceID: "default", Models: []string{"wan2.6-t2v"}, Operations: map[string][]string{"wan2.6-t2v": {"videos.create"}}, TaskID: "wan-task", ExpiresAt: time.Now().Add(time.Hour), Asset: "CNY/6", FundingMode: "prepaid_cash"}
 			case "/internal/v1/rates":
 				out = []platformbilling.Rate{rate}
 			case "/internal/v1/calls/reserve":
 				var in map[string]string
 				require.NoError(t, common.DecodeJson(r.Body, &in))
-				remote = platformbilling.RemoteCall{WireOperation: in["wire_operation"], CallID: in["call_id"], ActorID: "actor", AccountID: "account", OriginProductID: "superwagie", InstanceID: "default", CredentialID: "original-credential", RequestDigest: in["request_digest"], Rate: rate, ChargeAsset: "CNY/6", FundingMode: "prepaid_cash", FundingProductID: "llmrouter", Held: in["amount"], Status: "RESERVED"}
+				remote = platformbilling.RemoteCall{WireOperation: in["wire_operation"], CallID: in["call_id"], ActorID: "actor", AccountID: "account", OriginProductID: f.originProduct, InstanceID: "default", CredentialID: "original-credential", RequestDigest: in["request_digest"], Rate: rate, ChargeAsset: "CNY/6", FundingMode: "prepaid_cash", FundingProductID: "llmrouter", Held: in["amount"], Status: "RESERVED"}
 				out = remote
 			case "/internal/v1/calls/wan-call/settle":
 				f.settles++

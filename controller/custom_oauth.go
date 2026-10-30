@@ -10,9 +10,12 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // CustomOAuthProviderResponse is the response structure for custom OAuth providers
@@ -537,7 +540,26 @@ func UnbindCustomOAuth(c *gin.Context) {
 		return
 	}
 
-	if err := model.DeleteUserOAuthBinding(userId, providerId, tokenRequestRealm(c)); err != nil {
+	var unbindErr error
+	if middleware.CentralRealmAuthenticated(c) {
+		identity, ok := middleware.GetSessionAuthIdentity(c)
+		if !ok || identity.UserID != userId {
+			common.ApiError(c, service.ErrLoginSessionInvalid)
+			return
+		}
+		if _, err := service.ValidateSessionReference(c.Request.Context(), userId, identity.SessionID); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		unbindErr = model.DB.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+			return model.DeleteCentralLoginCredentialTx(tx, userId, identity.SessionID, "oauth:"+strconv.Itoa(providerId), func(tx *gorm.DB) error {
+				return tx.Where("user_id = ? AND provider_id = ?", userId, providerId).Delete(&model.UserOAuthBinding{}).Error
+			})
+		})
+	} else {
+		unbindErr = model.DeleteUserOAuthBinding(userId, providerId, tokenRequestRealm(c))
+	}
+	if err := unbindErr; err != nil {
 		common.ApiError(c, err)
 		return
 	}

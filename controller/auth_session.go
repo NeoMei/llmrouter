@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/internal/platformaccount"
+	"github.com/QuantumNous/new-api/internal/unihubaccess"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
@@ -18,16 +19,20 @@ import (
 
 func RefreshAuth(c *gin.Context) {
 	setAuthNoStore(c)
-	rawRefreshToken, err := c.Cookie(service.RefreshCookieName)
-	if err != nil || rawRefreshToken == "" {
-		service.ClearRefreshCookie(c)
-		writeAuthSessionError(c, service.ErrRefreshTokenInvalid)
+	if strings.TrimSpace(c.GetHeader("X-Auth-Session")) == "" && service.SessionSelectionCleared(c) {
+		writeAuthSessionError(c, service.ErrLoginSessionMismatch)
+		return
+	}
+	cookieName, rawRefreshToken, err := service.SelectRefreshCookie(c, strings.TrimSpace(c.GetHeader("X-Auth-Session")))
+	if err != nil {
+		writeAuthSessionError(c, err)
 		return
 	}
 	bundle, user, err := service.RefreshLoginSession(rawRefreshToken, c.GetHeader("X-Auth-Session"), c.ClientIP(), c.Request.UserAgent())
 	if err != nil {
 		if errors.Is(err, service.ErrRefreshTokenInvalid) || errors.Is(err, service.ErrLoginSessionRevoked) {
-			service.ClearRefreshCookie(c)
+			service.ClearNamedRefreshCookie(c, cookieName)
+			service.MarkSessionSelectionCleared(c)
 		}
 		writeAuthSessionError(c, err)
 		return
@@ -40,7 +45,8 @@ func RefreshAuth(c *gin.Context) {
 	if err = service.VerifyBrokerSource(c.Request.Context(), identity); err != nil {
 		if errors.Is(err, service.ErrLoginSessionRevoked) {
 			_, _ = model.RevokeUserSession(identity.UserID, identity.SessionID, "broker_source_revoked")
-			service.ClearRefreshCookie(c)
+			service.ClearNamedRefreshCookie(c, cookieName)
+			service.MarkSessionSelectionCleared(c)
 			writeAuthSessionError(c, service.ErrLoginSessionRevoked)
 		} else {
 			// Rotation already occurred; retain the new HttpOnly cookie so a
@@ -57,16 +63,29 @@ func RefreshAuth(c *gin.Context) {
 		return
 	}
 	if platformaccount.RuntimeEnabled() && !native && !middleware.NativePrivateMaintenanceIdentity(c, user.Id) {
-		if e := applyCurrentProductIdentity(c, user, false); e != nil {
-			productIdentityError(c, e)
+		session, sessionErr := model.GetUserSessionBySID(identity.SessionID)
+		if sessionErr != nil {
+			writeAuthSessionError(c, sessionErr)
+			return
+		}
+		var identityErr error
+		if session.AuthRealm == model.CentralAuthRealm {
+			identityErr = applyCurrentProductIdentity(c, user, false, identity.UserAuthVersion)
+		} else {
+			identityErr = applyCurrentProductIdentity(c, user, false)
+		}
+		if identityErr != nil {
+			// Runtime errors do not prove the local session was revoked. The
+			// refresh cookie has already rotated and must remain retryable.
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"success": false, "code": "PRODUCT_IDENTITY_UNAVAILABLE", "message": "Product identity authority is unavailable"})
 			return
 		}
 		if e := model.RefreshProductBalance(c.Request.Context(), user); e != nil {
-			productIdentityError(c, e)
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"success": false, "code": "PRODUCT_IDENTITY_UNAVAILABLE", "message": "Product identity authority is unavailable"})
 			return
 		}
 	}
-	data := productSelfData(c, user)
+	data := productSelfData(c, user, native)
 	if !native && !platformaccount.RuntimeEnabled() && user.IdentitySource == model.UniHubIdentitySource {
 		identity, e := service.ParseAccessToken(bundle.AccessToken)
 		if e != nil {
@@ -83,9 +102,9 @@ func RefreshAuth(c *gin.Context) {
 			return
 		}
 		authz.SetProductPrincipal(c, p)
-		data["permissions"] = gin.H{"admin_permissions": authz.RequestCapabilities(c)}
-		data["role"] = middleware.RoleFromAccess(p.Access)
+		data = productSelfData(c, user, native)
 	}
+	data["authentication_realm"] = bundle.Session.AuthenticationRealm
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -99,13 +118,59 @@ func RefreshAuth(c *gin.Context) {
 	})
 }
 
+func SessionOptions(c *gin.Context) {
+	setAuthNoStore(c)
+	options := make([]service.SessionOption, 0, 2)
+	unavailable := false
+	for _, name := range []string{service.RefreshCookieName, service.CentralRefreshCookieName} {
+		raw, err := c.Cookie(name)
+		if err != nil || raw == "" {
+			continue
+		}
+		option, err := service.InspectSessionOption(c.Request.Context(), raw, func(userID int) bool {
+			return middleware.NativePrivateMaintenanceIdentity(c, userID)
+		})
+		if err != nil {
+			if !errors.Is(err, service.ErrRefreshTokenInvalid) && !errors.Is(err, service.ErrLoginSessionRevoked) {
+				unavailable = true
+			}
+			continue
+		}
+		if (name == service.RefreshCookieName && option.Realm != "native" && option.Realm != "legacy") || (name == service.CentralRefreshCookieName && option.Realm != "central") {
+			continue
+		}
+		if option.Realm == "native" || option.Realm == "legacy" {
+			policy, err := unihubaccess.FromEnv()
+			if err != nil || (!policy.NativePublicEnabled && !policy.IsPrivateManagementRequest(c.Request) && !(option.PublicProjection && (policy.PublicEnabled || platformaccount.RuntimeEnabled()))) {
+				continue
+			}
+		}
+		options = append(options, *option)
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"sessions": options, "unavailable": unavailable}})
+}
+
 func AuthLogout(c *gin.Context) {
 	setAuthNoStore(c)
 	expectedSID := strings.TrimSpace(c.GetHeader("X-Auth-Session"))
-	rawRefreshToken, cookieErr := c.Cookie(service.RefreshCookieName)
+	selectionSID := expectedSID
+	if rawAccessToken, ok := dashboardBearer(c.GetHeader("Authorization")); ok && selectionSID == "" {
+		if identity, err := service.ParseAccessToken(rawAccessToken); err == nil {
+			selectionSID = identity.SessionID
+		}
+	}
+	cookieName, rawRefreshToken, cookieErr := service.SelectRefreshCookie(c, selectionSID)
+	if errors.Is(cookieErr, service.ErrLoginSessionMismatch) {
+		writeAuthSessionError(c, cookieErr)
+		return
+	}
 	cookieSID, hasCookieSID := service.RefreshTokenSID(rawRefreshToken)
 	if expectedSID != "" && cookieErr == nil && hasCookieSID && cookieSID != expectedSID {
 		writeAuthSessionError(c, service.ErrLoginSessionMismatch)
+		return
+	}
+	if expectedSID == "" && selectionSID == "" && service.SessionSelectionCleared(c) {
+		c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 		return
 	}
 
@@ -125,9 +190,10 @@ func AuthLogout(c *gin.Context) {
 					writeAuthSessionError(c, err)
 					return
 				}
-				service.ClearRefreshCookie(c)
+				service.ClearNamedRefreshCookie(c, cookieName)
 				cookieCleared = true
 			}
+			service.MarkSessionSelectionCleared(c)
 			c.JSON(http.StatusOK, gin.H{
 				"success": true,
 				"message": "",
@@ -137,7 +203,7 @@ func AuthLogout(c *gin.Context) {
 		}
 	}
 	if cookieErr != nil || rawRefreshToken == "" {
-		service.ClearRefreshCookie(c)
+		service.MarkSessionSelectionCleared(c)
 		c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 		return
 	}
@@ -145,8 +211,16 @@ func AuthLogout(c *gin.Context) {
 		writeAuthSessionError(c, err)
 		return
 	}
-	service.ClearRefreshCookie(c)
+	service.ClearNamedRefreshCookie(c, cookieName)
+	service.MarkSessionSelectionCleared(c)
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
+}
+
+func sessionRequestRealm(c *gin.Context) string {
+	if middleware.CentralRealmAuthenticated(c) {
+		return model.CentralAuthRealm
+	}
+	return tokenRequestRealm(c)
 }
 
 func GetLoginSessions(c *gin.Context) {
@@ -154,7 +228,7 @@ func GetLoginSessions(c *gin.Context) {
 	if !ok {
 		return
 	}
-	sessions, err := service.ListLoginSessions(identity.UserID, identity.SessionID, tokenRequestRealm(c))
+	sessions, err := service.ListLoginSessions(identity.UserID, identity.SessionID, sessionRequestRealm(c))
 	if err != nil {
 		writeAuthSessionError(c, err)
 		return
@@ -172,7 +246,7 @@ func DeleteLoginSession(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "code": "AUTH_SESSION_ID_REQUIRED", "message": "session id is required"})
 		return
 	}
-	revoked, err := model.RevokeUserSession(identity.UserID, sid, "user_revoked", tokenRequestRealm(c))
+	revoked, err := model.RevokeUserSession(identity.UserID, sid, "user_revoked", sessionRequestRealm(c))
 	if err != nil {
 		writeAuthSessionError(c, err)
 		return
@@ -181,11 +255,14 @@ func DeleteLoginSession(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "code": "AUTH_SESSION_NOT_FOUND", "message": "session not found"})
 		return
 	}
-	if rawRefreshToken, cookieErr := c.Cookie(service.RefreshCookieName); cookieErr == nil {
+	if cookieName, rawRefreshToken, cookieErr := service.SelectRefreshCookie(c, sid); cookieErr == nil {
 		cookieSID, ok := service.RefreshTokenSID(rawRefreshToken)
 		if ok && cookieSID == sid {
-			service.ClearRefreshCookie(c)
+			service.ClearNamedRefreshCookie(c, cookieName)
 		}
+	}
+	if sid == identity.SessionID {
+		service.MarkSessionSelectionCleared(c)
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": gin.H{"revoked_sid": sid, "current": sid == identity.SessionID}})
 }
@@ -195,7 +272,7 @@ func RevokeOtherLoginSessions(c *gin.Context) {
 	if !ok {
 		return
 	}
-	count, err := model.RevokeOtherUserSessions(identity.UserID, identity.SessionID, "user_revoked_others", tokenRequestRealm(c))
+	count, err := model.RevokeOtherUserSessions(identity.UserID, identity.SessionID, "user_revoked_others", sessionRequestRealm(c))
 	if err != nil {
 		writeAuthSessionError(c, err)
 		return

@@ -43,6 +43,10 @@ func TestNativeRealmPasswordLoginAndKeyManagement(t *testing.T) {
 	require.NoError(t, err)
 	approved := sha256.Sum256(raw)
 	require.NoError(t, model.EnrollNativeRealm(context.Background(), f.db, raw, hex.EncodeToString(approved[:])))
+	quotaManifest, err := common.Marshal(model.NativeTokenQuotaManifest{Version: 1, CutoverEvidence: strings.Repeat("a", 64)})
+	require.NoError(t, err)
+	quotaApproved := sha256.Sum256(quotaManifest)
+	require.NoError(t, model.ImportNativeTokenQuota(context.Background(), f.db, quotaManifest, hex.EncodeToString(quotaApproved[:])))
 	send := func(method, path, bearer, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, "https://dashboard.test"+path, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")

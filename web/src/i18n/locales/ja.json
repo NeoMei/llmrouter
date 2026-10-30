@@ -1,5 +1,16 @@
 {
   "translation": {
+    "Two-factor authentication is managed by UniHub.": "二要素認証は UniHub で管理されます。",
+    "Two-factor authentication status is temporarily unavailable.": "二要素認証の状態を一時的に取得できません。",
+    "Password and account deletion are managed by UniHub.": "パスワードとアカウント削除は UniHub で管理されます。",
+    "Switch account": "アカウントを切り替え",
+    "Local account": "ローカルアカウント",
+    "Central account": "中央アカウント",
+    "No other signed-in account": "他にログイン中のアカウントはありません",
+    "Session access is blocked by the server origin configuration. Please contact your administrator, then retry.": "サーバーのオリジン設定によりセッションへのアクセスが拒否されました。管理者に連絡してから再試行してください。",
+    "Account choices temporarily unavailable": "アカウント一覧を一時的に利用できません",
+    "Try again": "再試行",
+    "Unable to switch account": "アカウントを切り替えられません",
     "Settle sandbox recharge": "サンドボックス入金を確定",
     "UniHub account access is unavailable for this browser session. Contact the administrator.": "このブラウザーセッションでは UniHub アカウントにアクセスできません。管理者にお問い合わせください。",
     "For UniHub accounts, local log date ranges must not exceed 30 days.": "UniHub アカウントのローカルログの期間は 30 日以内にしてください。",

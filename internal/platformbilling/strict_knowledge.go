@@ -55,7 +55,8 @@ func (p KnowledgePolicy) valid(c Config, model, wire string) bool {
 	case "rerank.create":
 		return p.ChannelType == constant.ChannelTypeAli && p.UpstreamModel == "qwen3-rerank" && p.HardInputTokens <= 120000 && p.MaxItemTokens > 0 && p.MaxItemTokens <= 4000 && p.MaxBatch > 0 && p.MaxBatch <= 500 && p.VisualTokens == 0
 	case "embeddings.create":
-		return p.ChannelType == constant.ChannelTypeOpenAI && p.MaxItemTokens > 0 && p.MaxItemTokens <= 8192 && p.MaxBatch > 0 && p.MaxBatch <= 2048 && p.Space != nil && p.Space.Model == p.UpstreamModel && p.Space.Version != "" && p.Space.Provider != "" && p.Space.Dimensions > 0 && p.Space.Dimensions <= 65536 && p.Space.InputSemantics == "text" && p.VisualTokens == 0
+		aliTextEmbedding := p.ChannelType == constant.ChannelTypeAli && p.UpstreamModel == "text-embedding-v4" && p.Space != nil && p.Space.Provider == "aliyun"
+		return (p.ChannelType == constant.ChannelTypeOpenAI || aliTextEmbedding) && p.MaxItemTokens > 0 && p.MaxItemTokens <= 8192 && p.MaxBatch > 0 && p.MaxBatch <= 2048 && p.Space != nil && p.Space.Model == p.UpstreamModel && p.Space.Version != "" && p.Space.Provider != "" && p.Space.Dimensions > 0 && p.Space.Dimensions <= 65536 && (p.Space.InputSemantics == "text" || p.Space.InputSemantics == "text/query-document-v1") && p.VisualTokens == 0
 	case "multimodal.embeddings.create":
 		return p.ChannelType == constant.ChannelTypeAli && p.UpstreamModel == "qwen3-vl-embedding" && p.HardInputTokens <= 64000 && p.VisualTokens > 0 && p.VisualTokens <= 10000000 && p.MaxBatch > 0 && p.MaxBatch <= 20 && validKnowledgeSpace(p.Space) && p.Space.Provider == "aliyun" && p.Space.Model == p.UpstreamModel && p.Space.Version != "" && p.Space.InputSemantics == dto.QwenMultimodalInputSemantics
 	}

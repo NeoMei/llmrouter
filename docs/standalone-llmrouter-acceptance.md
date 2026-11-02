@@ -43,7 +43,7 @@ Run one ordinary and one streaming request through the same key. Then verify:
 
 - the provider received exactly one request per logical call;
 - the token's `remain_quota` decreased and `used_quota` increased;
-- `/usage/token` reports the same token totals;
+- `/api/usage/token/` reports the same token totals;
 - `/api/log/self` contains the model, token counts and charge;
 - a request after exhausting the token quota is rejected before provider dispatch.
 

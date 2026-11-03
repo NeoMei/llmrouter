@@ -55,6 +55,7 @@ export function silentProductLoginURL(
   storage: Pick<Storage, 'getItem' | 'setItem'>
 ): string | null {
   if (!enabled || storage.getItem('unihub:signed-out') === '1') return null
+  if (new URLSearchParams(search).get('native') === '1') return null
   if (new URLSearchParams(search).get('unihub_silent') === 'done') {
     storage.setItem('unihub:silent-attempted', '1')
     return null

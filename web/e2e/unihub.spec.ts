@@ -3278,3 +3278,572 @@ test('signed-out browser explicitly switches to a cookie-verified account withou
     .toBe('sid-central')
   expect(requests.every((sid) => sid === 'sid-central')).toBe(true)
 })
+
+test('UniHub password failure never falls back to a same-name local account', async ({
+  page,
+}) => {
+  let localAttempts = 0
+  let centralAttempts = 0
+  await page.addInitScript(() => {
+    localStorage.setItem('setup_status_checked', 'true')
+    localStorage.setItem('i18nextLng', 'en')
+  })
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (path === '/api/unihub/config') {
+      return route.fulfill({
+        json: {
+          enabled: true,
+          browser_sso_enabled: true,
+          native_access: true,
+          public_origin: 'https://hub.invalid',
+          client_id: 'client',
+          redirect_uri: 'http://127.0.0.1:58004/api/unihub/callback',
+          product_id: 'llmrouter',
+          models: [],
+        },
+      })
+    }
+    if (path === '/api/user/login') {
+      localAttempts++
+      return route.fulfill({ json: { success: false } })
+    }
+    if (path === '/api/user/auth/refresh') {
+      return route.fulfill({ status: 401, json: { success: false } })
+    }
+    if (path === '/api/status') {
+      return route.fulfill({
+        json: {
+          success: true,
+          data: { system_name: 'LLMRouter', password_login_enabled: true },
+        },
+      })
+    }
+    return route.fulfill({ json: { success: true, data: [] } })
+  })
+  await page.route('https://hub.invalid/v1/**', async (route) => {
+    if (route.request().method() === 'OPTIONS') {
+      return route.fulfill({
+        status: 204,
+        headers: {
+          'access-control-allow-origin': '*',
+          'access-control-allow-methods': 'POST, OPTIONS',
+          'access-control-allow-headers': 'content-type',
+        },
+      })
+    }
+    centralAttempts++
+    return route.fulfill({
+      status: 401,
+      headers: { 'access-control-allow-origin': '*' },
+      json: { error: 'invalid_credentials' },
+    })
+  })
+  await page.goto('/sign-in?unihub_silent=done')
+  await page.getByLabel('Username', { exact: true }).fill('neomei')
+  await page.getByLabel('Password', { exact: true }).fill('incorrect-password')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await expect.poll(() => centralAttempts).toBe(1)
+  expect(localAttempts).toBe(0)
+})
+
+for (const requireMfa of [false, true]) {
+  test(`UniHub password ${requireMfa ? 'MFA completes' : 'success completes'} into the central user session`, async ({
+    page,
+  }) => {
+    let localAttempts = 0
+    let passcode = ''
+    const expiry = Math.floor(Date.now() / 1000) + 300
+    const user = {
+      id: 42,
+      username: 'projection',
+      role: 1,
+      identity_source: 'unihub',
+      unihub_user_id: 'central-user',
+    }
+    const bundle = {
+      access_token: 'local-session',
+      token_type: 'Bearer',
+      access_expires_at: expiry,
+      user,
+      session: {
+        sid: 'central-sid',
+        current: true,
+        login_method: 'unihub',
+        ip: '',
+        user_agent: '',
+        created_at: 1,
+        last_active_at: 1,
+        expires_at: expiry,
+      },
+    }
+    await page.addInitScript(() => {
+      localStorage.setItem('setup_status_checked', 'true')
+      localStorage.setItem('i18nextLng', 'en')
+    })
+    await page.route('**/api/**', async (route) => {
+      const path = new URL(route.request().url()).pathname
+      if (path === '/api/unihub/config') {
+        return route.fulfill({
+          json: {
+            enabled: true,
+            browser_sso_enabled: true,
+            native_access: true,
+            public_origin: 'https://hub.invalid',
+            client_id: 'client',
+            redirect_uri: 'http://127.0.0.1:58004/api/unihub/callback',
+            product_id: 'llmrouter',
+            models: [],
+          },
+        })
+      }
+      if (path === '/api/user/login') {
+        localAttempts++
+        return route.fulfill({ json: { success: false } })
+      }
+      if (path === '/api/user/auth/refresh') {
+        return route.fulfill({ status: 401, json: { success: false } })
+      }
+      if (path === '/api/status') {
+        return route.fulfill({
+          json: {
+            success: true,
+            data: { system_name: 'LLMRouter', password_login_enabled: true },
+          },
+        })
+      }
+      if (path === '/api/unihub/identity') {
+        return route.fulfill({
+          json: {
+            user: { id: 'central-user', name: 'Member', email: '' },
+            accounts: [],
+          },
+        })
+      }
+      if (path === '/api/unihub/session') {
+        return route.fulfill({ json: { success: true, data: bundle } })
+      }
+      if (path === '/api/unihub/access') {
+        return route.fulfill({
+          json: {
+            access: {
+              subject: 'central-user',
+              user: { id: 'central-user', name: 'Member', email: '' },
+              roles: ['member'],
+              permissions: ['product:use'],
+              expires_at: expiry,
+            },
+            user,
+            permissions: { admin_permissions: { product: { use: true } } },
+            csrf_token: 'csrf',
+          },
+        })
+      }
+      if (path === '/api/user/self') {
+        return route.fulfill({ json: { success: true, data: user } })
+      }
+      return route.fulfill({ json: { success: true, data: [] } })
+    })
+    await page.route('https://hub.invalid/v1/**', async (route) => {
+      const path = new URL(route.request().url()).pathname
+      const headers = {
+        'access-control-allow-origin': '*',
+        'access-control-allow-methods': 'POST, OPTIONS',
+        'access-control-allow-headers': 'content-type',
+      }
+      if (route.request().method() === 'OPTIONS') {
+        return route.fulfill({ status: 204, headers })
+      }
+      if (path.endsWith('/authorize/password')) {
+        const state = route.request().postDataJSON().state
+        return route.fulfill({
+          headers,
+          json: requireMfa
+            ? {
+                error: 'mfa_pending',
+                mfa_token: 'a'.repeat(43),
+                expires_in: 300,
+              }
+            : { state, authorization_id: 'b'.repeat(43), code: 'c'.repeat(64) },
+        })
+      }
+      if (path.endsWith('/authorize/mfa')) {
+        passcode = route.request().postDataJSON().passcode
+        if (passcode === '000000') {
+          return route.fulfill({
+            status: 401,
+            headers,
+            json: { error: 'invalid_mfa_code' },
+          })
+        }
+        if (passcode === '999999') {
+          return route.fulfill({
+            status: 400,
+            headers,
+            json: { error: 'invalid_mfa_token' },
+          })
+        }
+        return route.fulfill({
+          headers,
+          json: { authorization_id: 'b'.repeat(43), code: 'c'.repeat(64) },
+        })
+      }
+      return route.fulfill({
+        headers,
+        json: {
+          access_token: 'central-token',
+          id_token: 'id',
+          token_type: 'Bearer',
+          scope: 'openid profile email',
+          expires_in: 300,
+        },
+      })
+    })
+    await page.goto('/sign-in?unihub_silent=done')
+    await page.getByLabel('Username', { exact: true }).fill('neomei')
+    await page.getByLabel('Password', { exact: true }).fill('fixture-password')
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+    if (requireMfa) {
+      await page.getByLabel('Verification code').fill('000000')
+      await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+      await expect(page.getByLabel('Verification code')).toHaveValue('')
+      await page.getByLabel('Verification code').fill('999999')
+      await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+      await expect(page.getByLabel('Username', { exact: true })).toBeVisible()
+      await page
+        .getByLabel('Password', { exact: true })
+        .fill('fixture-password')
+      await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+      await page.getByLabel('Verification code').fill('123456')
+      await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+    }
+    await expect(page).toHaveURL(/\/dashboard/)
+    if (requireMfa) expect(passcode).toBe('123456')
+    expect(localAttempts).toBe(0)
+  })
+}
+
+test('explicit native sign in retains the local password flow with UniHub enabled', async ({
+  page,
+}) => {
+  let localAttempts = 0
+  let ssoAttempts = 0
+  await page.addInitScript(() => {
+    localStorage.setItem('setup_status_checked', 'true')
+    localStorage.setItem('i18nextLng', 'en')
+  })
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (path === '/api/unihub/config') {
+      return route.fulfill({
+        json: {
+          enabled: true,
+          browser_sso_enabled: true,
+          native_access: true,
+          public_origin: 'https://hub.invalid',
+          client_id: 'client',
+          redirect_uri: 'http://127.0.0.1:58004/api/unihub/callback',
+          product_id: 'llmrouter',
+          models: [],
+        },
+      })
+    }
+    if (path === '/api/unihub/login') {
+      ssoAttempts++
+      return route.abort()
+    }
+    if (path === '/api/user/login') {
+      localAttempts++
+      return route.fulfill({
+        json: { success: false, message: 'wrong password' },
+      })
+    }
+    if (path === '/api/user/auth/refresh') {
+      return route.fulfill({ status: 401, json: { success: false } })
+    }
+    if (path === '/api/status') {
+      return route.fulfill({
+        json: {
+          success: true,
+          data: { system_name: 'LLMRouter', password_login_enabled: true },
+        },
+      })
+    }
+    return route.fulfill({ json: { success: true, data: [] } })
+  })
+  await page.goto('/sign-in?native=1')
+  await page.getByLabel('Username or Email').fill('operator')
+  await page.getByLabel('Password', { exact: true }).fill('fixture-password')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await expect.poll(() => localAttempts).toBe(1)
+  expect(ssoAttempts).toBe(0)
+})
+
+test('signed-out browser can open central sign in and choose native entry', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('setup_status_checked', 'true')
+    localStorage.setItem('i18nextLng', 'en')
+    sessionStorage.setItem('new-api:auth:selected-sid:v1', '')
+  })
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (path === '/api/unihub/config') {
+      return route.fulfill({
+        json: {
+          enabled: true,
+          browser_sso_enabled: true,
+          native_access: true,
+          public_origin: 'https://hub.invalid',
+          client_id: 'client',
+          redirect_uri: 'http://127.0.0.1:58004/api/unihub/callback',
+          product_id: 'llmrouter',
+          models: [],
+        },
+      })
+    }
+    if (path === '/api/user/auth/refresh') {
+      return route.fulfill({ status: 401, json: { success: false } })
+    }
+    if (path === '/api/status') {
+      return route.fulfill({
+        json: {
+          success: true,
+          data: { system_name: 'LLMRouter', password_login_enabled: true },
+        },
+      })
+    }
+    return route.fulfill({ json: { success: true, data: [] } })
+  })
+  await page.goto('/sign-in')
+  await expect(page.getByLabel('Username', { exact: true })).toBeVisible()
+  await page.getByRole('link', { name: 'Local operator sign in' }).click()
+  await expect(page).toHaveURL(/native=1/)
+  await expect(page.getByLabel('Username or Email')).toBeVisible()
+})
+
+test('failed UniHub configuration can be retried without using local login', async ({
+  page,
+}) => {
+  let available = false
+  await page.addInitScript(() => {
+    localStorage.setItem('setup_status_checked', 'true')
+    localStorage.setItem('i18nextLng', 'en')
+  })
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (path === '/api/unihub/config') {
+      if (!available) return route.fulfill({ json: {} })
+      return route.fulfill({
+        json: {
+          enabled: true,
+          browser_sso_enabled: true,
+          native_access: true,
+          public_origin: 'https://hub.invalid',
+          client_id: 'client',
+          redirect_uri: 'http://127.0.0.1:58004/api/unihub/callback',
+          product_id: 'llmrouter',
+          models: [],
+        },
+      })
+    }
+    if (path === '/api/user/auth/refresh') {
+      return route.fulfill({ status: 401, json: { success: false } })
+    }
+    if (path === '/api/status') {
+      return route.fulfill({
+        json: {
+          success: true,
+          data: { system_name: 'LLMRouter', password_login_enabled: true },
+        },
+      })
+    }
+    return route.fulfill({ json: { success: true, data: [] } })
+  })
+  await page.goto('/sign-in?unihub_silent=done')
+  const error = page.getByRole('alert').filter({ hasText: 'Request failed' })
+  await expect(error).toBeVisible()
+  await expect(page.getByLabel('Username or Email')).toHaveCount(0)
+  available = true
+  await error.getByRole('button', { name: 'Try again' }).click()
+  await expect(page.getByLabel('Username', { exact: true })).toBeVisible()
+})
+
+test('runtime-only UniHub configuration retains the browser sign in', async ({
+  page,
+}) => {
+  let ssoAttempts = 0
+  await page.addInitScript(() => {
+    localStorage.setItem('setup_status_checked', 'true')
+    localStorage.setItem('i18nextLng', 'en')
+  })
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (path === '/api/unihub/config') {
+      return route.fulfill({
+        json: {
+          enabled: false,
+          browser_sso_enabled: true,
+          native_access: true,
+          public_origin: 'https://hub.invalid',
+          client_id: 'client',
+          redirect_uri: 'http://127.0.0.1:58004/api/unihub/callback',
+          product_id: 'llmrouter',
+          models: [],
+        },
+      })
+    }
+    if (path === '/api/unihub/login') {
+      ssoAttempts++
+      return route.fulfill({ status: 200, body: 'SSO' })
+    }
+    if (path === '/api/user/auth/refresh') {
+      return route.fulfill({ status: 401, json: { success: false } })
+    }
+    if (path === '/api/status') {
+      return route.fulfill({
+        json: {
+          success: true,
+          data: { system_name: 'LLMRouter', password_login_enabled: true },
+        },
+      })
+    }
+    return route.fulfill({ json: { success: true, data: [] } })
+  })
+  await page.goto('/sign-in?unihub_silent=done')
+  await page.getByRole('button', { name: 'Sign in with UniHub' }).click()
+  await expect.poll(() => ssoAttempts).toBe(1)
+})
+
+test('leaving the sign-in page revokes a late-created UniHub session', async ({
+  page,
+}) => {
+  let release!: () => void
+  let sessionRequested!: () => void
+  const requested = new Promise<void>((resolve) => {
+    sessionRequested = resolve
+  })
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let revoked = 0
+  const expiry = Math.floor(Date.now() / 1000) + 300
+  const bundle = {
+    access_token: 'local-session',
+    token_type: 'Bearer',
+    access_expires_at: expiry,
+    user: {
+      id: 42,
+      username: 'projection',
+      role: 1,
+      identity_source: 'unihub',
+      unihub_user_id: 'central-user',
+    },
+    session: {
+      sid: 'late-sid',
+      current: true,
+      login_method: 'unihub',
+      ip: '',
+      user_agent: '',
+      created_at: 1,
+      last_active_at: 1,
+      expires_at: expiry,
+    },
+  }
+  await page.addInitScript(() => {
+    localStorage.setItem('setup_status_checked', 'true')
+    localStorage.setItem('i18nextLng', 'en')
+  })
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (path === '/api/unihub/config') {
+      return route.fulfill({
+        json: {
+          enabled: true,
+          browser_sso_enabled: true,
+          native_access: true,
+          public_origin: 'https://hub.invalid',
+          client_id: 'client',
+          redirect_uri: 'http://127.0.0.1:58004/api/unihub/callback',
+          product_id: 'llmrouter',
+          models: [],
+        },
+      })
+    }
+    if (path === '/api/user/auth/refresh') {
+      return route.fulfill({ status: 401, json: { success: false } })
+    }
+    if (path === '/api/status') {
+      return route.fulfill({
+        json: {
+          success: true,
+          data: {
+            system_name: 'LLMRouter',
+            password_login_enabled: true,
+            register_enabled: true,
+          },
+        },
+      })
+    }
+    if (path === '/api/unihub/identity') {
+      return route.fulfill({
+        json: {
+          user: { id: 'central-user', name: 'Member', email: '' },
+          accounts: [],
+        },
+      })
+    }
+    if (path === '/api/unihub/session') {
+      sessionRequested()
+      await gate
+      return route.fulfill({ json: { success: true, data: bundle } })
+    }
+    if (path === '/api/user/auth/logout') {
+      revoked++
+      return route.fulfill({ json: { success: true } })
+    }
+    return route.fulfill({ json: { success: true, data: [] } })
+  })
+  await page.route('https://hub.invalid/v1/**', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    const headers = {
+      'access-control-allow-origin': '*',
+      'access-control-allow-methods': 'POST, OPTIONS',
+      'access-control-allow-headers': 'content-type',
+    }
+    if (route.request().method() === 'OPTIONS') {
+      return route.fulfill({ status: 204, headers })
+    }
+    if (path.endsWith('/authorize/password')) {
+      return route.fulfill({
+        headers,
+        json: {
+          state: route.request().postDataJSON().state,
+          authorization_id: 'a'.repeat(43),
+          code: 'a'.repeat(64),
+        },
+      })
+    }
+    return route.fulfill({
+      headers,
+      json: {
+        access_token: 'central-token',
+        id_token: 'id',
+        token_type: 'Bearer',
+        scope: 'openid profile email',
+        expires_in: 300,
+      },
+    })
+  })
+  await page.goto('/sign-in?unihub_silent=done')
+  await page.getByLabel('Username', { exact: true }).fill('neomei')
+  await page.getByLabel('Password', { exact: true }).fill('fixture-password')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await requested
+  await page.getByRole('link', { name: 'Sign up' }).click()
+  await expect(page).toHaveURL(/\/sign-up/)
+  release()
+  await expect.poll(() => revoked).toBe(1)
+  await expect(page).toHaveURL(/\/sign-up/)
+})

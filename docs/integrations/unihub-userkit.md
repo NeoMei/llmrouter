@@ -50,6 +50,16 @@ on that IdP application (Casdoor enableSigninSession and enableAutoSignin).
 Browser SSO does not require enabling the headless password API. Registration
 remains available only when separately enabled for that product client.
 
+When the product integration is enabled, the default `/sign-in` form verifies
+the username and password through UniHub's JSON identity API, then creates the
+existing issuer+subject product session. The client must explicitly permit
+`password_login` and satisfy UniHub's headless identity privacy gate. TOTP
+continues with UniHub's MFA API; required enrollment, password changes and consent
+continue through browser SSO. Authentication failures never fall back to a
+same-name local account. `/sign-in?native=1` keeps the original local login when
+native access is allowed. Runtime-only deployments without the product session
+endpoint retain the browser SSO entry.
+
 Configure a trusted `PRODUCT_USER_MANIFESTS_FILE` in UniHub with product/instance,
 entry URL and explicit permissions. A normal default member can have product:use;
 privileged channel viewer/operator roles must never be defaults. A viewer needs

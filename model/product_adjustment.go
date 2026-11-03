@@ -51,7 +51,7 @@ func (s *ProductFundingStore) Adjust(ctx context.Context, actorToken string, act
 			}
 			req.Amount = strconv.Itoa(-value)
 		case "override":
-			balance, e := s.Balance(ctx, userID)
+			balance, e := s.LegacyBalance(ctx, userID)
 			if e != nil {
 				return result, e
 			}

@@ -1531,13 +1531,16 @@ func ResetDueSubscriptions(limit int) (int, error) {
 	return resetCount, nil
 }
 
-// CleanupSubscriptionPreConsumeRecords removes old idempotency records to keep table small.
+// CleanupSubscriptionPreConsumeRecords expires ordinary idempotency records.
+// Centrally purchased entitlements also use these receipts to prove historical
+// usage ownership, so their receipts must outlive the short retry window.
 func CleanupSubscriptionPreConsumeRecords(olderThanSeconds int64) (int64, error) {
 	if olderThanSeconds <= 0 {
 		olderThanSeconds = 7 * 24 * 3600
 	}
 	cutoff := GetDBTimestamp() - olderThanSeconds
-	res := DB.Where("updated_at < ?", cutoff).Delete(&SubscriptionPreConsumeRecord{})
+	centralSubscriptions := DB.Model(&ProductSubscriptionPurchase{}).Select("subscription_id").Where("state = ? AND subscription_id > ?", "applied", 0)
+	res := DB.Where("updated_at < ?", cutoff).Where("user_subscription_id NOT IN (?)", centralSubscriptions).Delete(&SubscriptionPreConsumeRecord{})
 	return res.RowsAffected, res.Error
 }
 

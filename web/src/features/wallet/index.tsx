@@ -16,13 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Link } from '@tanstack/react-router'
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
-import { Button } from '@/components/ui/button'
-import { ProductConsoleView } from '@/features/unihub'
 import { useStatus } from '@/hooks/use-status'
 import { useSystemConfig } from '@/hooks/use-system-config'
 import { getSelf } from '@/lib/api'
@@ -68,35 +65,11 @@ interface WalletProps {
 
 export function Wallet(props: WalletProps) {
   const { t } = useTranslation()
-  const central = useAuthStore(
-    (state) => state.auth.user?.identity_source === 'unihub'
+  const cashSession = useAuthStore(
+    (state) => state.auth.user?.funding?.mode === 'unified_cash'
   )
-  const [native, setNative] = useState(false)
-  if (central && !native) {
-    return (
-      <>
-        <Button variant='outline' onClick={() => setNative(true)}>
-          {t('Local')} · {t('Wallet')}
-        </Button>
-        <ProductConsoleView page='wallet' />
-      </>
-    )
-  }
-  return (
-    <>
-      {central ? (
-        <Button variant='outline' onClick={() => setNative(false)}>
-          {t('UniHub account')}
-        </Button>
-      ) : null}
-      <NativeWallet {...props} />
-    </>
-  )
-}
-
-function NativeWallet(props: WalletProps) {
-  const { t } = useTranslation()
   const [user, setUser] = useState<UserWalletData | null>(null)
+  const unifiedCash = cashSession || user?.funding?.mode === 'unified_cash'
   const [userLoading, setUserLoading] = useState(true)
   const [topupAmount, setTopupAmount] = useState(0)
   const [selectedPreset, setSelectedPreset] = useState<number | null>(null)
@@ -137,7 +110,7 @@ function NativeWallet(props: WalletProps) {
     loading: affiliateLoading,
     transferQuota,
     transferring,
-  } = useAffiliate()
+  } = useAffiliate(!userLoading && !unifiedCash)
   const { redeeming, redeemCode } = useRedemption()
   const { processing: creemProcessing, processCreemPayment } = useCreemPayment()
   const { processing: waffoProcessing, processWaffoPayment } = useWaffoPayment()
@@ -175,15 +148,15 @@ function NativeWallet(props: WalletProps) {
 
   // Initialize topup amount when topup info is loaded
   useEffect(() => {
-    if (topupInfo && topupAmount === 0) {
+    if (topupInfo && topupAmount === 0 && !userLoading) {
       const minTopup = getMinTopupAmount(topupInfo)
       setTopupAmount(minTopup)
 
       // Calculate initial payment amount with default payment type
       const defaultPaymentType = getDefaultPaymentType(topupInfo)
-      calculatePaymentAmount(minTopup, defaultPaymentType)
+      if (!unifiedCash) calculatePaymentAmount(minTopup, defaultPaymentType)
     }
-  }, [topupInfo, topupAmount, calculatePaymentAmount])
+  }, [topupInfo, topupAmount, calculatePaymentAmount, unifiedCash, userLoading])
 
   // Get current payment type (selected or default)
   const getCurrentPaymentType = useCallback(() => {
@@ -323,9 +296,6 @@ function NativeWallet(props: WalletProps) {
         <SectionPageLayout.Title>{t('Wallet')}</SectionPageLayout.Title>
         <SectionPageLayout.Content>
           <div className='mx-auto flex w-full max-w-7xl flex-col gap-4 sm:gap-5'>
-            <Link to='/unihub' className='text-primary underline'>
-              {t('UniHub account and billing')}
-            </Link>
             <WalletStatsCard user={user} loading={userLoading} />
 
             <div
@@ -385,15 +355,17 @@ function NativeWallet(props: WalletProps) {
               />
             </div>
 
-            <AffiliateRewardsCard
-              user={user}
-              affiliateLink={affiliateLink}
-              onTransfer={() => setTransferDialogOpen(true)}
-              complianceConfirmed={
-                topupInfo?.payment_compliance_confirmed !== false
-              }
-              loading={affiliateLoading}
-            />
+            {!unifiedCash && (
+              <AffiliateRewardsCard
+                user={user}
+                affiliateLink={affiliateLink}
+                onTransfer={() => setTransferDialogOpen(true)}
+                complianceConfirmed={
+                  topupInfo?.payment_compliance_confirmed !== false
+                }
+                loading={affiliateLoading}
+              />
+            )}
           </div>
         </SectionPageLayout.Content>
       </SectionPageLayout>

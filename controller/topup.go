@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/internal/platformaccount"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
@@ -24,6 +25,11 @@ import (
 )
 
 func GetTopUpInfo(c *gin.Context) {
+	cash, err := productWalletCash(c)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	complianceConfirmed := operation_setting.IsPaymentComplianceConfirmed()
 	wechatPayConfig := service.WeChatPayConfig{}
 	enableWeChatPay := false
@@ -141,6 +147,15 @@ func GetTopUpInfo(c *gin.Context) {
 		"amount_options":          operation_setting.GetPaymentSetting().AmountOptions,
 		"discount":                operation_setting.GetPaymentSetting().AmountDiscount,
 		"topup_link":              common.TopUpLink,
+	}
+	if cash {
+		for _, key := range []string{"enable_online_topup", "enable_stripe_topup", "enable_creem_topup", "enable_waffo_topup", "enable_waffo_pancake_topup", "enable_redemption", "enable_checkin", "enable_affiliate_transfer"} {
+			data[key] = false
+		}
+		data["funding_mode"], data["funding_asset"], data["funding_unit_version"] = "unified_cash", "CNY/6", "lr-cny-v1"
+		data["pay_methods"], data["waffo_pay_methods"] = []map[string]string{}, nil
+		data["creem_products"], data["topup_link"] = "[]", ""
+		data["amount_options"], data["discount"] = []int{}, map[int]float64{}
 	}
 	common.ApiSuccess(c, data)
 }
@@ -530,12 +545,6 @@ func RequestAmount(c *gin.Context) {
 }
 
 func GetUserTopUps(c *gin.Context) {
-	// Historical rows do not carry a reliable realm. An authenticated product
-	// principal must not inherit a shared owner's native payment history.
-	if _, managed := authz.ProductPrincipal(c); managed {
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "TOPUP_REALM_UNAVAILABLE"})
-		return
-	}
 	userId := c.GetInt("id")
 	pageInfo := common.GetPageQuery(c)
 	keyword := c.Query("keyword")
@@ -545,7 +554,9 @@ func GetUserTopUps(c *gin.Context) {
 		total  int64
 		err    error
 	)
-	if keyword != "" {
+	if _, managed := authz.ProductPrincipal(c); managed {
+		topups, total, err = model.GetProductUserTopUps(c.Request.Context(), userId, keyword, pageInfo)
+	} else if keyword != "" {
 		topups, total, err = model.SearchUserTopUps(userId, keyword, pageInfo)
 	} else {
 		topups, total, err = model.GetUserTopUps(userId, pageInfo)
@@ -634,4 +645,23 @@ func AdminCompleteTopUp(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, nil)
+}
+
+// Native-only wallets retain their original methods even in a cash deployment.
+func productWalletCash(c *gin.Context) (bool, error) {
+	if !platformaccount.UnifiedCashFundingEnabled() {
+		return false, nil
+	}
+	state, err := model.ProductFundingState(c.Request.Context(), c.GetInt("id"))
+	if err != nil {
+		return false, err
+	}
+	if state == "local" {
+		return false, nil
+	}
+	if state != "central" {
+		return false, model.ErrProductFundingPending
+	}
+	_, err = model.ProductWalletAccount(c.Request.Context(), c.GetInt("id"))
+	return err == nil, err
 }

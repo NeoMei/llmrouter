@@ -25,7 +25,9 @@ import (
 )
 
 func TestRelayMediaHTTPImmutableRead(t *testing.T) {
-	enableNativeCompatibility(t)
+	enableUniHubBoundary(t)
+	t.Setenv("UNIHUB_PRODUCT_RUNTIME_ENABLED", "true")
+	t.Setenv("UNIHUB_PLATFORM_ENABLED", "false")
 	setting := system_setting.GetFetchSetting()
 	old := *setting
 	*setting = system_setting.FetchSetting{EnableSSRFProtection: true, AllowPrivateIp: true, AllowedPorts: []string{"1-65535"}, ApplyIPFilterForDomain: true}

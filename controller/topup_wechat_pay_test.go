@@ -522,3 +522,96 @@ func TestWeChatPayNotifyRecordsProviderTransactionConflict(t *testing.T) {
 	require.NoError(t, model.DB.Model(&model.Log{}).Where("content = ?", "WeChat Pay callback requires reconciliation").Count(&incidentCount).Error)
 	assert.Equal(t, int64(1), incidentCount)
 }
+
+func TestCashWeChatCreateNeedsNoLRConversionAndReportsExactMoney(t *testing.T) {
+	db := setupWeChatPayControllerTestDB(t)
+	confirmPaymentComplianceForTest(t)
+	insertWeChatPayControllerUser(t, 809, 0)
+	require.NoError(t, db.AutoMigrate(&model.ProductFundingAccount{}, &model.ProductCreditAward{}))
+	t.Setenv("UNIHUB_PRODUCT_RUNTIME_ENABLED", "true")
+	t.Setenv("UNIHUB_PRODUCT_RUNTIME_TOKEN", "ssssssssssssssssssssssssssssssss")
+	t.Setenv("UNIHUB_ORIGIN", "http://127.0.0.1:1")
+	t.Setenv("UNIHUB_PRODUCT_ID", "llmrouter")
+	t.Setenv("UNIHUB_PRODUCT_INSTANCE_ID", "default")
+	t.Setenv("UNIHUB_PRODUCT_FUNDING_MODE", "unified_cash")
+	scope, err := model.ProductRuntimeScopeDigest()
+	require.NoError(t, err)
+	require.NoError(t, db.Create(&model.ProductFundingAccount{UserID: 809, ScopeDigest: scope, AccountID: "cash-payer", Asset: "LR_QUOTA/0", UnitVersion: "lr-quota-v1", State: "central"}).Error)
+	provider := &fakeControllerWeChatPayProvider{createResult: service.WeChatPayCreateResult{CodeURL: "weixin://wxpay/cash"}}
+	setWeChatPayControllerDependencies(t, provider, validControllerWeChatPayConfig(), nil)
+	old := operation_setting.USDExchangeRate
+	operation_setting.USDExchangeRate = 0
+	t.Cleanup(func() { operation_setting.USDExchangeRate = old })
+	_, response := performWeChatNativeCreate(t, 809, `{"amount":"50.01","idempotency_key":"123e4567-e89b-12d3-a456-426614174000"}`)
+	require.Equal(t, true, response["success"])
+	data, ok := response["data"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "CNY/6", data["funding_asset"])
+	assert.Equal(t, "lr-cny-v1", data["funding_unit_version"])
+	assert.Equal(t, "50010000", data["credit_amount"])
+	assert.Equal(t, float64(0), data["credited_quota"])
+	assert.Equal(t, int64(5001), provider.createRequest.AmountMinor)
+	order := model.GetTopUpByTradeNo(data["trade_no"].(string))
+	require.NotNil(t, order)
+	provider.notifyResult = successfulWeChatNotify(validControllerWeChatPayConfig(), order)
+	for range 2 {
+		assert.Equal(t, http.StatusNoContent, performWeChatPayNotify(t).Code)
+	}
+	var awards []model.ProductCreditAward
+	require.NoError(t, db.Find(&awards).Error)
+	require.Len(t, awards, 1)
+	assert.Contains(t, awards[0].Request, `"amount":"50010000"`)
+	assert.Equal(t, "pending", awards[0].State)
+	var user model.User
+	require.NoError(t, db.First(&user, 809).Error)
+	assert.Zero(t, user.Quota)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Set("id", 809)
+	ctx.Params = gin.Params{{Key: "trade_no", Value: order.TradeNo}}
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/user/wechat-pay/orders/"+order.TradeNo, nil)
+	GetWeChatPayOrder(ctx)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"credit_amount":"50010000"`)
+	assert.Contains(t, recorder.Body.String(), `"credit_status":"pending"`)
+	assert.Contains(t, recorder.Body.String(), `"status":"success"`)
+	_, replay := performWeChatNativeCreate(t, 809, `{"amount":"50.01","idempotency_key":"123e4567-e89b-12d3-a456-426614174000"}`)
+	replayData, ok := replay["data"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "pending", replayData["credit_status"], "a confirmed payment replay must retain pending ledger delivery")
+	require.NoError(t, db.Model(&model.ProductCreditAward{}).Where("id = ?", awards[0].ID).Update("state", "applied").Error)
+	_, replay = performWeChatNativeCreate(t, 809, `{"amount":"50.01","idempotency_key":"123e4567-e89b-12d3-a456-426614174000"}`)
+	replayData, ok = replay["data"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "applied", replayData["credit_status"])
+	assert.Equal(t, 1, provider.createCalls, "status readback must not create another provider payment")
+}
+
+func TestLegacyCentralWeChatCheckoutStillChecksLRCapacityBeforeProviderCreation(t *testing.T) {
+	db := setupWeChatPayControllerTestDB(t)
+	confirmPaymentComplianceForTest(t)
+	insertWeChatPayControllerUser(t, 810, 0)
+	require.NoError(t, db.AutoMigrate(&model.ProductFundingAccount{}))
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, _ := common.Marshal(map[string]any{"product_id": "llmrouter", "instance_id": "default", "account_id": "legacy-payer", "asset": "LR_QUOTA/0", "unit_version": "lr-quota-v1", "available": fmt.Sprint(common.MaxQuota - 1), "held": "0", "consumed": "0"})
+		_, _ = w.Write(data)
+	}))
+	t.Cleanup(hub.Close)
+	t.Setenv("UNIHUB_PRODUCT_RUNTIME_ENABLED", "true")
+	t.Setenv("UNIHUB_PRODUCT_FUNDING_MODE", "")
+	t.Setenv("UNIHUB_ORIGIN", hub.URL)
+	t.Setenv("UNIHUB_PRODUCT_RUNTIME_TOKEN", "ssssssssssssssssssssssssssssssss")
+	t.Setenv("UNIHUB_PRODUCT_ID", "llmrouter")
+	t.Setenv("UNIHUB_PRODUCT_INSTANCE_ID", "default")
+	scope, err := model.ProductRuntimeScopeDigest()
+	require.NoError(t, err)
+	require.NoError(t, db.Create(&model.ProductFundingAccount{UserID: 810, ScopeDigest: scope, AccountID: "legacy-payer", Asset: "LR_QUOTA/0", UnitVersion: "lr-quota-v1", State: "central"}).Error)
+	provider := &fakeControllerWeChatPayProvider{createResult: service.WeChatPayCreateResult{CodeURL: "weixin://wxpay/legacy"}}
+	setWeChatPayControllerDependencies(t, provider, validControllerWeChatPayConfig(), nil)
+	_, response := performWeChatNativeCreate(t, 810, `{"amount":"50.01","idempotency_key":"123e4567-e89b-12d3-a456-426614174000"}`)
+	assert.Equal(t, false, response["success"])
+	assert.Zero(t, provider.createCalls)
+	var count int64
+	require.NoError(t, db.Model(&model.TopUp{}).Count(&count).Error)
+	assert.Zero(t, count)
+}

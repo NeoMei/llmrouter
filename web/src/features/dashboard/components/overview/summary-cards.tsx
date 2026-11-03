@@ -30,6 +30,7 @@ import type { QuotaDataItem } from '@/features/dashboard/types'
 import { useStatus } from '@/hooks/use-status'
 import { getCurrencyLabel, isCurrencyDisplayEnabled } from '@/lib/currency'
 import { formatNumber, formatQuota } from '@/lib/format'
+import { exactAmount } from '@/lib/funding'
 import { computeTimeRange } from '@/lib/time'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
@@ -142,6 +143,7 @@ export function SummaryCards() {
   const { status, loading } = useStatus()
 
   const summaryTimeRange = useMemo(() => computeTimeRange(1), [])
+  const funding = user?.funding
   const remainQuota = Number(user?.quota ?? 0)
   const usedQuota = Number(user?.used_quota ?? 0)
   const requestCount = Number(user?.request_count ?? 0)
@@ -165,10 +167,12 @@ export function SummaryCards() {
 
   const summaryValues = useMemo(() => {
     return {
-      usedDisplay: formatQuota(usedQuota),
+      usedDisplay: funding
+        ? `${usedQuota.toLocaleString()} LR_QUOTA`
+        : formatQuota(usedQuota),
       requestCountDisplay: formatNumber(requestCount),
     }
-  }, [requestCount, usedQuota])
+  }, [funding, requestCount, usedQuota])
 
   const currencyEnabledFromStore = isCurrencyDisplayEnabled()
   const statusCurrencyFlag =
@@ -176,9 +180,10 @@ export function SummaryCards() {
       ? Boolean(status.display_in_currency)
       : undefined
   const currencyEnabled =
-    statusCurrencyFlag !== undefined
+    !funding &&
+    (statusCurrencyFlag !== undefined
       ? statusCurrencyFlag
-      : currencyEnabledFromStore
+      : currencyEnabledFromStore)
   const currencyLabel = currencyEnabled ? getCurrencyLabel() : 'Tokens'
 
   const sparklineData = useMemo(
@@ -210,7 +215,9 @@ export function SummaryCards() {
   const healthCfg = HEALTH_CONFIG[healthLevel]
   const runwayDays = getRunwayDays(remainQuota, recentUsage)
 
-  const todayUsageDisplay = formatQuota(recentUsage)
+  const todayUsageDisplay = funding
+    ? `${recentUsage.toLocaleString()} LR_QUOTA`
+    : formatQuota(recentUsage)
   let runwayDisplay: string
   if (runwayDays !== null) {
     if (runwayDays < 1) {
@@ -238,7 +245,10 @@ export function SummaryCards() {
       key: config.key,
       title: config.title,
       value: config.value,
-      desc: config.description,
+      desc:
+        funding && config.key !== 'requests'
+          ? t('Product quota usage')
+          : config.description,
       icon: config.icon,
       tone: tones[index] ?? 'accent-3',
       sparkline:
@@ -289,21 +299,34 @@ export function SummaryCards() {
           <div className='flex flex-col gap-2 sm:gap-3'>
             <div className='flex items-center justify-between'>
               <span className='text-muted-foreground text-xs font-medium'>
-                {t('Credit remaining')}
+                {funding ? t('Shared cash balance') : t('Credit remaining')}
               </span>
-              <span className='flex items-center gap-1.5'>
-                <span
-                  className={cn('size-1.5 rounded-full', healthCfg.dotClass)}
-                  aria-hidden='true'
-                />
+              {funding ? (
                 <span className='text-muted-foreground text-[11px] font-medium'>
-                  {t(healthCfg.labelKey)}
+                  CNY
                 </span>
-              </span>
+              ) : (
+                <span className='flex items-center gap-1.5'>
+                  <span
+                    className={cn('size-1.5 rounded-full', healthCfg.dotClass)}
+                    aria-hidden='true'
+                  />
+                  <span className='text-muted-foreground text-[11px] font-medium'>
+                    {t(healthCfg.labelKey)}
+                  </span>
+                </span>
+              )}
             </div>
 
-            <div className='font-mono text-xl font-semibold tracking-tight sm:text-2xl'>
-              {formatQuota(remainQuota)}
+            <div
+              className={cn(
+                'font-mono text-xl font-semibold tracking-tight sm:text-2xl',
+                funding && 'break-all'
+              )}
+            >
+              {funding
+                ? exactAmount(funding.available, funding.asset)
+                : formatQuota(remainQuota)}
             </div>
 
             <div className='grid grid-cols-2 gap-2'>
@@ -313,12 +336,12 @@ export function SummaryCards() {
                   <span className='truncate'>{t('Last 24h usage')}</span>
                 </div>
                 <div className='text-foreground mt-1.5 truncate text-xs font-semibold tabular-nums'>
-                  {formatQuota(recentUsage)}
+                  {todayUsageDisplay}
                 </div>
               </div>
               <div className='bg-background/60 rounded-lg px-2.5 py-2'>
                 <div className='text-muted-foreground flex items-center gap-1 text-[11px] leading-none font-medium'>
-                  {runwayDays !== null && runwayDays < 3 ? (
+                  {!funding && runwayDays !== null && runwayDays < 3 ? (
                     <TrendingDown
                       className='size-3 shrink-0'
                       aria-hidden='true'
@@ -329,16 +352,23 @@ export function SummaryCards() {
                       aria-hidden='true'
                     />
                   )}
-                  <span className='truncate'>{t('Runway')}</span>
+                  <span className='truncate'>
+                    {funding ? t('Held funds') : t('Runway')}
+                  </span>
                 </div>
                 <div
                   className={cn(
-                    'mt-1.5 truncate text-xs font-semibold tabular-nums',
-                    healthLevel === 'critical' && 'text-destructive',
-                    healthLevel === 'caution' && 'text-warning'
+                    'mt-1.5 text-xs font-semibold tabular-nums',
+                    funding ? 'break-all' : 'truncate',
+                    !funding &&
+                      healthLevel === 'critical' &&
+                      'text-destructive',
+                    !funding && healthLevel === 'caution' && 'text-warning'
                   )}
                 >
-                  {runwayDisplay}
+                  {funding
+                    ? exactAmount(funding.held, funding.asset)
+                    : runwayDisplay}
                 </div>
               </div>
             </div>

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -35,9 +36,9 @@ type PlatformTelemetry struct {
 	Stat      model.Stat
 }
 
-// ReadPlatformTelemetry adapts central logical calls to the established product
-// monitoring contracts. Local quota remains zero. Central financial amounts
-// stay behind UniHub's account financial permissions.
+// ReadPlatformTelemetry combines original product calls with managed-key
+// compatibility telemetry. Original logs retain product quota even for a
+// frozen cash contract; monetary amounts never populate original quota fields.
 func ReadPlatformTelemetry(ctx context.Context, scope platformbilling.TechnicalScope, userID int, username string, filter PlatformTelemetryFilter) (PlatformTelemetry, error) {
 	result := PlatformTelemetry{Logs: make([]*model.Log, 0), QuotaData: make([]*model.QuotaData, 0), UserData: make([]*model.QuotaData, 0), FlowData: make([]*model.FlowQuotaData, 0)}
 	if filter.End == 0 {
@@ -46,10 +47,33 @@ func ReadPlatformTelemetry(ctx context.Context, scope platformbilling.TechnicalS
 	if filter.Start == 0 {
 		filter.Start = filter.End - 2592000
 	}
-	rows, err := platformbilling.ReadTechnicalUsage(ctx, model.DB, scope, filter.Start, filter.End)
-	if err != nil {
-		return result, err
+	// The original date picker includes 31-day months and longer custom
+	// intervals. Keep the protected compatibility reader's 30-day bound per
+	// query, and cap work for extreme externally supplied year ranges.
+	const chunkSpan, maxChunks = int64(2592000), int64(128)
+	if filter.Start < 0 || filter.End < filter.Start || filter.End == math.MaxInt64 || filter.End-filter.Start > maxChunks*(chunkSpan+1)-1 {
+		return result, platformbilling.ErrInvalid
 	}
+	var rows []platformbilling.TechnicalUsage
+	for start := filter.Start; ; {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		end := filter.End
+		if end-start > chunkSpan {
+			end = start + chunkSpan
+		}
+		batch, err := platformbilling.ReadTechnicalUsage(ctx, model.DB, scope, start, end)
+		if err != nil {
+			return result, err
+		}
+		rows = append(rows, batch...)
+		if end == filter.End {
+			break
+		}
+		start = end + 1 // Both bounds are inclusive; never repeat a boundary.
+	}
+	var err error
 	var modelPattern *regexp.Regexp
 	if strings.Contains(filter.Model, "%") {
 		pattern := strings.ReplaceAll(regexp.QuoteMeta(filter.Model), "%", ".*")
@@ -58,10 +82,21 @@ func ReadPlatformTelemetry(ctx context.Context, scope platformbilling.TechnicalS
 			return result, err
 		}
 	}
+	productLogs, err := model.ReadProductRuntimeTelemetryLogs(ctx, scope.ActorID, userID, scope.AllActors, filter.Start, filter.End)
+	if err != nil {
+		return result, err
+	}
+	productCalls := make(map[string]bool, len(productLogs))
+	for _, entry := range productLogs {
+		productCalls[entry.Log.RequestId] = true
+	}
 	dates := make(map[string]*model.QuotaData)
 	users := make(map[string]*model.QuotaData)
 	flows := make(map[string]*model.FlowQuotaData)
 	for _, row := range rows {
+		if productCalls[row.Scope.CallID] {
+			continue
+		}
 		logType := model.LogTypeSystem
 		if row.Outcome == "failed" {
 			logType = model.LogTypeError
@@ -138,6 +173,111 @@ func ReadPlatformTelemetry(ctx context.Context, scope platformbilling.TechnicalS
 		}
 		flow.Count++
 		flow.TokenUsed = boundedTechnicalTokens(flow.TokenUsed, row.PromptTokens, row.CompletionTokens)
+	}
+	for _, entry := range productLogs {
+		log := entry.Log
+		if scope.AllActors && filter.ActorID != "" && filter.ActorID != entry.ActorID && filter.ActorID != log.Username {
+			continue
+		}
+		if filter.LogType != 0 && filter.LogType != log.Type {
+			continue
+		}
+		if filter.Model != "" && ((modelPattern == nil && filter.Model != log.ModelName) || modelPattern != nil && !modelPattern.MatchString(log.ModelName)) {
+			continue
+		}
+		if filter.TokenName != "" && filter.TokenName != log.TokenName || filter.Group != "" && filter.Group != log.Group {
+			continue
+		}
+		if filter.RequestID != "" && filter.RequestID != log.RequestId || filter.UpstreamRequestID != "" && filter.UpstreamRequestID != log.UpstreamRequestId {
+			continue
+		}
+		if filter.ChannelID != 0 && filter.ChannelID != log.ChannelId {
+			continue
+		}
+		// Arbitrary provider errors, overrides and administrative metadata may
+		// contain secrets. Keep structured product pricing facts, never those
+		// opaque values, when serving a central product principal.
+		other := map[string]any{}
+		var source map[string]any
+		if common.UnmarshalJsonStr(log.Other, &source) == nil {
+			for _, key := range []string{"model_ratio", "group_ratio", "completion_ratio", "cache_tokens", "cache_ratio", "model_price", "user_group_ratio", "frt", "cache_creation_tokens", "cache_creation_ratio", "cache_creation_5m_tokens", "cache_creation_1h_tokens", "claude", "is_model_mapped", "is_system_prompt_overwritten"} {
+				if value, ok := source[key]; ok {
+					switch value.(type) {
+					case float64, bool:
+						other[key] = value
+					}
+				}
+			}
+		}
+		other["funding_owner"], other["billing_source"] = "unihub", entry.BillingSource
+		other["actor_id"], other["account_id"] = entry.ActorID, entry.AccountID
+		other["call_id"], other["central_status"] = log.RequestId, entry.State
+		other["central_asset"], other["central_unit_version"] = entry.Asset, entry.UnitVersion
+		other["instance_id"], other["product_runtime"] = scope.InstanceID, true
+		if entry.Adjustment {
+			other["product_call_id"], other["adjustment_id"] = entry.ParentCallID, log.RequestId
+		}
+		if entry.SubscriptionID > 0 {
+			other["subscription_id"], other["purchase_call_id"] = entry.SubscriptionID, entry.PurchaseCallID
+			other["wallet_quota_deducted"] = 0
+		}
+		log.Content, log.Ip, log.Other = "", "", common.MapToJsonStr(other)
+		result.Logs = append(result.Logs, log)
+		// Original error/diagnostic rows remain visible without becoming an
+		// extra charged request or duplicating the final consumption row.
+		if log.Type != model.LogTypeConsume && !(entry.Adjustment && log.Type == model.LogTypeRefund) {
+			continue
+		}
+		quota := log.Quota
+		if entry.Adjustment && log.Type == model.LogTypeRefund {
+			quota = -quota
+		}
+		if !entry.Adjustment && log.CreatedAt >= time.Now().Unix()-60 {
+			result.Stat.Rpm++
+			result.Stat.Tpm = boundedTechnicalTokens(result.Stat.Tpm, log.PromptTokens, log.CompletionTokens)
+		}
+		hour := log.CreatedAt - log.CreatedAt%3600
+		dateKey := fmt.Sprintf("%d\x00%s", hour, log.ModelName)
+		date := dates[dateKey]
+		if date == nil {
+			date = &model.QuotaData{UserID: userID, Username: username, ModelName: log.ModelName, CreatedAt: hour}
+			dates[dateKey] = date
+			result.QuotaData = append(result.QuotaData, date)
+		}
+		if !entry.Adjustment {
+			date.Count++
+			date.TokenUsed = boundedTechnicalTokens(date.TokenUsed, log.PromptTokens, log.CompletionTokens)
+		}
+		userKey := fmt.Sprintf("%d\x00%s", hour, entry.ActorID)
+		user := users[userKey]
+		if user == nil {
+			user = &model.QuotaData{UserID: log.UserId, Username: log.Username, CreatedAt: hour}
+			users[userKey] = user
+			result.UserData = append(result.UserData, user)
+		}
+		if !entry.Adjustment {
+			user.Count++
+			user.TokenUsed = boundedTechnicalTokens(user.TokenUsed, log.PromptTokens, log.CompletionTokens)
+		}
+		flowKey := fmt.Sprintf("product:%d\x00%d\x00%s\x00%s\x00%d", log.UserId, log.TokenId, log.Group, log.ModelName, log.ChannelId)
+		flow := flows[flowKey]
+		if flow == nil {
+			flow = &model.FlowQuotaData{UserID: log.UserId, Username: log.Username, TokenID: log.TokenId, TokenName: log.TokenName, UseGroup: log.Group, ModelName: log.ModelName, ChannelID: log.ChannelId}
+			flows[flowKey] = flow
+			result.FlowData = append(result.FlowData, flow)
+		}
+		if !entry.Adjustment {
+			flow.Count++
+			flow.TokenUsed = boundedTechnicalTokens(flow.TokenUsed, log.PromptTokens, log.CompletionTokens)
+		}
+		// Read totals can exceed one charge's int32 ceiling. Keep exact integer
+		// sums, returning an error instead of wrapping or truncating a total.
+		for _, total := range []*int{&result.Stat.Quota, &date.Quota, &user.Quota, &flow.Quota} {
+			if quota > 0 && *total > math.MaxInt-quota || quota < 0 && *total < math.MinInt-quota {
+				return result, fmt.Errorf("product usage total exceeds supported range")
+			}
+			*total += quota
+		}
 	}
 	return result, nil
 }

@@ -40,22 +40,28 @@ type ProductFundingAccount struct {
 // ProductRuntimeCall is the durable financial intent for an original product
 // call. It never stores a user credential, API key secret, or request body.
 type ProductRuntimeCall struct {
-	ParentCallID                             string `gorm:"size:128;index"`
-	FinancialCommitment                      bool
-	ScopeDigest                              string `gorm:"size:64"`
-	ExternalCounters                         bool
-	ID                                       string `gorm:"primaryKey;size:128"`
-	UserID, TokenID                          int
-	AccountID                                string `gorm:"size:128"`
-	ContractDigest                           string `gorm:"size:64"`
-	ReserveJSON                              string `gorm:"type:text"`
-	PricingDigest                            string `gorm:"size:64"`
-	State                                    string `gorm:"size:24;index"`
-	ReservedQuota, TokenReserved, FinalQuota int
-	FinalUsage                               string `gorm:"type:text"`
-	FinalDigest                              string `gorm:"size:64"`
-	CreatedAt, UpdatedAt                     int64
-	DispatchedAt, DispatchLeaseUntil         int64
+	Asset, UnitVersion                         string `gorm:"size:32"`
+	CashBaseQuota                              int
+	CashRoundingVersion                        string `gorm:"size:40"`
+	ConversionVersion                          string `gorm:"size:40"`
+	ConversionNumerator, ConversionDenominator string `gorm:"size:32"`
+	SnapshotDigest                             string `gorm:"size:64"`
+	ParentCallID                               string `gorm:"size:128;index"`
+	FinancialCommitment                        bool
+	ScopeDigest                                string `gorm:"size:64"`
+	ExternalCounters                           bool
+	ID                                         string `gorm:"primaryKey;size:128"`
+	UserID, TokenID                            int
+	AccountID                                  string `gorm:"size:128"`
+	ContractDigest                             string `gorm:"size:64"`
+	ReserveJSON                                string `gorm:"type:text"`
+	PricingDigest                              string `gorm:"size:64"`
+	State                                      string `gorm:"size:24;index"`
+	ReservedQuota, TokenReserved, FinalQuota   int
+	FinalUsage                                 string `gorm:"type:text"`
+	FinalDigest                                string `gorm:"size:64"`
+	CreatedAt, UpdatedAt                       int64
+	DispatchedAt, DispatchLeaseUntil           int64
 }
 
 type ProductFundingAdmission struct {
@@ -75,6 +81,7 @@ type ProductFundingStore struct {
 
 type ProductFundingTopUp struct {
 	AcceptedCall         bool
+	LedgerAmount         int64
 	ID                   string `gorm:"primaryKey;size:128"`
 	CallID               string `gorm:"index;size:128"`
 	TargetQuota, Delta   int
@@ -243,6 +250,19 @@ func (s *ProductFundingStore) ActivateZero(ctx context.Context, id int, payer st
 }
 
 func (s *ProductFundingStore) Balance(ctx context.Context, id int) (int, error) {
+	if platformaccount.UnifiedCashFundingEnabled() {
+		b, e := s.CashBalance(ctx, id)
+		if e != nil {
+			return 0, e
+		}
+		return productCashQuotaProjection(b.Available)
+	}
+	return s.LegacyBalance(ctx, id)
+}
+
+// LegacyBalance reads the original LR asset for gifts/imports and legacy CAS.
+// Deployment cash mode never changes the unit of an existing award operation.
+func (s *ProductFundingStore) LegacyBalance(ctx context.Context, id int) (int, error) {
 	a, err := s.Account(ctx, id)
 	if err != nil {
 		return 0, err
@@ -285,6 +305,25 @@ func (s *ProductFundingStore) Reserve(ctx context.Context, in ProductFundingAdmi
 		if err := userQuery.First(&user, in.UserID).Error; err != nil {
 			return err
 		}
+		funding := ProductRuntimeCall{Asset: a.Asset, UnitVersion: a.UnitVersion}
+		existingErr := lockForUpdate(tx).First(&call, "id = ?", in.CallID).Error
+		if existingErr != nil && !errors.Is(existingErr, gorm.ErrRecordNotFound) {
+			return existingErr
+		}
+		if existingErr == nil {
+			req, e := ProductRuntimeCallContract(call)
+			if e != nil {
+				return e
+			}
+			if call.ParentCallID == "" && call.SnapshotDigest != "" && call.SnapshotDigest != productDigest(in.PriceSnapshot) {
+				return ErrProductFundingConflict
+			}
+			funding = call
+			funding.Asset, funding.UnitVersion = req.Asset, req.UnitVersion
+			if call.SnapshotDigest != "" {
+				price = call.PricingDigest
+			}
+		}
 		if in.ParentCallID != "" {
 			var parent ProductRuntimeCall
 			if err := lockForUpdate(tx).First(&parent, "id = ?", in.ParentCallID).Error; err != nil {
@@ -293,11 +332,22 @@ func (s *ProductFundingStore) Reserve(ctx context.Context, in ProductFundingAdmi
 			if !in.FinancialCommitment || !in.ExternalCounters || in.ParentCallID == in.CallID || parent.ParentCallID != "" || parent.State != "settled" || parent.ScopeDigest != s.ScopeDigest() || parent.UserID != in.UserID || parent.TokenID != in.TokenID || parent.AccountID != a.AccountID || in.PriceSnapshot != parent.ReserveJSON {
 				return ErrProductFundingConflict
 			}
-			var original userkit.RuntimeReserveRequest
-			if err := common.UnmarshalJsonStr(parent.ReserveJSON, &original); err != nil {
-				return err
+			original, e := ProductRuntimeCallContract(parent)
+			if e != nil {
+				return e
 			}
-			if original.CallID != parent.ID || original.LocalUserID != strconv.Itoa(in.UserID) || original.LocalKeyID != strconv.Itoa(in.TokenID) || original.AccountID != a.AccountID || original.Model != in.Model || original.Operation != in.Operation || original.Asset != a.Asset || original.UnitVersion != a.UnitVersion || original.PricingDigest != parent.PricingDigest {
+			funding = parent
+			funding.Asset, funding.UnitVersion = original.Asset, original.UnitVersion
+			if existingErr == nil {
+				funding.CashBaseQuota = call.CashBaseQuota
+			} else if funding.Asset == userkit.RuntimeCashAsset {
+				_, base, e := s.productCashSegments(ctx, tx, parent)
+				if e != nil {
+					return e
+				}
+				funding.CashBaseQuota = base
+			}
+			if original.CallID != parent.ID || original.LocalUserID != strconv.Itoa(in.UserID) || original.LocalKeyID != strconv.Itoa(in.TokenID) || original.AccountID != a.AccountID || original.Model != in.Model || original.Operation != in.Operation || original.PricingDigest != parent.PricingDigest {
 				return ErrProductFundingConflict
 			}
 			acceptedParent, price = true, parent.PricingDigest
@@ -305,16 +355,21 @@ func (s *ProductFundingStore) Reserve(ctx context.Context, in ProductFundingAdmi
 		if !acceptedParent && user.Status != common.UserStatusEnabled {
 			return ErrProductFundingConflict
 		}
-		contract := productDigest(fmt.Sprintf("%s:%d:%d:%s:%s:%s:%s:%t:%t:%s", s.ScopeDigest(), in.UserID, in.TokenID, a.AccountID, in.Model, in.Operation, price, in.ExternalCounters, in.FinancialCommitment, in.ParentCallID))
-		err := lockForUpdate(tx).First(&call, "id = ?", in.CallID).Error
-		if err == nil {
+		if existingErr != nil && !acceptedParent && platformaccount.UnifiedCashFundingEnabled() {
+			n, d, e := currentProductCashRate()
+			if e != nil {
+				return e
+			}
+			funding = ProductRuntimeCall{Asset: userkit.RuntimeCashAsset, UnitVersion: userkit.RuntimeCashUnitVersion, ConversionVersion: ProductCashConversionVersion, ConversionNumerator: n, ConversionDenominator: d, CashRoundingVersion: ProductCashRoundingVersion}
+			price = productCashPricingDigest(price, funding)
+		}
+		contractCall := ProductRuntimeCall{ScopeDigest: s.ScopeDigest(), UserID: in.UserID, TokenID: in.TokenID, AccountID: a.AccountID, PricingDigest: price, ExternalCounters: in.ExternalCounters, FinancialCommitment: in.FinancialCommitment, ParentCallID: in.ParentCallID, Asset: funding.Asset, CashBaseQuota: funding.CashBaseQuota, CashRoundingVersion: funding.CashRoundingVersion}
+		contract := productCallContractDigest(contractCall, in.Model, in.Operation)
+		if existingErr == nil {
 			if call.ScopeDigest == "" || call.ScopeDigest != s.ScopeDigest() || call.ContractDigest != contract {
 				return ErrProductFundingConflict
 			}
 			return nil
-		}
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
 		}
 		if in.TokenID > 0 {
 			var token Token
@@ -337,12 +392,24 @@ func (s *ProductFundingStore) Reserve(ctx context.Context, in ProductFundingAdmi
 				return err
 			}
 		}
-		req := userkit.RuntimeReserveRequest{ParentCallID: in.ParentCallID, CallID: in.CallID, LocalUserID: strconv.Itoa(in.UserID), LocalKeyID: strconv.Itoa(in.TokenID), AccountID: a.AccountID, RequestDigest: contract, Model: in.Model, Operation: in.Operation, Asset: a.Asset, UnitVersion: a.UnitVersion, PriceVersion: userkit.RuntimeUnitVersion, PricingDigest: price, Amount: strconv.Itoa(in.Quota)}
+		amount, e := productCallAmount(funding, in.Quota)
+		if e != nil {
+			return e
+		}
+		priceVersion := userkit.RuntimeUnitVersion
+		if funding.Asset == userkit.RuntimeCashAsset {
+			priceVersion = userkit.RuntimeCashUnitVersion
+		}
+		req := userkit.RuntimeReserveRequest{ParentCallID: in.ParentCallID, CallID: in.CallID, LocalUserID: strconv.Itoa(in.UserID), LocalKeyID: strconv.Itoa(in.TokenID), AccountID: a.AccountID, RequestDigest: contract, Model: in.Model, Operation: in.Operation, Asset: funding.Asset, UnitVersion: funding.UnitVersion, PriceVersion: priceVersion, PricingDigest: price, Amount: strconv.FormatInt(amount, 10)}
 		raw, err := common.Marshal(req)
 		if err != nil {
 			return err
 		}
-		call = ProductRuntimeCall{ParentCallID: in.ParentCallID, FinancialCommitment: in.FinancialCommitment, ScopeDigest: s.ScopeDigest(), ID: in.CallID, UserID: in.UserID, TokenID: in.TokenID, AccountID: a.AccountID, ContractDigest: contract, ReserveJSON: string(raw), PricingDigest: price, ExternalCounters: in.ExternalCounters, State: "reserve_pending", ReservedQuota: in.Quota, TokenReserved: in.Quota, CreatedAt: time.Now().Unix(), DispatchLeaseUntil: time.Now().Unix() + ProductFundingDispatchLeaseSeconds}
+		snapshot := productDigest(in.PriceSnapshot)
+		if acceptedParent && funding.Asset == userkit.RuntimeCashAsset {
+			snapshot = funding.SnapshotDigest
+		}
+		call = ProductRuntimeCall{CashBaseQuota: funding.CashBaseQuota, CashRoundingVersion: funding.CashRoundingVersion, Asset: funding.Asset, UnitVersion: funding.UnitVersion, ConversionVersion: funding.ConversionVersion, ConversionNumerator: funding.ConversionNumerator, ConversionDenominator: funding.ConversionDenominator, SnapshotDigest: snapshot, ParentCallID: in.ParentCallID, FinancialCommitment: in.FinancialCommitment, ScopeDigest: s.ScopeDigest(), ID: in.CallID, UserID: in.UserID, TokenID: in.TokenID, AccountID: a.AccountID, ContractDigest: contract, ReserveJSON: string(raw), PricingDigest: price, ExternalCounters: in.ExternalCounters, State: "reserve_pending", ReservedQuota: in.Quota, TokenReserved: in.Quota, CreatedAt: time.Now().Unix(), DispatchLeaseUntil: time.Now().Unix() + ProductFundingDispatchLeaseSeconds}
 		return tx.Create(&call).Error
 	})
 	if err != nil {
@@ -394,7 +461,11 @@ func productTokenApplyDelta(tx *gorm.DB, id, charge int, postpaid bool) error {
 }
 
 func (s *ProductFundingStore) validateRemote(call ProductRuntimeCall, remote userkit.RuntimeCall) error {
-	if call.ScopeDigest == "" || call.ScopeDigest != s.ScopeDigest() || remote.CallID != call.ID || remote.ParentCallID != call.ParentCallID || remote.LocalUserID != strconv.Itoa(call.UserID) || remote.LocalKeyID != strconv.Itoa(call.TokenID) || remote.AccountID != call.AccountID || remote.RequestDigest != call.ContractDigest || remote.PricingDigest != call.PricingDigest || remote.Asset != userkit.RuntimeAsset || remote.UnitVersion != userkit.RuntimeUnitVersion {
+	req, e := ProductRuntimeCallContract(call)
+	if e != nil {
+		return e
+	}
+	if call.ScopeDigest == "" || call.ScopeDigest != s.ScopeDigest() || remote.CallID != call.ID || remote.ParentCallID != call.ParentCallID || remote.LocalUserID != strconv.Itoa(call.UserID) || remote.LocalKeyID != strconv.Itoa(call.TokenID) || remote.AccountID != call.AccountID || remote.RequestDigest != call.ContractDigest || remote.PricingDigest != call.PricingDigest || remote.Asset != req.Asset || remote.UnitVersion != req.UnitVersion || remote.PriceVersion != req.PriceVersion || remote.Amount != req.Amount {
 		return ErrProductFundingConflict
 	}
 	return nil
@@ -412,6 +483,9 @@ func (s *ProductFundingStore) TopUp(ctx context.Context, id string, target int) 
 		}
 		if call.ScopeDigest == "" || call.ScopeDigest != s.ScopeDigest() {
 			return ErrProductFundingConflict
+		}
+		if _, e := ProductRuntimeCallContract(call); e != nil {
+			return e
 		}
 		if call.State != "reserved" && call.State != "settle_pending" {
 			return ErrProductFundingConflict
@@ -435,7 +509,15 @@ func (s *ProductFundingStore) TopUp(ctx context.Context, id string, target int) 
 		if err = productTokenApplyDelta(tx, call.TokenID, delta, call.State == "settle_pending" && (call.DispatchedAt > 0 || call.FinancialCommitment)); err != nil {
 			return err
 		}
-		intent = ProductFundingTopUp{AcceptedCall: call.State == "settle_pending" && (call.DispatchedAt > 0 || call.FinancialCommitment), ID: productDigest(fmt.Sprintf("topup:%s:%d:%s", id, target, common.GetUUID())), CallID: id, TargetQuota: target, Delta: delta, State: "pending", CreatedAt: time.Now().Unix()}
+		targetAmount, e := productCallAmount(call, target)
+		if e != nil {
+			return e
+		}
+		heldAmount, e := productCallAmount(call, call.ReservedQuota)
+		if e != nil {
+			return e
+		}
+		intent = ProductFundingTopUp{LedgerAmount: targetAmount - heldAmount, AcceptedCall: call.State == "settle_pending" && (call.DispatchedAt > 0 || call.FinancialCommitment), ID: productDigest(fmt.Sprintf("topup:%s:%d:%s", id, target, common.GetUUID())), CallID: id, TargetQuota: target, Delta: delta, State: "pending", CreatedAt: time.Now().Unix()}
 		if err = tx.Create(&intent).Error; err != nil {
 			return err
 		}
@@ -478,6 +560,9 @@ func (s *ProductFundingStore) Settle(ctx context.Context, id string, actual int,
 		if c.ScopeDigest == "" || c.ScopeDigest != s.ScopeDigest() {
 			return ErrProductFundingConflict
 		}
+		if _, e := ProductRuntimeCallContract(c); e != nil {
+			return e
+		}
 		if c.FinalDigest != "" {
 			if c.FinalDigest != digest || c.State == "release_pending" || c.State == "released" {
 				return ErrProductFundingConflict
@@ -507,6 +592,9 @@ func (s *ProductFundingStore) Release(ctx context.Context, id, reason string) er
 		if c.ScopeDigest == "" || c.ScopeDigest != s.ScopeDigest() {
 			return ErrProductFundingConflict
 		}
+		if _, e := ProductRuntimeCallContract(c); e != nil {
+			return e
+		}
 		if c.State == "released" || c.State == "release_pending" {
 			return nil
 		}
@@ -529,6 +617,9 @@ func (s *ProductFundingStore) reconcile(ctx context.Context, id string) error {
 	if c.ScopeDigest == "" || c.ScopeDigest != s.ScopeDigest() {
 		return ErrProductFundingConflict
 	}
+	if _, e := ProductRuntimeCallContract(c); e != nil {
+		return e
+	}
 	if c.State == "settled" || c.State == "released" {
 		return nil
 	}
@@ -541,7 +632,11 @@ func (s *ProductFundingStore) reconcile(ctx context.Context, id string) error {
 		if err = s.TopUp(ctx, id, c.FinalQuota); err != nil {
 			return err
 		}
-		remote, err = s.client.Settle(ctx, id, userkit.RuntimeSettlementRequest{Amount: strconv.Itoa(c.FinalQuota), PricingDigest: c.PricingDigest, Usage: []byte(c.FinalUsage)})
+		amount, e := productCallAmount(c, c.FinalQuota)
+		if e != nil {
+			return e
+		}
+		remote, err = s.client.Settle(ctx, id, userkit.RuntimeSettlementRequest{Amount: strconv.FormatInt(amount, 10), PricingDigest: c.PricingDigest, Usage: []byte(c.FinalUsage)})
 	} else {
 		var topups []ProductFundingTopUp
 		if err = s.db.WithContext(ctx).Where("call_id = ? AND state = ?", id, "pending").Find(&topups).Error; err != nil {
@@ -564,7 +659,11 @@ func (s *ProductFundingStore) reconcile(ctx context.Context, id string) error {
 	if c.State == "release_pending" {
 		terminal = "released"
 	}
-	if strings.ToLower(remote.Status) != terminal || (terminal == "settled" && remote.Charged != strconv.Itoa(c.FinalQuota)) {
+	amount, e := productCallAmount(c, c.FinalQuota)
+	if e != nil {
+		return e
+	}
+	if strings.ToLower(remote.Status) != terminal || (terminal == "settled" && remote.Charged != strconv.FormatInt(amount, 10)) {
 		return ErrProductFundingPending
 	}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -749,6 +848,20 @@ func RefreshProductBalance(ctx context.Context, user *User) error {
 	s, err := productFundingStore()
 	if err != nil {
 		return err
+	}
+	user.Funding = nil
+	if platformaccount.UnifiedCashFundingEnabled() {
+		balance, e := s.CashBalance(ctx, user.Id)
+		if e != nil {
+			return e
+		}
+		quota, e := productCashQuotaProjection(balance.Available)
+		if e != nil {
+			return e
+		}
+		user.Quota = quota
+		user.Funding = &ProductMoneyBalance{Mode: "unified_cash", Asset: balance.Asset, UnitVersion: balance.UnitVersion, Available: balance.Available, Held: balance.Held, Consumed: balance.Consumed}
+		return nil
 	}
 	user.Quota, err = s.Balance(ctx, user.Id)
 	return err

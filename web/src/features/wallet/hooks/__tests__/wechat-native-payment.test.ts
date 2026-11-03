@@ -26,7 +26,8 @@ import {
 } from '../use-wechat-native-payment'
 
 function orderWithStatus(
-  status: WeChatNativeOrder['status']
+  status: WeChatNativeOrder['status'],
+  creditStatus?: 'pending' | 'applied'
 ): WeChatNativeOrderResponse {
   return {
     success: true,
@@ -35,14 +36,84 @@ function orderWithStatus(
       code_url: 'weixin://wxpay/bizpayurl?pr=test',
       amount: '50.00',
       currency: 'CNY',
-      credited_quota: 3424658,
+      credited_quota: creditStatus ? 0 : 3424658,
       expires_at: 1788189000,
       status,
+      ...(creditStatus && {
+        funding_asset: 'CNY/6',
+        funding_unit_version: 'lr-cny-v1',
+        credit_amount: '50000000',
+        credit_status: creditStatus,
+      }),
     },
   }
 }
 
 describe('WeChat order polling', () => {
+  test('cash payment confirmation keeps reading the same order until ledger credit is applied', async () => {
+    const responses = [
+      orderWithStatus('pending', 'pending'),
+      orderWithStatus('success', 'pending'),
+      orderWithStatus('success', 'pending'),
+      orderWithStatus('success', 'applied'),
+    ]
+    const updates: string[] = []
+    let fetches = 0
+    let waits = 0
+
+    const result = await pollWeChatOrder({
+      tradeNo: 'WXN0123456789abcdef0123456789abc',
+      signal: new AbortController().signal,
+      fetchOrder: async (tradeNo) => {
+        assert.equal(tradeNo, 'WXN0123456789abcdef0123456789abc')
+        const response = responses[fetches++]
+        assert.ok(response)
+        return response
+      },
+      wait: async () => {
+        waits++
+      },
+      onUpdate: (order) =>
+        updates.push(`${order.status}:${order.credit_status}`),
+    })
+
+    assert.equal(result?.credit_status, 'applied')
+    assert.equal(fetches, 4)
+    assert.equal(waits, 3)
+    assert.deepEqual(updates, [
+      'pending:pending',
+      'success:pending',
+      'success:pending',
+      'success:applied',
+    ])
+  })
+
+  test('cash payment confirmation without a credit status waits for explicit ledger delivery', async () => {
+    const confirmed = orderWithStatus('success')
+    assert.ok(confirmed.data)
+    confirmed.data.funding_asset = 'CNY/6'
+    confirmed.data.funding_unit_version = 'lr-cny-v1'
+    confirmed.data.credit_amount = '50000000'
+    confirmed.data.credited_quota = 0
+    const responses = [confirmed, orderWithStatus('success', 'applied')]
+    let fetches = 0
+
+    const result = await pollWeChatOrder({
+      tradeNo: 'WXN0123456789abcdef0123456789abc',
+      signal: new AbortController().signal,
+      fetchOrder: async () => {
+        const response = responses[fetches++]
+        assert.ok(response)
+        return response
+      },
+      wait: async () => undefined,
+      onUpdate: () => {},
+    })
+
+    assert.equal(result?.credit_status, 'applied')
+    assert.equal(fetches, 2)
+  })
+
   test('stops immediately after the server reports a terminal status', async () => {
     const responses = [
       orderWithStatus('pending'),

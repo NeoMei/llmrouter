@@ -49,7 +49,6 @@ import { Button } from '@/components/ui/button'
 import { IconBadge, type IconBadgeTone } from '@/components/ui/icon-badge'
 import { fetchTokenKey, getApiKeys } from '@/features/keys/api'
 import type { ApiKey } from '@/features/keys/types'
-import { ProductConsoleView } from '@/features/unihub'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { getUserModels } from '@/lib/api'
 import { MOTION_TRANSITION } from '@/lib/motion'
@@ -458,34 +457,6 @@ function CompactQuickAction(props: { action: QuickAction }) {
 
 export function OverviewDashboard() {
   const { t } = useTranslation()
-  const central = useAuthStore(
-    (state) => state.auth.user?.identity_source === 'unihub'
-  )
-  const [native, setNative] = useState(false)
-  if (central && !native) {
-    return (
-      <>
-        <Button variant='outline' onClick={() => setNative(true)}>
-          {t('Local')} · {t('Overview')}
-        </Button>
-        <ProductConsoleView page='overview' />
-      </>
-    )
-  }
-  return (
-    <>
-      {central ? (
-        <Button variant='outline' onClick={() => setNative(false)}>
-          {t('UniHub account')}
-        </Button>
-      ) : null}
-      <NativeOverviewDashboard hideExample={central} />
-    </>
-  )
-}
-
-function NativeOverviewDashboard(props: { hideExample?: boolean }) {
-  const { t } = useTranslation()
   const user = useAuthStore((state) => state.auth.user)
   const { items: apiInfoItems } = useApiInfo()
   const {
@@ -652,7 +623,7 @@ function NativeOverviewDashboard(props: { hideExample?: boolean }) {
         <CardStaggerContainer className='grid items-stretch gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]'>
           <CardStaggerItem className='bg-card h-full overflow-hidden rounded-2xl border shadow-xs'>
             <div className='relative h-full overflow-hidden p-4 sm:p-5'>
-              {!props.hideExample ? <SetupGuideBackdrop /> : null}
+              <SetupGuideBackdrop />
               <div className='relative grid gap-5 lg:grid-cols-[minmax(0,1fr)_21rem]'>
                 <div className='flex min-w-0 flex-col gap-5'>
                   <div className='flex flex-wrap items-start justify-between gap-3'>
@@ -698,12 +669,10 @@ function NativeOverviewDashboard(props: { hideExample?: boolean }) {
                   </ol>
                 </div>
 
-                {!props.hideExample ? (
-                  <RequestPreview
-                    example={requestExample}
-                    signals={heroSignals}
-                  />
-                ) : null}
+                <RequestPreview
+                  example={requestExample}
+                  signals={heroSignals}
+                />
               </div>
             </div>
           </CardStaggerItem>
@@ -730,7 +699,7 @@ function NativeOverviewDashboard(props: { hideExample?: boolean }) {
         <CardStaggerContainer>
           <CardStaggerItem className='bg-card overflow-hidden rounded-2xl border shadow-xs'>
             <div className='relative overflow-hidden px-4 py-3 sm:px-5'>
-              {!props.hideExample ? <SetupGuideBackdrop compact /> : null}
+              <SetupGuideBackdrop compact />
               <div className='relative flex flex-wrap items-center justify-between gap-3'>
                 <div className='flex min-w-0 items-center gap-3'>
                   <span className='bg-background/70 flex size-9 shrink-0 items-center justify-center rounded-xl border shadow-xs'>

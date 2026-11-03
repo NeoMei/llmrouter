@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/internal/platformaccount"
+	"github.com/QuantumNous/new-api/internal/unihubaccess"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
@@ -118,6 +119,9 @@ func authHelper(c *gin.Context, minRole int) {
 			c.AbortWithStatusJSON(403, gin.H{"success": false, "code": "UNIHUB_ORIGIN_FORBIDDEN"})
 			return
 		}
+	}
+	if managed && !productAccountBoundary(c, user) {
+		return
 	}
 	if user.Role < minRole && !runtimeSettings {
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "AUTH_INSUFFICIENT_PRIVILEGE"})
@@ -787,6 +791,13 @@ func tokenAuth(ownedJobRead bool) func(c *gin.Context) {
 			if owner.FundingRealm == model.NativeFundingLocalOnly {
 				abortWithOpenAiMessage(c, http.StatusForbidden, "native funding requires native credential")
 				return
+			}
+			if platformaccount.RuntimeEnabled() && userCache.IdentitySource == "" && nativeUnboundLocalIdentity(c, userCache.Id) {
+				policy, err := unihubaccess.FromEnv()
+				if err != nil || !policy.NativePublicEnabled && !policy.IsPrivateManagementRequest(c.Request) {
+					NativePublicBoundary()(c)
+					return
+				}
 			}
 		}
 		if native {

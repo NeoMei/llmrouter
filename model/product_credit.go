@@ -3,7 +3,9 @@ package model
 import (
 	"context"
 	"errors"
+	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	userkit "github.com/NeoMei/UniHub/packages/userkit-go"
@@ -44,6 +46,9 @@ func QueueProductCreditAward(tx *gorm.DB, userID int, kind, receiptID string, qu
 	if a.State != "central" {
 		return true, ErrProductFundingPending
 	}
+	if a.Asset != userkit.RuntimeAsset || a.UnitVersion != userkit.RuntimeUnitVersion {
+		return true, ErrProductFundingConflict
+	}
 	if quota < 0 || quota > common.MaxQuota || receiptID == "" || len(receiptID) > 128 {
 		return true, ErrProductFundingConflict
 	}
@@ -55,23 +60,44 @@ func QueueProductCreditAward(tx *gorm.DB, userID int, kind, receiptID string, qu
 		return true, err
 	}
 	req := userkit.RuntimeAwardRequest{ReceiptID: receiptID, SourceKind: kind, ReceiptDigest: productDigest(string(payload)), Reason: "llmrouter verified " + kind + " receipt", LocalUserID: strconv.Itoa(userID), AccountID: a.AccountID, Amount: strconv.Itoa(quota), Asset: a.Asset, UnitVersion: a.UnitVersion, SourcePayload: payload}
+	return true, queueProductAward(tx, userID, a.ScopeDigest, req)
+}
+
+// Cash payments accept only an explicit frozen CNY order and its verified
+// provider transaction. Gifts/imports retain the original LR award path.
+func QueueProductCashPayment(tx *gorm.DB, order *TopUp) error {
+	if order == nil || order.Id <= 0 || order.UserId <= 0 || order.Status != common.TopUpStatusSuccess || order.TradeNo == "" || order.PaymentProvider != PaymentProviderWeChatPay || order.PaymentMethod != PaymentMethodWeChatNative || order.Currency != "CNY" || order.ProviderTradeNo == nil || strings.TrimSpace(*order.ProviderTradeNo) == "" || order.PaidAmountMinor <= 0 || order.PaidAmountMinor > math.MaxInt64/10000 || order.FundingAsset != userkit.RuntimeCashAsset || order.FundingUnitVersion != userkit.RuntimeCashUnitVersion {
+		return ErrProductFundingConflict
+	}
+	if err := validateProductTopUpFundingTx(tx, order); err != nil {
+		return err
+	}
+	payload, err := common.Marshal(map[string]any{"order_id": order.Id, "trade_no": order.TradeNo, "provider": order.PaymentProvider, "provider_trade_no": *order.ProviderTradeNo, "currency": order.Currency, "paid_amount_minor": order.PaidAmountMinor})
+	if err != nil {
+		return err
+	}
+	req := userkit.RuntimeAwardRequest{ReceiptID: productDigest(order.PaymentProvider + ":" + order.TradeNo), SourceKind: "payment", ReceiptDigest: productDigest(string(payload)), Reason: "llmrouter verified payment receipt", LocalUserID: strconv.Itoa(order.UserId), AccountID: order.FundingAccountID, Amount: strconv.FormatInt(order.PaidAmountMinor*10000, 10), Asset: order.FundingAsset, UnitVersion: order.FundingUnitVersion, SourcePayload: payload}
+	return queueProductAward(tx, order.UserId, order.FundingScopeDigest, req)
+}
+
+func queueProductAward(tx *gorm.DB, userID int, scope string, req userkit.RuntimeAwardRequest) error {
 	raw, err := common.Marshal(req)
 	if err != nil {
-		return true, err
+		return err
 	}
-	id := productDigest(kind + ":" + receiptID)
-	award := ProductCreditAward{ScopeDigest: a.ScopeDigest, ID: id, UserID: userID, Request: string(raw), RequestDigest: productDigest(string(raw)), State: "pending", CreatedAt: time.Now().Unix()}
+	id := productDigest(req.SourceKind + ":" + req.ReceiptID)
+	award := ProductCreditAward{ScopeDigest: scope, ID: id, UserID: userID, Request: string(raw), RequestDigest: productDigest(string(raw)), State: "pending", CreatedAt: time.Now().Unix()}
 	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&award).Error; err != nil {
-		return true, err
+		return err
 	}
 	var existing ProductCreditAward
 	if err := lockForUpdate(tx).First(&existing, "id = ?", id).Error; err != nil {
-		return true, err
+		return err
 	}
-	if existing.RequestDigest != award.RequestDigest || existing.UserID != userID {
-		return true, ErrProductFundingConflict
+	if existing.RequestDigest != award.RequestDigest || existing.UserID != userID || existing.ScopeDigest != scope {
+		return ErrProductFundingConflict
 	}
-	return true, nil
+	return nil
 }
 
 func FlushProductCreditAwards(ctx context.Context, userID int) error {

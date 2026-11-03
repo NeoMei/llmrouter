@@ -14,9 +14,11 @@ import (
 
 const RuntimeAsset = "LR_QUOTA/0"
 const RuntimeUnitVersion = "lr-quota-v1"
+const RuntimeCashAsset = "CNY/6"
+const RuntimeCashUnitVersion = "lr-cny-v1"
 
 // ServiceConfig contains a product-instance credential, never a user credential.
-// Runtime amounts are exact native LR quota integers, not cash or CREDIT/6.
+// Runtime amounts are exact integers in the explicitly declared asset unit.
 type ServiceConfig struct {
 	BaseURL, ProductID, InstanceID, ServiceToken string
 	BrowserOrigin                                string
@@ -300,6 +302,15 @@ func (c *RuntimeClient) Access(ctx context.Context, localID string) (out Runtime
 }
 func (c *RuntimeClient) Balance(ctx context.Context, localID, account string) (out RuntimeBalance, e error) {
 	e = c.request(ctx, "GET", "/users/"+url.PathEscape(localID)+"/balance?account_id="+url.QueryEscape(account), "", nil, &out)
+	if e == nil {
+		e = c.scope(out.ProductID, out.InstanceID)
+	}
+	return
+}
+
+// BalanceAsset explicitly selects the ledger asset; Balance retains its legacy contract.
+func (c *RuntimeClient) BalanceAsset(ctx context.Context, localID, account, asset, unitVersion string) (out RuntimeBalance, e error) {
+	e = c.request(ctx, "GET", "/users/"+url.PathEscape(localID)+"/balance?account_id="+url.QueryEscape(account)+"&asset="+url.QueryEscape(asset)+"&unit_version="+url.QueryEscape(unitVersion), "", nil, &out)
 	if e == nil {
 		e = c.scope(out.ProductID, out.InstanceID)
 	}

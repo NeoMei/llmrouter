@@ -37,6 +37,14 @@ export function isTerminalWeChatOrderStatus(status: TopupStatus): boolean {
   return status === 'success' || status === 'failed' || status === 'expired'
 }
 
+export function isWeChatOrderAwaitingCredit(order: WeChatNativeOrder): boolean {
+  return (
+    order.status === 'success' &&
+    order.funding_asset === 'CNY/6' &&
+    order.credit_status !== 'applied'
+  )
+}
+
 interface PollWeChatOrderOptions {
   tradeNo: string
   signal: AbortSignal
@@ -82,7 +90,11 @@ export async function pollWeChatOrder({
 
     latestOrder = response.data
     onUpdate(latestOrder)
-    if (isTerminalWeChatOrderStatus(latestOrder.status) || signal.aborted) {
+    if (
+      (isTerminalWeChatOrderStatus(latestOrder.status) &&
+        !isWeChatOrderAwaitingCredit(latestOrder)) ||
+      signal.aborted
+    ) {
       return latestOrder
     }
 
@@ -117,6 +129,7 @@ export function useWeChatNativePayment({
   const [polling, setPolling] = useState(false)
   const actionRef = useRef<{ amount: string; key: string } | null>(null)
   const notifiedTradeRef = useRef<string | null>(null)
+  const creditedTradeRef = useRef<string | null>(null)
 
   const createPayment = useCallback(async (amount: string) => {
     let action = actionRef.current
@@ -157,10 +170,13 @@ export function useWeChatNativePayment({
   }, [])
 
   const orderTradeNo = order?.trade_no
-  const orderStatus = order?.status
+  const orderNeedsPolling =
+    order?.status === 'pending' ||
+    (order !== null && isWeChatOrderAwaitingCredit(order))
 
   useEffect(() => {
-    if (!open || !orderTradeNo || orderStatus !== 'pending') {
+    if (!open || !orderTradeNo || !orderNeedsPolling) {
+      setPolling(false)
       return
     }
 
@@ -192,7 +208,7 @@ export function useWeChatNativePayment({
       })
 
     return () => controller.abort()
-  }, [open, orderStatus, orderTradeNo])
+  }, [open, orderNeedsPolling, orderTradeNo])
 
   useEffect(() => {
     if (!order || !isTerminalWeChatOrderStatus(order.status)) {
@@ -206,6 +222,13 @@ export function useWeChatNativePayment({
     ) {
       notifiedTradeRef.current = order.trade_no
       toast.success(i18next.t('Payment successful'))
+    }
+    if (
+      order.status === 'success' &&
+      !isWeChatOrderAwaitingCredit(order) &&
+      creditedTradeRef.current !== order.trade_no
+    ) {
+      creditedTradeRef.current = order.trade_no
       void onSuccess?.()
     }
   }, [onSuccess, order])

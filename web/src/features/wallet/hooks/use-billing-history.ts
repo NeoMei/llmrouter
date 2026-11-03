@@ -21,6 +21,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { toast } from 'sonner'
 
 import { useIsAdmin } from '@/hooks/use-admin'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   getUserBillingHistory,
@@ -35,6 +36,7 @@ import type { TopupRecord } from '../types'
 // ============================================================================
 
 interface UseBillingHistoryOptions {
+  enabled?: boolean
   /** Initial page number */
   initialPage?: number
   /** Initial page size */
@@ -43,7 +45,11 @@ interface UseBillingHistoryOptions {
 
 export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
   const { initialPage = 1, initialPageSize = 10 } = options
-  const isAdmin = useIsAdmin()
+  const administrator = useIsAdmin()
+  const unifiedCash = useAuthStore(
+    (state) => state.auth.user?.funding?.mode === 'unified_cash'
+  )
+  const isAdmin = administrator && !unifiedCash
 
   const [records, setRecords] = useState<TopupRecord[]>([])
   const [total, setTotal] = useState(0)
@@ -143,8 +149,8 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
 
   // Fetch data when dependencies change
   useEffect(() => {
-    fetchBillingHistory()
-  }, [fetchBillingHistory])
+    if (options.enabled !== false) fetchBillingHistory()
+  }, [fetchBillingHistory, options.enabled])
 
   return {
     records,

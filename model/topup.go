@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
+	userkit "github.com/NeoMei/UniHub/packages/userkit-go"
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/internal/platformaccount"
 	"github.com/QuantumNous/new-api/logger"
 
 	"github.com/shopspring/decimal"
@@ -14,23 +17,28 @@ import (
 )
 
 type TopUp struct {
-	Id                int     `json:"id"`
-	UserId            int     `json:"user_id" gorm:"index"`
-	Amount            int64   `json:"amount"`
-	Money             float64 `json:"money"`
-	TradeNo           string  `json:"trade_no" gorm:"unique;type:varchar(255);index"`
-	PaymentMethod     string  `json:"payment_method" gorm:"type:varchar(50)"`
-	PaymentProvider   string  `json:"payment_provider" gorm:"type:varchar(50);default:'';uniqueIndex:idx_topups_provider_trade"`
-	Currency          string  `json:"currency" gorm:"type:varchar(8);default:''"`
-	PaidAmountMinor   int64   `json:"paid_amount_minor"`
-	CreditedQuota     int     `json:"credited_quota"`
-	ProviderTradeNo   *string `json:"provider_trade_no,omitempty" gorm:"type:varchar(64);uniqueIndex:idx_topups_provider_trade"`
-	NextReconcileTime int64   `json:"next_reconcile_time" gorm:"index"`
-	ReconcileAttempts int     `json:"reconcile_attempts"`
-	CreateTime        int64   `json:"create_time"`
-	CompleteTime      int64   `json:"complete_time"`
-	Status            string  `json:"status"`
-	CreditStatus      string  `json:"credit_status,omitempty" gorm:"-"`
+	FundingScopeDigest string  `json:"-" gorm:"size:64;index:idx_topup_funding_owner"`
+	FundingAccountID   string  `json:"-" gorm:"size:128"`
+	FundingAsset       string  `json:"funding_asset,omitempty" gorm:"size:32"`
+	FundingUnitVersion string  `json:"funding_unit_version,omitempty" gorm:"size:32"`
+	Id                 int     `json:"id"`
+	UserId             int     `json:"user_id" gorm:"index;index:idx_topup_funding_owner"`
+	Amount             int64   `json:"amount"`
+	Money              float64 `json:"money"`
+	TradeNo            string  `json:"trade_no" gorm:"unique;type:varchar(255);index"`
+	PaymentMethod      string  `json:"payment_method" gorm:"type:varchar(50)"`
+	PaymentProvider    string  `json:"payment_provider" gorm:"type:varchar(50);default:'';uniqueIndex:idx_topups_provider_trade"`
+	Currency           string  `json:"currency" gorm:"type:varchar(8);default:''"`
+	PaidAmountMinor    int64   `json:"paid_amount_minor"`
+	CreditedQuota      int     `json:"credited_quota"`
+	ProviderTradeNo    *string `json:"provider_trade_no,omitempty" gorm:"type:varchar(64);uniqueIndex:idx_topups_provider_trade"`
+	NextReconcileTime  int64   `json:"next_reconcile_time" gorm:"index"`
+	ReconcileAttempts  int     `json:"reconcile_attempts"`
+	CreateTime         int64   `json:"create_time"`
+	CompleteTime       int64   `json:"complete_time"`
+	Status             string  `json:"status"`
+	CreditStatus       string  `json:"credit_status,omitempty" gorm:"-"`
+	CreditAmount       string  `json:"credit_amount,omitempty" gorm:"-"`
 }
 
 const (
@@ -135,62 +143,73 @@ func (topUp *TopUp) Insert() error {
 }
 
 func CreateOrReuseWeChatTopUp(input WeChatTopUpOrderInput) (*TopUp, bool, error) {
-	if input.UserID <= 0 || input.TradeNo == "" || input.AmountMinor <= 0 || input.CreditedQuota <= 0 || input.CreateTime <= 0 {
+	if input.UserID <= 0 || input.TradeNo == "" || input.AmountMinor <= 0 || input.CreditedQuota < 0 || input.CreateTime <= 0 {
 		return nil, false, errors.New("invalid WeChat top-up order")
 	}
-
-	validateExisting := func(existing *TopUp) error {
-		if existing.UserId != input.UserID ||
-			existing.PaymentProvider != PaymentProviderWeChatPay ||
-			existing.PaymentMethod != PaymentMethodWeChatNative ||
-			existing.Currency != "CNY" ||
-			existing.PaidAmountMinor != input.AmountMinor ||
-			existing.CreditedQuota != input.CreditedQuota {
-			return ErrTopUpOrderConflict
+	topUp := &TopUp{}
+	reused := false
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		// Match the funding cutover lock order. An existing receipt keeps its asset
+		// even if the deployment mode changed since checkout.
+		var owner User
+		if err := lockForUpdate(tx).Select("id", "funding_realm", "quota").First(&owner, input.UserID).Error; err != nil {
+			return err
 		}
-		return nil
-	}
-
-	existing := &TopUp{}
-	if err := DB.Where("trade_no = ?", input.TradeNo).First(existing).Error; err == nil {
-		if err := validateExisting(existing); err != nil {
-			return nil, false, err
+		err := tx.Where("trade_no = ?", input.TradeNo).First(topUp).Error
+		if err == nil {
+			if topUp.UserId != input.UserID || topUp.PaymentProvider != PaymentProviderWeChatPay || topUp.PaymentMethod != PaymentMethodWeChatNative || topUp.Currency != "CNY" || topUp.PaidAmountMinor != input.AmountMinor || topUp.CreditedQuota != input.CreditedQuota {
+				return ErrTopUpOrderConflict
+			}
+			reused = true
+			return nil
 		}
-		return existing, true, nil
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		*topUp = TopUp{UserId: input.UserID, Money: float64(input.AmountMinor) / 100, TradeNo: input.TradeNo, PaymentMethod: PaymentMethodWeChatNative, PaymentProvider: PaymentProviderWeChatPay, Currency: "CNY", PaidAmountMinor: input.AmountMinor, CreditedQuota: input.CreditedQuota, NextReconcileTime: input.CreateTime + 30, CreateTime: input.CreateTime, Status: common.TopUpStatusPending}
+		if platformaccount.RuntimeEnabled() || tx.Migrator().HasTable(&ProductFundingAccount{}) {
+			var account ProductFundingAccount
+			err = lockForUpdate(tx).First(&account, "user_id = ?", input.UserID).Error
+			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			if err == nil {
+				if account.State != "central" {
+					return ErrProductFundingPending
+				}
+				scope, err := ProductRuntimeScopeDigest()
+				if err != nil {
+					return err
+				}
+				if owner.FundingRealm != "" || account.ScopeDigest == "" || account.ScopeDigest != scope || account.AccountID == "" || account.Asset != userkit.RuntimeAsset || account.UnitVersion != userkit.RuntimeUnitVersion {
+					return ErrProductFundingConflict
+				}
+				topUp.FundingScopeDigest, topUp.FundingAccountID = scope, account.AccountID
+				topUp.FundingAsset, topUp.FundingUnitVersion = account.Asset, account.UnitVersion
+				if platformaccount.UnifiedCashFundingEnabled() {
+					topUp.FundingAsset, topUp.FundingUnitVersion = userkit.RuntimeCashAsset, userkit.RuntimeCashUnitVersion
+				}
+			}
+		}
+		if topUp.FundingAsset == userkit.RuntimeCashAsset {
+			if input.AmountMinor > math.MaxInt64/10000 {
+				return ErrTopUpAmountMismatch
+			}
+		} else {
+			maxCurrent, err := topUpQuotaMaxCurrent(input.CreditedQuota)
+			if err != nil {
+				return err
+			}
+			if topUp.FundingAccountID == "" && owner.Quota > maxCurrent {
+				return ErrTopUpQuotaLimitExceeded
+			}
+		}
+		return tx.Create(topUp).Error
+	})
+	if err != nil {
 		return nil, false, err
 	}
-
-	if err := ValidateTopUpQuotaCapacity(input.UserID, input.CreditedQuota); err != nil {
-		return nil, false, err
-	}
-
-	topUp := &TopUp{
-		UserId:            input.UserID,
-		Money:             float64(input.AmountMinor) / 100,
-		TradeNo:           input.TradeNo,
-		PaymentMethod:     PaymentMethodWeChatNative,
-		PaymentProvider:   PaymentProviderWeChatPay,
-		Currency:          "CNY",
-		PaidAmountMinor:   input.AmountMinor,
-		CreditedQuota:     input.CreditedQuota,
-		NextReconcileTime: input.CreateTime + 30,
-		CreateTime:        input.CreateTime,
-		Status:            common.TopUpStatusPending,
-	}
-	if err := DB.Create(topUp).Error; err == nil {
-		return topUp, false, nil
-	} else {
-		createErr := err
-		winner := &TopUp{}
-		if loadErr := DB.Where("trade_no = ?", input.TradeNo).First(winner).Error; loadErr != nil {
-			return nil, false, createErr
-		}
-		if validateErr := validateExisting(winner); validateErr != nil {
-			return nil, false, validateErr
-		}
-		return winner, true, nil
-	}
+	return topUp, reused, nil
 }
 
 func SettleWeChatTopUp(settlement WeChatTopUpSettlement) (
@@ -269,13 +288,11 @@ func SettleWeChatTopUp(settlement WeChatTopUpSettlement) (
 	}
 
 	syncProductCreditResult(userID, creditedQuota, "WeChat Pay topup")
-	RecordTopupLog(
-		userID,
-		fmt.Sprintf("微信支付充值成功，充值额度: %v，支付金额：%s %s", logger.FormatQuota(creditedQuota), formatTopUpMinor(topUp.PaidAmountMinor), topUp.Currency),
-		settlement.CallerIP,
-		PaymentMethodWeChatNative,
-		PaymentProviderWeChatPay,
-	)
+	content := fmt.Sprintf("微信支付充值成功，充值额度: %v，支付金额：%s %s", logger.FormatQuota(creditedQuota), formatTopUpMinor(topUp.PaidAmountMinor), topUp.Currency)
+	if topUp.FundingAsset == userkit.RuntimeCashAsset {
+		content = fmt.Sprintf("微信支付确认成功，支付金额：%s %s", formatTopUpMinor(topUp.PaidAmountMinor), topUp.Currency)
+	}
+	RecordTopupLog(userID, content, settlement.CallerIP, PaymentMethodWeChatNative, PaymentProviderWeChatPay)
 	return false, userID, creditedQuota, nil
 }
 
@@ -446,6 +463,14 @@ func ValidateTopUpQuotaCapacity(userId int, creditedQuota int) error {
 // quota. Keeping the predicate and increment in one UPDATE prevents two
 // concurrent callbacks from both passing a separate read/check.
 func creditTopUpQuota(tx *gorm.DB, userId int, creditedQuota int, updates map[string]interface{}, order *TopUp) error {
+	if order != nil && order.FundingAsset == userkit.RuntimeCashAsset {
+		return QueueProductCashPayment(tx, order)
+	}
+	if order != nil && (order.FundingScopeDigest != "" || order.FundingAccountID != "" || order.FundingAsset != "" || order.FundingUnitVersion != "") {
+		if err := validateProductTopUpFundingTx(tx, order); err != nil {
+			return err
+		}
+	}
 	maxCurrentQuota, err := topUpQuotaMaxCurrent(creditedQuota)
 	if err != nil {
 		return err

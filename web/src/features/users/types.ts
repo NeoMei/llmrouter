@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { z } from 'zod'
 
 import type { AdminPermissionMatrix } from '@/lib/admin-permissions'
+import { unifiedCashFundingSchema } from '@/lib/funding'
 
 // ============================================================================
 // User Schema & Types
@@ -44,6 +45,7 @@ export const userSchema = z.object({
   email: z.string().optional(),
   quota: z.number(),
   used_quota: z.number(),
+  funding: unifiedCashFundingSchema.optional(),
   request_count: z.number(),
   group: z.string(),
   aff_code: z.string().optional(),

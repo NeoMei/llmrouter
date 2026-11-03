@@ -68,7 +68,7 @@ func TestUniHubProductMemberOwnApplicationData(t *testing.T) {
 		w := f.request("GET", path, member.Data.AccessToken, nil)
 		require.Equal(t, 200, w.Code, w.Body.String())
 	}
-	for _, path := range []string{"/api/data/", "/api/log/", "/api/client_model_routes/", "/api/option/", "/api/user/", "/api/token/", "/api/user/topup/info"} {
+	for _, path := range []string{"/api/data/", "/api/log/", "/api/client_model_routes/", "/api/option/", "/api/user/", "/api/user/topup/info"} {
 		w := f.request("GET", path, member.Data.AccessToken, nil)
 		assert.Equal(t, 403, w.Code, path+" "+w.Body.String())
 	}
@@ -215,7 +215,7 @@ func TestUniHubProductCapabilitiesAndCatalogAuthorization(t *testing.T) {
 	assert.Equal(t, "updated-vendor", vendor.Name)
 	delete := request("DELETE", fmt.Sprintf("/api/vendors/%d", vendor.Id), admin.Data.AccessToken, "")
 	require.Equal(t, 200, delete.Code, delete.Body.String())
-	for _, path := range []string{"/api/token/", "/api/user/", "/api/native-billing/", "/api/subscription/self", "/api/deployments/", "/api/custom-oauth-provider/", "/api/performance/stats"} {
+	for _, path := range []string{"/api/user/", "/api/native-billing/", "/api/subscription/self", "/api/deployments/", "/api/custom-oauth-provider/", "/api/performance/stats"} {
 		assert.Equal(t, 403, request("GET", path, admin.Data.AccessToken, "").Code, path)
 	}
 	f.revoked.Store(true)

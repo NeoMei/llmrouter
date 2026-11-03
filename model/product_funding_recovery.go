@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	userkit "github.com/NeoMei/UniHub/packages/userkit-go"
-	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/internal/platformaccount"
 	"gorm.io/gorm"
 	"strconv"
@@ -62,9 +61,9 @@ func (s *ProductFundingStore) resolveProductReserve(ctx context.Context, id stri
 		if call.State != "reserve_pending" {
 			return ErrProductFundingConflict
 		}
-		var req userkit.RuntimeReserveRequest
-		if err := common.UnmarshalJsonStr(call.ReserveJSON, &req); err != nil {
-			return err
+		req, e := ProductRuntimeCallContract(call)
+		if e != nil {
+			return e
 		}
 		remote, remoteErr := s.client.Reserve(ctx, req)
 		if remoteErr != nil {
@@ -136,7 +135,32 @@ func (s *ProductFundingStore) resolveProductTopUp(ctx context.Context, id string
 		if op.State != "pending" {
 			return ErrProductFundingConflict
 		}
-		remote, remoteErr := s.client.TopUp(ctx, call.ID, userkit.RuntimeTopUpRequest{RequestKey: op.ID, Amount: strconv.Itoa(op.Delta), AcceptedCall: op.AcceptedCall})
+		if _, e := ProductRuntimeCallContract(call); e != nil {
+			return e
+		}
+		amount := op.LedgerAmount
+		if call.Asset != userkit.RuntimeCashAsset {
+			amount = int64(op.Delta)
+		}
+		currentAmount, e := productCallAmount(call, call.ReservedQuota)
+		if e != nil {
+			return e
+		}
+		targetAmount, e := productCallAmount(call, op.TargetQuota)
+		if e != nil {
+			return e
+		}
+		if amount < 0 || amount != targetAmount-currentAmount {
+			return ErrProductFundingConflict
+		}
+		var remote userkit.RuntimeCall
+		var remoteErr error
+		if amount == 0 {
+			// Rounding can leave a larger LR key reservation at the same cash hold.
+			remote, remoteErr = s.client.Call(ctx, call.ID)
+		} else {
+			remote, remoteErr = s.client.TopUp(ctx, call.ID, userkit.RuntimeTopUpRequest{RequestKey: op.ID, Amount: strconv.FormatInt(amount, 10), AcceptedCall: op.AcceptedCall})
+		}
 		if remoteErr != nil {
 			confirmed, readErr := s.client.Call(ctx, call.ID)
 			if readErr != nil {
@@ -145,13 +169,13 @@ func (s *ProductFundingStore) resolveProductTopUp(ctx context.Context, id string
 			if err := s.validateRemote(call, confirmed); err != nil {
 				return err
 			}
-			held, err := productQuota(confirmed.Held)
+			held, err := productRuntimeAmount(confirmed.Held)
 			if err != nil {
 				return err
 			}
 			// A terminal rejection plus unchanged hold proves this extension did
 			// not execute. A timeout with unchanged hold is still uncertain.
-			if productRuntimeDefiniteReject(remoteErr) && held == call.ReservedQuota && confirmed.Status == "RESERVED" {
+			if productRuntimeDefiniteReject(remoteErr) && held == currentAmount && confirmed.Status == "RESERVED" {
 				// Final observed usage already consumed this key's capacity.
 				// Keep this immutable intent and debt until funding completes it.
 				if op.AcceptedCall {
@@ -171,11 +195,11 @@ func (s *ProductFundingStore) resolveProductTopUp(ctx context.Context, id string
 		if err := s.validateRemote(call, remote); err != nil {
 			return err
 		}
-		held, err := productQuota(remote.Held)
+		held, err := productRuntimeAmount(remote.Held)
 		if err != nil {
 			return err
 		}
-		if remote.Status != "RESERVED" || held < op.TargetQuota {
+		if remote.Status != "RESERVED" || held != targetAmount {
 			return ErrProductFundingPending
 		}
 		if err = tx.Model(&call).Updates(map[string]any{"reserved_quota": op.TargetQuota, "updated_at": time.Now().Unix()}).Error; err != nil {
@@ -199,6 +223,9 @@ func (s *ProductFundingStore) MarkDispatched(ctx context.Context, id string) err
 		}
 		if call.ScopeDigest == "" || call.ScopeDigest != s.ScopeDigest() {
 			return ErrProductFundingConflict
+		}
+		if _, e := ProductRuntimeCallContract(call); e != nil {
+			return e
 		}
 		if call.DispatchedAt != 0 || call.FinancialCommitment {
 			return nil

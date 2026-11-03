@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next'
 import { Dialog } from '@/components/dialog'
 import { Button } from '@/components/ui/button'
 
+import { isWeChatOrderAwaitingCredit } from '../../hooks/use-wechat-native-payment'
 import type { WeChatNativeOrder } from '../../types'
 
 interface WeChatNativePaymentDialogProps {
@@ -47,6 +48,7 @@ export function WeChatNativePaymentDialog({
   if (!order) return null
 
   const pending = order.status === 'pending'
+  const awaitingCredit = isWeChatOrderAwaitingCredit(order)
   const description = pending
     ? t('Pay exactly ¥{{amount}}', { amount: order.amount })
     : t('WeChat Pay order {{tradeNo}}', { tradeNo: order.trade_no })
@@ -102,8 +104,18 @@ export function WeChatNativePaymentDialog({
 
         {order.status === 'success' ? (
           <div className='space-y-3' role='status' aria-live='polite'>
-            <CheckCircle2 className='mx-auto h-16 w-16 text-green-600' />
-            <p className='text-lg font-semibold'>{t('Payment successful')}</p>
+            {awaitingCredit ? (
+              <Clock3 className='text-muted-foreground mx-auto size-16' />
+            ) : (
+              <CheckCircle2 className='mx-auto h-16 w-16 text-green-600' />
+            )}
+            <p className='text-lg font-semibold'>
+              {awaitingCredit
+                ? t(
+                    'Payment confirmed. Balance credit is pending. Do not pay again.'
+                  )
+                : t('Payment successful')}
+            </p>
           </div>
         ) : null}
 

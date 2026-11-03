@@ -46,7 +46,7 @@ func TestUniHubLiveChannelManagement(t *testing.T) {
 			} else {
 				assert.NotEqual(t, 403, req.Code)
 			}
-			for _, path := range []string{"/api/token/", "/api/user/", "/api/option/", "/api/topup/"} {
+			for _, path := range []string{"/api/user/", "/api/option/", "/api/topup/"} {
 				assert.NotEqual(t, 200, f.request("GET", path, b.Data.AccessToken, nil).Code, path)
 			}
 			assert.Equal(t, 403, f.request("POST", "/api/channel/1/key", b.Data.AccessToken, nil).Code)

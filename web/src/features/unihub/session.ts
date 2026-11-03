@@ -32,13 +32,7 @@ export interface ProductConfig {
   instance_id?: string
   models: string[]
 }
-export function exactAmount(value: string, asset: string): string {
-  if (!/^(0|[1-9][0-9]*)$/.test(value)) {
-    throw new TypeError('Invalid canonical quantity')
-  }
-  const padded = value.padStart(7, '0')
-  return `${padded.slice(0, -6)}.${padded.slice(-6)} ${asset.split('/')[0]}`
-}
+export { exactAmount } from '@/lib/funding'
 export class FinancialIntent {
   readonly key = crypto.randomUUID()
   readonly account: string

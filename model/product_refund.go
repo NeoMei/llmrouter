@@ -16,6 +16,7 @@ type ProductCallRefund struct {
 	CallID                            string `gorm:"index;size:128"`
 	RequestKey, RequestDigest, Reason string
 	Amount                            int
+	LedgerAmount                      int64
 	State                             string `gorm:"index;size:24"`
 	CreatedAt, UpdatedAt              int64
 }
@@ -67,6 +68,9 @@ func (s *ProductFundingStore) Refund(ctx context.Context, callID, key string, am
 			}
 		}
 		parentID := callID
+		if call.ParentCallID != "" {
+			parentID = call.ParentCallID
+		}
 		var segment ProductCallChargeSegment
 		if e := tx.First(&segment, "call_id = ?", callID).Error; e == nil {
 			parentID = segment.ParentCallID
@@ -100,6 +104,25 @@ func (s *ProductFundingStore) Refund(ctx context.Context, callID, key string, am
 		if !errors.Is(e, gorm.ErrRecordNotFound) {
 			return e
 		}
+		if call.Asset == userkit.RuntimeCashAsset {
+			var parent ProductRuntimeCall
+			if e := tx.First(&parent, "id = ?", parentID).Error; e != nil {
+				return e
+			}
+			segments, _, e := s.productCashSegments(ctx, tx, parent)
+			if e != nil {
+				return e
+			}
+			for _, segment := range segments {
+				if segment.FinalQuota <= 0 {
+					continue
+				}
+				if segment.ID != call.ID {
+					return ErrProductFundingConflict
+				}
+				break
+			}
+		}
 		var total int64
 		if e = tx.Model(&ProductCallRefund{}).Select("COALESCE(SUM(amount),0)").Where("call_id = ? AND state IN ?", callID, []string{"pending", "applied"}).Scan(&total).Error; e != nil {
 			return e
@@ -107,7 +130,18 @@ func (s *ProductFundingStore) Refund(ctx context.Context, callID, key string, am
 		if total+int64(amount) > int64(call.FinalQuota) {
 			return ErrProductFundingConflict
 		}
-		return tx.Create(&ProductCallRefund{ID: id, CallID: callID, RequestKey: key, RequestDigest: digest, Reason: reason, Amount: amount, State: "pending", CreatedAt: time.Now().Unix()}).Error
+		if _, e := ProductRuntimeCallContract(call); e != nil {
+			return e
+		}
+		before, e := productCallAmount(call, call.FinalQuota-int(total))
+		if e != nil {
+			return e
+		}
+		after, e := productCallAmount(call, call.FinalQuota-int(total)-amount)
+		if e != nil {
+			return e
+		}
+		return tx.Create(&ProductCallRefund{LedgerAmount: before - after, ID: id, CallID: callID, RequestKey: key, RequestDigest: digest, Reason: reason, Amount: amount, State: "pending", CreatedAt: time.Now().Unix()}).Error
 	})
 	if err != nil {
 		return err
@@ -138,14 +172,26 @@ func (s *ProductFundingStore) resumeProductRefund(ctx context.Context, id string
 			return ErrProductFundingConflict
 		}
 	}
-	out, e := s.client.Refund(ctx, receipt.CallID, userkit.RuntimeRefundRequest{RequestKey: receipt.ID, Amount: strconv.Itoa(receipt.Amount), Reason: receipt.Reason})
-	if e != nil {
+	if _, e := ProductRuntimeCallContract(call); e != nil {
 		return e
 	}
-	if out.Status != "APPLIED" || out.AccountID != call.AccountID || out.Amount != strconv.Itoa(receipt.Amount) {
-		return ErrProductFundingPending
+	amount := receipt.LedgerAmount
+	if call.Asset != userkit.RuntimeCashAsset {
+		amount = int64(receipt.Amount)
 	}
-	e = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	if amount < 0 {
+		return ErrProductFundingConflict
+	}
+	if amount > 0 {
+		out, e := s.client.Refund(ctx, receipt.CallID, userkit.RuntimeRefundRequest{RequestKey: receipt.ID, Amount: strconv.FormatInt(amount, 10), Reason: receipt.Reason})
+		if e != nil {
+			return e
+		}
+		if out.Status != "APPLIED" || out.AccountID != call.AccountID || out.Amount != strconv.FormatInt(amount, 10) {
+			return ErrProductFundingPending
+		}
+	}
+	e := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var user User
 		if e := lockForUpdate(tx).Unscoped().First(&user, call.UserID).Error; e != nil {
 			return e
@@ -262,6 +308,13 @@ func RecoverProductRefunds(ctx context.Context) error {
 	return s.RecoverRefunds(ctx)
 }
 func (s *ProductFundingStore) productSegments(ctx context.Context, tx *gorm.DB, parent string) ([]ProductRuntimeCall, int, error) {
+	var original ProductRuntimeCall
+	if e := tx.First(&original, "id = ?", parent).Error; e != nil {
+		return nil, 0, e
+	}
+	if original.Asset == userkit.RuntimeCashAsset {
+		return s.productCashSegments(ctx, tx, original)
+	}
 	var segments []ProductCallChargeSegment
 	if e := tx.WithContext(ctx).Where("parent_call_id = ?", parent).Order("created_at DESC,call_id DESC").Find(&segments).Error; e != nil {
 		return nil, 0, e

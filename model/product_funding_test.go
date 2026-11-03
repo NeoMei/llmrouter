@@ -37,18 +37,28 @@ func productFundingFixture(t *testing.T) (*ProductFundingStore, *gorm.DB, *runti
 }
 
 type runtimeLedgerFixture struct {
-	origin                  string
-	balance, held, consumed int
-	settlements, imports    int
-	loseSettleReply         bool
-	loseReserveReply        bool
-	rejectReserve           bool
-	rejectTopUp             bool
-	loseTopUpReply          bool
-	loseRefundReply         bool
-	refunds                 map[string]int
-	topups                  map[string]string
-	calls                   map[string]userkit.RuntimeCall
+	origin                              string
+	balance, held, consumed             int
+	cashBalance, cashHeld, cashConsumed int
+	balanceCalls                        int
+	rejectBalance                       bool
+	settlements, imports                int
+	loseSettleReply                     bool
+	loseReserveReply                    bool
+	rejectReserve                       bool
+	rejectTopUp                         bool
+	loseTopUpReply                      bool
+	loseRefundReply                     bool
+	refunds                             map[string]int
+	topups                              map[string]string
+	calls                               map[string]userkit.RuntimeCall
+}
+
+func (f *runtimeLedgerFixture) funds(asset string) (*int, *int, *int) {
+	if asset == "CNY/6" {
+		return &f.cashBalance, &f.cashHeld, &f.cashConsumed
+	}
+	return &f.balance, &f.held, &f.consumed
 }
 
 func (f *runtimeLedgerFixture) serve(w http.ResponseWriter, r *http.Request) {
@@ -64,14 +74,19 @@ func (f *runtimeLedgerFixture) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		key := id + ":" + in.RequestKey
 		amount := fixtureQuota(in.Amount)
+		if amount <= 0 {
+			w.WriteHeader(400)
+			return
+		}
 		if old, ok := f.refunds[key]; ok {
 			if old != amount {
 				w.WriteHeader(409)
 				return
 			}
 		} else {
-			f.balance += amount
-			f.consumed -= amount
+			balance, _, consumed := f.funds(f.calls[id].Asset)
+			*balance += amount
+			*consumed -= amount
 			f.refunds[key] = amount
 		}
 		if f.loseRefundReply {
@@ -89,7 +104,17 @@ func (f *runtimeLedgerFixture) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		out = userkit.RuntimeAdjustment{ID: "import-42", ProductID: "llmrouter", InstanceID: "default", AccountID: "payer", Amount: in.Amount, Status: "APPLIED"}
 	case strings.HasSuffix(path, "/balance"):
-		out = userkit.RuntimeBalance{ProductID: "llmrouter", InstanceID: "default", AccountID: "payer", Asset: userkit.RuntimeAsset, UnitVersion: userkit.RuntimeUnitVersion, Available: strconv.Itoa(f.balance), Held: strconv.Itoa(f.held), Consumed: strconv.Itoa(f.consumed)}
+		f.balanceCalls++
+		if f.rejectBalance {
+			w.WriteHeader(503)
+			return
+		}
+		asset, version := r.URL.Query().Get("asset"), r.URL.Query().Get("unit_version")
+		if asset == "" {
+			asset, version = userkit.RuntimeAsset, userkit.RuntimeUnitVersion
+		}
+		balance, held, consumed := f.funds(asset)
+		out = userkit.RuntimeBalance{ProductID: "llmrouter", InstanceID: "default", AccountID: "payer", Asset: asset, UnitVersion: version, Available: strconv.Itoa(*balance), Held: strconv.Itoa(*held), Consumed: strconv.Itoa(*consumed)}
 	case path == "/calls/reserve":
 		if f.rejectReserve {
 			w.WriteHeader(402)
@@ -100,8 +125,9 @@ func (f *runtimeLedgerFixture) serve(w http.ResponseWriter, r *http.Request) {
 		call, found := f.calls[in.CallID]
 		if !found {
 			amount := fixtureQuota(in.Amount)
-			f.balance -= amount
-			f.held += amount
+			balance, held, _ := f.funds(in.Asset)
+			*balance -= amount
+			*held += amount
 			call = userkit.RuntimeCall{RuntimeReserveRequest: in, ProductID: "llmrouter", InstanceID: "default", ActorID: "central-user", Held: in.Amount, Charged: "0", Status: "RESERVED"}
 			f.calls[in.CallID] = call
 		}
@@ -123,6 +149,10 @@ func (f *runtimeLedgerFixture) serve(w http.ResponseWriter, r *http.Request) {
 			f.topups = map[string]string{}
 		}
 		key := id + ":" + in.RequestKey
+		if fixtureQuota(in.Amount) <= 0 {
+			w.WriteHeader(400)
+			return
+		}
 		call := f.calls[id]
 		if previous, ok := f.topups[key]; ok {
 			if previous != in.Amount {
@@ -131,8 +161,9 @@ func (f *runtimeLedgerFixture) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			amount := fixtureQuota(in.Amount)
-			f.balance -= amount
-			f.held += amount
+			balance, held, _ := f.funds(call.Asset)
+			*balance -= amount
+			*held += amount
 			call.Held = strconv.Itoa(fixtureQuota(call.Held) + amount)
 			f.calls[id] = call
 			f.topups[key] = in.Amount
@@ -148,8 +179,9 @@ func (f *runtimeLedgerFixture) serve(w http.ResponseWriter, r *http.Request) {
 		call := f.calls[id]
 		if call.Status != "RELEASED" {
 			held := fixtureQuota(call.Held)
-			f.held -= held
-			f.balance += held
+			balance, totalHeld, _ := f.funds(call.Asset)
+			*totalHeld -= held
+			*balance += held
 			call.Status = "RELEASED"
 			f.calls[id] = call
 		}
@@ -162,9 +194,10 @@ func (f *runtimeLedgerFixture) serve(w http.ResponseWriter, r *http.Request) {
 		if call.Status != "SETTLED" {
 			amount := fixtureQuota(in.Amount)
 			hold := fixtureQuota(call.Held)
-			f.held -= hold
-			f.balance += hold - amount
-			f.consumed += amount
+			balance, held, consumed := f.funds(call.Asset)
+			*held -= hold
+			*balance += hold - amount
+			*consumed += amount
 			f.settlements++
 			call.Status = "SETTLED"
 			call.Charged = in.Amount

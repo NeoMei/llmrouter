@@ -688,7 +688,7 @@ func buildSelfUserData(user *model.User) map[string]interface{} {
 	userSetting := user.GetSetting()
 	permissions := calculateUserPermissions(user.Role)
 	permissions["admin_permissions"] = authz.Capabilities(user.Id, user.Role)
-	return map[string]interface{}{
+	data := map[string]interface{}{
 		"id":                user.Id,
 		"username":          user.Username,
 		"display_name":      user.DisplayName,
@@ -717,6 +717,10 @@ func buildSelfUserData(user *model.User) map[string]interface{} {
 		"sidebar_modules":   userSetting.SidebarModules, // 正确提取sidebar_modules字段
 		"permissions":       permissions,
 	}
+	if user.Funding != nil {
+		data["funding"] = user.Funding
+	}
+	return data
 }
 
 // BuildSelfUserData returns the dashboard-safe user contract for non-password logins.

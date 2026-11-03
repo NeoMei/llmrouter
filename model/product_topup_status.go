@@ -1,10 +1,20 @@
 package model
 
-import "context"
+import (
+	"context"
+	userkit "github.com/NeoMei/UniHub/packages/userkit-go"
+	"math"
+	"strconv"
+)
 
 // Payment confirmation and spendable-credit delivery are separate receipts.
 // Enrich the original history without turning a read into payment/reward retry.
 func PopulateProductTopUpCreditStatuses(ctx context.Context, topups []*TopUp) error {
+	for _, t := range topups {
+		if t != nil && t.FundingAsset == userkit.RuntimeCashAsset && t.FundingUnitVersion == userkit.RuntimeCashUnitVersion && t.PaidAmountMinor > 0 && t.PaidAmountMinor <= math.MaxInt64/10000 {
+			t.CreditAmount = strconv.FormatInt(t.PaidAmountMinor*10000, 10)
+		}
+	}
 	if len(topups) == 0 || !DB.Migrator().HasTable(&ProductCreditAward{}) {
 		return nil
 	}

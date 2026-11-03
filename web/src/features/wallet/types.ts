@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { UnifiedCashFunding } from '@/lib/funding'
+
 // ============================================================================
 // Wallet Type Definitions
 // ============================================================================
@@ -122,6 +124,9 @@ export interface WaffoPayMethod {
  * Topup configuration information
  */
 export interface TopupInfo {
+  funding_mode?: 'unified_cash'
+  funding_asset?: 'CNY/6'
+  funding_unit_version?: 'lr-cny-v1'
   /** Whether online topup is enabled */
   enable_online_topup: boolean
   /** Whether Stripe topup is enabled */
@@ -233,6 +238,11 @@ export interface WeChatNativeOrder {
   credited_quota: number
   expires_at: number
   status: TopupStatus
+  funding_asset?: string
+  funding_unit_version?: string
+  /** Exact micro-CNY quantity for shared cash orders. */
+  credit_amount?: string
+  credit_status?: 'pending' | 'applied' | ''
 }
 
 /**
@@ -263,6 +273,8 @@ export interface UserWalletData {
   quota: number
   /** Total used quota */
   used_quota: number
+  /** Authoritative shared cash; quota fields remain product quota units. */
+  funding?: UnifiedCashFunding
   /** Total request count */
   request_count: number
   /** Affiliate quota (pending rewards) */
@@ -284,6 +296,8 @@ export type TopupStatus = 'success' | 'pending' | 'failed' | 'expired'
  * Topup billing record
  */
 export interface TopupRecord {
+  funding_asset?: 'CNY/6' | 'LR_QUOTA/0'
+  credit_amount?: string
   /** Record ID */
   id: number
   /** User ID */

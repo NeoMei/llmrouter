@@ -333,8 +333,7 @@ func TestUniHubSessionNativeAuthRegressionMatrix(t *testing.T) {
 	f := newUniHubRegressionFixture(t)
 	bundle, _ := decodeUniHubBundle(t, f.request("POST", "/api/unihub/session", "subject", nil))
 	for _, tc := range []struct{ method, path string }{
-		{"POST", "/api/user/topup"}, {"GET", "/api/user/token"}, {"POST", "/api/token/"},
-		{"POST", "/api/user/chat-credential"}, {"PUT", "/api/user/self"},
+		{"POST", "/api/user/topup"}, {"GET", "/api/user/token"}, {"PUT", "/api/user/self"},
 		{"POST", "/api/user/2fa/setup"}, {"POST", "/api/oauth/email/bind"},
 		{"GET", "/api/user/"},
 		{"GET", "/api/oauth/github"},

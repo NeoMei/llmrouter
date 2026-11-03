@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
@@ -43,6 +45,11 @@ type weChatNativePayRequest struct {
 }
 
 func RequestWeChatNativePay(c *gin.Context) {
+	cash, err := productWalletCash(c)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	if !operation_setting.IsPaymentComplianceConfirmed() {
 		common.ApiErrorMsg(c, "payment compliance confirmation is required")
 		return
@@ -74,6 +81,12 @@ func RequestWeChatNativePay(c *gin.Context) {
 	tradeNo := weChatPayTradeNo(userID, request.IdempotencyKey)
 	topUp, err := model.GetUserWeChatTopUp(userID, tradeNo)
 	if err == nil {
+		if _, managed := authz.ProductPrincipal(c); managed {
+			if _, err = model.GetProductUserWeChatTopUp(c.Request.Context(), userID, tradeNo); err != nil {
+				common.ApiError(c, err)
+				return
+			}
+		}
 		if topUp.PaidAmountMinor != amountMinor || topUp.Currency != "CNY" {
 			common.ApiError(c, model.ErrTopUpOrderConflict)
 			return
@@ -87,14 +100,18 @@ func RequestWeChatNativePay(c *gin.Context) {
 			common.ApiErrorMsg(c, "failed to load WeChat Pay order")
 			return
 		}
-		creditedQuota, quotaErr := service.CalculateWeChatCreditedQuota(
-			amountMinor,
-			decimal.NewFromFloat(operation_setting.USDExchangeRate),
-			decimal.NewFromFloat(common.QuotaPerUnit),
-		)
-		if quotaErr != nil {
-			common.ApiErrorMsg(c, "invalid WeChat Pay top-up conversion")
-			return
+		creditedQuota := 0
+		if !cash {
+			creditedQuota, err = service.CalculateWeChatCreditedQuota(amountMinor, decimal.NewFromFloat(operation_setting.USDExchangeRate), decimal.NewFromFloat(common.QuotaPerUnit))
+			if err != nil {
+				common.ApiErrorMsg(c, "invalid WeChat Pay top-up conversion")
+				return
+			}
+			// Keep the original LR balance preflight outside the checkout transaction.
+			if err = model.ValidateTopUpQuotaCapacity(userID, creditedQuota); err != nil {
+				common.ApiError(c, err)
+				return
+			}
 		}
 		topUp, _, err = model.CreateOrReuseWeChatTopUp(model.WeChatTopUpOrderInput{
 			UserID:        userID,
@@ -109,6 +126,12 @@ func RequestWeChatNativePay(c *gin.Context) {
 		}
 	}
 
+	if _, managed := authz.ProductPrincipal(c); managed {
+		if _, err = model.GetProductUserWeChatTopUp(c.Request.Context(), userID, tradeNo); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
 	createResult, err := provider.CreateNative(c.Request.Context(), service.WeChatPayCreateRequest{
 		OutTradeNo:  topUp.TradeNo,
 		AmountMinor: topUp.PaidAmountMinor,
@@ -138,19 +161,30 @@ func RequestWeChatNativePay(c *gin.Context) {
 }
 
 func writeWeChatTopUpResponse(c *gin.Context, topUp *model.TopUp, codeURL string) {
+	if err := model.PopulateProductTopUpCreditStatuses(c.Request.Context(), []*model.TopUp{topUp}); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	common.ApiSuccess(c, weChatTopUpData(topUp, codeURL))
 }
 
 func weChatTopUpData(topUp *model.TopUp, codeURL string) gin.H {
-	return gin.H{
-		"trade_no":       topUp.TradeNo,
-		"code_url":       codeURL,
-		"amount":         decimal.NewFromInt(topUp.PaidAmountMinor).Shift(-2).StringFixed(2),
-		"currency":       topUp.Currency,
-		"credited_quota": topUp.CreditedQuota,
-		"expires_at":     topUp.CreateTime + model.WeChatTopUpOrderLifetimeSeconds,
-		"status":         topUp.Status,
+	data := gin.H{
+		"trade_no":             topUp.TradeNo,
+		"code_url":             codeURL,
+		"amount":               decimal.NewFromInt(topUp.PaidAmountMinor).Shift(-2).StringFixed(2),
+		"currency":             topUp.Currency,
+		"credited_quota":       topUp.CreditedQuota,
+		"expires_at":           topUp.CreateTime + model.WeChatTopUpOrderLifetimeSeconds,
+		"status":               topUp.Status,
+		"funding_asset":        topUp.FundingAsset,
+		"funding_unit_version": topUp.FundingUnitVersion,
+		"credit_status":        topUp.CreditStatus,
 	}
+	if topUp.FundingAsset == "CNY/6" && topUp.PaidAmountMinor > 0 && topUp.PaidAmountMinor <= math.MaxInt64/10000 {
+		data["credit_amount"] = strconv.FormatInt(topUp.PaidAmountMinor*10000, 10)
+	}
+	return data
 }
 
 func weChatPayTradeNo(userID int, idempotencyKey string) string {
@@ -159,12 +193,22 @@ func weChatPayTradeNo(userID int, idempotencyKey string) string {
 }
 
 func GetWeChatPayOrder(c *gin.Context) {
-	topUp, err := model.GetUserWeChatTopUp(c.GetInt("id"), c.Param("trade_no"))
+	var topUp *model.TopUp
+	var err error
+	if _, managed := authz.ProductPrincipal(c); managed {
+		topUp, err = model.GetProductUserWeChatTopUp(c.Request.Context(), c.GetInt("id"), c.Param("trade_no"))
+	} else {
+		topUp, err = model.GetUserWeChatTopUp(c.GetInt("id"), c.Param("trade_no"))
+	}
 	if err != nil {
 		if errors.Is(err, model.ErrTopUpNotFound) {
 			c.AbortWithStatus(http.StatusNotFound)
 			return
 		}
+		c.AbortWithStatus(http.StatusServiceUnavailable)
+		return
+	}
+	if err = model.PopulateProductTopUpCreditStatuses(c.Request.Context(), []*model.TopUp{topUp}); err != nil {
 		c.AbortWithStatus(http.StatusServiceUnavailable)
 		return
 	}

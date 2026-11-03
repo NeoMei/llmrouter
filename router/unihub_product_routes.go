@@ -10,6 +10,12 @@ import (
 // deployment provisioning keep their separate native/UniHub authority boundaries.
 func registerUniHubProductApplicationRoutes() {
 	use := authz.Permission{Resource: "product", Action: "use"}
+	for _, path := range []string{"/api/user/topup/info", "/api/user/topup/self", "/api/user/wechat-pay/orders/:trade_no", "/api/subscription/plans", "/api/subscription/self"} {
+		middleware.RegisterUniHubManagementRoute(http.MethodGet, path, use)
+	}
+	middleware.RegisterUniHubManagementRoute(http.MethodPost, "/api/user/wechat-pay/native", use)
+	middleware.RegisterUniHubManagementRoute(http.MethodPut, "/api/subscription/self/preference", use)
+	middleware.RegisterUniHubManagementRoute(http.MethodPost, "/api/subscription/balance/pay", use)
 	catalogRead := authz.Permission{Resource: "catalog", Action: "read"}
 	catalogWrite := authz.Permission{Resource: "catalog", Action: "write"}
 	logRead := authz.Permission{Resource: "log", Action: "read"}
@@ -17,6 +23,14 @@ func registerUniHubProductApplicationRoutes() {
 	routingWrite := authz.Permission{Resource: "routing", Action: "write"}
 	for _, path := range []string{"/api/models", "/api/capabilities", "/api/user/self/groups", "/api/user/models", "/api/data/self", "/api/data/flow/self", "/api/log/self", "/api/log/self/search", "/api/log/self/stat", "/api/mj/self", "/api/task/self", "/api/pricing", "/api/ratio_config", "/api/perf-metrics", "/api/perf-metrics/summary"} {
 		middleware.RegisterUniHubManagementRoute(http.MethodGet, path, use)
+	}
+	for _, route := range []struct{ method, path string }{
+		{http.MethodGet, "/api/token/"}, {http.MethodGet, "/api/token/search"}, {http.MethodGet, "/api/token/:id"},
+		{http.MethodPost, "/api/token/"}, {http.MethodPut, "/api/token/"}, {http.MethodDelete, "/api/token/:id"},
+		{http.MethodPost, "/api/token/:id/key"}, {http.MethodPost, "/api/token/batch"}, {http.MethodPost, "/api/token/batch/keys"},
+		{http.MethodPost, "/api/user/chat-credential"}, {http.MethodPut, "/api/user/self"}, {http.MethodPut, "/api/user/setting"},
+	} {
+		middleware.RegisterUniHubManagementRoute(route.method, route.path, use)
 	}
 	for _, path := range []string{"/api/authz/catalog", "/api/group/", "/api/prefill_group/", "/api/models/", "/api/models/search", "/api/models/:id", "/api/vendors/", "/api/vendors/search", "/api/vendors/:id"} {
 		middleware.RegisterUniHubManagementRoute(http.MethodGet, path, catalogRead, authz.ChannelRead)

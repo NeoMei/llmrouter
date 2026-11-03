@@ -53,6 +53,11 @@ func TestNativeBoundaryRealRoutes(t *testing.T) {
 			req.Header.Set("Authorization", "Bearer secret")
 			w := httptest.NewRecorder()
 			r.ServeHTTP(w, req)
+			if route.path == "/api/token/" || route.path == "/api/user/chat-credential" || route.path == "/api/user/topup/info" || route.path == "/api/user/topup/self" || route.path == "/api/user/wechat-pay/native" || route.path == "/api/user/wechat-pay/orders/test" || route.path == "/api/subscription/plans" || route.path == "/api/subscription/self" || route.path == "/api/subscription/self/preference" || route.path == "/api/subscription/balance/pay" {
+				assert.Equal(t, http.StatusUnauthorized, w.Code)
+				assert.Contains(t, w.Body.String(), "UNIHUB_SESSION_REQUIRED")
+				return
+			}
 			require.Equal(t, 403, w.Code)
 			assert.JSONEq(t, `{"success":false,"code":"NATIVE_ACCESS_DISABLED","message":"native identity and billing are managed by UniHub"}`, w.Body.String())
 		})

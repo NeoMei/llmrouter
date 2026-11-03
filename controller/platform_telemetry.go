@@ -74,9 +74,8 @@ func serveProductTelemetryLogs(c *gin.Context, allActors bool) bool {
 		return projected
 	}
 	logs := telemetry.Logs
-	// Product principals have no trustworthy realm attribution for legacy
-	// local rows. Only native authentication may read those rows through the
-	// native handler; product telemetry is sourced solely from its journal.
+	// Original product logs enter only through durable runtime-call provenance.
+	// Unattributed native history never inherits a central principal's access.
 	sort.SliceStable(logs, func(i, j int) bool {
 		if logs[i].CreatedAt == logs[j].CreatedAt {
 			return logs[i].RequestId > logs[j].RequestId

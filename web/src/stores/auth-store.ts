@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { create } from 'zustand'
 
 import type { AdminCapabilities } from '@/lib/admin-permissions'
+import type { UnifiedCashFunding } from '@/lib/funding'
 
 export type UserPermissions = {
   sidebar_settings?: boolean
@@ -39,6 +40,7 @@ export interface AuthUser {
   group?: string
   quota?: number
   used_quota?: number
+  funding?: UnifiedCashFunding
   request_count?: number
   aff_code?: string
   aff_count?: number

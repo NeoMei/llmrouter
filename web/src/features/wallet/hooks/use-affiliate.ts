@@ -30,7 +30,7 @@ import { generateAffiliateLink } from '../lib'
 // Affiliate Hook
 // ============================================================================
 
-export function useAffiliate() {
+export function useAffiliate(enabled = true) {
   const [affiliateCode, setAffiliateCode] = useState<string>('')
   const [affiliateLink, setAffiliateLink] = useState<string>('')
   const [loading, setLoading] = useState(true)
@@ -39,6 +39,10 @@ export function useAffiliate() {
 
   // Fetch affiliate code
   const fetchAffiliateCode = useCallback(async () => {
+    if (!enabled) {
+      setLoading(false)
+      return
+    }
     try {
       setLoading(true)
       const response = await getAffiliateCode()
@@ -54,7 +58,7 @@ export function useAffiliate() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [enabled])
 
   // Copy affiliate link
   const copyAffiliateLink = useCallback(() => {
@@ -62,26 +66,30 @@ export function useAffiliate() {
   }, [affiliateLink, copyToClipboard])
 
   // Transfer affiliate quota to balance
-  const transferQuota = useCallback(async (quota: number): Promise<boolean> => {
-    try {
-      setTransferring(true)
-      const response = await transferAffiliateQuota({ quota })
+  const transferQuota = useCallback(
+    async (quota: number): Promise<boolean> => {
+      if (!enabled) return false
+      try {
+        setTransferring(true)
+        const response = await transferAffiliateQuota({ quota })
 
-      if (response.success) {
-        toast.success(response.message || i18next.t('Transfer successful'))
-        await getSelf()
-        return true
+        if (response.success) {
+          toast.success(response.message || i18next.t('Transfer successful'))
+          await getSelf()
+          return true
+        }
+
+        toast.error(response.message || i18next.t('Transfer failed'))
+        return false
+      } catch {
+        toast.error(i18next.t('Transfer failed'))
+        return false
+      } finally {
+        setTransferring(false)
       }
-
-      toast.error(response.message || i18next.t('Transfer failed'))
-      return false
-    } catch {
-      toast.error(i18next.t('Transfer failed'))
-      return false
-    } finally {
-      setTransferring(false)
-    }
-  }, [])
+    },
+    [enabled]
+  )
 
   useEffect(() => {
     fetchAffiliateCode()

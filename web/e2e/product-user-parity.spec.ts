@@ -4,7 +4,8 @@ async function fixture(
   page: Page,
   source: 'native' | 'unihub',
   role = 1,
-  anonymous = false
+  anonymous = false,
+  funding?: { available: string; held: string; consumed: string }
 ) {
   const requests: string[] = []
   const writes: Record<string, unknown>[] = []
@@ -99,7 +100,9 @@ async function fixture(
           register_enabled: true,
           password_login_enabled: true,
           default_use_auto_group: true,
-          display_in_currency: false,
+          display_in_currency: Boolean(funding),
+          quota_display_type: 'USD',
+          usd_exchange_rate: 7,
           quota_per_unit: 500000,
           SidebarModulesAdmin: '',
           announcements_enabled: false,
@@ -113,8 +116,22 @@ async function fixture(
         },
       }
     } else if (path === '/api/notice') body = { success: true, data: '' }
-    else if (path === '/api/user/self') body = { success: true, data: user }
-    else if (path === '/api/token/') {
+    else if (path === '/api/user/self') {
+      body = {
+        success: true,
+        data: {
+          ...user,
+          ...(funding && {
+            funding: {
+              mode: 'unified_cash',
+              asset: 'CNY/6',
+              unit_version: 'lr-cny-v1',
+              ...funding,
+            },
+          }),
+        },
+      }
+    } else if (path === '/api/token/') {
       if (route.request().method() === 'POST') {
         writes.push(route.request().postDataJSON() as Record<string, unknown>)
         body = { success: true }
@@ -164,18 +181,249 @@ async function fixture(
   return { requests, writes }
 }
 
+for (const balance of [
+  { available: '9007199254740993123', display: '9007199254740.993123 CNY' },
+  { available: '0', display: '0.000000 CNY' },
+]) {
+  test(`shared cash ${balance.available} is exact on the original overview and wallet`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    const { requests } = await fixture(page, 'unihub', 1, false, {
+      available: balance.available,
+      held: '1200001',
+      consumed: '2500002',
+    })
+    await page.goto('/dashboard/overview')
+    await expect(page.getByText(balance.display, { exact: true })).toBeVisible()
+    const cashBox = await page
+      .getByText(balance.display, { exact: true })
+      .boundingBox()
+    if (!cashBox) throw new Error('Cash balance must have a visible layout box')
+    expect(cashBox.x + cashBox.width).toBeLessThanOrEqual(390)
+    await expect(
+      page.getByText('Shared cash balance', { exact: true })
+    ).toBeVisible()
+    await expect(page.getByText('1.200001 CNY', { exact: true })).toBeVisible()
+    await expect(
+      page.getByText('500,000 LR_QUOTA', { exact: true })
+    ).toBeVisible()
+    await expect(page.getByText('Runway', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('$10', { exact: true })).toHaveCount(0)
+    await page.goto('/wallet')
+    await expect(page.getByText(balance.display, { exact: true })).toBeVisible()
+    await expect(
+      page.getByText('Shared cash balance', { exact: true })
+    ).toBeVisible()
+    await expect(
+      page.getByText('Referral Program', { exact: true })
+    ).toHaveCount(0)
+    expect(requests).not.toContain('/api/user/aff')
+    expect(requests).not.toContain('/api/user/amount')
+    await expect(
+      page.getByText('Product quota usage', { exact: true })
+    ).toBeVisible()
+    await expect(
+      page.getByText('500,000 LR_QUOTA', { exact: true })
+    ).toBeVisible()
+    await expect(page.getByText('$10', { exact: true })).toHaveCount(0)
+  })
+}
+
+test('cash administrator uses original personal order history with exact CNY amounts', async ({
+  page,
+}) => {
+  const { requests } = await fixture(page, 'unihub', 10, false, {
+    available: '1000000',
+    held: '0',
+    consumed: '0',
+  })
+  await page.route('**/api/user/topup/self**', async (route) => {
+    requests.push(new URL(route.request().url()).pathname)
+    await route.fulfill({
+      json: {
+        success: true,
+        data: {
+          items: [
+            {
+              id: 1,
+              user_id: 42,
+              amount: 0,
+              money: 1.23,
+              trade_no: 'cash-order',
+              payment_method: 'wechat_native',
+              payment_provider: 'wechat_pay',
+              create_time: 1,
+              status: 'success',
+              currency: 'CNY',
+              paid_amount_minor: 123,
+              funding_asset: 'CNY/6',
+              credit_amount: '1230000',
+              credit_status: 'applied',
+            },
+          ],
+          total: 1,
+          page: 1,
+          page_size: 10,
+        },
+      },
+    })
+  })
+  await page.goto('/wallet')
+  await expect(
+    page.getByText('Shared cash balance', { exact: true })
+  ).toBeVisible()
+  expect(requests).not.toContain('/api/user/topup/self')
+  await page.getByRole('button', { name: 'Order History', exact: true }).click()
+  await expect(
+    page.getByRole('dialog', { name: 'Billing History', exact: true })
+  ).toBeVisible()
+  await expect(page.getByText('cash-order', { exact: true })).toBeVisible()
+  await expect(page.getByText('1.230000 CNY', { exact: true })).toHaveCount(2)
+  expect(requests).toContain('/api/user/topup/self')
+  expect(requests).not.toContain('/api/user/topup')
+  await expect(
+    page.getByRole('button', { name: 'Complete Order', exact: true })
+  ).toHaveCount(0)
+})
+
+test('cash WeChat payment waits for ledger delivery and refreshes balance once without creating another order', async ({
+  page,
+}) => {
+  const funding = { available: '1000000', held: '0', consumed: '0' }
+  const { requests } = await fixture(page, 'unihub', 1, false, funding)
+  await page.route('**/api/user/topup/info', (route) =>
+    route.fulfill({
+      json: {
+        success: true,
+        data: {
+          funding_mode: 'unified_cash',
+          funding_asset: 'CNY/6',
+          funding_unit_version: 'lr-cny-v1',
+          enable_wechat_pay: true,
+          wechat_pay_min_amount: '1.00',
+          wechat_pay_max_amount: '5000.00',
+          enable_redemption: false,
+          enable_affiliate_transfer: false,
+          min_topup: 1,
+          amount_options: [],
+          discount: {},
+          pay_methods: [],
+        },
+      },
+    })
+  )
+  const order = {
+    trade_no: 'cash-payment',
+    code_url: 'weixin://wxpay/bizpayurl?pr=cash-payment',
+    amount: '1.00',
+    currency: 'CNY',
+    credited_quota: 0,
+    funding_asset: 'CNY/6',
+    funding_unit_version: 'lr-cny-v1',
+    credit_amount: '1000000',
+    expires_at: Math.floor(Date.now() / 1000) + 3600,
+  }
+  const creates: Record<string, unknown>[] = []
+  let orderReads = 0
+  let releaseCredit = () => {}
+  const ledgerReady = new Promise<void>((resolve) => {
+    releaseCredit = resolve
+  })
+  await page.route('**/api/user/wechat-pay/native', async (route) => {
+    expect(route.request().method()).toBe('POST')
+    creates.push(route.request().postDataJSON() as Record<string, unknown>)
+    await route.fulfill({
+      json: {
+        success: true,
+        data: { ...order, status: 'pending', credit_status: 'pending' },
+      },
+    })
+  })
+  await page.route(
+    '**/api/user/wechat-pay/orders/cash-payment',
+    async (route) => {
+      expect(route.request().method()).toBe('GET')
+      orderReads++
+      if (orderReads > 1) {
+        await ledgerReady
+        funding.available = '2000000'
+      }
+      await route.fulfill({
+        json: {
+          success: true,
+          data: {
+            ...order,
+            status: 'success',
+            credit_status: orderReads > 1 ? 'applied' : 'pending',
+          },
+        },
+      })
+    }
+  )
+  try {
+    await page.goto('/wallet')
+    await expect(page.getByText('1.000000 CNY', { exact: true })).toBeVisible()
+    await page.getByLabel('CNY amount', { exact: true }).fill('1.00')
+    const selfReadsBeforePayment = requests.filter(
+      (path) => path === '/api/user/self'
+    ).length
+    await page
+      .getByRole('button', { name: 'Create WeChat Pay QR code', exact: true })
+      .click()
+    const dialog = page.getByRole('dialog', { name: 'Scan with WeChat Pay' })
+    await expect(
+      dialog.getByText(
+        'Payment confirmed. Balance credit is pending. Do not pay again.',
+        { exact: true }
+      )
+    ).toBeVisible()
+    const successToasts = page
+      .locator('[data-sonner-toast][data-type="success"]')
+      .filter({ hasText: 'Payment successful' })
+    await expect(successToasts).toHaveCount(1)
+    await expect.poll(() => orderReads).toBe(2)
+    expect(requests.filter((path) => path === '/api/user/self')).toHaveLength(
+      selfReadsBeforePayment
+    )
+    await expect(
+      dialog.getByRole('button', { name: 'Retry QR code' })
+    ).toHaveCount(0)
+    releaseCredit()
+    await expect(page.getByText('2.000000 CNY', { exact: true })).toBeVisible()
+    await expect(
+      dialog.getByText('Payment successful', { exact: true })
+    ).toBeVisible()
+    await expect(successToasts).toHaveCount(1)
+    expect(requests.filter((path) => path === '/api/user/self')).toHaveLength(
+      selfReadsBeforePayment + 1
+    )
+    expect(creates).toHaveLength(1)
+    expect(creates[0]).toMatchObject({ amount: '1.00' })
+    expect(creates[0]?.idempotency_key).toEqual(expect.any(String))
+    expect(creates[0]?.idempotency_key).not.toBe('')
+    await dialog
+      .getByRole('button', { name: 'Close', exact: true })
+      .last()
+      .click()
+    expect(creates).toHaveLength(1)
+  } finally {
+    releaseCredit()
+  }
+})
+
 for (const source of ['native', 'unihub'] as const) {
   test(`${source} member creates keys with the complete original policy form`, async ({
     page,
   }) => {
     const { requests, writes } = await fixture(page, source)
     await page.goto('/keys')
-    if (source === 'unihub') {
-      await page.getByRole('button', { name: 'Local · API Keys' }).click()
-    }
     await expect(
       page.getByRole('heading', { name: 'API Keys', exact: true })
     ).toBeVisible()
+    await expect(
+      page.getByRole('button', { name: /^Local ·|^UniHub account$/ })
+    ).toHaveCount(0)
     await page
       .getByRole('button', { name: 'Create API Key', exact: true })
       .click()
@@ -221,14 +469,18 @@ for (const source of ['native', 'unihub'] as const) {
   }) => {
     await fixture(page, source)
     await page.goto('/dashboard/overview')
-    if (source === 'unihub') {
-      await page.getByRole('button', { name: 'Local · Overview' }).click()
-    }
     await expect(
       page.getByText('Monitor balance, usage, and request volume', {
         exact: true,
       })
     ).toBeVisible()
+    await expect(
+      page.getByText('Credit remaining', { exact: true })
+    ).toBeVisible()
+    await expect(page.getByText('$10', { exact: true })).toBeVisible()
+    await expect(
+      page.getByRole('button', { name: /^Local ·|^UniHub account$/ })
+    ).toHaveCount(0)
     await expect(
       page.locator('[data-slot="sidebar"] a[href="/wallet"]')
     ).toBeVisible()
@@ -236,12 +488,19 @@ for (const source of ['native', 'unihub'] as const) {
       page.locator('[data-slot="sidebar"] a[href="/profile"]')
     ).toBeVisible()
     await page.goto('/wallet')
-    if (source === 'unihub') {
-      await page.getByRole('button', { name: 'Local · Wallet' }).click()
-    }
     await expect(
       page.getByRole('heading', { name: 'Wallet', exact: true })
     ).toBeVisible()
+    await expect(
+      page.getByRole('button', { name: 'Order History', exact: true })
+    ).toBeVisible()
+    await expect(
+      page.getByText('Current Balance', { exact: true })
+    ).toBeVisible()
+    await expect(page.getByText('$10', { exact: true })).toBeVisible()
+    await expect(
+      page.getByRole('button', { name: /^Local ·|^UniHub account$/ })
+    ).toHaveCount(0)
     await expect(page).toHaveURL(/\/wallet$/)
   })
 }
@@ -324,9 +583,13 @@ for (const source of ['native', 'unihub'] as const) {
       })
     )
     await page.goto('/usage-logs/common')
-    if (source === 'unihub') {
-      await page.getByRole('button', { name: 'Local · Common Logs' }).click()
-    }
+    await expect(
+      page.getByRole('heading', { name: 'Common Logs', exact: true })
+    ).toBeVisible()
+    await expect(page.getByRole('table')).toBeVisible()
+    await expect(
+      page.getByRole('button', { name: /^Local ·|^UniHub account$/ })
+    ).toHaveCount(0)
     await expect(
       page.getByText('Native usage and receipts', { exact: true })
     ).toBeVisible()
@@ -428,9 +691,6 @@ for (const source of ['native', 'unihub'] as const) {
       })
     })
     await page.goto('/wallet')
-    if (source === 'unihub') {
-      await page.getByRole('button', { name: 'Local · Wallet' }).click()
-    }
     await page
       .getByRole('button', { name: 'Subscribe Now', exact: true })
       .click()
@@ -443,9 +703,6 @@ for (const source of ['native', 'unihub'] as const) {
     ).toBeEnabled()
     expect(keys[0]).not.toBe('')
     await page.reload()
-    if (source === 'unihub') {
-      await page.getByRole('button', { name: 'Local · Wallet' }).click()
-    }
     await page
       .getByRole('button', { name: 'Subscribe Now', exact: true })
       .click()

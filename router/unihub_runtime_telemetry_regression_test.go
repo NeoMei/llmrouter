@@ -115,9 +115,9 @@ func TestRuntimeTelemetryUsesVerifiedActorAndPreservesNativeHistory(t *testing.T
 				found[entry.RequestId] = true
 			}
 			assert.Equal(t, map[string]bool{"own-central": true, "own-stream": true}, found)
-			// Current technical telemetry is limited to a 30-day range. Exceeding
-			// that limit returns an API error instead of silently widening scope.
-			longRange := fmt.Sprintf("?start_timestamp=%d&end_timestamp=%d", now.Unix()-2592001, now.Unix())
+			// Original month/custom filters are internally chunked. Extreme
+			// externally supplied ranges still have a bounded query budget.
+			longRange := fmt.Sprintf("?start_timestamp=%d&end_timestamp=%d", now.Unix()-128*(2592000+1), now.Unix())
 			tooLong := f.request("GET", "/api/log/self"+longRange, managedSession.AccessToken, nil)
 			require.Equal(t, 200, tooLong.Code)
 			var failure struct {

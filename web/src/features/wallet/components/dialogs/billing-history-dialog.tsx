@@ -47,6 +47,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { formatCurrencyFromUSD } from '@/lib/currency'
 import { formatNumber } from '@/lib/format'
+import { exactAmount } from '@/lib/funding'
 
 import { useBillingHistory } from '../../hooks/use-billing-history'
 import {
@@ -78,7 +79,7 @@ export function BillingHistoryDialog({
     handlePageSizeChange,
     handleSearch,
     handleCompleteOrder,
-  } = useBillingHistory()
+  } = useBillingHistory({ enabled: open })
 
   const [confirmTradeNo, setConfirmTradeNo] = useState<string | null>(null)
   const { copyToClipboard, copiedText } = useCopyToClipboard({ notify: false })
@@ -231,7 +232,9 @@ export function BillingHistoryDialog({
                           role='status'
                           className='mt-2 text-xs text-amber-700 dark:text-amber-400'
                         >
-                          {t('支付已确认，额度正在入账，请勿重复支付')}
+                          {t(
+                            'Payment confirmed. Balance credit is pending. Do not pay again.'
+                          )}
                         </p>
                       )}
 
@@ -250,11 +253,14 @@ export function BillingHistoryDialog({
                             {t('Amount')}
                           </Label>
                           <div className='text-sm font-semibold'>
-                            {formatCurrencyFromUSD(record.amount, {
-                              digitsLarge: 2,
-                              digitsSmall: 2,
-                              abbreviate: false,
-                            })}
+                            {record.funding_asset === 'CNY/6'
+                              ? record.credit_amount &&
+                                exactAmount(record.credit_amount, 'CNY/6')
+                              : formatCurrencyFromUSD(record.amount, {
+                                  digitsLarge: 2,
+                                  digitsSmall: 2,
+                                  abbreviate: false,
+                                })}
                           </div>
                         </div>
                         <div className='space-y-1'>
@@ -262,7 +268,10 @@ export function BillingHistoryDialog({
                             {t('Payment')}
                           </Label>
                           <div className='text-sm font-semibold text-red-600'>
-                            {formatNumber(record.money)}
+                            {record.funding_asset === 'CNY/6'
+                              ? record.credit_amount &&
+                                exactAmount(record.credit_amount, 'CNY/6')
+                              : formatNumber(record.money)}
                           </div>
                         </div>
                       </div>

@@ -11,6 +11,12 @@ import (
 	"time"
 )
 
+// UnifiedCashFundingEnabled changes only new financial admissions and current
+// balance reads. Outstanding calls retain their frozen original contract.
+func UnifiedCashFundingEnabled() bool {
+	return os.Getenv("UNIHUB_PRODUCT_FUNDING_MODE") == "unified_cash"
+}
+
 func RuntimeEnabled() bool { return os.Getenv("UNIHUB_PRODUCT_RUNTIME_ENABLED") == "true" }
 
 // FinanceEnabled is a separate deployment gate; a runtime identity alone

@@ -210,3 +210,17 @@ test('a current access refresh applies the effective product role and original b
     useAuthStore.getState().auth.reset()
   }
 })
+
+test('explicit native login suppresses silent UniHub SSO', async () => {
+  const { silentProductLoginURL } = await import('../sso')
+  const storage = new Map<string, string>()
+  assert.equal(
+    silentProductLoginURL(true, '?native=1', '/dashboard', {
+      getItem: (key) => storage.get(key) ?? null,
+      setItem: (key, value) => {
+        storage.set(key, value)
+      },
+    }),
+    null
+  )
+})

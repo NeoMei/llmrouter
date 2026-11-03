@@ -21,7 +21,7 @@ import { t } from 'i18next'
 import { applyAuthBundle, getAuthEpoch, isAuthBundle } from '@/lib/auth-session'
 import { useAuthStore, type AuthBundle } from '@/stores/auth-store'
 
-import type { Account, Registration, User } from './sdk'
+import type { Account, MfaContext, Registration, User } from './sdk'
 import type { ProductSession } from './session'
 
 export async function revokeRejectedSession(bundle: AuthBundle): Promise<void> {
@@ -42,14 +42,27 @@ export async function revokeRejectedSession(bundle: AuthBundle): Promise<void> {
 
 export async function authorizeProductSession(
   session: ProductSession,
-  body: Registration
+  body: Registration | { mfa: MfaContext; passcode: string },
+  attempt = {
+    authEpoch: getAuthEpoch(),
+    originalSID: useAuthStore.getState().auth.session?.sid,
+  }
 ): Promise<{ user: User; accounts: Account[] }> {
-  const authEpoch = getAuthEpoch()
-  const originalSID = useAuthStore.getState().auth.session?.sid
+  const { authEpoch, originalSID } = attempt
+  const productEpoch = session.epoch
+  if (
+    authEpoch !== getAuthEpoch() ||
+    originalSID !== useAuthStore.getState().auth.session?.sid
+  ) {
+    throw new Error(t('Login flow expired. Please sign in again.'))
+  }
   let bundle: AuthBundle | null = null
   try {
     const result = await session.bound(async () => {
-      const tokens = await session.client.passwordLogin(body)
+      const tokens =
+        'mfa' in body
+          ? await session.client.mfaLogin(body.mfa, body.passcode)
+          : await session.client.passwordLogin(body)
       session.expire(tokens.expires_in)
       const proofResponse = await fetch('/api/unihub/identity', {
         method: 'POST',
@@ -90,7 +103,8 @@ export async function authorizeProductSession(
     })
     if (
       authEpoch !== getAuthEpoch() ||
-      originalSID !== useAuthStore.getState().auth.session?.sid
+      originalSID !== useAuthStore.getState().auth.session?.sid ||
+      productEpoch !== session.epoch
     ) {
       throw new Error(t('Product identity proof rejected'))
     }

@@ -17,10 +17,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import axios from 'axios'
 import { Loader2, LogIn, KeyRound } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -48,8 +48,18 @@ import { useAuthRedirect } from '@/features/auth/hooks/use-auth-redirect'
 import { useTurnstile } from '@/features/auth/hooks/use-turnstile'
 import { beginPasskeyLogin, finishPasskeyLogin } from '@/features/auth/passkey'
 import type { AuthFormProps } from '@/features/auth/types'
+import { authorizeProductSession } from '@/features/unihub/native-session'
+import {
+  MfaPendingError,
+  UniHubClient,
+  UniHubError,
+  type MfaContext,
+} from '@/features/unihub/sdk'
+import { ProductSession, type ProductConfig } from '@/features/unihub/session'
+import { safeProductReturn, startProductLogin } from '@/features/unihub/sso'
 import { useStatus } from '@/hooks/use-status'
 import { isAuthBundle } from '@/lib/api'
+import { getAuthEpoch } from '@/lib/auth-session'
 import {
   buildAssertionResult,
   prepareCredentialRequestOptions,
@@ -62,10 +72,26 @@ import { useAuthStore } from '@/stores/auth-store'
 export function UserAuthForm({
   className,
   redirectTo,
+  productConfig,
   ...props
-}: AuthFormProps) {
+}: AuthFormProps & { productConfig: ProductConfig | null }) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
+  const productLogin = useRef<ProductSession | null>(null)
+  useEffect(
+    () => () => {
+      productLogin.current?.clear()
+      productLogin.current = null
+    },
+    []
+  )
   const [isLoading, setIsLoading] = useState(false)
+  const [pendingMfa, setPendingMfa] = useState<{
+    session: ProductSession
+    context: MfaContext
+    attempt: { authEpoch: number; originalSID: string | undefined }
+  } | null>(null)
+  const [passcode, setPasscode] = useState('')
   const [wechatCode, setWeChatCode] = useState('')
   const [agreedToLegal, setAgreedToLegal] = useState(false)
   const [passkeySupported, setPasskeySupported] = useState(false)
@@ -80,6 +106,7 @@ export function UserAuthForm({
     status?.passkey_login ?? status?.data?.passkey_login
   )
   const passwordLoginEnabled =
+    productConfig !== null ||
     (status?.password_login_enabled ??
       status?.data?.password_login_enabled ??
       true) !== false
@@ -156,10 +183,56 @@ export function UserAuthForm({
       return
     }
 
-    if (!validateTurnstile()) return
+    if (!productConfig && !validateTurnstile()) return
 
     setIsLoading(true)
     try {
+      if (productConfig) {
+        const session: ProductSession = new ProductSession(
+          new UniHubClient({
+            baseUrl: productConfig.public_origin,
+            clientId: productConfig.client_id,
+            redirectUri: productConfig.redirect_uri,
+            fetch: (input, init) =>
+              fetch(input, { ...init, signal: session.signal }),
+          })
+        )
+        productLogin.current = session
+        const attempt = {
+          authEpoch: getAuthEpoch(),
+          originalSID: useAuthStore.getState().auth.session?.sid,
+        }
+        try {
+          await authorizeProductSession(
+            session,
+            { username: data.username, password: data.password },
+            attempt
+          )
+          productLogin.current = null
+          session.clear()
+          await navigate({ href: safeProductReturn(redirectTo), replace: true })
+          toast.success(t('Welcome back!'))
+        } catch (error) {
+          if (productLogin.current !== session) return
+          if (error instanceof MfaPendingError) {
+            setPendingMfa({ session, context: error.mfa, attempt })
+          } else {
+            productLogin.current = null
+            session.clear()
+            if (
+              error instanceof UniHubError &&
+              error.code === 'interaction_required'
+            ) {
+              startProductLogin(redirectTo ?? '/dashboard')
+            } else {
+              toast.error(loginFailedMessage)
+            }
+          }
+        } finally {
+          form.resetField('password')
+        }
+        return
+      }
       const res = await login({
         username: data.username,
         password: data.password,
@@ -185,6 +258,54 @@ export function UserAuthForm({
     } catch (error: unknown) {
       if (axios.isAxiosError(error)) return
       toast.error(error instanceof Error ? error.message : loginFailedMessage)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  async function submitMfa(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!pendingMfa || !/^\d{6}$/.test(passcode)) return
+    setIsLoading(true)
+    try {
+      await authorizeProductSession(
+        pendingMfa.session,
+        { mfa: pendingMfa.context, passcode },
+        pendingMfa.attempt
+      )
+      productLogin.current = null
+      pendingMfa.session.clear()
+      setPendingMfa(null)
+      setPasscode('')
+      await navigate({ href: safeProductReturn(redirectTo), replace: true })
+      toast.success(t('Welcome back!'))
+    } catch (error) {
+      if (productLogin.current !== pendingMfa.session) return
+      setPasscode('')
+      if (
+        pendingMfa.attempt.authEpoch !== getAuthEpoch() ||
+        pendingMfa.attempt.originalSID !==
+          useAuthStore.getState().auth.session?.sid
+      ) {
+        pendingMfa.session.clear()
+        productLogin.current = null
+        setPendingMfa(null)
+        toast.error(t('Login flow expired. Please sign in again.'))
+        return
+      }
+      if (error instanceof UniHubError && error.code === 'invalid_mfa_token') {
+        pendingMfa.session.clear()
+        productLogin.current = null
+        setPendingMfa(null)
+        toast.error(t('Login flow expired. Please sign in again.'))
+      } else if (
+        error instanceof UniHubError &&
+        error.code === 'interaction_required'
+      ) {
+        startProductLogin(redirectTo ?? '/dashboard')
+      } else {
+        toast.error(loginFailedMessage)
+      }
     } finally {
       setIsLoading(false)
     }
@@ -341,6 +462,40 @@ export function UserAuthForm({
     </>
   )
 
+  if (pendingMfa) {
+    return (
+      <form onSubmit={submitMfa} className={cn('grid gap-4', className)}>
+        <Label htmlFor='unihub-passcode'>{t('Verification code')}</Label>
+        <Input
+          id='unihub-passcode'
+          inputMode='numeric'
+          autoComplete='one-time-code'
+          pattern='[0-9]{6}'
+          maxLength={6}
+          value={passcode}
+          onChange={(event) => setPasscode(event.target.value)}
+          required
+        />
+        <Button type='submit' disabled={isLoading}>
+          {t('Sign in')}
+        </Button>
+        <Button
+          type='button'
+          variant='outline'
+          disabled={isLoading}
+          onClick={() => {
+            pendingMfa.session.clear()
+            productLogin.current = null
+            setPendingMfa(null)
+            setPasscode('')
+          }}
+        >
+          {t('Cancel')}
+        </Button>
+      </form>
+    )
+  }
+
   return (
     <Form {...form}>
       <form
@@ -358,10 +513,16 @@ export function UserAuthForm({
               name='username'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t('Username or Email')}</FormLabel>
+                  <FormLabel>
+                    {productConfig ? t('Username') : t('Username or Email')}
+                  </FormLabel>
                   <FormControl>
                     <Input
-                      placeholder={t('Enter your username or email')}
+                      placeholder={
+                        productConfig
+                          ? t('Enter your username')
+                          : t('Enter your username or email')
+                      }
                       {...field}
                     />
                   </FormControl>
@@ -384,12 +545,14 @@ export function UserAuthForm({
                     />
                   </FormControl>
                   <FormMessage />
-                  <Link
-                    to='/forgot-password'
-                    className='text-muted-foreground absolute end-0 -top-0.5 z-10 text-sm font-medium hover:opacity-75'
-                  >
-                    {t('Forgot password?')}
-                  </Link>
+                  {!productConfig && (
+                    <Link
+                      to='/forgot-password'
+                      className='text-muted-foreground absolute end-0 -top-0.5 z-10 text-sm font-medium hover:opacity-75'
+                    >
+                      {t('Forgot password?')}
+                    </Link>
+                  )}
                 </FormItem>
               )}
             />
@@ -405,7 +568,7 @@ export function UserAuthForm({
             </Button>
 
             {/* Turnstile */}
-            {isTurnstileEnabled && (
+            {!productConfig && isTurnstileEnabled && (
               <div className='mt-2'>
                 <Turnstile
                   siteKey={turnstileSiteKey}

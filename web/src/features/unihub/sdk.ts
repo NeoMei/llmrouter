@@ -78,6 +78,17 @@ export interface TokenSet {
   scope: string
   expires_in: number
 }
+export interface MfaContext {
+  token: string
+  verifier: string
+}
+
+export class MfaPendingError extends Error {
+  constructor(readonly mfa: MfaContext) {
+    super('mfa_pending')
+    this.name = 'MfaPendingError'
+  }
+}
 export interface User {
   id: string
   name: string
@@ -572,6 +583,9 @@ export class UniHubClient {
       authorization_id: string
       code: string
       state: string
+      error?: string
+      mfa_token?: string
+      expires_in?: number
     }>(
       'POST',
       '/v1/identity/authorize/password',
@@ -590,6 +604,17 @@ export class UniHubClient {
       },
       false
     )
+    if (auth?.error === 'mfa_pending') {
+      if (
+        typeof auth.mfa_token !== 'string' ||
+        !/^[A-Za-z0-9_-]{43}$/.test(auth.mfa_token) ||
+        !Number.isInteger(auth.expires_in) ||
+        (auth.expires_in ?? 0) <= 0
+      ) {
+        throw new UniHubError(502, 'invalid_authorization_response', undefined)
+      }
+      throw new MfaPendingError({ token: auth.mfa_token, verifier })
+    }
     if (
       auth?.state !== state ||
       typeof auth.authorization_id !== 'string' ||
@@ -599,16 +624,56 @@ export class UniHubClient {
     ) {
       throw new UniHubError(502, 'invalid_authorization_response', undefined)
     }
+    return this.exchangeAuthorization(
+      auth.authorization_id,
+      auth.code,
+      verifier
+    )
+  }
+  async mfaLogin(mfa: MfaContext, passcode: string): Promise<TokenSet> {
+    if (
+      !mfa ||
+      !/^[A-Za-z0-9_-]{43}$/.test(mfa.token) ||
+      !/^[A-Za-z0-9._~-]{43,128}$/.test(mfa.verifier) ||
+      !/^[0-9]{6}$/.test(passcode)
+    ) {
+      throw new UniHubError(400, 'invalid_request', undefined)
+    }
+    const auth = await this.perform<{ authorization_id: string; code: string }>(
+      'POST',
+      '/v1/identity/authorize/mfa',
+      { body: { client_id: this.clientId, mfa_token: mfa.token, passcode } },
+      false
+    )
+    if (
+      typeof auth?.authorization_id !== 'string' ||
+      !/^[A-Za-z0-9_-]{43}$/.test(auth.authorization_id) ||
+      typeof auth.code !== 'string' ||
+      !/^[0-9a-f]{64}$/.test(auth.code)
+    ) {
+      throw new UniHubError(502, 'invalid_authorization_response', undefined)
+    }
+    return this.exchangeAuthorization(
+      auth.authorization_id,
+      auth.code,
+      mfa.verifier
+    )
+  }
+  private async exchangeAuthorization(
+    authorizationId: string,
+    code: string,
+    verifier: string
+  ): Promise<TokenSet> {
     const tokens = await this.perform<TokenSet>(
       'POST',
       '/v1/identity/token',
       {
         body: {
           grant_type: 'authorization_code',
-          authorization_id: auth.authorization_id,
+          authorization_id: authorizationId,
           client_id: this.clientId,
           redirect_uri: this.redirectUri,
-          code: auth.code,
+          code,
           code_verifier: verifier,
         },
       },

@@ -17,10 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Link, useSearch } from '@tanstack/react-router'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { silentProductLoginURL } from '@/features/unihub/sso'
+import { Button } from '@/components/ui/button'
+import { UniHubClient } from '@/features/unihub/sdk'
+import type { ProductConfig } from '@/features/unihub/session'
+import { silentProductLoginURL, startProductLogin } from '@/features/unihub/sso'
 import { useStatus } from '@/hooks/use-status'
 import { isSessionSelectionCleared } from '@/lib/auth-selection'
 
@@ -33,9 +36,20 @@ export function SignIn() {
   const { t } = useTranslation()
   const { redirect } = useSearch({ from: '/(auth)/sign-in' })
   const { status } = useStatus()
+  const [config, setConfig] = useState<ProductConfig | null | undefined>(
+    undefined
+  )
+  const [configFailed, setConfigFailed] = useState(false)
+  const [configAttempt, setConfigAttempt] = useState(0)
 
   useEffect(() => {
-    if (isSessionSelectionCleared()) return
+    if (new URLSearchParams(window.location.search).get('native') === '1') {
+      setConfig(null)
+      setConfigFailed(false)
+      return
+    }
+    setConfigFailed(false)
+    setConfig(undefined)
     const controller = new AbortController()
     void fetch('/api/unihub/config', {
       credentials: 'same-origin',
@@ -43,13 +57,43 @@ export function SignIn() {
       signal: controller.signal,
     })
       .then(async (response) => {
-        if (!response.ok) return
-        const config = (await response.json()) as {
-          enabled?: boolean
-          browser_sso_enabled?: boolean
+        if (!response.ok) throw new Error('configuration unavailable')
+        const config = (await response.json()) as ProductConfig
+        if (
+          typeof config.enabled !== 'boolean' ||
+          (config.browser_sso_enabled !== undefined &&
+            typeof config.browser_sso_enabled !== 'boolean') ||
+          (config.native_access !== undefined &&
+            typeof config.native_access !== 'boolean')
+        ) {
+          throw new Error('invalid configuration')
+        }
+        if (config.enabled || config.browser_sso_enabled) {
+          if (
+            typeof config.public_origin !== 'string' ||
+            typeof config.client_id !== 'string' ||
+            typeof config.redirect_uri !== 'string' ||
+            new URL(config.redirect_uri).origin !== window.location.origin
+          ) {
+            throw new Error('invalid configuration')
+          }
+          new UniHubClient({
+            baseUrl: config.public_origin,
+            clientId: config.client_id,
+            redirectUri: config.redirect_uri,
+          })
+        }
+        if (!controller.signal.aborted) {
+          setConfig(
+            (config.enabled || config.browser_sso_enabled) &&
+              new URLSearchParams(window.location.search).get('native') !== '1'
+              ? config
+              : null
+          )
         }
         if (
           controller.signal.aborted ||
+          isSessionSelectionCleared() ||
           document.activeElement?.matches('input')
         ) {
           return
@@ -62,9 +106,11 @@ export function SignIn() {
         )
         if (target) window.location.replace(target)
       })
-      .catch(() => {})
+      .catch(() => {
+        if (!controller.signal.aborted) setConfigFailed(true)
+      })
     return () => controller.abort()
-  }, [redirect])
+  }, [redirect, configAttempt])
 
   return (
     <AuthLayout>
@@ -88,7 +134,38 @@ export function SignIn() {
             )}
         </div>
 
-        <UserAuthForm redirectTo={redirect} />
+        {configFailed ? (
+          <div role='alert'>
+            <p>{t('Request failed')}</p>
+            <Button
+              type='button'
+              onClick={() => setConfigAttempt((n) => n + 1)}
+            >
+              {t('Try again')}
+            </Button>
+          </div>
+        ) : null}
+        {!configFailed && config === undefined ? <p>{t('Loading')}</p> : null}
+        {!configFailed &&
+        config !== undefined &&
+        (!config || config.enabled) ? (
+          <UserAuthForm redirectTo={redirect} productConfig={config} />
+        ) : null}
+        {!configFailed &&
+        config &&
+        !config.enabled &&
+        config.browser_sso_enabled ? (
+          <Button onClick={() => startProductLogin(redirect ?? '/dashboard')}>
+            {t('Sign in with UniHub')}
+          </Button>
+        ) : null}
+        {config?.native_access ? (
+          <a
+            href={`/sign-in?native=1${redirect ? `&redirect=${encodeURIComponent(redirect)}` : ''}`}
+          >
+            {t('Local operator sign in')}
+          </a>
+        ) : null}
 
         <AccountSwitchCard />
 

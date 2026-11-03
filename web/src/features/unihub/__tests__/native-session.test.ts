@@ -227,3 +227,97 @@ test('exact session cleanup supplies bounded cancellation and never changes auth
   assert.equal(useAuthStore.getState().auth.session?.sid, 'current-sid')
   clearAuthentication(false)
 })
+
+test('MFA continuation creates a UniHub session for the verified subject', async (context) => {
+  clearAuthentication(false)
+  const calls: string[] = []
+  const fetchMock: typeof fetch = async (input, init) => {
+    const url = String(input)
+    calls.push(url)
+    if (url.endsWith('/authorize/mfa')) {
+      const body = JSON.parse(String(init?.body)) as { passcode: string }
+      assert.equal(body.passcode, '123456')
+      return Response.json({
+        authorization_id: 'a'.repeat(43),
+        code: 'a'.repeat(64),
+      })
+    }
+    if (url.endsWith('/identity/token')) {
+      return Response.json({
+        access_token: 'product-token',
+        id_token: 'id',
+        token_type: 'Bearer',
+        scope: 'openid profile email',
+        expires_in: 300,
+      })
+    }
+    if (url === '/api/unihub/identity') {
+      return Response.json({
+        user: { id: 'subject', name: 'Business', email: '' },
+        accounts: [],
+      })
+    }
+    if (url === '/api/unihub/session') {
+      return Response.json({ success: true, data: bundle })
+    }
+    throw new Error(`unexpected request ${url}`)
+  }
+  context.mock.method(globalThis, 'fetch', fetchMock)
+  const session = new ProductSession(
+    new UniHubClient({
+      baseUrl: 'https://hub.test',
+      clientId: 'c',
+      redirectUri: 'https://app.test/unihub',
+      fetch: fetchMock,
+    })
+  )
+  await authorizeProductSession(session, {
+    mfa: { token: 'a'.repeat(43), verifier: 'b'.repeat(43) },
+    passcode: '123456',
+  })
+  assert.equal(useAuthStore.getState().auth.user?.unihub_user_id, 'subject')
+  assert.ok(calls.some((url) => url.endsWith('/authorize/mfa')))
+  session.clear()
+  clearAuthentication(false)
+})
+
+test('MFA continuation cannot replace an account selected after password verification', async (context) => {
+  clearAuthentication(false)
+  const { getAuthEpoch } = await import('@/lib/auth-session')
+  const attempt = {
+    authEpoch: getAuthEpoch(),
+    originalSID: useAuthStore.getState().auth.session?.sid,
+  }
+  applyAuthBundle(
+    { ...bundle, session: { ...bundle.session, sid: 'new-account' } },
+    false
+  )
+  let requests = 0
+  const fetchMock: typeof fetch = async () => {
+    requests++
+    return Response.json({}, { status: 401 })
+  }
+  context.mock.method(globalThis, 'fetch', fetchMock)
+  const session = new ProductSession(
+    new UniHubClient({
+      baseUrl: 'https://hub.test',
+      clientId: 'c',
+      redirectUri: 'https://app.test/unihub',
+      fetch: fetchMock,
+    })
+  )
+  await assert.rejects(
+    authorizeProductSession(
+      session,
+      {
+        mfa: { token: 'a'.repeat(43), verifier: 'b'.repeat(43) },
+        passcode: '123456',
+      },
+      attempt
+    )
+  )
+  assert.equal(requests, 0)
+  assert.equal(useAuthStore.getState().auth.session?.sid, 'new-account')
+  session.clear()
+  clearAuthentication(false)
+})

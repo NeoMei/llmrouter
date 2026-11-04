@@ -442,6 +442,12 @@ func registerPlatformOperation(engine gin.IRoutes, adapter *platformbilling.Adap
 		var session *platformbilling.Session
 		if wire.ID == "multimodal.embeddings.create" {
 			session, err = adapter.AdmitPreparedKnowledge(c.Request.Context(), strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "), c.GetHeader("X-UniHub-Task-ID"), c.GetHeader("Idempotency-Key"), wire, ct, body, knowledgeMediaPreparation(c, adapter))
+		} else if platformbilling.ApprovedKnowledgePair(knowledgeRequest.Model, wire.ID) && strings.HasPrefix(c.GetHeader("Authorization"), "Bearer uh_key_") {
+			if len(c.Request.Header.Values("X-UniHub-Actor-Authorization")) != 0 || len(c.Request.Header.Values("X-UniHub-Knowledge-Policy")) != 0 || len(c.Request.Header.Values("Cookie")) != 0 {
+				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "invalid_platform_scope"}})
+				return
+			}
+			session, err = adapter.AdmitManagedKnowledge(c.Request.Context(), strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "), c.GetHeader("X-UniHub-Task-ID"), c.GetHeader("Idempotency-Key"), wire, ct, body)
 		} else if platformbilling.ApprovedKnowledgePair(knowledgeRequest.Model, wire.ID) {
 			actor, actorOK := singleKnowledgeHeader(c.Request.Header, "X-UniHub-Actor-Authorization")
 			pin, pinOK := singleKnowledgeHeader(c.Request.Header, "X-UniHub-Knowledge-Policy")

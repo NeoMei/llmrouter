@@ -25,6 +25,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -51,6 +52,8 @@ type pairedFixture struct {
 	remote                                                                                                          platformbilling.RemoteCall
 	usage                                                                                                           platformbilling.Usage
 	finalDigest                                                                                                     string
+	callID, taskID                                                                                                  string
+	managed                                                                                                         *managedKnowledgeFixture
 }
 
 func newPairedFixture(t *testing.T, embedding bool) *pairedFixture {
@@ -58,7 +61,7 @@ func newPairedFixture(t *testing.T, embedding bool) *pairedFixture {
 	enableUniHubBoundary(t)
 	gin.SetMode(gin.TestMode)
 	require.NoError(t, i18n.Init())
-	f := &pairedFixture{t: t, product: "superwagie", name: "qwen3-rerank", wire: "rerank.create", upstream: "qwen3-rerank", channel: 103, path: "/platform/v1/rerank", body: `{"model":"qwen3-rerank","query":"q","documents":["a"],"top_n":1,"return_documents":false}`}
+	f := &pairedFixture{t: t, product: "superwagie", name: "qwen3-rerank", wire: "rerank.create", upstream: "qwen3-rerank", channel: 103, path: "/platform/v1/rerank", body: `{"model":"qwen3-rerank","query":"q","documents":["a"],"top_n":1,"return_documents":false}`, callID: "call", taskID: "task"}
 	if embedding {
 		f.name = "unihub-text-embedding-v4"
 		f.wire = "embeddings.create"
@@ -159,6 +162,13 @@ func newPairedFixture(t *testing.T, embedding bool) *pairedFixture {
 				f.verifies++
 				var in map[string]string
 				require.NoError(t, common.DecodeJson(r.Body, &in))
+				if f.managed != nil && in["purpose"] == "" {
+					out = f.managed.verify(f, w, r, in)
+					if out == nil {
+						return
+					}
+					break
+				}
 				assert.Equal(t, "Bearer original-actor", r.Header.Get("X-UniHub-Actor-Authorization"))
 				if f.revoked || (f.refusePaid && in["purpose"] == "knowledge_dispatch") {
 					w.WriteHeader(403)
@@ -188,13 +198,30 @@ func newPairedFixture(t *testing.T, embedding bool) *pairedFixture {
 				}
 				var in map[string]string
 				require.NoError(t, common.DecodeJson(r.Body, &in))
-				f.remote = platformbilling.RemoteCall{InstanceID: "default", WireOperation: f.wire, CallID: "call", ActorID: "actor", AccountID: "account", OriginProductID: f.product, CredentialID: "producer", RequestDigest: in["request_digest"], Rate: rate, ChargeAsset: "CREDIT/6", FundingMode: "credits", FundingProductID: "llmrouter", Held: in["amount"], Status: "RESERVED"}
+				credentialID := "producer"
+				if f.managed != nil {
+					if f.managed.acceptGeneratedID {
+						require.Equal(t, 1, f.reserves)
+						generated, err := uuid.Parse(strings.TrimPrefix(in["call_id"], "uk_"))
+						require.NoError(t, err)
+						assert.Equal(t, "uk_"+generated.String(), in["call_id"])
+						assert.Equal(t, "task_"+in["call_id"], in["task_id"])
+						f.callID, f.taskID = in["call_id"], in["task_id"]
+					}
+					assert.Equal(t, f.managed.credential, in["credential"])
+					assert.Equal(t, f.callID, in["call_id"])
+					assert.Equal(t, f.taskID, in["task_id"])
+					assert.Empty(t, r.Header.Get("X-UniHub-Actor-Authorization"))
+					f.managed.reserveInput = in
+					credentialID = "parent-key"
+				}
+				f.remote = platformbilling.RemoteCall{InstanceID: "default", WireOperation: f.wire, CallID: f.callID, ActorID: "actor", AccountID: "account", OriginProductID: f.product, CredentialID: credentialID, RequestDigest: in["request_digest"], Rate: rate, ChargeAsset: "CREDIT/6", FundingMode: "credits", FundingProductID: "llmrouter", Held: in["amount"], Status: "RESERVED"}
 				if f.lostReserveReply {
 					w.WriteHeader(503)
 					return
 				}
 				out = f.remote
-			case "/internal/v1/calls/call/settle":
+			case "/internal/v1/calls/" + f.callID + "/settle":
 				f.settles++
 				var in struct {
 					Usage platformbilling.Usage `json:"usage"`
@@ -207,12 +234,12 @@ func newPairedFixture(t *testing.T, embedding bool) *pairedFixture {
 					CallID       string                 `json:"call_id"`
 					Usage        *platformbilling.Usage `json:"usage"`
 					ProviderCost string                 `json:"provider_cost"`
-				}{"call", &f.usage, ""})
+				}{f.callID, &f.usage, ""})
 				require.NoError(t, e)
 				sum := sha256.Sum256(raw)
 				f.finalDigest = hex.EncodeToString(sum[:])
 				out = f.remote
-			case "/internal/v1/calls/call":
+			case "/internal/v1/calls/" + f.callID:
 				out = struct {
 					platformbilling.RemoteCall
 					ServiceID    string                 `json:"service_id"`
@@ -220,8 +247,8 @@ func newPairedFixture(t *testing.T, embedding bool) *pairedFixture {
 					Usage        *platformbilling.Usage `json:"usage"`
 					FinalDigest  string                 `json:"final_digest"`
 					ProviderCost string                 `json:"provider_cost"`
-				}{f.remote, "llmrouter", "task", &f.usage, f.finalDigest, ""}
-			case "/internal/v1/calls/call/release":
+				}{f.remote, "llmrouter", f.taskID, &f.usage, f.finalDigest, ""}
+			case "/internal/v1/calls/" + f.callID + "/release":
 				f.remote.Status = "RELEASED"
 				out = f.remote
 			default:
@@ -239,11 +266,11 @@ func newPairedFixture(t *testing.T, embedding bool) *pairedFixture {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.sends++
 		var row platformbilling.Call
-		require.NoError(t, f.db.First(&row, "call_id = ?", "call").Error)
+		require.NoError(t, f.db.First(&row, "call_id = ?", f.callID).Error)
 		assert.Equal(t, "UNKNOWN", row.Status)
 		assert.NotContains(t, row.MediaSnapshot, "original-actor")
 		var n int64
-		require.NoError(t, f.db.Model(&platformbilling.Attempt{}).Where("call_id = ?", "call").Count(&n).Error)
+		require.NoError(t, f.db.Model(&platformbilling.Attempt{}).Where("call_id = ?", f.callID).Count(&n).Error)
 		assert.EqualValues(t, 1, n)
 		if f.afterClaim != nil {
 			f.afterClaim()
@@ -258,7 +285,23 @@ func newPairedFixture(t *testing.T, embedding bool) *pairedFixture {
 			}
 			fmt.Fprintf(w, `{"object":"list","model":"text-embedding-v4","data":[{"index":0,"embedding":%s}],"usage":%s}`, vector, usage)
 		} else {
-			io.WriteString(w, `{"output":{"results":[{"index":0,"relevance_score":0.9}]},"usage":{"total_tokens":3}}`)
+			var input struct {
+				Input struct {
+					Documents []string `json:"documents"`
+				} `json:"input"`
+				Parameters struct {
+					ReturnDocuments *bool `json:"return_documents"`
+				} `json:"parameters"`
+			}
+			require.NoError(t, common.DecodeJson(r.Body, &input))
+			require.NotEmpty(t, input.Input.Documents)
+			result := map[string]any{"index": 0, "relevance_score": 0.9}
+			if input.Parameters.ReturnDocuments == nil || *input.Parameters.ReturnDocuments {
+				result["document"] = map[string]string{"text": input.Input.Documents[0]}
+			}
+			raw, err := common.Marshal(map[string]any{"output": map[string]any{"results": []any{result}}, "usage": map[string]int{"total_tokens": 3}})
+			require.NoError(t, err)
+			_, _ = w.Write(raw)
 		}
 	}))
 	t.Cleanup(up.Close)

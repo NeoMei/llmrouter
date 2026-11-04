@@ -42,27 +42,38 @@ func (a *Adapter) validateModelCredential(credential, task, model string, grant 
 // ManagedModels returns only the current credential's explicit model grant.
 // Empty-model verification still enforces central membership and revocation.
 func (a *Adapter) ManagedModels(ctx context.Context, credential string) ([]string, error) {
+	grant, err := a.ManagedModelGrant(ctx, credential)
+	if err != nil {
+		return nil, err
+	}
+	return grant.Models, nil
+}
+
+// ManagedModelGrant retains verified operation authority for credential-scoped
+// discovery. Models remain normalized exactly as in ManagedModels.
+func (a *Adapter) ManagedModelGrant(ctx context.Context, credential string) (Claims, error) {
 	if !a.Enabled() || !strings.HasPrefix(credential, "uh_key_") || !IsModelCredential(credential) {
-		return nil, ErrInvalid
+		return Claims{}, ErrInvalid
 	}
 	var grant Claims
 	if err := a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": "", "instance_id": a.config.InstanceID}, &grant); err != nil {
-		return nil, err
+		return Claims{}, err
 	}
 	if err := a.validateModelCredential(credential, "", "", grant); err != nil {
-		return nil, err
+		return Claims{}, err
 	}
 	models := make([]string, 0, len(grant.Models))
 	for _, model := range grant.Models {
 		if strings.TrimSpace(model) != model || model == "" || len(model) > 255 || model == "*" {
-			return nil, ErrInvalid
+			return Claims{}, ErrInvalid
 		}
 		if !slices.Contains(models, model) {
 			models = append(models, model)
 		}
 	}
 	slices.Sort(models)
-	return models, nil
+	grant.Models = models
+	return grant, nil
 }
 
 // ManagedTask verifies the durable key before looking up a persisted job. The

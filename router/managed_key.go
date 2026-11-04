@@ -52,7 +52,7 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 		c.Next()
 	})
 	modelsHandler := func(c *gin.Context) {
-		models, err := adapter.ManagedModels(c.Request.Context(), strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
+		grant, err := adapter.ManagedModelGrant(c.Request.Context(), strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
 		if err != nil {
 			status := platformbilling.HTTPStatus(err)
 			code := "model_credential_rejected"
@@ -62,15 +62,38 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 			c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"code": code}})
 			return
 		}
+		models := grant.Models
 		// Discovery stays constrained to the verified key even if metadata is
 		// unavailable. Technical metadata does not grant execution authority.
 		config := platformbilling.CatalogConfigFromEnv(os.Getenv)
 		metadata := map[string]platformbilling.CatalogModel{}
 		scoped := []platformbilling.CatalogModel{}
 		if config.Valid() {
-			if catalog, e := readTechnicalCatalog(c.Request.Context(), adapter, config.ProductID); e == nil && catalog.InstanceID == config.InstanceID {
+			if catalog, e := readTechnicalCatalog(c.Request.Context(), adapter, grant.OriginProductID); e == nil && catalog.InstanceID == grant.InstanceID {
 				for _, m := range catalog.Models {
 					if slices.Contains(models, m.ID) {
+						for i := range m.Operations {
+							op := &m.Operations[i]
+							op.Executable = false
+							if !op.Available {
+								continue
+							}
+							switch {
+							case grant.Operations == nil:
+								op.DisabledReason = "operation_authorization_unknown"
+							case !slices.Contains(grant.Operations[m.ID], op.ID):
+								op.DisabledReason = "operation_not_authorized"
+							default:
+								if platformbilling.ApprovedKnowledgePair(m.ID, op.ID) {
+									if _, err := adapter.ManagedKnowledgeBinding(c.Request.Context(), grant.OriginProductID, m.ID, op.ID); err != nil {
+										op.DisabledReason = "knowledge_route_unavailable"
+										continue
+									}
+								}
+								op.Executable = true
+								op.DisabledReason = ""
+							}
+						}
 						metadata[m.ID] = m
 						scoped = append(scoped, m)
 					}
@@ -81,7 +104,7 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 			Models            []string
 			Metadata          []platformbilling.CatalogModel
 			Product, Instance string
-		}{models, scoped, config.ProductID, config.InstanceID})
+		}{models, scoped, grant.OriginProductID, grant.InstanceID})
 		version := sha256.Sum256(raw)
 		project := func(id string) gin.H {
 			value := gin.H{"id": id, "object": "model", "created": 0, "owned_by": "unihub", "catalog_version": hex.EncodeToString(version[:])}

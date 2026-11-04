@@ -12,10 +12,21 @@ import (
 
 type pinnedKnowledgeContextKey struct{}
 type pinnedKnowledgeAdmission struct {
+	managedKey bool
 	actor      string // request-memory only; never serialized, logged or sent upstream
 	credential string
 	grant      knowledgeReadGrant
 	binding    ManagedBinding
+}
+
+func (p *pinnedKnowledgeAdmission) authorizedAt(now time.Time) bool {
+	if !p.grant.ExpiresAt.After(now) {
+		return false
+	}
+	if p.managedKey {
+		return p.grant.CredentialKind == "api_key"
+	}
+	return p.grant.ActorExpiresAt > now.Unix()
 }
 
 func (a *Adapter) AdmitPinnedKnowledge(ctx context.Context, actor, credential, task, id, pin string, wire WireOperation, ct string, body []byte) (*Session, error) {
@@ -62,7 +73,7 @@ func (a *Adapter) preparePinnedCallTx(tx *gorm.DB, row *Call, admission *pinnedK
 	if !reflect.DeepEqual(current, admission.binding) {
 		return ErrConflict
 	}
-	if admission.grant.ActorExpiresAt <= time.Now().Unix() || !admission.grant.ExpiresAt.After(time.Now()) {
+	if !admission.authorizedAt(time.Now()) {
 		return &remoteError{status: 403}
 	}
 	if err = a.knowledgeResults.checkWriter(tx); err != nil {
@@ -93,11 +104,17 @@ func (s *Session) ClaimPinnedKnowledgeSend(ctx context.Context, channel int, ups
 		return err
 	}
 	p := s.knowledgeAdmission
-	grant, err := s.adapter.verifyKnowledgeDispatch(ctx, p.actor, p.credential, s.call.TaskID, s.call.Model, s.call.WireOperation)
+	current := *p
+	if p.managedKey {
+		current.grant.Claims, err = s.adapter.verifyManagedKnowledge(ctx, p.credential, s.call.Model, s.call.WireOperation)
+	} else {
+		current.grant, err = s.adapter.verifyKnowledgeDispatch(ctx, p.actor, p.credential, s.call.TaskID, s.call.Model, s.call.WireOperation)
+	}
 	if err != nil {
 		return err
 	}
-	if grant.ID != s.call.CredentialID || grant.ActorID != s.call.ActorID || grant.AccountID != s.call.AccountID || grant.OriginProductID != s.call.OriginProductID || grant.InstanceID != s.call.InstanceID || grant.Asset != p.grant.Asset || grant.FundingMode != p.grant.FundingMode || grant.BillingProfileVersion != s.call.BillingProfileVersion {
+	grant := current.grant
+	if grant.ID != s.call.CredentialID || grant.CredentialKind != p.grant.CredentialKind || grant.ActorID != s.call.ActorID || grant.AccountID != s.call.AccountID || grant.OriginProductID != s.call.OriginProductID || grant.InstanceID != s.call.InstanceID || grant.Asset != p.grant.Asset || grant.FundingMode != p.grant.FundingMode || grant.BillingProfileVersion != s.call.BillingProfileVersion {
 		return &remoteError{status: 403}
 	}
 	attempt := Attempt{CallID: s.call.CallID, ChannelID: channel, Status: "DISPATCHED"}
@@ -110,7 +127,7 @@ func (s *Session) ClaimPinnedKnowledgeSend(ctx context.Context, channel int, ups
 		if !reflect.DeepEqual(b, p.binding) || b.ChannelID != channel {
 			return ErrConflict
 		}
-		if grant.ActorExpiresAt <= time.Now().Unix() || !grant.ExpiresAt.After(time.Now()) || ctx.Err() != nil {
+		if !current.authorizedAt(time.Now()) || ctx.Err() != nil {
 			return &remoteError{status: 403}
 		}
 		var row Call

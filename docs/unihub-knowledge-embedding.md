@@ -31,6 +31,31 @@ an enabled producer and versioned keyring. A task capability alone does not prov
 logged-in user or account membership, and central authorization must also address
 the interval between result authorization and a concurrent revocation.
 
+## Public inference with managed API keys
+
+A centrally authorized `uh_key_` can call `/v1/embeddings` with
+`unihub-text-embedding-v4` or `/v1/rerank` with `qwen3-rerank` using the ordinary
+JSON request body. This path requires the existing certified producer to be
+enabled and its managed route binding to be active. It does not activate a
+producer, select a new channel, or change a price.
+
+Public inference verifies the original key's current actor, account, product,
+instance, model and exact wire-operation authority through UniHub. Reservation
+and settlement retain that key's credential ID and funding mode, so its per-call
+and total budget continue to apply. The server resolves the active policy pin;
+client actor, policy-pin and cookie headers are rejected. Immediately before
+sending, the gateway verifies the key again and checks the frozen route binding
+inside the existing one-send transaction.
+
+This does not grant access to a private knowledge index or historical results.
+The task-based platform flow, index authorization and result-read flow retain
+their original actor and task-credential checks. A task credential missing its
+actor or pin never falls back to public API-key inference.
+
+The key-scoped model directory combines technical availability with verified
+operation authority. Missing capability metadata remains unknown; a model
+allowlist alone does not imply chat support or permission for every operation.
+
 ## Settled result recovery retention
 
 Captured output has a one-hour default expiry. The optional deployment setting

@@ -24,6 +24,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -65,7 +66,7 @@ func TestCrossProductRuntimeAcceptance(t *testing.T) {
 		sqlDB, e := db.DB()
 		require.NoError(t, e)
 		t.Cleanup(func() { _ = sqlDB.Close() })
-		require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.UserSession{}, &model.AuthFlow{}, &model.UniHubIdentityMapping{}, &model.ProductAuthLifecycle{}, &model.ProductCreditAward{}, &model.TwoFA{}, &model.Log{}, &model.UserSubscription{}, &model.SubscriptionPlan{}, &model.SubscriptionPreConsumeRecord{}))
+		require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.UserSession{}, &model.ProductBrokerSessionProof{}, &model.AuthFlow{}, &model.UniHubIdentityMapping{}, &model.ProductAuthLifecycle{}, &model.ProductCreditAward{}, &model.TwoFA{}, &model.Log{}, &model.UserSubscription{}, &model.SubscriptionPlan{}, &model.SubscriptionPreConsumeRecord{}))
 		require.NoError(t, model.RegisterProductFundingModels(db))
 		require.NoError(t, model.RegisterProductRefundModels(db))
 		model.DB, model.LOG_DB = db, db
@@ -80,7 +81,7 @@ func TestCrossProductRuntimeAcceptance(t *testing.T) {
 		r.POST("/api/user/auth/refresh", controller.RefreshAuth)
 		r.GET("/api/user/self", middleware.UserAuth(), controller.GetSelf)
 		r.POST("/api/token/", middleware.UserAuth(), controller.AddToken)
-		registerUniHubSSO(r, platformaccount.Config{Enabled: true, ClientID: client, PublicOrigin: origin, RedirectURI: "https://" + host + "/api/unihub/callback"})
+		registerUniHubSSO(r, platformaccount.Config{Enabled: true, ProductID: product, InstanceID: instance, ClientID: client, PublicOrigin: origin, RedirectURI: "https://" + host + "/api/unihub/callback"})
 		server := httptest.NewTLSServer(r)
 		server.Client().Timeout = 5 * time.Second
 		server.Client().CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
@@ -194,13 +195,39 @@ func TestCrossProductRuntimeAcceptance(t *testing.T) {
 	require.NoError(t, sourceDB.Where("user_id = ?", signed.Data.User.ID).First(&sourceMap).Error)
 	constant.GenerateDefaultToken = true
 	second, secondDB := activate("llmrouter", "second", "second", "second.test", strings.Repeat("b", 32))
+	brokerSession := func(completed *httptest.ResponseRecorder) string {
+		t.Helper()
+		target, err := url.Parse(completed.Header().Get("Location"))
+		require.NoError(t, err)
+		require.Empty(t, target.Scheme)
+		require.Empty(t, target.Host)
+		require.Equal(t, "/keys", target.Path)
+		require.Len(t, target.Query(), 1)
+		require.Len(t, target.Query()["__auth_session"], 1)
+		sid := target.Query().Get("__auth_session")
+		require.NotEmpty(t, sid)
+		var session model.UserSession
+		require.NoError(t, secondDB.First(&session, "sid = ?", sid).Error)
+		require.Equal(t, "product_broker", session.LoginMethod)
+		config := platformaccount.Config{PublicOrigin: origin, ProductID: "llmrouter", InstanceID: "second", ClientID: "second"}
+		bound, proof, err := model.OpenBrokerSourceProof(sid, session.UserID, sourceMap.Subject, config)
+		require.NoError(t, err)
+		assert.Equal(t, sid, bound.SID)
+		assert.Equal(t, session.UserID, bound.UserID)
+		assert.Equal(t, sourceMap.Subject, bound.Subject)
+		assert.True(t, strings.HasPrefix(proof, "ubsp_"))
+		identity, err := service.ValidateSessionReference(context.Background(), session.UserID, sid)
+		require.NoError(t, err)
+		require.NoError(t, service.VerifyBrokerSource(context.Background(), identity))
+		return sid
+	}
 	begin := request(second, "GET", "https://second.test/api/unihub/login?prompt=none&return_to=%2Fkeys", nil, "")
 	check(begin, 303)
 	authorized := centralGet(begin.Header().Get("Location"), centralSession)
 	secondCallback := location(authorized, 303)
 	completed := request(second, "GET", secondCallback, nil, "", cookie(begin.Result().Cookies(), productBrokerCookie))
 	check(completed, 303)
-	require.Equal(t, "/keys", completed.Header().Get("Location"))
+	secondSID := brokerSession(completed)
 	secondRefresh := cookie(completed.Result().Cookies(), service.RefreshCookieName)
 	refreshed := request(second, "POST", "https://second.test/api/user/auth/refresh", nil, "", secondRefresh)
 	check(refreshed, 200)
@@ -218,6 +245,10 @@ func TestCrossProductRuntimeAcceptance(t *testing.T) {
 	require.NoError(t, json.Unmarshal(refreshed.Body.Bytes(), &secondSession))
 	require.True(t, secondSession.Success, refreshed.Body.String())
 	require.NotEmpty(t, secondSession.Data.Access)
+	secondIdentity, err := service.ParseAccessToken(secondSession.Data.Access)
+	require.NoError(t, err)
+	assert.Equal(t, secondSID, secondIdentity.SessionID)
+	assert.Equal(t, secondSession.Data.User.ID, secondIdentity.UserID)
 	require.Equal(t, 500, secondSession.Data.User.Quota)
 	require.NotEmpty(t, secondSession.Data.User.Setting)
 	var initialKeys int64
@@ -283,7 +314,8 @@ func TestCrossProductRuntimeAcceptance(t *testing.T) {
 	reauthorized := centralGet(reentry.Header().Get("Location"), centralSession)
 	reentered := request(second, "GET", location(reauthorized, 303), nil, "", cookie(reentry.Result().Cookies(), productBrokerCookie))
 	check(reentered, 303)
-	require.Equal(t, "/keys", reentered.Header().Get("Location"))
+	reenteredSID := brokerSession(reentered)
+	assert.NotEqual(t, secondSID, reenteredSID)
 	var users, keys int64
 	require.NoError(t, secondDB.Model(&model.User{}).Count(&users).Error)
 	require.EqualValues(t, 1, users)

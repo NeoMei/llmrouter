@@ -4,21 +4,17 @@ set -euo pipefail
 # Migration parity evidence collector
 # Usage (on staging host):
 #   bash scripts/migration-parity-check.sh
-# Required environment (sourced from next.env):
-#   OLD_URL, NEW_URL, EVIDENCE_DIR, optionally MANAGEMENT_TOKEN
+# Required environment: PGPASSWORD (source any env file explicitly before running).
+# Optional credentials: RELAY_TOKEN, MANAGEMENT_TOKEN.
+: "${PGPASSWORD:?Set PGPASSWORD explicitly before running this script}"
+export PGPASSWORD
+RELAY_TOKEN="${RELAY_TOKEN:-}"
 
 OLD_URL="${OLD_URL:-http://127.0.0.1:13000}"
 NEW_URL="${NEW_URL:-http://127.0.0.1:13100}"
 EVIDENCE="${EVIDENCE_DIR:-/opt/codex-gateway-next/evidence}"
 mkdir -p "$EVIDENCE"
 
-set -a
-if [[ -f /opt/codex-gateway-next/next.env ]]; then
-  source /opt/codex-gateway-next/next.env
-fi
-set +a
-
-RELAY_TOKEN=$(docker exec -e PGPASSWORD=Postgres9803 postgres psql -U root -d codex_gateway_next -Atc "SELECT key FROM tokens WHERE status = 1 ORDER BY id LIMIT 1" 2>/dev/null || true)
 if [[ -z "${RELAY_TOKEN:-}" ]]; then
   echo "WARNING: No usable relay token found in codex_gateway_next" >&2
 fi
@@ -84,11 +80,10 @@ for base in "$OLD_URL" "$NEW_URL"; do
 done
 
 # Database invariant counts before/after API tests
-export PGPASSWORD=Postgres9803
 for db in new-api codex_gateway_next; do
   echo "== $db invariant counts ==" >> "$EVIDENCE/parity.log"
   for tbl in users channels tokens abilities options user_subscriptions subscription_orders quota_data logs; do
-    cnt=$(docker exec -e PGPASSWORD=$PGPASSWORD postgres psql -U root -d "$db" -Atc "SELECT count(*) FROM $tbl" 2>/dev/null || echo ERR)
+    cnt=$(docker exec -e PGPASSWORD postgres psql -U root -d "$db" -Atc "SELECT count(*) FROM $tbl" 2>/dev/null || echo ERR)
     echo "$tbl: $cnt" >> "$EVIDENCE/parity.log"
   done
 done

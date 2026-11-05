@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { test, expect, type Page } from '@playwright/test'
 
+import zeroLegacy from '../../../../../service/testdata/central-zero-legacy.json' with { type: 'json' }
 import { fixture } from '../../wallet/__tests__/settings-fixture'
 
 const evidence =
@@ -232,3 +233,52 @@ test('hidden finance cannot leak subscription or native pricing details', async 
     page.getByRole('dialog').getByText('secret-native-price')
   ).toHaveCount(0)
 })
+
+for (const width of [1440, 390]) {
+  test(`round2 confirmed legacy zero stays recorded across table card and details at ${width}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 1000 })
+    await logFixture(page, zeroLegacy.other, [
+      zeroLegacy.prompt_tokens,
+      zeroLegacy.completion_tokens,
+    ])
+    await expect(
+      page
+        .getByText('Recorded input / output tokens: 0 / 0', { exact: true })
+        .first()
+    ).toBeVisible()
+    await expect(
+      page.getByText('Usage confirmed', { exact: true }).first()
+    ).toBeVisible()
+    await expect(
+      page.getByText('Provider token usage was not recorded.')
+    ).toHaveCount(0)
+    await expect(
+      page.getByText('Cash settlement managed by UniHub').first()
+    ).toBeVisible()
+    await page.screenshot({
+      path: `${evidence}/round2/zero-${width}.png`,
+      fullPage: true,
+      animations: 'disabled',
+    })
+    await page
+      .getByTitle('Click to view full details')
+      .filter({ visible: true })
+      .click()
+    const dialog = page.getByRole('dialog')
+    await expect(
+      dialog.getByText('Recorded input / output tokens: 0 / 0', { exact: true })
+    ).toBeVisible()
+    await expect(
+      dialog.getByText('Usage confirmed', { exact: true })
+    ).toBeVisible()
+    await expect(dialog.getByText('Total Cost', { exact: true })).toHaveCount(0)
+    await expect(dialog.getByText('Per-token', { exact: true })).toHaveCount(0)
+    await page.screenshot({
+      path: `${evidence}/round2/zero-details-${width}.png`,
+      fullPage: true,
+      animations: 'disabled',
+    })
+  })
+}

@@ -110,6 +110,7 @@ export interface LogOtherData {
   product_runtime?: boolean
   operation?: string
   usage_state?: string
+  legacy_tokens_recorded?: boolean
   native_measurements?: unknown
   financial_details?: boolean
   funding_owner?: string

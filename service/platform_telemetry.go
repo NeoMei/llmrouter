@@ -129,6 +129,9 @@ func ReadPlatformTelemetry(ctx context.Context, scope platformbilling.TechnicalS
 			"usage_state": row.UsageState, "central_status": row.Status, "central_asset": row.Asset,
 			"attempt_count": row.AttemptCount, "latency_ms": row.LatencyMS, "request_count": 1,
 		}
+		if row.LegacyTokensRecorded {
+			other["legacy_tokens_recorded"] = true
+		}
 		if len(row.Measurements) != 0 {
 			other["native_measurements"] = row.Measurements
 		}

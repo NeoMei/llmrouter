@@ -1,0 +1,12 @@
+{
+  "prompt_tokens": 0,
+  "completion_tokens": 0,
+  "other": {
+    "funding_owner": "unihub",
+    "financial_details": false,
+    "operation": "chat",
+    "usage_state": "confirmed",
+    "legacy_tokens_recorded": true,
+    "request_count": 1
+  }
+}

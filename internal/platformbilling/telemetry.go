@@ -67,6 +67,7 @@ type TechnicalUsage struct {
 	IsStream                       bool
 	CreatedAt                      int64
 	Measurements                   []metering.Measurement
+	LegacyTokensRecorded           bool
 }
 
 // ReadTechnicalUsage counts durable logical calls, including unknown outcomes
@@ -188,6 +189,7 @@ func ReadTechnicalUsage(ctx context.Context, db *gorm.DB, scope TechnicalScope, 
 			prompt, output, valid := technicalTokenCounts(usage)
 			if valid {
 				r.PromptTokens, r.CompletionTokens = prompt, output
+				r.LegacyTokensRecorded = true
 				r.UsageState, r.Outcome = "confirmed", "success"
 			} else {
 				r.UsageState, r.PromptTokens, r.CompletionTokens = "invalid", 0, 0

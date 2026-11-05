@@ -169,7 +169,8 @@ export function technicalUsage(other: LogOtherData, hasRecordedTokens = false) {
   if (
     other.usage_state === 'confirmed' &&
     other.native_measurements === undefined &&
-    !hasRecordedTokens
+    !hasRecordedTokens &&
+    other.legacy_tokens_recorded !== true
   ) {
     state = 'Usage evidence is missing'
   }

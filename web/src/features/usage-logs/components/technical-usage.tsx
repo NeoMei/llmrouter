@@ -29,7 +29,11 @@ import type { LogOtherData } from '../types'
 export function TechnicalUsage(props: { log: UsageLog; other: LogOtherData }) {
   const { t } = useTranslation()
   const hasLegacyTokens =
-    props.log.prompt_tokens > 0 || props.log.completion_tokens > 0
+    props.log.prompt_tokens > 0 ||
+    props.log.completion_tokens > 0 ||
+    (props.other.legacy_tokens_recorded === true &&
+      props.other.usage_state === 'confirmed' &&
+      props.other.native_measurements === undefined)
   const usage = technicalUsage(props.other, hasLegacyTokens)
   const hasNativeTokens = usage.measurements.some((m) => m.unit === 'token')
   return (

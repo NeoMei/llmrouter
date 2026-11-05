@@ -24,6 +24,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import parityCases from '../../../../../pkg/metering/testdata/technical-presentation.json'
+import zeroLegacy from '../../../../../service/testdata/central-zero-legacy.json'
 import { TechnicalUsage } from '../components/technical-usage'
 import { usageLogSchema } from '../data/schema'
 import {
@@ -275,4 +276,42 @@ test('literal image keys resembling token dimensions keep their image identity',
     assert.ok(html.includes(` (${key})`))
     assert.doesNotMatch(html, /Input Tokens|Text tokens|Visual tokens/)
   }
+})
+
+test('producer-confirmed all-zero legacy evidence remains recorded zero', () => {
+  const html = renderToStaticMarkup(
+    <TechnicalUsage
+      log={{
+        ...log,
+        prompt_tokens: zeroLegacy.prompt_tokens,
+        completion_tokens: zeroLegacy.completion_tokens,
+      }}
+      other={zeroLegacy.other}
+    />
+  )
+  assert.match(html, /Usage confirmed/)
+  assert.match(html, /Recorded input \/ output tokens: 0 \/ 0/)
+  assert.doesNotMatch(html, /missing|not recorded|Total Cost|Per-token/)
+})
+test('default zero fields never become recorded tokens for unconfirmed or request-only evidence', () => {
+  for (const state of ['missing', 'unverifiable', 'invalid', 'conflict']) {
+    const html = renderToStaticMarkup(
+      <TechnicalUsage
+        log={log}
+        other={{ ...zeroLegacy.other, usage_state: state }}
+      />
+    )
+    assert.doesNotMatch(html, /Recorded input/)
+  }
+  const html = renderToStaticMarkup(
+    <TechnicalUsage
+      log={log}
+      other={{
+        ...zeroLegacy.other,
+        native_measurements: [measurement('requests', 'request', '1')],
+      }}
+    />
+  )
+  assert.doesNotMatch(html, /Recorded input/)
+  assert.match(html, /not recorded/)
 })

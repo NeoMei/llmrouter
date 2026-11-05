@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"github.com/QuantumNous/new-api/dto"
 	"math"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -285,4 +287,63 @@ func TestCentralTechnicalLogsHaveNoFinancialDetails(t *testing.T) {
 	require.NoError(t, common.UnmarshalJsonStr(result.Logs[0].Other, &other))
 	assert.Equal(t, false, other["financial_details"])
 	assert.NotContains(t, other, "central_charged")
+}
+
+func TestCentralTechnicalZeroLegacyEvidenceMatchesPresentationFixture(t *testing.T) {
+	db, _ := setupProductTelemetryReadTest(t)
+	now := time.Now().Unix()
+	usage, err := platformbilling.NormalizeUsage(&dto.Usage{})
+	require.NoError(t, err)
+	raw, err := common.Marshal(map[string]any{"usage": usage})
+	require.NoError(t, err)
+	require.NoError(t, db.Create(&platformbilling.Call{CallID: "zero-legacy", ActorID: "actor-42", InstanceID: "default", FundingProductID: "llmrouter", Model: "m", Operation: "chat", Status: "SETTLED", Intent: string(raw), CreatedAt: time.Unix(now, 0)}).Error)
+	result, err := ReadPlatformTelemetry(context.Background(), platformbilling.TechnicalScope{ActorID: "actor-42", InstanceID: "default"}, 42, "member", PlatformTelemetryFilter{Start: now - 60, End: now + 1})
+	require.NoError(t, err)
+	require.Len(t, result.Logs, 1)
+	fixtureBytes, err := os.ReadFile("testdata/central-zero-legacy.json")
+	require.NoError(t, err)
+	var expected struct {
+		PromptTokens     int            `json:"prompt_tokens"`
+		CompletionTokens int            `json:"completion_tokens"`
+		Other            map[string]any `json:"other"`
+	}
+	require.NoError(t, common.Unmarshal(fixtureBytes, &expected))
+	assert.Equal(t, expected.PromptTokens, result.Logs[0].PromptTokens)
+	assert.Equal(t, expected.CompletionTokens, result.Logs[0].CompletionTokens)
+	var other map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(result.Logs[0].Other, &other))
+	for key, value := range expected.Other {
+		assert.Equal(t, value, other[key], key)
+	}
+	assert.NotContains(t, other, "native_measurements")
+	assert.NotContains(t, other, "central_charged")
+}
+
+func TestCentralTechnicalUnconfirmedZeroNeverClaimsRecordedLegacyTokens(t *testing.T) {
+	for _, state := range []string{"missing", "invalid", "conflict"} {
+		t.Run(state, func(t *testing.T) {
+			db, _ := setupProductTelemetryReadTest(t)
+			now := time.Now().Unix()
+			call := platformbilling.Call{CallID: "unconfirmed-zero", ActorID: "actor-42", InstanceID: "default", FundingProductID: "llmrouter", Operation: "chat", Model: "m", Status: "SETTLED", CreatedAt: time.Unix(now, 0)}
+			if state != "missing" {
+				usage, err := platformbilling.NormalizeUsage(&dto.Usage{})
+				require.NoError(t, err)
+				if state == "invalid" {
+					usage.Input = "-1"
+				}
+				raw, err := common.Marshal(map[string]any{"usage": usage})
+				require.NoError(t, err)
+				call.Intent = string(raw)
+			}
+			call.EvidenceConflict = state == "conflict"
+			require.NoError(t, db.Create(&call).Error)
+			result, err := ReadPlatformTelemetry(context.Background(), platformbilling.TechnicalScope{ActorID: "actor-42", InstanceID: "default"}, 42, "member", PlatformTelemetryFilter{Start: now - 60, End: now + 1})
+			require.NoError(t, err)
+			require.Len(t, result.Logs, 1)
+			var other map[string]any
+			require.NoError(t, common.UnmarshalJsonStr(result.Logs[0].Other, &other))
+			assert.Equal(t, state, other["usage_state"])
+			assert.NotContains(t, other, "legacy_tokens_recorded")
+		})
+	}
 }

@@ -15,7 +15,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 type PlatformFaultWaiverDecision struct {
@@ -209,17 +208,6 @@ func waiverAttemptsEqual(a, b []Attempt) bool {
 	return true
 }
 
-// A fresh query is required for every table: retaining a GORM query after Find
-// also retains its table. model.lockForUpdate cannot be imported here because
-// model already depends on platformbilling through relay/common.
-func waiverLockedRead(tx *gorm.DB) *gorm.DB {
-	q := tx.Session(&gorm.Session{NewDB: true})
-	if tx.Dialector.Name() != "sqlite" {
-		return q.Clauses(clause.Locking{Strength: "UPDATE"})
-	}
-	return q
-}
-
 // PreparePlatformFaultWaiver freezes one explicitly approved cash waiver. It
 // never submits a model request or a financial command. Dry-run does not write.
 func PreparePlatformFaultWaiver(ctx context.Context, db *gorm.DB, raw []byte, digest string, apply bool) (Call, error) {
@@ -236,10 +224,10 @@ func PreparePlatformFaultWaiver(ctx context.Context, db *gorm.DB, raw []byte, di
 				return ErrConflict
 			}
 			var attempts []Attempt
-			if err := waiverLockedRead(tx).Where("call_id = ?", p.CallID).Order("id").Find(&attempts).Error; err != nil {
+			if err := platformBillingLockedRead(tx).Where("call_id = ?", p.CallID).Order("id").Find(&attempts).Error; err != nil {
 				return err
 			}
-			if err := waiverLockedRead(tx).First(&out, "call_id = ?", p.CallID).Error; err != nil {
+			if err := platformBillingLockedRead(tx).First(&out, "call_id = ?", p.CallID).Error; err != nil {
 				return err
 			}
 			if !waiverAttemptsEqual(attempts, p.GatewayAttempts) || !waiverStagedCallMatches(p.GatewayCall, out, digest) {
@@ -252,10 +240,10 @@ func PreparePlatformFaultWaiver(ctx context.Context, db *gorm.DB, raw []byte, di
 		}
 		// Supplier response capture locks Attempt before Call. Match that order.
 		var attempts []Attempt
-		if err := waiverLockedRead(tx).Where("call_id = ?", p.CallID).Order("id").Find(&attempts).Error; err != nil {
+		if err := platformBillingLockedRead(tx).Where("call_id = ?", p.CallID).Order("id").Find(&attempts).Error; err != nil {
 			return err
 		}
-		if err := waiverLockedRead(tx).First(&out, "call_id = ?", p.CallID).Error; err != nil {
+		if err := platformBillingLockedRead(tx).First(&out, "call_id = ?", p.CallID).Error; err != nil {
 			return err
 		}
 		if !waiverCallEqual(out, p.GatewayCall) || !waiverAttemptsEqual(attempts, p.GatewayAttempts) {
@@ -269,7 +257,7 @@ func PreparePlatformFaultWaiver(ctx context.Context, db *gorm.DB, raw []byte, di
 				// on MySQL REPEATABLE READ. Read current rows under the same
 				// locks; an aggregate FOR UPDATE is invalid on PostgreSQL.
 				var found []struct{ CallID string }
-				if err := waiverLockedRead(tx).Model(observation).Select("call_id").Where("call_id = ?", p.CallID).Limit(1).Find(&found).Error; err != nil {
+				if err := platformBillingLockedRead(tx).Model(observation).Select("call_id").Where("call_id = ?", p.CallID).Limit(1).Find(&found).Error; err != nil {
 					return err
 				}
 				if len(found) != 0 {
@@ -338,10 +326,10 @@ func FinalizePlatformFaultWaiver(ctx context.Context, db *gorm.DB, cfg Config, r
 			return ErrConflict
 		}
 		var attempts []Attempt
-		if err := waiverLockedRead(tx).Where("call_id = ?", p.CallID).Order("id").Find(&attempts).Error; err != nil {
+		if err := platformBillingLockedRead(tx).Where("call_id = ?", p.CallID).Order("id").Find(&attempts).Error; err != nil {
 			return err
 		}
-		if err := waiverLockedRead(tx).First(&out, "call_id = ?", p.CallID).Error; err != nil {
+		if err := platformBillingLockedRead(tx).First(&out, "call_id = ?", p.CallID).Error; err != nil {
 			return err
 		}
 		if !waiverAttemptsEqual(attempts, p.GatewayAttempts) || !waiverStagedCallMatches(p.GatewayCall, out, digest) {

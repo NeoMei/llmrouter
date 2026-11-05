@@ -575,3 +575,109 @@ func TestKnowledgeRejectedUsageWaiverCurrentRead(t *testing.T) {
 		})
 	}
 }
+
+// checkWriter's ordinary active-generation SELECT can establish a snapshot
+// before capture waits for the original Attempt/Call locks. These checks must
+// observe binding/finalization changes committed after that snapshot.
+func TestKnowledgeRejectedUsageCaptureCurrentRead(t *testing.T) {
+	for _, dialect := range []string{"mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			dsn := os.Getenv(map[string]string{"mysql": "KNOWLEDGE_RESULT_TEST_MYSQL_DSN", "postgres": "KNOWLEDGE_RESULT_TEST_POSTGRES_DSN"}[dialect])
+			if dsn == "" {
+				t.Skip("explicit disposable " + dialect + " database not configured")
+			}
+			for _, op := range []string{"embedding", "rerank"} {
+				for _, change := range []struct {
+					name    string
+					attempt bool
+					values  map[string]any
+				}{
+					{"call binding", false, map[string]any{"credential_id": "other-credential"}},
+					{"attempt binding", true, map[string]any{"upstream_identity": "other-upstream"}},
+					{"call finalization", false, map[string]any{"status": "WAIVER_PENDING", "intent": `{"reason":"reviewed-platform-fault"}`}},
+				} {
+					t.Run(op+"/"+change.name, func(t *testing.T) {
+						db := knowledgeResultTestDB(t, dialect, dsn)
+						if dialect == "mysql" {
+							var isolation string
+							require.NoError(t, db.Raw("SELECT @@transaction_isolation").Scan(&isolation).Error)
+							require.Equal(t, "REPEATABLE-READ", isolation)
+						}
+						s, key, upstream, body := rejectedKnowledgeFixtureOnDB(t, op, db)
+						ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+						defer cancel()
+						snapshotRead := make(chan struct{})
+						resume := make(chan struct{})
+						var paused atomic.Bool
+						var resumeOnce sync.Once
+						release := func() { resumeOnce.Do(func() { close(resume) }) }
+						defer release()
+						require.NoError(t, db.Callback().Query().After("gorm:query").Register("fixture:capture_snapshot_barrier", func(tx *gorm.DB) {
+							if tx.Statement.Table == "platform_knowledge_result_active" && paused.CompareAndSwap(false, true) {
+								close(snapshotRead)
+								select {
+								case <-resume:
+								case <-ctx.Done():
+									tx.AddError(ctx.Err())
+								}
+							}
+						}))
+						defer func() { require.NoError(t, db.Callback().Query().Remove("fixture:capture_snapshot_barrier")) }()
+						finished := make(chan error, 1)
+						go func() {
+							_, captureErr := s.CaptureKnowledgeResult(ctx, 1, upstream, key, []byte(body))
+							finished <- captureErr
+						}()
+						select {
+						case <-snapshotRead:
+						case captureErr := <-finished:
+							t.Fatalf("capture finished before snapshot barrier: %v", captureErr)
+						case <-ctx.Done():
+							t.Fatal("capture did not reach snapshot barrier")
+						}
+						// This writer commits before capture acquires the Attempt/Call locks.
+						var mutationErr error
+						if change.attempt {
+							mutationErr = db.Model(&Attempt{}).Where("id = ?", s.attempt.ID).UpdateColumns(change.values).Error
+						} else {
+							mutationErr = db.Model(&Call{}).Where("call_id = ?", s.call.CallID).UpdateColumns(change.values).Error
+						}
+						release()
+						var captureErr error
+						select {
+						case captureErr = <-finished:
+						case <-ctx.Done():
+							t.Fatal("capture did not finish after binding change")
+						}
+						require.NoError(t, mutationErr)
+						assert.ErrorIs(t, captureErr, ErrPending, "current call and original attempt must be rechecked after the locks are acquired")
+						var current Call
+						var attempt Attempt
+						require.NoError(t, db.First(&current, "call_id = ?", s.call.CallID).Error)
+						require.NoError(t, db.First(&attempt, "id = ?", s.attempt.ID).Error)
+						if change.attempt {
+							assert.Equal(t, "other-upstream", attempt.UpstreamIdentity)
+						} else if change.name == "call binding" {
+							assert.Equal(t, "other-credential", current.CredentialID)
+						} else {
+							assert.Equal(t, "WAIVER_PENDING", current.Status)
+							assert.Equal(t, change.values["intent"], current.Intent)
+						}
+						assert.Equal(t, "100", current.Amount)
+						assert.Empty(t, current.Evidence)
+						assert.Empty(t, current.NativeObservation)
+						assert.Empty(t, current.Charged)
+						assert.False(t, current.EvidenceConflict)
+						var rejected, results, attempts int64
+						require.NoError(t, db.Model(&knowledgeRejectedUsage{}).Count(&rejected).Error)
+						require.NoError(t, db.Model(&knowledgeResultRow{}).Count(&results).Error)
+						require.NoError(t, db.Model(&Attempt{}).Count(&attempts).Error)
+						assert.Zero(t, rejected, "stale binding must not be certified in nonchargeable evidence")
+						assert.Zero(t, results)
+						assert.EqualValues(t, 1, attempts)
+					})
+				}
+			}
+		})
+	}
+}

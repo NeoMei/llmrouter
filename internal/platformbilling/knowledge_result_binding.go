@@ -186,14 +186,14 @@ func (v *knowledgeResultVault) captureValidated(ctx context.Context, s *Session,
 			return ErrPending
 		}
 		var attempt Attempt
-		if err := tx.First(&attempt, "id = ? AND call_id = ?", result.attemptID, result.callID).Error; err != nil || attempt.Status != "DISPATCHED" || !sameKnowledgeAttemptBinding(attempt, result.attempt) || !attempt.CreatedAt.Equal(result.attempt.CreatedAt) {
+		if err := platformBillingLockedRead(tx).First(&attempt, "id = ? AND call_id = ?", result.attemptID, result.callID).Error; err != nil || attempt.Status != "DISPATCHED" || !sameKnowledgeAttemptBinding(attempt, result.attempt) || !attempt.CreatedAt.Equal(result.attempt.CreatedAt) {
 			return ErrPending
 		}
 		if err := tx.Model(&Call{}).Where("call_id = ?", result.callID).UpdateColumn("updated_at", gorm.Expr("updated_at")).Error; err != nil {
 			return ErrPending
 		}
 		var row Call
-		if err := tx.First(&row, "call_id = ?", result.callID).Error; err != nil || row.EvidenceConflict || !sameKnowledgeCallBinding(row, result.snapshot) {
+		if err := platformBillingLockedRead(tx).First(&row, "call_id = ?", result.callID).Error; err != nil || row.EvidenceConflict || !sameKnowledgeCallBinding(row, result.snapshot) {
 			return ErrPending
 		}
 		var frozen frozenKnowledge
@@ -225,7 +225,7 @@ func (v *knowledgeResultVault) captureValidated(ctx context.Context, s *Session,
 			return ErrInvalid
 		}
 		var prior knowledgeRejectedUsage
-		priorErr := tx.First(&prior, "call_id = ?", row.CallID).Error
+		priorErr := platformBillingLockedRead(tx).First(&prior, "call_id = ?", row.CallID).Error
 		if priorErr != nil && !errors.Is(priorErr, gorm.ErrRecordNotFound) {
 			return ErrPending
 		}

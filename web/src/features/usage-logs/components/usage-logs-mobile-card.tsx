@@ -41,12 +41,14 @@ import { cn } from '@/lib/utils'
 import { LOG_TYPE_ENUM } from '../constants'
 import type { UsageLog } from '../data/schema'
 import { parseLogOther } from '../lib/format'
+import { isCentralTechnical } from '../lib/technical-usage'
 import {
   getLogTypeConfig,
   isDisplayableLogType,
   isTimingLogType,
 } from '../lib/utils'
 import type { LogCategory } from '../types'
+import { TechnicalUsage } from './technical-usage'
 import { StreamTpsCell, TimingMetricsCell } from './timing-metrics-cell'
 import { useUsageLogsContext } from './usage-logs-provider'
 
@@ -192,6 +194,11 @@ function MobileTokensField({ log }: { log: UsageLog }) {
   const { t } = useTranslation()
 
   if (!isDisplayableLogType(log.type)) return null
+
+  const technicalOther = parseLogOther(log.other)
+  if (technicalOther && isCentralTechnical(technicalOther)) {
+    return <TechnicalUsage log={log} other={technicalOther} />
+  }
 
   const promptTokens = log.prompt_tokens || 0
   const completionTokens = log.completion_tokens || 0

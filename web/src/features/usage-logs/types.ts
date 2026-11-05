@@ -107,6 +107,10 @@ export type UsageBillingPath =
   (typeof USAGE_BILLING_PATH)[keyof typeof USAGE_BILLING_PATH]
 
 export interface LogOtherData {
+  product_runtime?: boolean
+  operation?: string
+  usage_state?: string
+  native_measurements?: unknown
   financial_details?: boolean
   funding_owner?: string
   central_status?: string

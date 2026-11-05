@@ -19,6 +19,34 @@ For commercial licensing, please contact support@quantumnous.com
 // Static translation keys that don't get picked up by the t('...') regex.
 // These cover dynamic labels (e.g. constants, configs) that are passed into t at runtime.
 export const STATIC_I18N_KEYS = [
+  // Technical usage evidence and dimensions
+  'Usage confirmed',
+  'Usage cannot be verified',
+  'Usage evidence is invalid',
+  'Usage evidence conflicts',
+  'Usage evidence is missing',
+  'Cache read tokens',
+  'Cache write tokens',
+  'Reasoning tokens',
+  'Audio seconds',
+  'Video seconds',
+  'Provider units',
+  'Other operation',
+  'Chat',
+  'Responses',
+  'Embedding',
+  'Speech',
+  'Transcription',
+  'Image generation',
+  'Image editing',
+  'OCR',
+  'Video',
+  'Requests',
+  'Input Tokens',
+  'Output Tokens',
+  'Characters',
+  'Images',
+
   // Native metering editor dynamic labels
   'Dimension or image tier',
   'Provider namespace',

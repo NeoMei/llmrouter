@@ -51,6 +51,10 @@ import {
   renderAuditContent,
 } from '../../lib/format'
 import {
+  hasFinancialDetails,
+  isCentralTechnical,
+} from '../../lib/technical-usage'
+import {
   isDisplayableLogType,
   isTimingLogType,
   getLogTypeConfig,
@@ -59,6 +63,7 @@ import {
 import type { LogOtherData } from '../../types'
 import { DetailsDialog } from '../dialogs/details-dialog'
 import { ModelBadge } from '../model-badge'
+import { TechnicalUsage } from '../technical-usage'
 import { TimingMetricsCell, StreamTpsCell } from '../timing-metrics-cell'
 import { useUsageLogsContext } from '../usage-logs-provider'
 
@@ -105,6 +110,12 @@ function buildDetailSegments(
   t: (key: string, opts?: Record<string, unknown>) => string,
   isAdmin: boolean
 ): DetailSegment[] {
+  if (isCentralTechnical(other)) {
+    return [{ text: t('Cash settlement managed by UniHub'), muted: true }]
+  }
+  if (!hasFinancialDetails(other)) {
+    return [{ text: t('Finance access required'), muted: true }]
+  }
   const segments = buildTypeDetailSegments(log, other, t)
   // Quota saturation is a rare, admin-only anomaly marker; surface it first
   // and in danger styling so it stands out on the related billing log. The
@@ -656,6 +667,10 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
 
         const other = parseLogOther(log.other)
 
+        if (other && isCentralTechnical(other)) {
+          return <TechnicalUsage log={log} other={other} />
+        }
+
         const promptTokens = log.prompt_tokens || 0
         const completionTokens = log.completion_tokens || 0
         if (promptTokens === 0 && completionTokens === 0) {
@@ -704,6 +719,14 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         const quota = row.getValue('quota') as number
         const other = parseLogOther(log.other)
         const isSubscription = other?.billing_source === 'subscription'
+
+        if (isCentralTechnical(other)) {
+          return (
+            <span className='text-muted-foreground text-xs'>
+              {t('Cash settlement managed by UniHub')}
+            </span>
+          )
+        }
 
         if (other?.financial_details === false) {
           return (

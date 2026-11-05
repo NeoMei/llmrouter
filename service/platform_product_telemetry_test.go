@@ -273,3 +273,16 @@ func TestProductSubscriptionTelemetrySurvivesIdempotencyCleanup(t *testing.T) {
 	require.Len(t, after.QuotaData, 1)
 	assert.Equal(t, 1, after.QuotaData[0].Count)
 }
+
+func TestCentralTechnicalLogsHaveNoFinancialDetails(t *testing.T) {
+	db, _ := setupProductTelemetryReadTest(t)
+	now := time.Now().Unix()
+	require.NoError(t, db.Create(&platformbilling.Call{CallID: "technical-no-finance", ActorID: "actor-42", InstanceID: "default", FundingProductID: "llmrouter", Model: "m", Status: "SETTLED", TelemetryOutcome: "success", CreatedAt: time.Unix(now, 0)}).Error)
+	result, err := ReadPlatformTelemetry(context.Background(), platformbilling.TechnicalScope{ActorID: "actor-42", InstanceID: "default"}, 42, "member", PlatformTelemetryFilter{Start: now - 60, End: now + 1})
+	require.NoError(t, err)
+	require.Len(t, result.Logs, 1)
+	var other map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(result.Logs[0].Other, &other))
+	assert.Equal(t, false, other["financial_details"])
+	assert.NotContains(t, other, "central_charged")
+}

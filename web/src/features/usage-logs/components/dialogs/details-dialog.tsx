@@ -77,11 +77,16 @@ import {
   renderAuditContent,
 } from '../../lib/format'
 import {
+  hasFinancialDetails,
+  isCentralTechnical,
+} from '../../lib/technical-usage'
+import {
   getLogTypeConfig,
   isPerCallBilling,
   isTimingLogType,
 } from '../../lib/utils'
 import { USAGE_BILLING_PATH, type LogOtherData } from '../../types'
+import { TechnicalUsage } from '../technical-usage'
 
 // Maps a channel-update changed-field token (as recorded by the backend audit)
 // to its i18n label key for display in the audit details.
@@ -490,6 +495,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const isManage = props.log.type === 3
   const isSubscription = other?.billing_source === 'subscription'
   const isTieredBilling =
+    hasFinancialDetails(other) &&
     isConsume &&
     !isViolation &&
     other?.billing_mode === 'tiered_expr' &&
@@ -740,42 +746,52 @@ export function DetailsDialog(props: DetailsDialogProps) {
           )}
         </div>
 
-        {(other?.billing_unit === 'request' || other?.native_usage_unit) && (
+        {isCentralTechnical(other) && other && (
           <DetailSection label={t('Native usage')}>
-            {other.billing_unit === 'request' &&
-              other.request_count != null && (
-                <DetailRow
-                  label={t('Requests')}
-                  value={String(other.request_count)}
-                />
-              )}
-            {other.native_usage_unit === 'images' &&
-              other.native_usage_images != null && (
-                <DetailRow
-                  label={t('Images')}
-                  value={String(other.native_usage_images)}
-                />
-              )}
-            {other.native_usage_unit === 'characters' &&
-              other.native_usage_characters != null && (
-                <DetailRow
-                  label={t('Characters')}
-                  value={String(other.native_usage_characters)}
-                />
-              )}
-            {other.native_pricing && (
-              <DetailRow
-                label={t('Pricing basis')}
-                value={other.native_pricing}
-              />
-            )}
+            <TechnicalUsage log={props.log} other={other} />
             <p className='text-muted-foreground text-xs'>
-              {t(
-                'Native units are separate from tokens. Zero tokens do not imply a free request.'
-              )}
+              {t('Cash settlement managed by UniHub')}
             </p>
           </DetailSection>
         )}
+
+        {!isCentralTechnical(other) &&
+          (other?.billing_unit === 'request' || other?.native_usage_unit) && (
+            <DetailSection label={t('Native usage')}>
+              {other.billing_unit === 'request' &&
+                other.request_count != null && (
+                  <DetailRow
+                    label={t('Requests')}
+                    value={String(other.request_count)}
+                  />
+                )}
+              {other.native_usage_unit === 'images' &&
+                other.native_usage_images != null && (
+                  <DetailRow
+                    label={t('Images')}
+                    value={String(other.native_usage_images)}
+                  />
+                )}
+              {other.native_usage_unit === 'characters' &&
+                other.native_usage_characters != null && (
+                  <DetailRow
+                    label={t('Characters')}
+                    value={String(other.native_usage_characters)}
+                  />
+                )}
+              {other.native_pricing && hasFinancialDetails(other) && (
+                <DetailRow
+                  label={t('Pricing basis')}
+                  value={other.native_pricing}
+                />
+              )}
+              <p className='text-muted-foreground text-xs'>
+                {t(
+                  'Native units are separate from tokens. Zero tokens do not imply a free request.'
+                )}
+              </p>
+            </DetailSection>
+          )}
 
         {/* Request conversion (admin only, not for refund) */}
         {showConversion && (
@@ -818,39 +834,41 @@ export function DetailsDialog(props: DetailsDialogProps) {
         )}
 
         {/* Quota saturation marker (admin only) */}
-        {props.isAdmin && other?.admin_info?.quota_saturation && (
-          <DetailSection
-            icon={<AlertTriangle className='size-3.5' aria-hidden='true' />}
-            label={t('Quota clamped')}
-            variant='danger'
-          >
-            <p className='mb-1 text-xs wrap-break-word'>
-              {t('Quota saturation protection triggered')}
-            </p>
-            <DetailRow
-              label={t('Kind')}
-              value={quotaSaturationKindLabel(
-                other.admin_info.quota_saturation.kind,
-                t
-              )}
-            />
-            <DetailRow
-              label={t('Original value')}
-              value={String(other.admin_info.quota_saturation.original)}
-              mono
-            />
-            <DetailRow
-              label={t('Clamped to')}
-              value={String(other.admin_info.quota_saturation.clamped)}
-              mono
-            />
-            <DetailRow
-              label={t('Operation')}
-              value={other.admin_info.quota_saturation.op}
-              mono
-            />
-          </DetailSection>
-        )}
+        {props.isAdmin &&
+          hasFinancialDetails(other) &&
+          other?.admin_info?.quota_saturation && (
+            <DetailSection
+              icon={<AlertTriangle className='size-3.5' aria-hidden='true' />}
+              label={t('Quota clamped')}
+              variant='danger'
+            >
+              <p className='mb-1 text-xs wrap-break-word'>
+                {t('Quota saturation protection triggered')}
+              </p>
+              <DetailRow
+                label={t('Kind')}
+                value={quotaSaturationKindLabel(
+                  other.admin_info.quota_saturation.kind,
+                  t
+                )}
+              />
+              <DetailRow
+                label={t('Original value')}
+                value={String(other.admin_info.quota_saturation.original)}
+                mono
+              />
+              <DetailRow
+                label={t('Clamped to')}
+                value={String(other.admin_info.quota_saturation.clamped)}
+                mono
+              />
+              <DetailRow
+                label={t('Operation')}
+                value={other.admin_info.quota_saturation.op}
+                mono
+              />
+            </DetailSection>
+          )}
 
         {/* Reject reason (admin only) */}
         {props.isAdmin && other?.reject_reason && (
@@ -864,7 +882,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
         )}
 
         {/* Violation fee info */}
-        {isViolation && other && (
+        {isViolation && other && hasFinancialDetails(other) && (
           <DetailSection
             icon={<AlertTriangle className='size-3.5' aria-hidden='true' />}
             label={t('Violation Fee')}
@@ -1097,12 +1115,14 @@ export function DetailsDialog(props: DetailsDialogProps) {
         )}
 
         {/* Token breakdown (for consume/error types with token data) */}
-        {isDisplayableType(props.log.type) && other && (
-          <TokenBreakdown log={props.log} other={other} />
-        )}
+        {isDisplayableType(props.log.type) &&
+          other &&
+          !isCentralTechnical(other) && (
+            <TokenBreakdown log={props.log} other={other} />
+          )}
 
         {/* Billing breakdown (consume type) */}
-        {isConsume && other && !isViolation && (
+        {isConsume && other && hasFinancialDetails(other) && !isViolation && (
           <BillingBreakdown
             log={props.log}
             other={other}
@@ -1188,7 +1208,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
           )}
 
         {/* Subscription billing details */}
-        {isSubscription && other && (
+        {isSubscription && other && hasFinancialDetails(other) && (
           <DetailSection label={t('Subscription Billing')}>
             {other.subscription_plan_id && (
               <DetailRow

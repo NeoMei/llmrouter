@@ -131,7 +131,7 @@ export function CommonLogsStats() {
             accent='bg-rose-500/65'
           />
           <StatBadge
-            label={t('TPM')}
+            label={t('Recorded tokens/min (coverage may be incomplete)')}
             value={stats.tpm}
             accent='bg-slate-400/70'
           />

@@ -123,7 +123,7 @@ func ReadPlatformTelemetry(ctx context.Context, scope platformbilling.TechnicalS
 			continue
 		}
 		other := map[string]any{
-			"funding_owner": "unihub", "actor_id": row.Scope.ActorID, "account_id": row.Scope.AccountID, "credential_id": row.Scope.CredentialID,
+			"financial_details": false, "funding_owner": "unihub", "actor_id": row.Scope.ActorID, "account_id": row.Scope.AccountID, "credential_id": row.Scope.CredentialID,
 			"origin_product_id": row.Scope.OriginProductID, "funding_product_id": row.Scope.FundingProductID, "instance_id": row.Scope.InstanceID,
 			"call_id": row.Scope.CallID, "task_id": row.Scope.TaskID, "operation": row.Operation, "outcome": row.Outcome,
 			"usage_state": row.UsageState, "central_status": row.Status, "central_asset": row.Asset,

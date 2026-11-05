@@ -47,9 +47,9 @@ func TestNativeBillingCrossDatabaseAcceptance(t *testing.T) {
 			require.NoError(t, err)
 			conn.SetMaxOpenConns(1)
 			defer conn.Close()
-			require.NoError(t, db.AutoMigrate(&User{}, &Token{}, &Channel{}, &SubscriptionPlan{}, &UserSubscription{}, &OCRJob{}, &OCROperation{}, &OCRAuditEvent{}, &NativeBilling{}, &Log{}, &OCRLogReceipt{}))
+			require.NoError(t, db.AutoMigrate(&User{}, &Token{}, &Channel{}, &SubscriptionPlan{}, &UserSubscription{}, &OCRJob{}, &OCROperation{}, &OCRAuditEvent{}, &NativeBilling{}, &NativeUsageReceipt{}, &QuotaData{}, &Log{}, &OCRLogReceipt{}))
 			// Run migrations again to verify persisted portable receipt/schema shape.
-			require.NoError(t, db.AutoMigrate(&NativeBilling{}, &OCROperation{}, &OCRAuditEvent{}, &OCRLogReceipt{}))
+			require.NoError(t, db.AutoMigrate(&NativeBilling{}, &NativeUsageReceipt{}, &QuotaData{}, &OCROperation{}, &OCRAuditEvent{}, &OCRLogReceipt{}))
 			u := User{Username: "native-" + uuid.NewString()[:8], AffCode: uuid.NewString()[:16], Quota: 1000, Status: common.UserStatusEnabled}
 			require.NoError(t, db.Create(&u).Error)
 			tok := Token{UserId: u.Id, Key: uuid.NewString(), RemainQuota: 500, Status: common.TokenStatusEnabled, ExpiredTime: -1}

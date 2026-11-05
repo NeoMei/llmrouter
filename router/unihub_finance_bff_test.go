@@ -85,6 +85,10 @@ func TestBrokerFinanceBFFUsesFreshActorAndScopedRoutes(t *testing.T) {
 			return
 		}
 		financeCalls++
+		if strings.Contains(r.URL.Path, "/accounts/other/") {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
 		if r.Method != http.MethodGet {
 			writeCalls++
 			if !financeWritable || strings.Contains(r.URL.Path, "/accounts/other/") || (financeRole == "member" && !strings.Contains(r.URL.Path, "/api-keys")) {
@@ -124,6 +128,10 @@ func TestBrokerFinanceBFFUsesFreshActorAndScopedRoutes(t *testing.T) {
 		}
 		if r.URL.Path == "/internal/v1/product-finance/accounts" {
 			_, _ = w.Write([]byte(`[{"id":"payer","role":"owner"}]`))
+			return
+		}
+		if r.URL.Path == "/internal/v1/product-finance/accounts/payer/wallets" && r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`[{"product_id":"llmrouter","asset":"CNY/6","amount":"2340000"}]`))
 			return
 		}
 		if r.URL.Path == "/internal/v1/product-finance/accounts/payer/recharges" && r.Method == http.MethodPost {
@@ -209,6 +217,52 @@ func TestBrokerFinanceBFFUsesFreshActorAndScopedRoutes(t *testing.T) {
 	require.NoError(t, common.Unmarshal(brokerAccess.Body.Bytes(), &brokerFinance))
 	assert.LessOrEqual(t, brokerFinance.Finance.Expires, sourceExpiry)
 	assert.Equal(t, http.StatusOK, request("GET", "/api/unihub/bff/v1/accounts", "", "", "", nil).Code)
+	t.Run("read-only-gate-keeps-broker-writes-closed", func(t *testing.T) {
+		t.Setenv("UNIHUB_PRODUCT_FINANCE_ENABLED", "")
+		t.Setenv("UNIHUB_PRODUCT_FINANCE_READ_ONLY_ENABLED", "")
+		closed := request("GET", "/api/unihub/access", "", "", "", nil)
+		require.Equal(t, http.StatusOK, closed.Code)
+		assert.Contains(t, closed.Body.String(), `"available":false`)
+		assert.Equal(t, http.StatusForbidden, request("GET", "/api/unihub/bff/v1/accounts", "", "", "", nil).Code)
+		t.Setenv("UNIHUB_PRODUCT_FINANCE_READ_ONLY_ENABLED", "true")
+		readAccess := request("GET", "/api/unihub/access", "", "", "", nil)
+		require.Equal(t, http.StatusOK, readAccess.Code, readAccess.Body.String())
+		require.Contains(t, readAccess.Body.String(), `"available":true`)
+		assert.Contains(t, readAccess.Body.String(), `"write_scopes":[]`)
+		assert.Equal(t, http.StatusOK, request("GET", "/api/unihub/bff/v1/accounts", "", "", "", nil).Code)
+		wallet := request("GET", "/api/unihub/bff/v1/accounts/payer/wallets", "", "", "", nil)
+		require.Equal(t, http.StatusOK, wallet.Code, wallet.Body.String())
+		assert.Contains(t, wallet.Body.String(), `"amount":"2340000"`)
+		assert.Equal(t, http.StatusForbidden, request("GET", "/api/unihub/bff/v1/accounts/other/wallets", "", "", "", nil).Code)
+		beforeReadOnlyWrites, beforeReadOnlyFinance := writeCalls, financeCalls
+		for _, action := range []struct{ method, path string }{
+			{"POST", "recharges"}, {"POST", "recharges/order/sandbox-settle"}, {"POST", "api-keys"}, {"PUT", "usage-budget"}, {"DELETE", "api-keys/key"},
+		} {
+			body := `{}`
+			if action.method == "DELETE" {
+				body = ""
+			}
+			var headers http.Header
+			if action.path == "recharges" {
+				headers = http.Header{"Idempotency-Key": []string{"read-only-denial"}}
+			}
+			denied := request(action.method, "/api/unihub/bff/v1/accounts/payer/"+action.path, body, uniHubCSRF(bundle.Session.SID), "https://dashboard.test", headers)
+			assert.Equal(t, http.StatusForbidden, denied.Code, action.method+" "+action.path)
+		}
+		assert.Equal(t, beforeReadOnlyWrites, writeCalls, "read-only writes never reach the center even when central write permission exists")
+		assert.Equal(t, beforeReadOnlyFinance, financeCalls, "read-only denied writes do not dispatch any finance request")
+		sourceRevoked = true
+		beforeRevoked := financeCalls
+		assert.Equal(t, http.StatusServiceUnavailable, request("GET", "/api/unihub/bff/v1/accounts", "", "", "", nil).Code)
+		assert.Equal(t, beforeRevoked, financeCalls)
+		sourceRevoked = false
+		revokeSourceDuringFinance = true
+		late := request("GET", "/api/unihub/bff/v1/accounts/payer/wallets", "", "", "", nil)
+		assert.Equal(t, http.StatusServiceUnavailable, late.Code)
+		assert.NotContains(t, late.Body.String(), "2340000")
+		revokeSourceDuringFinance = false
+		sourceRevoked = false
+	})
 	financeWritable = false
 	readOnlyAccess := request("GET", "/api/unihub/access", "", "", "", nil)
 	require.Equal(t, http.StatusOK, readOnlyAccess.Code)

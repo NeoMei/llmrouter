@@ -493,3 +493,173 @@ test('switching identity during OIDC refresh cannot authorize the previous payer
   ).toBe(previousReads)
   expect(tracked.writes).toEqual([])
 })
+
+test('product broker login shows the verified payer unified recharge link', async ({
+  page,
+}) => {
+  const tracked = await cashFixture(page)
+  const broker = bundle(42, true)
+  broker.session.login_method = 'product_broker'
+  await page.route('**/api/user/auth/refresh', (route) =>
+    route.fulfill({ json: { success: true, data: broker } })
+  )
+  await page.goto('/wallet')
+  await expect(
+    page.getByRole('link', {
+      name: 'Recharge unified cash in UniHub',
+      exact: true,
+    })
+  ).toHaveAttribute(
+    'href',
+    'https://hub.invalid/?view=wallets&account=payer&wallet=unified'
+  )
+  await expect(page.getByText('300.000000 CNY', { exact: true })).toBeVisible()
+  expect(tracked.requests).toContain(
+    '/api/unihub/bff/v1/accounts/payer/wallets'
+  )
+  expect(tracked.writes).toEqual([])
+})
+
+for (const failure of ['member', 'forbidden', 'unavailable']) {
+  test(`product broker ${failure} wallet authority cannot expose a recharge link`, async ({
+    page,
+  }) => {
+    const tracked = await cashFixture(
+      page,
+      'payer',
+      failure === 'member' ? 'member' : 'owner'
+    )
+    const broker = bundle(42, true)
+    broker.session.login_method = 'product_broker'
+    await page.route('**/api/user/auth/refresh', (route) =>
+      route.fulfill({ json: { success: true, data: broker } })
+    )
+    if (failure !== 'member') {
+      await page.route('**/api/unihub/bff/v1/accounts/payer/wallets', (route) =>
+        route.fulfill({
+          status: failure === 'forbidden' ? 403 : 503,
+          json: { error: 'unavailable' },
+        })
+      )
+    }
+    await page.goto('/wallet')
+    await expect(page.getByRole('alert')).toContainText(
+      'Central wallet details are unavailable'
+    )
+    await expect(
+      page.getByRole('link', { name: 'Recharge unified cash in UniHub' })
+    ).toHaveCount(0)
+    await expect(page.getByText('300.000000 CNY', { exact: true })).toHaveCount(
+      0
+    )
+    await expect(
+      page.getByLabel('Managed model wallet unavailable', { exact: true })
+    ).toHaveText('—')
+    expect(tracked.writes).toEqual([])
+  })
+}
+
+test('near-expiry product broker refresh retains the verified payer link', async ({
+  page,
+}) => {
+  const tracked = await cashFixture(page)
+  const broker = bundle(42, true)
+  broker.session.login_method = 'product_broker'
+  await page.route('**/api/user/auth/refresh', (route) =>
+    route.fulfill({ json: { success: true, data: broker } })
+  )
+  await page.goto('/wallet')
+  const recharge = page.getByRole('link', {
+    name: 'Recharge unified cash in UniHub',
+    exact: true,
+  })
+  await expect(recharge).toBeVisible()
+  let refreshes = 0
+  await page.route('**/api/user/auth/refresh', (route) => {
+    refreshes += 1
+    return route.fulfill({ json: { success: true, data: broker } })
+  })
+  const nearExpiry = {
+    ...broker,
+    access_expires_at: Math.floor(Date.now() / 1000) + 30,
+  }
+  await page.evaluate(
+    (value) => window.settingsFixture.signIn(value, false, true),
+    nearExpiry
+  )
+  await page
+    .getByRole('button', { name: 'Refresh wallet', exact: true })
+    .click()
+  await expect.poll(() => refreshes).toBe(1)
+  await expect(recharge).toHaveAttribute(
+    'href',
+    'https://hub.invalid/?view=wallets&account=payer&wallet=unified'
+  )
+  expect(tracked.writes).toEqual([])
+})
+
+for (const from of ['unihub', 'product_broker']) {
+  test(`switching login method from ${from} discards the previous wallet response`, async ({
+    page,
+  }) => {
+    const tracked = await cashFixture(page)
+    const current = bundle(42, true)
+    current.session.login_method = from
+    await page.route('**/api/user/auth/refresh', (route) =>
+      route.fulfill({ json: { success: true, data: current } })
+    )
+    let start!: () => void
+    const started = new Promise<void>((resolve) => {
+      start = resolve
+    })
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await page.route(
+      '**/api/unihub/bff/v1/accounts/payer/wallets',
+      async (route) => {
+        start()
+        await gate
+        await route.fulfill({
+          json: [
+            { product_id: 'llmrouter', asset: 'CNY/6', amount: '300000000' },
+          ],
+        })
+      }
+    )
+    await page.goto('/wallet')
+    await started
+    await page.route('**/api/unihub/bff/v1/accounts', (route) =>
+      route.fulfill({ status: 403, json: { error: 'forbidden' } })
+    )
+    const cancelledRead = page.waitForEvent('requestfailed', {
+      predicate: (request) =>
+        new URL(request.url()).pathname ===
+        '/api/unihub/bff/v1/accounts/payer/wallets',
+    })
+    const changed = bundle(42, true)
+    changed.session.login_method =
+      from === 'unihub' ? 'product_broker' : 'unihub'
+    await page.evaluate(
+      (value) => window.settingsFixture.signIn(value),
+      changed
+    )
+    await expect(page.getByRole('alert')).toContainText(
+      'Central wallet details are unavailable'
+    )
+    release()
+    await cancelledRead
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    )
+    await expect(page.getByText('300.000000 CNY', { exact: true })).toHaveCount(
+      0
+    )
+    await expect(
+      page.getByRole('link', { name: 'Recharge unified cash in UniHub' })
+    ).toHaveCount(0)
+    expect(tracked.writes).toEqual([])
+  })
+}

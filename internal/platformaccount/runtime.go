@@ -25,8 +25,14 @@ func FinanceEnabled() bool {
 	return RuntimeEnabled() && os.Getenv("UNIHUB_PRODUCT_FINANCE_ENABLED") == "true"
 }
 
+// FinanceReadEnabled permits the existing actor-bound reads without enabling
+// financial writes. Both gates remain closed unless explicitly configured.
+func FinanceReadEnabled() bool {
+	return FinanceEnabled() || RuntimeEnabled() && os.Getenv("UNIHUB_PRODUCT_FINANCE_READ_ONLY_ENABLED") == "true"
+}
+
 func FinanceClient(config Config) (*userkit.ProductFinanceClient, error) {
-	if !FinanceEnabled() {
+	if !FinanceReadEnabled() {
 		return nil, errors.New("central product finance disabled")
 	}
 	product := os.Getenv("UNIHUB_PRODUCT_ID")

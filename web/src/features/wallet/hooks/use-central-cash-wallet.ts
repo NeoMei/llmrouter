@@ -71,12 +71,14 @@ export function useCentralCashWallet(props: {
   ready: boolean
   revision: number
 }) {
-  const oidc = useAuthStore(
+  const centralSession = useAuthStore(
     (state) =>
       state.auth.user?.identity_source === 'unihub' &&
-      state.auth.session?.login_method === 'unihub'
+      (state.auth.session?.login_method === 'unihub' ||
+        state.auth.session?.login_method === 'product_broker')
   )
-  const eligible = oidc && !!props.account && payerID.test(props.account)
+  const eligible =
+    centralSession && !!props.account && payerID.test(props.account)
   const query = useQuery({
     queryKey: [
       'central-cash-wallet',
@@ -99,13 +101,15 @@ export function useCentralCashWallet(props: {
         previous.user?.id !== current.user?.id ||
         previous.user?.unihub_user_id !== current.user?.unihub_user_id ||
         previous.session?.sid !== current.session?.sid ||
+        previous.session?.login_method !== current.session?.login_method ||
         previous.user?.role !== current.user?.role ||
         previous.user?.authentication_realm !==
           current.user?.authentication_realm ||
         previous.session?.authentication_realm !==
           current.session?.authentication_realm ||
         current.user?.identity_source !== 'unihub' ||
-        current.session?.login_method !== 'unihub'
+        (current.session?.login_method !== 'unihub' &&
+          current.session?.login_method !== 'product_broker')
       ) {
         throw new Error('Wallet identity changed')
       }

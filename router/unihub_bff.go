@@ -77,7 +77,7 @@ func registerUniHubBFF(r *gin.Engine, config platformaccount.Config) {
 			if resolveErr == nil && oidc.Access.ExpiresAt > time.Now().Unix() && oidc.Access.Subject == p.Access.Subject && oidc.Access.Issuer == p.Access.Issuer && oidc.Access.ProductID == p.Access.ProductID && oidc.Access.InstanceID == p.Access.InstanceID {
 				financeAccess = gin.H{"available": true, "transport": "oidc", "central_user_id": oidc.Access.Subject, "expires_at": min(oidc.Access.ExpiresAt, p.Access.ExpiresAt, current.ExpiresAt)}
 			}
-		} else if e == nil && platformaccount.FinanceEnabled() {
+		} else if e == nil && platformaccount.FinanceReadEnabled() {
 			proof, proofErr := runtimeFinanceActor(c.Request.Context(), identity, p, config)
 			client, clientErr := platformaccount.FinanceClient(config)
 			if proofErr == nil && clientErr == nil {
@@ -110,7 +110,7 @@ func registerUniHubBFF(r *gin.Engine, config platformaccount.Config) {
 							Scopes       []string `json:"scopes"`
 						}
 						writeScopes := []string{}
-						if capsErr == nil && capsResult.StatusCode == http.StatusOK && common.UnmarshalUnique(capsResult.Body, &caps) == nil && caps.Kind == "product" && caps.ProductID == config.ProductID && caps.InstanceID == config.InstanceID && caps.ClientID != "" && caps.FinanceWrite {
+						if platformaccount.FinanceEnabled() && capsErr == nil && capsResult.StatusCode == http.StatusOK && common.UnmarshalUnique(capsResult.Body, &caps) == nil && caps.Kind == "product" && caps.ProductID == config.ProductID && caps.InstanceID == config.InstanceID && caps.ClientID != "" && caps.FinanceWrite {
 							for _, scope := range caps.Scopes {
 								if scope == "model-credentials:write" || scope == "settings:write" || scope == "recharges:write" {
 									writeScopes = append(writeScopes, scope)
@@ -192,7 +192,7 @@ func registerUniHubBFF(r *gin.Engine, config platformaccount.Config) {
 			return
 		}
 		if session.LoginMethod != "unihub" {
-			if !platformaccount.FinanceEnabled() || !runtimeFinanceRoute(c.Request.Method, path) {
+			if !runtimeFinanceRoute(c.Request.Method, path) || !platformaccount.FinanceReadEnabled() || c.Request.Method != http.MethodGet && !platformaccount.FinanceEnabled() {
 				c.Status(http.StatusForbidden)
 				return
 			}

@@ -20,6 +20,13 @@ For commercial licensing, please contact support@quantumnous.com
 // These cover dynamic labels (e.g. constants, configs) that are passed into t at runtime.
 export const STATIC_I18N_KEYS = [
   // Technical usage evidence and dimensions
+  'Text tokens',
+  'Visual tokens',
+  'Video seconds (720p)',
+  'Video seconds (1080p)',
+  'Multimodal embedding',
+  'Reranking',
+
   'Usage confirmed',
   'Usage cannot be verified',
   'Usage evidence is invalid',

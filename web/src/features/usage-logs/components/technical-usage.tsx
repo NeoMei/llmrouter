@@ -45,9 +45,14 @@ export function TechnicalUsage(props: { log: UsageLog; other: LogOtherData }) {
       )}
       {usage.measurements.map((m) => (
         <span key={`${m.key}/${m.unit}/${m.provider_unit ?? ''}`}>
-          {t(measurementLabels[m.key] ?? 'Images')}
-          {m.unit === 'image' && m.key !== 'images' ? ` (${m.key})` : ''}
-          {m.provider_unit ? ` (${m.provider_unit})` : ''}: {m.formatted}
+          {t(m.unit === 'image' ? 'Images' : measurementLabels[m.key])}
+          {m.unit === 'image' && m.key !== 'images' && (
+            <span className='whitespace-pre-wrap'>{` (${m.key})`}</span>
+          )}
+          {m.provider_unit && (
+            <span className='whitespace-pre-wrap'>{` (${m.provider_unit})`}</span>
+          )}
+          : {m.formatted}
         </span>
       ))}
       {!hasNativeTokens && hasLegacyTokens && (

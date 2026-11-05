@@ -1,3 +1,10 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+
+import i18n from 'i18next'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { initReactI18next } from 'react-i18next'
+
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -16,13 +23,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import assert from 'node:assert/strict'
-import { test } from 'node:test'
-
-import i18n from 'i18next'
-import { renderToStaticMarkup } from 'react-dom/server'
-import { initReactI18next } from 'react-i18next'
-
+import parityCases from '../../../../../pkg/metering/testdata/technical-presentation.json'
 import { TechnicalUsage } from '../components/technical-usage'
 import { usageLogSchema } from '../data/schema'
 import {
@@ -152,12 +153,126 @@ test('confirmed legacy token evidence keeps its confirmed state without native d
   assert.doesNotMatch(html, /Usage evidence is missing/)
 })
 
-test('image resolution dimensions outside the native integer bound are invalid', () => {
-  assert.equal(
-    technicalUsage({
+for (const fixture of parityCases) {
+  test(`Go native producer parity: ${fixture.name}`, () => {
+    const result = technicalUsage({
+      operation: fixture.usage.operation,
       usage_state: 'confirmed',
-      native_measurements: [measurement('9999999999x1024', 'image', '1')],
-    }).state,
-    'Usage evidence is invalid'
-  )
+      native_measurements: fixture.usage.measurements,
+    })
+    assert.equal(
+      result.state,
+      fixture.valid ? 'Usage confirmed' : 'Usage evidence is invalid'
+    )
+    if (fixture.valid) {
+      assert.deepEqual(
+        result.measurements.map((m) => ({
+          key: m.key,
+          unit: m.unit,
+          provider_unit: m.provider_unit,
+          quantity: m.quantity,
+        })),
+        fixture.usage.measurements.map((m) => ({
+          ...m,
+          provider_unit: 'provider_unit' in m ? m.provider_unit : undefined,
+        }))
+      )
+    } else assert.deepEqual(result.measurements, [])
+  })
+}
+
+test('producer-valid dimensions render their identities and do not fabricate token aggregates', () => {
+  for (const fixture of parityCases.filter((f) => f.valid)) {
+    const html = renderToStaticMarkup(
+      <TechnicalUsage
+        log={log}
+        other={{
+          ...central,
+          operation: fixture.usage.operation,
+          usage_state: 'confirmed',
+          native_measurements: fixture.usage.measurements,
+        }}
+      />
+    )
+    assert.match(html, /Usage confirmed/)
+    if (fixture.usage.operation === 'multimodal_embedding') {
+      assert.match(html, /Multimodal embedding/)
+      assert.match(html, /Text tokens.*12300/)
+      assert.match(html, /Visual tokens.*12300/)
+      assert.doesNotMatch(html, /not recorded|Recorded input|24600/)
+    }
+    if (fixture.name === 'literal image tier') {
+      assert.ok(html.includes('( custom-tier )'))
+    }
+    if (fixture.name.startsWith('video_')) {
+      assert.ok(
+        html.includes(
+          fixture.name.endsWith('720p')
+            ? 'Video seconds (720p)'
+            : 'Video seconds (1080p)'
+        )
+      )
+    }
+    assert.doesNotMatch(html, /Total Cost|Per-token/)
+  }
+})
+
+test('new operation and measurement labels translate into Chinese', async () => {
+  const locale = await import('../../../i18n/locales/zh.json')
+  i18n.addResourceBundle('zh', 'translation', locale.default.translation)
+  await i18n.changeLanguage('zh')
+  try {
+    for (const fixture of parityCases.filter((f) =>
+      [
+        'multimodal text and visual',
+        'rerank input',
+        'video_720p',
+        'video_1080p',
+      ].includes(f.name)
+    )) {
+      const html = renderToStaticMarkup(
+        <TechnicalUsage
+          log={log}
+          other={{
+            ...central,
+            operation: fixture.usage.operation,
+            usage_state: 'confirmed',
+            native_measurements: fixture.usage.measurements,
+          }}
+        />
+      )
+      assert.doesNotMatch(
+        html,
+        /Other operation|Text tokens|Visual tokens|Video seconds|Multimodal embedding|Reranking/
+      )
+      if (fixture.name === 'multimodal text and visual') {
+        assert.match(html, /多模态向量化/)
+        assert.match(html, /文本 Token/)
+        assert.match(html, /视觉 Token/)
+      }
+      if (fixture.name === 'rerank input') assert.match(html, /重排序/)
+      if (fixture.name.startsWith('video_')) assert.match(html, /视频秒数/)
+    }
+  } finally {
+    await i18n.changeLanguage('en')
+  }
+})
+
+test('literal image keys resembling token dimensions keep their image identity', () => {
+  for (const key of ['input', 'text', 'visual']) {
+    const html = renderToStaticMarkup(
+      <TechnicalUsage
+        log={log}
+        other={{
+          ...central,
+          operation: 'image_generation',
+          usage_state: 'confirmed',
+          native_measurements: [measurement(key, 'image', '1')],
+        }}
+      />
+    )
+    assert.match(html, /Images/)
+    assert.ok(html.includes(` (${key})`))
+    assert.doesNotMatch(html, /Input Tokens|Text tokens|Visual tokens/)
+  }
 })

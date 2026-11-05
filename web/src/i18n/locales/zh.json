@@ -5637,6 +5637,12 @@
     "Transcription": "语音转写",
     "Image generation": "图像生成",
     "Image editing": "图像编辑",
-    "OCR": "文字识别"
+    "OCR": "文字识别",
+    "Text tokens": "文本 Token",
+    "Visual tokens": "视觉 Token",
+    "Video seconds (720p)": "视频秒数（720p）",
+    "Video seconds (1080p)": "视频秒数（1080p）",
+    "Multimodal embedding": "多模态向量化",
+    "Reranking": "重排序"
   }
 }

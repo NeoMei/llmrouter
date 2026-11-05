@@ -5590,6 +5590,12 @@
     "Transcription": "Transcription",
     "Image generation": "Image generation",
     "Image editing": "Image editing",
-    "OCR": "OCR"
+    "OCR": "OCR",
+    "Text tokens": "Text tokens",
+    "Visual tokens": "Visual tokens",
+    "Video seconds (720p)": "Video seconds (720p)",
+    "Video seconds (1080p)": "Video seconds (1080p)",
+    "Multimodal embedding": "Multimodal embedding",
+    "Reranking": "Reranking"
   }
 }

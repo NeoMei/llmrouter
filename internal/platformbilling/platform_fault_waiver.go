@@ -261,13 +261,17 @@ func PreparePlatformFaultWaiver(ctx context.Context, db *gorm.DB, raw []byte, di
 		if !waiverCallEqual(out, p.GatewayCall) || !waiverAttemptsEqual(attempts, p.GatewayAttempts) {
 			return ErrConflict
 		}
-		if tx.Migrator().HasTable(&knowledgeResultRow{}) {
-			var count int64
-			if err := tx.Model(&knowledgeResultRow{}).Where("call_id = ?", p.CallID).Count(&count).Error; err != nil {
-				return err
-			}
-			if count != 0 {
-				return ErrConflict
+		// Empty chargeable evidence does not imply absent provider work. Neither
+		// captured results nor separately retained overage fit this waiver contract.
+		for _, observation := range []any{&knowledgeResultRow{}, &knowledgeRejectedUsage{}} {
+			if tx.Migrator().HasTable(observation) {
+				var count int64
+				if err := tx.Model(observation).Where("call_id = ?", p.CallID).Count(&count).Error; err != nil {
+					return err
+				}
+				if count != 0 {
+					return ErrConflict
+				}
 			}
 		}
 		if !apply {

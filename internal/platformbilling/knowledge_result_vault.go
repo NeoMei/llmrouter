@@ -110,7 +110,7 @@ func newKnowledgeResultVaultWithKeys(db *gorm.DB, keys map[string][]byte, active
 	if !ok {
 		return nil, ErrInvalid
 	}
-	if err := db.AutoMigrate(&knowledgeResultKey{}, &knowledgeResultRow{}, &knowledgeResultActive{}); err != nil {
+	if err := db.AutoMigrate(&knowledgeResultKey{}, &knowledgeResultRow{}, &knowledgeResultActive{}, &knowledgeRejectedUsage{}); err != nil {
 		return nil, err
 	}
 	err := db.Transaction(func(tx *gorm.DB) error {

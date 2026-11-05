@@ -36,6 +36,8 @@ type knowledgeResponse struct {
 // validateKnowledgeResponse consumes a bounded raw provider response for the
 // active, already-dispatched session. It performs no network retry, write,
 // billing or release, and returns no partial result on malformed responses.
+// Reservation policy is enforced separately by captureValidated; complete valid
+// overage observations must survive validation for nonchargeable retention.
 func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, upstream, key string, response *http.Response) (_ knowledgeResponse, err error) {
 	stage := "response_admission"
 	defer func() { err = classifyKnowledgeResultError(stage, err) }()
@@ -73,7 +75,7 @@ func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, ups
 		if err := tx.First(&row, "call_id = ?", s.call.CallID).Error; err != nil {
 			return ErrPending
 		}
-		if err := tx.First(&verifiedAttempt, "id = ? AND call_id = ?", s.attempt.ID, s.call.CallID).Error; err != nil || verifiedAttempt.Status != "DISPATCHED" || verifiedAttempt.ChannelID != channel || verifiedAttempt.UpstreamIdentity != s.attempt.UpstreamIdentity {
+		if err := tx.First(&verifiedAttempt, "id = ? AND call_id = ?", s.attempt.ID, s.call.CallID).Error; err != nil || verifiedAttempt.Status != "DISPATCHED" || verifiedAttempt.ChannelID != channel || !sameKnowledgeAttemptBinding(verifiedAttempt, s.attempt) {
 			return ErrPending
 		}
 		return nil
@@ -216,7 +218,7 @@ func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, ups
 			return knowledgeResponse{}, ErrInvalid
 		}
 		quantity, err := confirmedCount(number)
-		if err != nil || int64(quantity) > row.ReservationQuantity {
+		if err != nil {
 			return knowledgeResponse{}, ErrInvalid
 		}
 		result.usage = metering.Usage{Version: "metered_v2", Operation: "rerank", State: "confirmed", Source: "ali_rerank_actual_v1", Measurements: []metering.Measurement{{Key: "input", Unit: "token", Quantity: metering.Quantity{Value: strconv.Itoa(quantity)}}}}
@@ -247,17 +249,11 @@ func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, ups
 	if metering.ValidateUsage(*rate.Metered, result.usage) != nil {
 		return knowledgeResponse{}, ErrInvalid
 	}
-	stage = "usage_reservation_bound"
-	sum := new(big.Int)
 	for _, measurement := range result.usage.Measurements {
 		quantity, ok := new(big.Int).SetString(measurement.Quantity.Value, 10)
 		if !ok || quantity.Sign() < 0 || measurement.Quantity.Scale != 0 {
 			return knowledgeResponse{}, ErrInvalid
 		}
-		sum.Add(sum, quantity)
-	}
-	if sum.Cmp(big.NewInt(row.ReservationQuantity)) > 0 {
-		return knowledgeResponse{}, ErrInvalid
 	}
 	result.rawDigest, result.snapshot, result.attempt = sha256.Sum256(raw), row, verifiedAttempt
 	return result, nil
@@ -265,4 +261,10 @@ func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, ups
 
 func sameKnowledgeCallBinding(a, b Call) bool {
 	return a.CallID == b.CallID && a.ActorID == b.ActorID && a.AccountID == b.AccountID && a.TaskID == b.TaskID && a.OriginProductID == b.OriginProductID && a.InstanceID == b.InstanceID && a.CredentialID == b.CredentialID && a.CredentialKind == b.CredentialKind && a.Model == b.Model && a.Digest == b.Digest && a.DigestVersion == b.DigestVersion && a.WireOperation == b.WireOperation && a.WirePathModel == b.WirePathModel && a.WireMode == b.WireMode && a.Operation == b.Operation && a.MediaSnapshot == b.MediaSnapshot && a.RateSnapshot == b.RateSnapshot && a.RateID == b.RateID && a.Asset == b.Asset && a.FundingMode == b.FundingMode && a.FundingProductID == b.FundingProductID && a.FundingSnapshot == b.FundingSnapshot && a.BillingProfileVersion == b.BillingProfileVersion && a.Amount == b.Amount && a.ReservationQuantity == b.ReservationQuantity && a.ReservationOutput == b.ReservationOutput
+}
+
+// These identity fields survive database timestamp precision normalization.
+// Capture additionally rechecks CreatedAt against its persisted snapshot.
+func sameKnowledgeAttemptBinding(a, b Attempt) bool {
+	return a.ID == b.ID && a.CallID == b.CallID && a.ChannelID == b.ChannelID && a.UpstreamIdentity == b.UpstreamIdentity
 }

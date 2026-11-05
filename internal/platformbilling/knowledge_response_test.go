@@ -115,7 +115,6 @@ func TestKnowledgeResponseRejectsInvalidAndIncomplete(t *testing.T) {
 		{"embedding", `{"model":"other","data":[{"index":0,"embedding":[0,0,0]},{"index":1,"embedding":[0,0,0]}],"usage":{"prompt_tokens":3}}`},
 		{"embedding", `{"model":"upstream-embed","data":[{"index":0,"embedding":[0,0,0]},{"index":0,"embedding":[0,0,0]}],"usage":{"prompt_tokens":3}}`},
 		{"embedding", `{"model":"upstream-embed","data":[{"index":0,"embedding":[0,0]},{"index":1,"embedding":[0,0,0]}],"usage":{"prompt_tokens":3}}`},
-		{"embedding", `{"model":"upstream-embed","data":[{"index":0,"embedding":[0,0,0]},{"index":1,"embedding":[0,0,0]}],"usage":{"prompt_tokens":101}}`},
 		{"embedding", `{"model":"upstream-embed","data":[{"index":0,"embedding":[0,0,0]},{"index":1,"embedding":[0,0,0]}],"usage":{}}`},
 		{"embedding", `{"model":"upstream-embed","data":[{"index":0,"embedding":[0,0,null]},{"index":1,"embedding":[0,0,0]}],"usage":{"prompt_tokens":3}}`},
 		{"embedding", `{"model":"upstream-embed","data":[{"index":0,"embedding":[0,0,0]},{"index":1,"embedding":[0,0,0]}],"usage":{"prompt_tokens":3,"total_tokens":4}}`},
@@ -126,7 +125,6 @@ func TestKnowledgeResponseRejectsInvalidAndIncomplete(t *testing.T) {
 		{"rerank", `{"output":{"results":[{"index":1,"relevance_score":0.9}]},"usage":{"total_tokens":3}}`},
 		{"rerank", `{"output":{"results":[{"index":1,"relevance_score":0.9,"document":{"text":"wrong"}}]},"usage":{"total_tokens":3}}`},
 		{"rerank", `{"output":{"results":[{"index":1,"relevance_score":0.9,"document":{"text":"second"}}]},"usage":{"total_tokens":3,"total_tokens":3}}`},
-		{"rerank", `{"output":{"results":[{"index":1,"relevance_score":0.9,"document":{"text":"second"}}]},"usage":{"total_tokens":101}}`},
 		{"rerank", `{"output":{"results":[{"index":1,"relevance_score":0.9,"document":{"text":"second"}}]},"usage":{"total_tokens":"3"}}`},
 	} {
 		t.Run(tc.op+"/"+tc.body, func(t *testing.T) {

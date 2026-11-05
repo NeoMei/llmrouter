@@ -175,6 +175,7 @@ func (v *knowledgeResultVault) captureValidated(ctx context.Context, s *Session,
 		return ErrInvalid
 	}
 	var conflict bool
+	var rejected error
 	err = v.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := v.checkWriter(tx); err != nil {
 			return err
@@ -185,7 +186,7 @@ func (v *knowledgeResultVault) captureValidated(ctx context.Context, s *Session,
 			return ErrPending
 		}
 		var attempt Attempt
-		if err := tx.First(&attempt, "id = ? AND call_id = ?", result.attemptID, result.callID).Error; err != nil || attempt.Status != "DISPATCHED" || attempt.ChannelID != result.attempt.ChannelID || attempt.UpstreamIdentity != result.attempt.UpstreamIdentity {
+		if err := tx.First(&attempt, "id = ? AND call_id = ?", result.attemptID, result.callID).Error; err != nil || attempt.Status != "DISPATCHED" || !sameKnowledgeAttemptBinding(attempt, result.attempt) || !attempt.CreatedAt.Equal(result.attempt.CreatedAt) {
 			return ErrPending
 		}
 		if err := tx.Model(&Call{}).Where("call_id = ?", result.callID).UpdateColumn("updated_at", gorm.Expr("updated_at")).Error; err != nil {
@@ -220,8 +221,31 @@ func (v *knowledgeResultVault) captureValidated(ctx context.Context, s *Session,
 			}
 			total.Add(total, amount)
 		}
-		if row.ReservationQuantity < 1 || total.Cmp(big.NewInt(row.ReservationQuantity)) > 0 {
+		if row.ReservationQuantity < 1 {
 			return ErrInvalid
+		}
+		var prior knowledgeRejectedUsage
+		priorErr := tx.First(&prior, "call_id = ?", row.CallID).Error
+		if priorErr != nil && !errors.Is(priorErr, gorm.ErrRecordNotFound) {
+			return ErrPending
+		}
+		overage := total.Cmp(big.NewInt(row.ReservationQuantity)) > 0
+		if overage || priorErr == nil {
+			if row.Status != "UNKNOWN" || row.Evidence != "" || row.Intent != "" || row.NativeObservation != "" || (row.Charged != "" && row.Charged != "0") {
+				return ErrPending
+			}
+			if !overage {
+				return ErrConflict
+			}
+			if err := v.retainRejectedKnowledgeUsage(tx, row, attempt, result, usage, prior, priorErr == nil); err != nil {
+				return err
+			}
+			stage := "usage_reservation_bound"
+			if row.Operation == "rerank" {
+				stage = "response_shape"
+			}
+			rejected = classifyKnowledgeResultError(stage, ErrInvalid)
+			return nil
 		}
 		usageBytes, err := common.Marshal(usage)
 		if err != nil {
@@ -287,5 +311,5 @@ func (v *knowledgeResultVault) captureValidated(ctx context.Context, s *Session,
 	if conflict {
 		return ErrConflict
 	}
-	return nil
+	return rejected
 }

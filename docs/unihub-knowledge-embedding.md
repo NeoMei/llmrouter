@@ -130,3 +130,32 @@ excluded. A rejected response retains its existing unresolved call and held
 reservation. No retry, release or historical-result recovery follows from a
 parser change; without saved validated response evidence, an existing UNKNOWN
 call remains unresolved.
+
+## Rejected supplier quantities
+
+A complete, certified embedding or rerank response reporting token quantities
+above the original frozen reservation is rejected without delivering output.
+After all response, usage, immutable call and original attempt checks pass, the
+capture transaction retains one internal `platform_knowledge_rejected_usage`
+record per call. It stores bounded normalized measurements, a fixed reason and
+`NONCHARGEABLE` disposition, original call/attempt IDs and keyed binding/response
+digests. It contains no supplier body, key, request text or chargeable usage
+envelope. The table uses ordinary GORM scalar/TEXT columns on SQLite, MySQL and
+PostgreSQL and is installed with the existing knowledge-result vault schema.
+
+The original call remains `UNKNOWN`, with its hold unchanged and no charge,
+settlement intent, `Call.Evidence`, `NativeObservation` or result ciphertext.
+The transaction locks the original attempt and call and rechecks the frozen
+binding/state before retaining evidence. An identical response is idempotent;
+a different response cannot overwrite the first observation, and a later
+in-bound capture cannot promote that rejected call to settlement. Failed
+storage returns a persistence error and does not claim durable retention.
+
+Ordinary recovery and deferred finish never replay, settle or release these
+observations. The existing platform-fault waiver contract refuses a call with
+this record even though chargeable evidence is empty. It requires a separately
+reviewed operator resolution to address actual supplier overage; no such API or
+automatic resolution is introduced here. The bounded first observation follows
+operational call-record retention, independently of encrypted result expiry.
+This evidence does not certify a supplier's maximum token usage or change any
+reservation, rate, funding limit or production activation gate.

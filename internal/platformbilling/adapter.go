@@ -372,6 +372,11 @@ func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body [
 	if err != nil {
 		return nil, err
 	}
+	snapshot, err := common.Marshal(chosen)
+	if err != nil {
+		return nil, err
+	}
+	row.RateSnapshot = string(snapshot)
 	row.RateID = chosen.ID
 	row.Amount = amount
 	created := a.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&row)

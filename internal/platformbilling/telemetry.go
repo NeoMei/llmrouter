@@ -136,10 +136,12 @@ func ReadTechnicalUsage(ctx context.Context, db *gorm.DB, scope TechnicalScope, 
 			r.Outcome = "success"
 		}
 		usage := Usage{}
+		malformedEvidence := false
 		if call.Operation != "" && call.Evidence != "" {
 			usage.Metered = &metering.Usage{}
 			if common.UnmarshalJsonStr(call.Evidence, usage.Metered) != nil {
 				usage.Metered = nil
+				malformedEvidence = true
 			}
 		} else if call.Intent != "" && (call.Status == "SETTLED" || call.Status == "SETTLE_PENDING") {
 			var intent struct {
@@ -147,14 +149,18 @@ func ReadTechnicalUsage(ctx context.Context, db *gorm.DB, scope TechnicalScope, 
 			}
 			if common.UnmarshalJsonStr(call.Intent, &intent) == nil {
 				usage = intent.Usage
+			} else {
+				malformedEvidence = true
 			}
 		}
 		if call.EvidenceConflict {
 			r.UsageState = "conflict"
+		} else if malformedEvidence {
+			r.UsageState = "invalid"
 		} else if usage.Metered != nil {
 			r.UsageState = usage.Metered.State
 			var rate Rate
-			if common.UnmarshalJsonStr(call.RateSnapshot, &rate) == nil && rate.Metered != nil && metering.ValidateUsage(*rate.Metered, *usage.Metered) == nil {
+			if common.UnmarshalJsonStr(call.RateSnapshot, &rate) == nil && rate.Metered != nil && (metering.ValidateUsage(*rate.Metered, *usage.Metered) == nil || validTechnicalRequestUsage(rate, *usage.Metered)) {
 				r.UsageState, r.Outcome = "confirmed", "success"
 				r.Measurements = usage.Metered.Measurements
 				for _, m := range r.Measurements {
@@ -174,6 +180,9 @@ func ReadTechnicalUsage(ctx context.Context, db *gorm.DB, scope TechnicalScope, 
 				}
 			} else if r.UsageState == "confirmed" {
 				r.UsageState = "invalid"
+				if call.RateSnapshot == "" && validRequestMeasurement(*usage.Metered) {
+					r.UsageState = "unverifiable"
+				}
 			}
 		} else if usage.Input != "" {
 			prompt, output, valid := technicalTokenCounts(usage)
@@ -210,4 +219,21 @@ func addTechnicalTokens(current int, count int64) int {
 		return math.MaxInt32
 	}
 	return current + int(count)
+}
+
+// validTechnicalRequestUsage is a read-only compatibility check for the flat
+// legacy chat tariff. It must not widen generic metering or financial admission.
+func validTechnicalRequestUsage(rate Rate, usage metering.Usage) bool {
+	if _, err := requestBound(rate); err != nil {
+		return false
+	}
+	return validRequestMeasurement(usage) && usage.Version == rate.Metered.Version && usage.Operation == rate.Metered.Operation
+}
+
+func validRequestMeasurement(usage metering.Usage) bool {
+	if usage.Version != "metered_v2" || usage.Operation != "chat" || usage.State != "confirmed" || usage.Source != "provider" || len(usage.ProviderRequestID) > 256 || len(usage.Measurements) != 1 {
+		return false
+	}
+	m := usage.Measurements[0]
+	return m.Key == "requests" && m.Unit == "request" && m.ProviderUnit == "" && m.Quantity.Value == "1" && m.Quantity.Scale == 0
 }

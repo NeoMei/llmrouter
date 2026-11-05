@@ -1,5 +1,58 @@
 import { expect, test, type Page } from '@playwright/test'
 
+// Page routes own every API response. Only this run's Rsbuild assets may reach
+// a socket; any missing API mock or external request fails the case.
+const ownedRequests = new Map<
+  string,
+  {
+    requests: { method: string; origin: string; path: string }[]
+    unowned: string[]
+  }
+>()
+test.beforeEach(async ({ context, page }, testInfo) => {
+  const unowned: string[] = []
+  const requests: { method: string; origin: string; path: string }[] = []
+  page.on('request', (request) => {
+    const url = new URL(request.url())
+    if (url.protocol === 'http:' || url.protocol === 'https:') {
+      requests.push({
+        method: request.method(),
+        origin: url.origin,
+        path: url.pathname,
+      })
+    }
+  })
+  await context.route('**/*', async (route) => {
+    const url = new URL(route.request().url())
+    if (
+      url.origin === 'http://127.0.0.1:58004' &&
+      !url.pathname.startsWith('/api/') &&
+      !url.pathname.startsWith('/platform/')
+    ) {
+      return route.continue()
+    }
+    unowned.push(`${route.request().method()} ${url.origin}${url.pathname}`)
+    return route.abort('blockedbyclient')
+  })
+  ownedRequests.set(testInfo.testId, { requests, unowned })
+})
+test.afterEach(async ({ context }, testInfo) => {
+  const observed = ownedRequests.get(testInfo.testId)
+  ownedRequests.delete(testInfo.testId)
+  await testInfo.attach('owned-request-paths', {
+    body: JSON.stringify(
+      { ...observed, openPages: context.pages().length },
+      null,
+      2
+    ),
+    contentType: 'application/json',
+  })
+  expect(
+    observed?.unowned,
+    'Every API and external request must be fulfilled by an owned fixture'
+  ).toEqual([])
+})
+
 async function fixture(
   page: Page,
   source: 'native' | 'unihub',
@@ -71,9 +124,9 @@ async function fixture(
       body = {
         enabled: true,
         native_access: false,
-        public_origin: 'https://hub.invalid',
+        public_origin: 'http://127.0.0.1:58006',
         client_id: 'client',
-        redirect_uri: 'http://127.0.0.1:58006/unihub',
+        redirect_uri: 'http://127.0.0.1:58004/api/unihub/callback',
         product_id: 'llmrouter',
         models: ['test-model'],
       }
@@ -213,7 +266,7 @@ for (const balance of [
     await page.goto('/wallet')
     await expect(page.getByText(balance.display, { exact: true })).toBeVisible()
     await expect(
-      page.getByText('Shared cash balance', { exact: true })
+      page.getByText('Unified cash balance', { exact: true })
     ).toBeVisible()
     await expect(
       page.getByText('Referral Program', { exact: true })
@@ -271,7 +324,7 @@ test('cash administrator uses original personal order history with exact CNY amo
   })
   await page.goto('/wallet')
   await expect(
-    page.getByText('Shared cash balance', { exact: true })
+    page.getByText('Unified cash balance', { exact: true })
   ).toBeVisible()
   expect(requests).not.toContain('/api/user/topup/self')
   await page.getByRole('button', { name: 'Order History', exact: true }).click()
@@ -551,7 +604,7 @@ test('silent SSO failure returns to the original form and does not repeat after 
 })
 
 for (const source of ['native', 'unihub'] as const) {
-  test(`${source} usage keeps original charge and native receipts visible`, async ({
+  test(`${source} usage keeps technical measurements and native receipts visible`, async ({
     page,
   }) => {
     const { requests } = await fixture(page, source)
@@ -602,7 +655,13 @@ for (const source of ['native', 'unihub'] as const) {
       })
     ).toBeVisible()
     await expect(page.getByText('Product key', { exact: true })).toBeVisible()
-    await expect(page.getByText('0.246912', { exact: true })).toBeVisible()
+    await expect(page.getByLabel('Native usage', { exact: true })).toBeVisible()
+    await expect(
+      page
+        .getByText('Cash settlement managed by UniHub', { exact: true })
+        .first()
+    ).toBeVisible()
+    await expect(page.getByText('0.246912', { exact: true })).toHaveCount(0)
     expect(requests).toContain('/api/native-billing/self')
     await expect(
       page.getByRole('link', { name: 'UniHub billing', exact: true })

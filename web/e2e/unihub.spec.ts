@@ -1,4 +1,218 @@
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { resolve } from 'node:path'
+
 import { test, expect, type Page, type Route } from '@playwright/test'
+
+// Page routes own every API response. Only this run's Rsbuild assets may reach
+// a socket; any missing API mock or external request fails the case.
+const ownedRequests = new Map<
+  string,
+  {
+    requests: { method: string; origin: string; path: string }[]
+    unowned: string[]
+  }
+>()
+test.beforeEach(async ({ context, page }, testInfo) => {
+  const unowned: string[] = []
+  const requests: { method: string; origin: string; path: string }[] = []
+  page.on('request', (request) => {
+    const url = new URL(request.url())
+    if (url.protocol === 'http:' || url.protocol === 'https:') {
+      requests.push({
+        method: request.method(),
+        origin: url.origin,
+        path: url.pathname,
+      })
+    }
+  })
+  await context.route('**/*', async (route) => {
+    const url = new URL(route.request().url())
+    if (
+      url.origin === 'http://127.0.0.1:58004' &&
+      !url.pathname.startsWith('/api/') &&
+      !url.pathname.startsWith('/platform/')
+    ) {
+      return route.continue()
+    }
+    unowned.push(`${route.request().method()} ${url.origin}${url.pathname}`)
+    return route.abort('blockedbyclient')
+  })
+  ownedRequests.set(testInfo.testId, { requests, unowned })
+})
+test.afterEach(async ({ context }, testInfo) => {
+  const observed = ownedRequests.get(testInfo.testId)
+  ownedRequests.delete(testInfo.testId)
+  await testInfo.attach('owned-request-paths', {
+    body: JSON.stringify(
+      { ...observed, openPages: context.pages().length },
+      null,
+      2
+    ),
+    contentType: 'application/json',
+  })
+  expect(
+    observed?.unowned,
+    'Every API and external request must be fulfilled by an owned fixture'
+  ).toEqual([])
+})
+
+// Current routes deliberately use native keys/dashboard. The central managed
+// contracts below run the real SDK/session in Chrome, without mounting removed
+// ProductConsoleView surfaces or copying their filtering/authority logic.
+let contractBundle = ''
+let contractDirectory = ''
+test.beforeAll(() => {
+  contractDirectory = mkdtempSync(resolve(tmpdir(), 'lr-managed-contract-'))
+  const source = (file: string) => JSON.stringify(resolve('src', file))
+  const entry = resolve(contractDirectory, 'entry.ts')
+  const output = resolve(contractDirectory, 'contract.js')
+  writeFileSync(
+    entry,
+    `
+    import * as session from ${source('features/unihub/session.ts')};
+    import { ManagedAccess } from ${source('features/unihub/managed-access.ts')};
+    import { useAuthStore } from ${source('stores/auth-store.ts')};
+    window.lrContracts = { ...session, ManagedAccess, useAuthStore };
+  `
+  )
+  execFileSync('bun', [
+    'build',
+    '--tsconfig-override',
+    'tsconfig.app.json',
+    entry,
+    '--target',
+    'browser',
+    '--format',
+    'iife',
+    '--outfile',
+    output,
+  ])
+  contractBundle = readFileSync(output, 'utf8')
+})
+test.afterAll(() => {
+  if (contractDirectory) {
+    rmSync(contractDirectory, { recursive: true, force: true })
+  }
+})
+
+type ContractOperation =
+  | 'keys'
+  | 'budget'
+  | 'create'
+  | 'revoke'
+  | 'saveBudget'
+  | 'resources'
+  | 'profile'
+async function managedContract(
+  page: Page,
+  operation: ContractOperation,
+  payer = 'personal-a'
+) {
+  await page.addScriptTag({ content: contractBundle })
+  return page.evaluate(
+    async ({ operation, payer }) => {
+      const runtime = (
+        window as unknown as {
+          lrContracts: typeof import('../src/features/unihub/session') & {
+            ManagedAccess: typeof import('../src/features/unihub/managed-access').ManagedAccess
+            useAuthStore: typeof import('../src/stores/auth-store').useAuthStore
+          }
+        }
+      ).lrContracts
+      const bundle = await (
+        await fetch('/api/user/auth/refresh', { method: 'POST' })
+      ).json()
+      runtime.useAuthStore.getState().auth.setBundle(bundle.data)
+      const config = await (await fetch('/api/unihub/config')).json()
+      const session = runtime.createProductSession(config)
+      try {
+        await runtime.restoreProductSession(session)
+        session.select(payer)
+        const access = new runtime.ManagedAccess(
+          session.client,
+          payer,
+          config.product_id,
+          config.instance_id ?? 'default'
+        )
+        const authority = {
+          keys: session.canFinanceWrite('model-credentials:write'),
+          budget: session.canFinanceWrite('settings:write'),
+          recharge: session.canFinanceWrite('recharges:write'),
+        }
+        let data: unknown
+        if (operation === 'keys') {
+          data = await session.bound(() => access.keys())
+        }
+        if (operation === 'budget') {
+          data = await session.bound(() => access.budget('prepaid_cash'))
+        }
+        if (operation === 'create') {
+          data = await session.bound(() =>
+            access.createKey({
+              name: 'Broker created key',
+              models: ['synthetic'],
+              funding_mode: 'prepaid_cash',
+              max_total: '9007199254740993123',
+              max_per_call: '0',
+            })
+          )
+        }
+        if (operation === 'revoke') {
+          data = await session.bound(() => access.revokeKey('broker-key'))
+        }
+        if (operation === 'saveBudget') {
+          data = await session.bound(() =>
+            access.setBudget('prepaid_cash', {
+              version: 1,
+              max_total: '2000000',
+              max_per_call: '0',
+            })
+          )
+        }
+        if (operation === 'resources') {
+          data = await session.bound(() => session.client.resources(payer))
+        }
+        if (operation === 'profile') {
+          data = await session.bound(() =>
+            session.client.billingProfile(config.product_id)
+          )
+        }
+        return { data, authority, error: '' }
+      } catch (error) {
+        return {
+          data: undefined,
+          authority: undefined,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      } finally {
+        session.clear()
+        runtime.useAuthStore.getState().auth.reset()
+      }
+    },
+    { operation, payer }
+  )
+}
+
+async function nativeKeysRemainSeparate(page: Page) {
+  await page.goto('/keys')
+  await expect(
+    page.getByRole('heading', {
+      name: 'LLMRouter product API keys',
+      exact: true,
+    })
+  ).toBeVisible()
+  await expect(
+    page.getByLabel('Account lifetime budget', { exact: true })
+  ).toHaveCount(0)
+  await expect(
+    page.getByLabel('Key lifetime limit', { exact: true })
+  ).toHaveCount(0)
+  await expect(
+    page.getByRole('button', { name: 'Create API Key', exact: true })
+  ).toBeEnabled()
+}
 
 const accounts = [
   { id: 'personal-a', name: 'Personal A', kind: 'personal', role: 'owner' },
@@ -1291,7 +1505,7 @@ test('interactive sign-in failure returns to UniHub without an automatic redirec
   expect(attempts).toBe(1)
 })
 
-test('central console uses the selected payer for keys, wallet and overview', async ({
+test('managed key transport and central wallet bind the selected payer; native keys remain separate', async ({
   page,
 }) => {
   await fixture(page)
@@ -1346,27 +1560,27 @@ test('central console uses the selected payer for keys, wallet and overview', as
     })
   })
   await login(page)
-  await page.goto('/keys')
-  await expect(page.getByText('Personal key', { exact: true })).toBeVisible()
-  await page.getByRole('combobox').first().selectOption('team-b')
-  await expect(page.getByText('Team key', { exact: true })).toBeVisible()
+  expect((await managedContract(page, 'keys')).data).toEqual([
+    expect.objectContaining({ name: 'Personal key', account_id: 'personal-a' }),
+  ])
+  expect((await managedContract(page, 'keys', 'team-b')).data).toEqual([
+    expect.objectContaining({ name: 'Team key', account_id: 'team-b' }),
+  ])
+  await nativeKeysRemainSeparate(page)
   await expect(page.getByText('Personal key', { exact: true })).toHaveCount(0)
-  await page.goto('/wallet')
+  await expect(page.getByText('Team key', { exact: true })).toHaveCount(0)
+  await page.goto('/unihub')
   await page.getByRole('combobox').first().selectOption('team-b')
   await expect(page.getByText('2.000000 CNY', { exact: false })).toBeVisible()
   await expect(page.getByText('10.000000 CNY', { exact: false })).toHaveCount(0)
   await page.getByRole('combobox').first().selectOption('personal-a')
   await expect(page.getByText('10.000000 CNY', { exact: false })).toBeVisible()
   await expect(page.getByText('2.000000 CNY', { exact: false })).toHaveCount(0)
-  await page.goto('/dashboard')
-  await expect(page.getByText('10.000000 CNY', { exact: false })).toBeVisible()
-  await expect(page.getByText('Personal key', { exact: true })).toBeVisible()
-  await expect(page.getByText(/qwen3-rerank/)).toHaveCount(0)
   expect(seen).toContain('/api/unihub/bff/v1/accounts/personal-a/api-keys')
   expect(seen).toContain('/api/unihub/bff/v1/accounts/team-b/api-keys')
 })
 
-test('overview suggests only an active key with an explicitly authorized chat model', async ({
+test('managed key transport retains expiry and model restrictions; task capabilities and native overview stay separate', async ({
   page,
 }) => {
   await fixture(page, { models: ['rerank', 'expired-chat', 'active-chat'] })
@@ -1424,12 +1638,33 @@ test('overview suggests only an active key with an explicitly authorized chat mo
     })
   })
   await login(page)
+  const keys = await managedContract(page, 'keys')
+  expect(keys.error).toBe('')
+  expect(keys.data).toEqual([
+    expect.objectContaining({ models: ['rerank'] }),
+    expect.objectContaining({
+      models: ['expired-chat'],
+      expires_at: '2000-01-01T00:00:00Z',
+    }),
+    expect.objectContaining({
+      models: ['active-chat'],
+      actor_id: 'immutable-user',
+      account_id: 'personal-a',
+    }),
+  ])
+  await nativeKeysRemainSeparate(page)
+  await page.goto('/unihub')
+  await expect(
+    page.getByLabel('Model', { exact: true }).locator('option')
+  ).toHaveText(['expired-chat', 'active-chat'])
+  // Task capabilities are rate-bound; they do not choose an existing managed key.
+  await expect(page.getByText('Expired', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('Active', { exact: true })).toHaveCount(0)
   await page.goto('/dashboard')
-  const example = page.locator('pre code')
-  await expect(example).toContainText('"model":"active-chat"')
-  await expect(example).not.toContainText('expired-chat')
-  await expect(example).not.toContainText('rerank')
-  await expect(example).toContainText('YOUR_API_KEY')
+  await expect(
+    page.getByText('First API request', { exact: true })
+  ).toBeVisible()
+  await expect(page.getByText('YOUR_API_KEY', { exact: true })).toHaveCount(0)
 })
 
 test('task chat requires an explicit active chat capability and excludes rerank', async ({
@@ -1476,7 +1711,7 @@ test('task chat requires an explicit active chat capability and excludes rerank'
   expect(issued).toBe(0)
 })
 
-test('chat suggestions reject mismatched rate, asset, payer keys and missing metadata', async ({
+test('task suggestions reject mismatched rates while managed transport preserves payer and actor metadata', async ({
   page,
 }) => {
   await fixture(page, { models: ['chat'] })
@@ -1548,15 +1783,32 @@ test('chat suggestions reject mismatched rate, asset, payer keys and missing met
   await expect(
     page.getByRole('button', { name: 'Send new task' })
   ).toBeDisabled()
-  await page.goto('/keys')
-  await expect(page.getByText('Own key', { exact: true })).toBeVisible()
-  await expect(page.getByText('Other user key', { exact: true })).toBeVisible()
-  await page.goto('/dashboard')
-  await expect(page.locator('pre code')).toHaveCount(0)
-  await page.getByRole('combobox').first().selectOption('team-b')
-  await expect(page.getByText('Own key', { exact: true })).toBeVisible()
+  const personal = await managedContract(page, 'keys')
+  expect(personal.data).toEqual([
+    expect.objectContaining({
+      name: 'Own key',
+      actor_id: 'immutable-user',
+      account_id: 'personal-a',
+    }),
+    expect.objectContaining({
+      name: 'Other user key',
+      actor_id: 'other-user',
+      account_id: 'personal-a',
+    }),
+  ])
+  const team = await managedContract(page, 'keys', 'team-b')
+  expect(team.data).toEqual([
+    expect.objectContaining({ account_id: 'team-b', asset: 'CNY/6' }),
+    expect.objectContaining({ account_id: 'team-b', asset: 'CNY/6' }),
+  ])
+  await nativeKeysRemainSeparate(page)
+  await expect(page.getByText('Own key', { exact: true })).toHaveCount(0)
   await expect(page.getByText('Other user key', { exact: true })).toHaveCount(0)
-  await expect(page.locator('pre code')).toHaveCount(0)
+  await page.goto('/unihub')
+  await page.getByRole('combobox').first().selectOption('team-b')
+  await expect(
+    page.getByRole('button', { name: 'Send new task' })
+  ).toBeDisabled()
 })
 
 test('late capability response from the previous payer cannot leak after switch', async ({
@@ -1595,7 +1847,7 @@ test('late capability response from the previous payer cannot leak after switch'
   ).toHaveText(['team-chat'])
 })
 
-test('key management keeps finance roles authorized team keys and respects payer scope', async ({
+test('managed transport preserves key scope and capabilities; finance authority distinguishes owner billing-admin and member', async ({
   page,
 }) => {
   await fixture(page, { models: ['chat'] })
@@ -1662,37 +1914,49 @@ test('key management keeps finance roles authorized team keys and respects payer
     })
   )
   await login(page)
-  await page.goto('/keys')
-  await expect(page.getByText('Other key', { exact: true })).toBeVisible()
-  await expect(page.getByText('Wrong payer key', { exact: true })).toHaveCount(
-    0
-  )
-  await expect(
-    page.getByText('Wrong product key', { exact: true })
-  ).toHaveCount(0)
-  await expect(
-    page.getByText('Wrong instance key', { exact: true })
-  ).toHaveCount(0)
-  const own = page.getByRole('row').filter({ hasText: 'Own key' })
-  await own.locator('summary').click()
-  await expect(own.getByText('chat: chat.completions.create')).toBeVisible()
-  const other = page.getByRole('row').filter({ hasText: 'Other key' })
-  await other.locator('summary').click()
-  await expect(
-    other.getByText(
-      'Capabilities are checked against current published rates when the key is used.'
-    )
-  ).toBeVisible()
+  const owner = await managedContract(page, 'keys')
+  expect(owner.data).toEqual([
+    expect.objectContaining({
+      name: 'Own key',
+      operations: { chat: ['chat.completions.create'] },
+    }),
+    expect.objectContaining({ name: 'Other key', actor_id: 'other' }),
+    expect.objectContaining({ name: 'Wrong payer key', account_id: 'team-b' }),
+    expect.objectContaining({
+      name: 'Wrong product key',
+      origin_product_id: 'elsewhere',
+    }),
+    expect.objectContaining({
+      name: 'Wrong instance key',
+      instance_id: 'elsewhere',
+    }),
+  ])
+  expect(owner.authority).toEqual({ keys: true, budget: true, recharge: true })
   role = 'billing_admin'
-  await page.getByRole('button', { name: 'Refresh accounts and roles' }).click()
-  await expect(page.getByText('Other key', { exact: true })).toBeVisible()
+  expect((await managedContract(page, 'keys')).authority).toEqual({
+    keys: true,
+    budget: true,
+    recharge: true,
+  })
   role = 'member'
-  await page.getByRole('button', { name: 'Refresh accounts and roles' }).click()
-  await expect(page.getByText('Own key', { exact: true })).toBeVisible()
-  await expect(page.getByText('Other key', { exact: true })).toHaveCount(0)
+  expect((await managedContract(page, 'keys')).authority).toEqual({
+    keys: true,
+    budget: false,
+    recharge: false,
+  })
+  await nativeKeysRemainSeparate(page)
+  for (const name of [
+    'Own key',
+    'Other key',
+    'Wrong payer key',
+    'Wrong product key',
+    'Wrong instance key',
+  ]) {
+    await expect(page.getByText(name, { exact: true })).toHaveCount(0)
+  }
 })
 
-test('overview honors an explicit key wire restriction while accepting the real DTO without operations', async ({
+test('managed transport preserves explicit wire restriction and accepts the real DTO without operations', async ({
   page,
 }) => {
   await fixture(page, { models: ['chat'] })
@@ -1729,14 +1993,30 @@ test('overview honors an explicit key wire restriction while accepting the real 
     })
   )
   await login(page)
-  await page.goto('/dashboard')
-  await expect(
-    page.getByText('No available models', { exact: true })
-  ).toBeVisible()
-  await expect(page.locator('pre code')).toHaveCount(0)
+  expect((await managedContract(page, 'keys')).data).toEqual([
+    expect.objectContaining({ operations: { chat: ['embeddings.create'] } }),
+  ])
+  await nativeKeysRemainSeparate(page)
+  await expect(page.getByText('Own key', { exact: true })).toHaveCount(0)
   restricted = false
-  await page.reload()
-  await expect(page.locator('pre code')).toContainText('"model":"chat"')
+  const dto = await managedContract(page, 'keys')
+  expect(dto.data).toEqual([
+    expect.objectContaining({
+      models: ['chat'],
+      actor_id: 'immutable-user',
+      asset: 'CNY/6',
+    }),
+  ])
+  expect(dto.data).not.toEqual([
+    expect.objectContaining({ operations: expect.anything() }),
+  ])
+  await page.goto('/unihub')
+  await expect(
+    page.getByLabel('Model', { exact: true }).locator('option')
+  ).toHaveText(['chat'])
+  await expect(
+    page.getByRole('button', { name: 'Send new task' })
+  ).toBeEnabled()
 })
 
 test('legacy admits exclusive rate and metered mode rejects the same rate', async ({
@@ -2003,7 +2283,7 @@ test('metered chat requires the gateway usage policy to match the published cent
   ).toBeEnabled()
 })
 
-test('overview hides cached key and example when key refresh fails', async ({
+test('managed key refresh failure returns no prior key; native overview never suggests a central key', async ({
   page,
 }) => {
   await fixture(page, { models: ['chat'] })
@@ -2038,14 +2318,18 @@ test('overview hides cached key and example when key refresh fails', async ({
         })
   )
   await login(page)
-  await page.goto('/dashboard')
-  await expect(page.locator('pre code')).toContainText('"model":"chat"')
-  await expect(page.getByText('Own key', { exact: true })).toBeVisible()
+  expect((await managedContract(page, 'keys')).data).toEqual([
+    expect.objectContaining({ name: 'Own key', models: ['chat'] }),
+  ])
   failed = true
-  await page.getByRole('button', { name: 'Refresh accounts and roles' }).click()
+  const refreshed = await managedContract(page, 'keys')
+  expect(refreshed.error).not.toBe('')
+  expect(refreshed.data).toBeUndefined()
+  await nativeKeysRemainSeparate(page)
   await expect(page.getByText('Own key', { exact: true })).toHaveCount(0)
-  await expect(page.locator('pre code')).toHaveCount(0)
-  await expect(page.getByRole('alert')).toBeVisible()
+  await page.goto('/dashboard')
+  await expect(page.getByText('YOUR_API_KEY', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('Own key', { exact: true })).toHaveCount(0)
 })
 
 test('central usage pages use selected payer receipts and do not carry another payer data across switches', async ({
@@ -2121,23 +2405,17 @@ test('central usage pages use selected payer receipts and do not carry another p
     })
   })
   await login(page)
-  await page.goto('/usage-logs/common')
+  await page.goto('/unihub')
   await expect(page.getByText(/personal-a-call/)).toBeVisible()
   await page.getByRole('combobox').first().selectOption('team-b')
   await expect(page.getByText(/team-b-call/)).toBeVisible()
   await expect(page.getByText(/personal-a-call/)).toHaveCount(0)
-  await page.getByRole('button', { name: 'Local · Common Logs' }).click()
+  await page.goto('/usage-logs/common')
+  await expect(page.getByText(/team-b-call|personal-a-call/)).toHaveCount(0)
   await expect(
-    page.getByText(
-      'For UniHub accounts, local log date ranges must not exceed 30 days.'
-    )
-  ).toBeVisible()
-  await expect(
-    page.getByRole('button', { name: 'UniHub account' })
-  ).toBeVisible()
-  await page.getByRole('button', { name: 'UniHub account' }).click()
-  await expect(page.getByText(/team-b-call/)).toBeVisible()
-  await page.goto('/dashboard')
+    page.getByRole('button', { name: 'UniHub account', exact: true })
+  ).toHaveCount(0)
+  await page.goto('/unihub')
   await expect(page.getByText(/personal-a-call/)).toBeVisible()
   await expect(page.getByText(/team-b-call/)).toHaveCount(0)
 })
@@ -2200,7 +2478,7 @@ test('usage scopes require matching payer and actor; a failed refresh hides cach
     })
   })
   await login(page)
-  await page.goto('/usage-logs/common')
+  await page.goto('/unihub')
   await expect(
     page.getByText(/personal-a-call.*immutable-user.*verified-chat.*SETTLED/)
   ).toBeVisible()
@@ -2244,7 +2522,7 @@ test('overview clears old balances when resources refresh fails', async ({
         })
   )
   await login(page)
-  await page.goto('/dashboard')
+  await page.goto('/unihub')
   await expect(page.getByText(/1\.234567 CNY/)).toBeVisible()
   await expect(page.getByText(/7\.654321 CREDIT/)).toBeVisible()
   failed = true
@@ -2273,7 +2551,7 @@ test('runtime browser SSO reports account access unavailable without dropping th
       },
     })
   )
-  await page.goto('/api/unihub/login?return_to=%2Fkeys')
+  await page.goto('/api/unihub/login?return_to=%2Funihub')
   await expect(
     page.getByText(
       'UniHub account access is unavailable for this browser session. Contact the administrator.'
@@ -2282,7 +2560,7 @@ test('runtime browser SSO reports account access unavailable without dropping th
   await expect(
     page.getByText('UniHub product integration is disabled by this deployment.')
   ).toHaveCount(0)
-  await expect(page).toHaveURL(/\/keys$/)
+  await expect(page).toHaveURL(/\/unihub$/)
 })
 
 test('runtime broker session is not cleared when legacy integration is also enabled', async ({
@@ -2326,14 +2604,14 @@ test('runtime broker session is not cleared when legacy integration is also enab
     bffCalls++
     return route.fulfill({ status: 401 })
   })
-  await page.goto('/api/unihub/login?return_to=%2Fkeys')
+  await page.goto('/api/unihub/login?return_to=%2Funihub')
   await expect(
     page.getByText(
       'UniHub account access is unavailable for this browser session. Contact the administrator.'
     )
   ).toBeVisible()
   expect(bffCalls).toBe(0)
-  await expect(page).toHaveURL(/\/keys$/)
+  await expect(page).toHaveURL(/\/unihub$/)
 })
 
 test('sandbox settlement requires explicit action and server reported sandbox mode', async ({
@@ -2511,7 +2789,7 @@ for (const failedEndpoint of [
       return route.fallback()
     })
     await login(page)
-    await page.goto('/wallet')
+    await page.goto('/unihub')
     await expect(page.getByText('1.234567 CNY', { exact: false })).toBeVisible()
     await expect(
       page.getByText('Published plan', { exact: true })
@@ -2554,7 +2832,7 @@ for (const failedEndpoint of [
   'usage-budget',
   'api-keys',
 ] as const) {
-  test(`key settings hide ${failedEndpoint} data and prevent unsafe changes after refresh fails`, async ({
+  test(`managed ${failedEndpoint} transport refresh fails closed while native key controls remain separate`, async ({
     page,
   }) => {
     await fixture(page, { models: ['verified-chat'] })
@@ -2629,39 +2907,63 @@ for (const failedEndpoint of [
       return route.fallback()
     })
     await login(page)
-    await page.goto('/keys')
-    await page.getByLabel('verified-chat').check()
-    await expect(
-      page.getByRole('button', { name: 'Create API key' })
-    ).toBeEnabled()
-    await expect(
-      page.getByText('Visible managed key', { exact: true })
-    ).toBeVisible()
-    await expect(page.getByText(/7\.654321 CNY/)).toBeVisible()
-    await expect(
-      page.getByRole('button', { name: 'Save account budget' })
-    ).toBeVisible()
-    failed = true
-    await page
-      .getByRole('button', { name: 'Refresh accounts and roles' })
-      .click()
-    await expect(page.getByRole('alert').first()).toBeVisible()
-    await expect(
-      page.getByRole('button', { name: 'Create API key' })
-    ).toBeDisabled()
+    const operation = (
+      {
+        resources: 'resources',
+        'billing-profile': 'profile',
+        'usage-budget': 'budget',
+        'api-keys': 'keys',
+      } as const
+    )[failedEndpoint]
+    const initial = await managedContract(page, operation)
+    expect(initial.error).toBe('')
     if (failedEndpoint === 'resources') {
-      await expect(page.getByText(/7\.654321 CNY/)).toHaveCount(0)
+      expect(initial.data).toEqual(
+        expect.objectContaining({
+          wallets: [
+            { product_id: 'llmrouter', asset: 'CNY/6', amount: '7654321' },
+          ],
+        })
+      )
     }
-    if (failedEndpoint === 'api-keys') {
-      await expect(
-        page.getByText('Visible managed key', { exact: true })
-      ).toHaveCount(0)
+    if (failedEndpoint === 'billing-profile') {
+      expect(initial.data).toEqual(
+        expect.objectContaining({
+          usage: {
+            enabled: true,
+            default_funding_mode: 'prepaid_cash',
+            funding_modes: ['prepaid_cash'],
+          },
+        })
+      )
     }
     if (failedEndpoint === 'usage-budget') {
-      await expect(
-        page.getByRole('button', { name: 'Save account budget' })
-      ).toHaveCount(0)
+      expect(initial.data).toEqual(
+        expect.objectContaining({
+          max_total: '5000000',
+          used: '1234567',
+          version: 1,
+          asset: 'CNY/6',
+        })
+      )
     }
+    if (failedEndpoint === 'api-keys') {
+      expect(initial.data).toEqual([
+        expect.objectContaining({
+          name: 'Visible managed key',
+          account_id: 'personal-a',
+        }),
+      ])
+    }
+    failed = true
+    const refreshed = await managedContract(page, operation)
+    expect(refreshed.error).not.toBe('')
+    expect(refreshed.data).toBeUndefined()
+    await nativeKeysRemainSeparate(page)
+    await expect(
+      page.getByText('Visible managed key', { exact: true })
+    ).toHaveCount(0)
+    await expect(page.getByText(/7\.654321 CNY/)).toHaveCount(0)
   })
 }
 
@@ -2744,7 +3046,7 @@ test('a failed offer refresh discards a previously quoted upgrade', async ({
 })
 
 for (const accessMode of ['write', 'read-only', 'member'] as const) {
-  test(`broker finance ${accessMode} uses dedicated current financial controls`, async ({
+  test(`broker finance ${accessMode} uses managed transport authority and central recharge controls`, async ({
     page,
   }) => {
     await fixture(page, { models: ['synthetic'] })
@@ -2882,6 +3184,13 @@ for (const accessMode of ['write', 'read-only', 'member'] as const) {
         })
       }
       if (path.endsWith('/usage-budget')) {
+        if (request.method() === 'PUT') {
+          expect(request.postDataJSON()).toEqual({
+            version: 1,
+            max_total: '2000000',
+            max_per_call: '0',
+          })
+        }
         return route.fulfill({
           json: {
             account_id: 'personal-a',
@@ -2899,6 +3208,15 @@ for (const accessMode of ['write', 'read-only', 'member'] as const) {
       }
       if (path.endsWith('/api-keys')) {
         if (request.method() === 'POST') {
+          expect(request.postDataJSON()).toEqual({
+            name: 'Broker created key',
+            models: ['synthetic'],
+            funding_mode: 'prepaid_cash',
+            max_total: '9007199254740993123',
+            max_per_call: '0',
+            origin_product_id: 'llmrouter',
+            instance_id: 'default',
+          })
           created = true
           return route.fulfill({
             json: { ...key, token: 'synthetic-broker-secret' },
@@ -2942,58 +3260,25 @@ for (const accessMode of ['write', 'read-only', 'member'] as const) {
       }
       return route.fallback()
     })
-    await page.goto('/api/unihub/login?return_to=%2Fkeys')
-    await expect(
-      page.getByRole('button', { name: 'Create API key' })
-    ).toBeVisible()
-    if (accessMode === 'read-only') {
-      await expect(
-        page.getByRole('button', { name: 'Create API key' })
-      ).toBeDisabled()
-      await expect(
-        page.getByRole('button', { name: 'Save account budget' })
-      ).toHaveCount(0)
-      await page.goto('/wallet')
-      await expect(page.getByText(/9007199254740\.993123 CNY/)).toBeVisible()
-      await expect(
-        page.getByRole('button', { name: 'Create recharge' })
-      ).toHaveCount(0)
-      expect(writes).toEqual([])
-      return
-    }
-    await page
-      .getByLabel('Key name', { exact: true })
-      .fill('Broker created key')
-    await page.getByLabel('synthetic', { exact: true }).check()
-    await page
-      .getByRole('button', { name: 'Create API key', exact: true })
-      .click()
-    await expect(
-      page.getByText('synthetic-broker-secret', { exact: true })
-    ).toBeVisible()
-    await page.getByRole('button', { name: 'Revoke', exact: true }).click()
-    await expect(
-      page.getByRole('button', { name: 'Revoke', exact: true })
-    ).toHaveCount(0)
-    await expect(
-      page.getByText('synthetic-broker-secret', { exact: true })
-    ).toHaveCount(0)
-    if (accessMode === 'write') {
-      await page
-        .getByLabel('Account lifetime budget', { exact: true })
-        .fill('2')
-      await page
-        .getByRole('button', { name: 'Save account budget', exact: true })
-        .click()
-      await expect
-        .poll(() => writes.includes('PUT /accounts/personal-a/usage-budget'))
-        .toBe(true)
+    await page.goto('/api/unihub/login?return_to=%2Funihub')
+    await expect(page.getByText(/9007199254740\.993123 CNY/)).toBeVisible()
+    const canKey = accessMode !== 'read-only'
+    const create = await managedContract(page, 'create')
+    if (canKey) {
+      expect(create.error).toBe('')
+      expect(create.data).toEqual(
+        expect.objectContaining({ token: 'synthetic-broker-secret' })
+      )
+      expect((await managedContract(page, 'revoke')).error).toBe('')
     } else {
-      await expect(
-        page.getByRole('button', { name: 'Save account budget' })
-      ).toHaveCount(0)
+      expect(create.error).toContain('read only')
+      expect(create.data).toBeUndefined()
     }
-    await page.goto('/wallet')
+    const budget = await managedContract(page, 'saveBudget')
+    if (accessMode === 'write') expect(budget.error).toBe('')
+    else expect(budget.error).toContain('read only')
+    await nativeKeysRemainSeparate(page)
+    await page.goto('/unihub')
     await expect(page.getByText(/9007199254740\.993123 CNY/)).toBeVisible()
     await expect(
       page.getByRole('button', { name: 'Purchase addon' })
@@ -3026,10 +3311,14 @@ for (const accessMode of ['write', 'read-only', 'member'] as const) {
       await expect(
         page.getByRole('button', { name: 'Create recharge' })
       ).toHaveCount(0)
-      expect(writes).toEqual([
-        'POST /accounts/personal-a/api-keys',
-        'DELETE /accounts/personal-a/api-keys/broker-key',
-      ])
+      expect(writes).toEqual(
+        canKey
+          ? [
+              'POST /accounts/personal-a/api-keys',
+              'DELETE /accounts/personal-a/api-keys/broker-key',
+            ]
+          : []
+      )
     }
   })
 }
@@ -3097,7 +3386,7 @@ for (const sessionKind of ['product_broker', 'password'] as const) {
       page.on('request', (request) => {
         if (request.url().includes('/api/unihub/bff/')) bffCalls++
       })
-      await page.goto('/api/unihub/login?return_to=%2Fkeys')
+      await page.goto('/api/unihub/login?return_to=%2Funihub')
       await expect(
         page.getByText(
           'UniHub account access is unavailable for this browser session. Contact the administrator.'
@@ -3107,7 +3396,7 @@ for (const sessionKind of ['product_broker', 'password'] as const) {
       await expect(
         page.getByRole('button', { name: 'Create API key' })
       ).toHaveCount(0)
-      await expect(page).toHaveURL(/\/keys$/)
+      await expect(page).toHaveURL(/\/unihub$/)
     })
   }
 }
@@ -3296,7 +3585,7 @@ test('UniHub password failure never falls back to a same-name local account', as
           enabled: true,
           browser_sso_enabled: true,
           native_access: true,
-          public_origin: 'https://hub.invalid',
+          public_origin: 'http://127.0.0.1:58006',
           client_id: 'client',
           redirect_uri: 'http://127.0.0.1:58004/api/unihub/callback',
           product_id: 'llmrouter',
@@ -3321,7 +3610,7 @@ test('UniHub password failure never falls back to a same-name local account', as
     }
     return route.fulfill({ json: { success: true, data: [] } })
   })
-  await page.route('https://hub.invalid/v1/**', async (route) => {
+  await page.route('http://127.0.0.1:58006/v1/**', async (route) => {
     if (route.request().method() === 'OPTIONS') {
       return route.fulfill({
         status: 204,
@@ -3389,7 +3678,7 @@ for (const requireMfa of [false, true]) {
             enabled: true,
             browser_sso_enabled: true,
             native_access: true,
-            public_origin: 'https://hub.invalid',
+            public_origin: 'http://127.0.0.1:58006',
             client_id: 'client',
             redirect_uri: 'http://127.0.0.1:58004/api/unihub/callback',
             product_id: 'llmrouter',
@@ -3444,7 +3733,7 @@ for (const requireMfa of [false, true]) {
       }
       return route.fulfill({ json: { success: true, data: [] } })
     })
-    await page.route('https://hub.invalid/v1/**', async (route) => {
+    await page.route('http://127.0.0.1:58006/v1/**', async (route) => {
       const path = new URL(route.request().url()).pathname
       const headers = {
         'access-control-allow-origin': '*',
@@ -3540,7 +3829,7 @@ test('explicit native sign in retains the local password flow with UniHub enable
           enabled: true,
           browser_sso_enabled: true,
           native_access: true,
-          public_origin: 'https://hub.invalid',
+          public_origin: 'http://127.0.0.1:58006',
           client_id: 'client',
           redirect_uri: 'http://127.0.0.1:58004/api/unihub/callback',
           product_id: 'llmrouter',
@@ -3595,7 +3884,7 @@ test('signed-out browser can open central sign in and choose native entry', asyn
           enabled: true,
           browser_sso_enabled: true,
           native_access: true,
-          public_origin: 'https://hub.invalid',
+          public_origin: 'http://127.0.0.1:58006',
           client_id: 'client',
           redirect_uri: 'http://127.0.0.1:58004/api/unihub/callback',
           product_id: 'llmrouter',
@@ -3640,7 +3929,7 @@ test('failed UniHub configuration can be retried without using local login', asy
           enabled: true,
           browser_sso_enabled: true,
           native_access: true,
-          public_origin: 'https://hub.invalid',
+          public_origin: 'http://127.0.0.1:58006',
           client_id: 'client',
           redirect_uri: 'http://127.0.0.1:58004/api/unihub/callback',
           product_id: 'llmrouter',
@@ -3686,7 +3975,7 @@ test('runtime-only UniHub configuration retains the browser sign in', async ({
           enabled: false,
           browser_sso_enabled: true,
           native_access: true,
-          public_origin: 'https://hub.invalid',
+          public_origin: 'http://127.0.0.1:58006',
           client_id: 'client',
           redirect_uri: 'http://127.0.0.1:58004/api/unihub/callback',
           product_id: 'llmrouter',
@@ -3763,7 +4052,7 @@ test('leaving the sign-in page revokes a late-created UniHub session', async ({
           enabled: true,
           browser_sso_enabled: true,
           native_access: true,
-          public_origin: 'https://hub.invalid',
+          public_origin: 'http://127.0.0.1:58006',
           client_id: 'client',
           redirect_uri: 'http://127.0.0.1:58004/api/unihub/callback',
           product_id: 'llmrouter',
@@ -3805,7 +4094,7 @@ test('leaving the sign-in page revokes a late-created UniHub session', async ({
     }
     return route.fulfill({ json: { success: true, data: [] } })
   })
-  await page.route('https://hub.invalid/v1/**', async (route) => {
+  await page.route('http://127.0.0.1:58006/v1/**', async (route) => {
     const path = new URL(route.request().url()).pathname
     const headers = {
       'access-control-allow-origin': '*',

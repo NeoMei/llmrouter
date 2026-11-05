@@ -61,6 +61,24 @@ The interface accepts exact decimal yuan and converts to canonical integer micro
 
 Financial intents preserve account/payload/idempotency key in the current tab across uncertain requests and account switches. Query or retry the original operation rather than making a new one. Reload/logout clears memory state, so keep the original object ID for later readback. Real merchant integration remains unavailable until UniHub explicitly configures and validates a real payment provider.
 
+## Native cash wallet and central recharge handoff
+
+With `UNIHUB_PRODUCT_FUNDING_MODE=unified_cash`, native API keys and native subscription purchases use the bound account's **unified CNY wallet**. A separate `llmrouter` product CNY wallet funds managed prepaid model calls, including SuperWagie. Product cash is not native available cash: unified 0 and product 300 CNY are valid simultaneous balances and must never be summed or moved automatically.
+
+The read-only native `funding.account_id` comes from the validated runtime balance response. An existing UniHub OIDC session can read that exact account's product wallet through the existing BFF with user authority; this does not require enabling `UNIHUB_PRODUCT_FINANCE_ENABLED` or granting service finance writes. The console requires the current account's owner/billing_admin role. Missing payer, unsupported session, malformed response, and failed reads suppress the managed balance and central actions instead of inventing zero or selecting the first accessible account. Identity changes and wallet refreshes invalidate earlier context.
+
+The native recharge action opens the configured UniHub public origin with `?view=wallets&account=<funding.account_id>&wallet=unified`. The managed-wallet action uses the existing `product=llmrouter` target. UniHub must support the explicit `wallet=unified` contract before this native-console change is deployed; an empty product hint is not an equivalent destination. URL hints carry no token and grant no authority: the central console verifies its signed-in account access and still requires explicit recharge and sandbox-settlement confirmation. Page loading and refresh perform no financial write. Unavailable native international payment controls are hidden in cash mode; configured WeChat and legacy local payment behavior remain intact.
+
+Focused regression commands:
+
+```sh
+go test ./model ./controller -run 'TestProductCash|TestProductSelfKeepsExactSharedCash|TestProductSubscriptionBalancePurchase' -count=1
+cd web
+bun x tsx --test src/features/wallet/__tests__/central-wallet-url.test.ts src/features/users/__tests__/funding.test.ts src/features/unihub/__tests__/*.test.ts
+bun x playwright test --config playwright.wallet-source.config.ts
+SETTINGS_MOBILE=1 bun x playwright test --config playwright.wallet-source.config.ts
+```
+
 ## Verification and rollout
 
 Use isolated source/data for acceptance. The implementation report [local acceptance](unihub-validation-2026-10-25.md) separates real identity/database/ledger checks from controlled model responses and browser protocol fixtures. Relevant commands:

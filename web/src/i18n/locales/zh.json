@@ -4461,6 +4461,7 @@
     "Share your link and earn rewards": "分享您的链接并赚取奖励",
     "Shared available funds": "共享可用资金",
     "Shared cash balance": "共享现金余额",
+    "Unified cash balance": "统一钱包余额",
     "Shared configuration for all payment gateways": "所有支付网关的共享配置",
     "Short-lived task credentials are not durable API keys. Text chat only; media, OCR and Responses are unavailable here.": "任务凭证短期有效，并非长期 API 密钥。此入口仅支持文本对话，暂不支持媒体、OCR 和 Responses。",
     "Shorten": "缩词",
@@ -5601,6 +5602,18 @@
     "Usage statistics unavailable": "暂时无法获取用量统计",
     "Use configured international methods or a redemption code. Availability does not confirm a successful payment.": "使用已配置的国际支付方式或兑换码。显示可用不代表支付已成功。",
     "Wallet funding source is not confirmed yet.": "钱包资金来源尚未确认。",
-    "Wallet unavailable": "暂时无法获取钱包"
+    "Wallet unavailable": "暂时无法获取钱包",
+    "Central cash wallets": "中央现金钱包",
+    "Native LLMRouter funding": "LLMRouter 原生调用与订阅",
+    "Native API keys and subscriptions use unified cash. Recharge this wallet in UniHub, then return and refresh.": "原生 API Key 和订阅使用统一钱包。请在 UniHub 充值统一钱包，返回后刷新余额。",
+    "Recharge unified cash in UniHub": "前往 UniHub 充值统一钱包",
+    "Sandbox recharge requires your confirmation in UniHub. Opening this page does not create an order.": "沙箱充值需要在 UniHub 明确确认；打开本页不会创建订单。",
+    "Managed model wallet": "托管模型产品钱包",
+    "Managed model wallet unavailable": "托管模型钱包余额不可用",
+    "Manage model wallet in UniHub": "在 UniHub 管理托管模型钱包",
+    "For SuperWagie managed model calls. This balance does not fund native LLMRouter keys or subscriptions.": "用于 SuperWagie 托管模型调用。这笔余额不用于 LLMRouter 原生 Key 或原生订阅。",
+    "Verifying the central wallet payer…": "正在核验中央钱包付款账户…",
+    "Central wallet details are unavailable. Refresh or sign in with UniHub to verify the payer.": "中央钱包信息暂不可用。请刷新或通过 UniHub 登录以核验付款账户。",
+    "Retry central wallet": "重试中央钱包"
   }
 }

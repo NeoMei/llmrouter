@@ -9,6 +9,8 @@ const config: KnipConfig = {
     // Custom Playwright config/testMatch roots and the async Rsbuild browser entry.
     // Shared fixtures are reached through imports rather than blanket entry globs.
     'playwright.settings.config.ts',
+    'playwright.wallet-source.config.ts',
+    'src/features/wallet/__tests__/wallet-source.spec.ts',
     'src/features/keys/__tests__/settings-state.spec.ts',
     'src/features/native-metering/__tests__/settings-state.spec.ts',
     'src/features/usage-logs/__tests__/settings-state.spec.ts',

@@ -181,6 +181,9 @@ func TestProductCashRefreshSharesExactReadAndFailsClosed(t *testing.T) {
 	assert.Equal(t, "1001", user.Funding.Available)
 	assert.Equal(t, "CNY/6", user.Funding.Asset)
 	assert.Equal(t, "unified_cash", user.Funding.Mode)
+	raw, err := common.Marshal(user.Funding)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"account_id":"payer"`, "cash DTO must name the actual runtime payer")
 	assert.Equal(t, 1, ledger.balanceCalls)
 	ledger.rejectBalance = true
 	require.Error(t, RefreshProductBalance(context.Background(), &user))

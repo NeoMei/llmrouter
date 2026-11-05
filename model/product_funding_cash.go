@@ -163,6 +163,7 @@ func (s *ProductFundingStore) CashBalance(ctx context.Context, id int) (userkit.
 // quota compatibility field in the original product user DTO.
 type ProductMoneyBalance struct {
 	Mode        string `json:"mode"`
+	AccountID   string `json:"account_id,omitempty"`
 	Asset       string `json:"asset"`
 	UnitVersion string `json:"unit_version"`
 	Available   string `json:"available"`

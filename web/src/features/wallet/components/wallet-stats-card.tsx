@@ -58,7 +58,7 @@ export function WalletStatsCard(props: WalletStatsCardProps) {
     tone: IconBadgeTone
   }[] = [
     {
-      label: funding ? t('Shared cash balance') : t('Current Balance'),
+      label: funding ? t('Unified cash balance') : t('Current Balance'),
       value: funding
         ? exactAmount(funding.available, funding.asset)
         : formatQuota(props.user?.quota ?? 0),

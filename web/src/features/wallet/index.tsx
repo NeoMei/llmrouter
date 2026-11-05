@@ -30,6 +30,7 @@ import { unifiedCashFundingSchema } from '@/lib/funding'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { AffiliateRewardsCard } from './components/affiliate-rewards-card'
+import { CentralCashCard } from './components/central-cash-card'
 import { CnyTopupCard } from './components/cny-topup-card'
 import { BillingHistoryDialog } from './components/dialogs/billing-history-dialog'
 import { CreemConfirmDialog } from './components/dialogs/creem-confirm-dialog'
@@ -50,6 +51,7 @@ import {
   useWaffoPancakePayment,
   useWeChatNativePayment,
 } from './hooks'
+import { useCentralCashWallet } from './hooks/use-central-cash-wallet'
 import {
   getDefaultPaymentType,
   getMinTopupAmount,
@@ -109,6 +111,12 @@ function WalletContent(props: WalletProps & { identity: string }) {
   const userLoading = wallet.isPending
   const financialReady = wallet.isSuccess && !wallet.isFetching
   const unifiedCash = cashSession || user?.funding?.mode === 'unified_cash'
+  const centralCash = useCentralCashWallet({
+    identity: props.identity,
+    account: user?.funding?.account_id,
+    ready: financialReady && unifiedCash,
+    revision: wallet.dataUpdatedAt,
+  })
   const refreshWallet = wallet.refetch
   const fetchUser = useCallback(async () => {
     await refreshWallet()
@@ -379,55 +387,63 @@ function WalletContent(props: WalletProps & { identity: string }) {
               {fundingExplanation}
             </p>
 
+            {unifiedCash ? <CentralCashCard context={centralCash} /> : null}
+
             <fieldset
               disabled={!financialReady || topupLoading || !topupInfo}
               aria-busy={wallet.isFetching}
               className={
-                financialReady && showSubscriptionPanel
+                financialReady &&
+                showSubscriptionPanel &&
+                (!unifiedCash || topupInfo?.enable_wechat_pay)
                   ? 'grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)] xl:items-start'
                   : 'grid gap-4'
               }
             >
-              <div id='wallet-add-funds' className='scroll-mt-4 space-y-4'>
-                {topupInfo?.enable_wechat_pay ? (
-                  <CnyTopupCard
-                    minAmount={topupInfo.wechat_pay_min_amount || '1.00'}
-                    maxAmount={topupInfo.wechat_pay_max_amount || '5000.00'}
-                    processing={weChatPayment.processing}
-                    onSubmit={weChatPayment.createPayment}
-                  />
-                ) : null}
-                <RechargeFormCard
-                  topupInfo={topupInfo}
-                  presetAmounts={presetAmounts}
-                  selectedPreset={selectedPreset}
-                  onSelectPreset={handleSelectPreset}
-                  topupAmount={topupAmount}
-                  onTopupAmountChange={handleTopupAmountChange}
-                  paymentAmount={paymentAmount}
-                  calculating={calculating}
-                  onPaymentMethodSelect={handlePaymentMethodSelect}
-                  paymentLoading={paymentLoading}
-                  redemptionCode={redemptionCode}
-                  onRedemptionCodeChange={setRedemptionCode}
-                  onRedeem={handleRedeem}
-                  redeeming={redeeming}
-                  topupLink={topupInfo?.topup_link}
-                  loading={topupLoading}
-                  priceRatio={(status?.price as number) || 1}
-                  usdExchangeRate={effectiveUsdExchangeRate}
-                  creemProducts={topupInfo?.creem_products}
-                  enableCreemTopup={topupInfo?.enable_creem_topup}
-                  onCreemProductSelect={handleCreemProductSelect}
-                  enableWaffoTopup={topupInfo?.enable_waffo_topup}
-                  waffoPayMethods={topupInfo?.waffo_pay_methods}
-                  waffoMinTopup={topupInfo?.waffo_min_topup}
-                  onWaffoMethodSelect={handleWaffoMethodSelect}
-                  enableWaffoPancakeTopup={
-                    topupInfo?.enable_waffo_pancake_topup
-                  }
-                />
-              </div>
+              {!unifiedCash || topupInfo?.enable_wechat_pay ? (
+                <div id='wallet-add-funds' className='scroll-mt-4 space-y-4'>
+                  {topupInfo?.enable_wechat_pay ? (
+                    <CnyTopupCard
+                      minAmount={topupInfo.wechat_pay_min_amount || '1.00'}
+                      maxAmount={topupInfo.wechat_pay_max_amount || '5000.00'}
+                      processing={weChatPayment.processing}
+                      onSubmit={weChatPayment.createPayment}
+                    />
+                  ) : null}
+                  {!unifiedCash ? (
+                    <RechargeFormCard
+                      topupInfo={topupInfo}
+                      presetAmounts={presetAmounts}
+                      selectedPreset={selectedPreset}
+                      onSelectPreset={handleSelectPreset}
+                      topupAmount={topupAmount}
+                      onTopupAmountChange={handleTopupAmountChange}
+                      paymentAmount={paymentAmount}
+                      calculating={calculating}
+                      onPaymentMethodSelect={handlePaymentMethodSelect}
+                      paymentLoading={paymentLoading}
+                      redemptionCode={redemptionCode}
+                      onRedemptionCodeChange={setRedemptionCode}
+                      onRedeem={handleRedeem}
+                      redeeming={redeeming}
+                      topupLink={topupInfo?.topup_link}
+                      loading={topupLoading}
+                      priceRatio={(status?.price as number) || 1}
+                      usdExchangeRate={effectiveUsdExchangeRate}
+                      creemProducts={topupInfo?.creem_products}
+                      enableCreemTopup={topupInfo?.enable_creem_topup}
+                      onCreemProductSelect={handleCreemProductSelect}
+                      enableWaffoTopup={topupInfo?.enable_waffo_topup}
+                      waffoPayMethods={topupInfo?.waffo_pay_methods}
+                      waffoMinTopup={topupInfo?.waffo_min_topup}
+                      onWaffoMethodSelect={handleWaffoMethodSelect}
+                      enableWaffoPancakeTopup={
+                        topupInfo?.enable_waffo_pancake_topup
+                      }
+                    />
+                  ) : null}
+                </div>
+              ) : null}
 
               {financialReady ? (
                 <SubscriptionPlansCard
@@ -435,6 +451,7 @@ function WalletContent(props: WalletProps & { identity: string }) {
                   onAvailabilityChange={handleSubscriptionAvailabilityChange}
                   userQuota={user?.quota}
                   onPurchaseSuccess={fetchUser}
+                  rechargeURL={centralCash.data?.rechargeURL}
                 />
               ) : null}
             </fieldset>

@@ -860,7 +860,7 @@ func RefreshProductBalance(ctx context.Context, user *User) error {
 			return e
 		}
 		user.Quota = quota
-		user.Funding = &ProductMoneyBalance{Mode: "unified_cash", Asset: balance.Asset, UnitVersion: balance.UnitVersion, Available: balance.Available, Held: balance.Held, Consumed: balance.Consumed}
+		user.Funding = &ProductMoneyBalance{Mode: "unified_cash", AccountID: balance.AccountID, Asset: balance.Asset, UnitVersion: balance.UnitVersion, Available: balance.Available, Held: balance.Held, Consumed: balance.Consumed}
 		return nil
 	}
 	user.Quota, err = s.Balance(ctx, user.Id)

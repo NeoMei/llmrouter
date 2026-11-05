@@ -22,6 +22,10 @@ const canonicalQuantity = z.string().regex(/^(0|[1-9][0-9]*)$/)
 
 export const unifiedCashFundingSchema = z.object({
   mode: z.literal('unified_cash'),
+  account_id: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{1,128}$/)
+    .optional(),
   asset: z.literal('CNY/6'),
   unit_version: z.literal('lr-cny-v1'),
   available: canonicalQuantity,

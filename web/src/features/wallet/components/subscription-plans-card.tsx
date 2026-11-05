@@ -65,6 +65,7 @@ interface SubscriptionPlansCardProps {
   topupInfo: TopupInfo | null
   onAvailabilityChange?: (available: boolean) => void
   userQuota?: number
+  rechargeURL?: string
   onPurchaseSuccess?: () => void | Promise<void>
 }
 
@@ -96,6 +97,7 @@ export function SubscriptionPlansCard({
   topupInfo,
   onAvailabilityChange,
   userQuota,
+  rechargeURL,
   onPurchaseSuccess,
 }: SubscriptionPlansCardProps) {
   const { t } = useTranslation()
@@ -648,6 +650,7 @@ export function SubscriptionPlansCard({
         enableOnlineTopUp={enableOnlineTopUp}
         epayMethods={epayMethods}
         userQuota={userQuota}
+        rechargeURL={rechargeURL}
         onPurchaseSuccess={onPurchaseSuccess}
         purchaseLimit={
           selectedPlan?.plan?.max_purchase_per_user

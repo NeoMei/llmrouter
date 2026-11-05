@@ -35,6 +35,7 @@ const user = {
 }
 const funding = {
   mode: 'unified_cash',
+  account_id: 'payer-1',
   asset: 'CNY/6',
   unit_version: 'lr-cny-v1',
   available: '9007199254740993123',
@@ -45,6 +46,11 @@ const funding = {
 test('user decoding retains exact shared cash separately from product quota', () => {
   assert.deepEqual(userSchema.parse({ ...user, funding }), { ...user, funding })
   assert.deepEqual(userSchema.parse(user), user)
+  const { account_id: _account, ...oldFunding } = funding
+  assert.deepEqual(userSchema.parse({ ...user, funding: oldFunding }), {
+    ...user,
+    funding: oldFunding,
+  })
 })
 
 test('user decoding rejects noncanonical cash quantities and unsupported money units', () => {

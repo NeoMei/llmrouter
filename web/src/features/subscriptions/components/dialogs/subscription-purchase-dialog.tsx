@@ -65,6 +65,7 @@ interface Props {
   purchaseLimit?: number
   purchaseCount?: number
   userQuota?: number
+  rechargeURL?: string
   onPurchaseSuccess?: () => void | Promise<void>
 }
 
@@ -348,7 +349,19 @@ export function SubscriptionPurchaseDialog(props: Props) {
           ) : (
             insufficientBalance && (
               <Alert variant='destructive'>
-                <AlertDescription>{t('Insufficient balance')}</AlertDescription>
+                <AlertDescription>
+                  {t('Insufficient balance')}
+                  {props.rechargeURL ? (
+                    <a
+                      className='mt-2 block underline underline-offset-4'
+                      href={props.rechargeURL}
+                      target='_blank'
+                      rel='noopener noreferrer'
+                    >
+                      {t('Recharge unified cash in UniHub')}
+                    </a>
+                  ) : null}
+                </AlertDescription>
               </Alert>
             )
           )}

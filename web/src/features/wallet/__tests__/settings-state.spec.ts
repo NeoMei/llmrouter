@@ -443,3 +443,34 @@ test('malformed history refresh retains previous records with a stale label', as
   ).toHaveCount(0)
   expect(writes).toEqual([])
 })
+
+test('negative native remaining quota stays visible and allows manual balance recovery without automatic writes', async ({
+  page,
+}) => {
+  const { writes } = await fixture(page)
+  await walletResponse(page, (route) =>
+    route.fulfill({
+      json: {
+        success: true,
+        data: { ...user, quota: -7, used_quota: 3, request_count: 2 },
+      },
+    })
+  )
+  await page.goto('/wallet')
+  await expect(page.getByText('Current Balance', { exact: true })).toBeVisible()
+  await expect(page.getByText('-7', { exact: true })).toBeVisible()
+  await expect(
+    page.getByRole('alert').filter({ hasText: 'Wallet unavailable' })
+  ).toHaveCount(0)
+  await expect(
+    page.getByRole('button', { name: 'Create WeChat Pay QR code', exact: true })
+  ).toBeEnabled()
+  const code = page.getByPlaceholder('Enter your redemption code')
+  await expect(code).toBeEnabled()
+  await code.fill('synthetic-recovery-code')
+  await expect(
+    page.getByRole('button', { name: 'Redeem', exact: true })
+  ).toBeEnabled()
+  expect(writes).toEqual([])
+  await screenshot(page, 'wallet-native-negative-recovery')
+})

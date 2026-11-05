@@ -82,15 +82,13 @@ function WalletContent(props: WalletProps & { identity: string }) {
     queryKey: ['wallet-self', props.identity],
     queryFn: async () => {
       const response = await getSelf()
+      // Native remaining quota is signed after settlement; usage counters are not.
       if (
         !response.success ||
         !response.data ||
         response.data.id !== userID ||
-        ![
-          response.data.quota,
-          response.data.used_quota,
-          response.data.request_count,
-        ].every(
+        !Number.isFinite(response.data.quota) ||
+        ![response.data.used_quota, response.data.request_count].every(
           (value) =>
             typeof value === 'number' && Number.isFinite(value) && value >= 0
         ) ||

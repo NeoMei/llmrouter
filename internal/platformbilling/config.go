@@ -118,6 +118,11 @@ func ConfigFromEnv(get func(string) string) (Config, error) {
 	if err != nil {
 		return c, ErrInvalid
 	}
+	if raw := get("UNIHUB_TEXT_INPUT_POLICIES"); raw != "" {
+		if decodeTextInputPolicies([]byte(raw), &c) != nil {
+			return c, ErrInvalid
+		}
+	}
 	if raw := get("UNIHUB_MODEL_RATE_IDS"); raw != "" {
 		if common.UnmarshalJsonStr(raw, &c.RateIDs) != nil {
 			return c, ErrInvalid

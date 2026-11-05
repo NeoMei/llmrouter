@@ -259,6 +259,13 @@ func (a *Adapter) NativeHistoryReplay(ctx context.Context, credential, task, id 
 	if e != nil {
 		return true, e
 	}
+	// Existing unconfigured Chat calls retain their original admission path.
+	// Policy-bound calls replay against their saved scope before mutable limits.
+	if wire.ID == "chat.completions.create" && old.TextInputSnapshot == "" {
+		if _, configured := a.config.TextInputPolicies[wire.ID][old.Model]; !configured {
+			return false, nil
+		}
+	}
 
 	// Receipt supports refreshed task credentials and purpose=receipt key checks.
 	if strings.HasPrefix(credential, "uh_key_") {

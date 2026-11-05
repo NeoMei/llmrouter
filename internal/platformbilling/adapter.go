@@ -32,6 +32,7 @@ type Call struct {
 	OCRObservation        string
 	AudioObservation      string `gorm:"type:text"`
 	MediaSnapshot         string
+	TextInputSnapshot     string `gorm:"type:text"`
 	WireOperation         string `gorm:"size:64"`
 	WirePathModel         string `gorm:"size:255"`
 	WireMode              string `gorm:"size:32"`
@@ -154,6 +155,12 @@ func New(db *gorm.DB, c Config) (*Adapter, error) {
 			}
 		}
 	}
+	if c.TextInputPolicies != nil {
+		raw, err := common.Marshal(c.TextInputPolicies)
+		if err != nil || decodeTextInputPolicies(raw, &c) != nil {
+			return nil, ErrInvalid
+		}
+	}
 	if c.NativePresetPolicies != nil {
 		raw, err := common.Marshal(c.NativePresetPolicies)
 		if err != nil {
@@ -211,7 +218,7 @@ func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body [
 	if len(a.config.OperationRateIDs["chat"]) > 0 {
 		return a.AdmitOperation(ctx, credential, task, id, "chat", "application/json", body)
 	}
-	if !a.Enabled() || !stableID.MatchString(id) || !stableID.MatchString(task) || !IsModelCredential(credential) || int64(len(body)) > a.config.MaxBodyBytes || len(body) > a.config.MaxInputTokens/2 {
+	if !a.Enabled() || !stableID.MatchString(id) || !stableID.MatchString(task) || !IsModelCredential(credential) || int64(len(body)) > a.config.MaxBodyBytes {
 		return nil, ErrInvalid
 	}
 	req, parseErr := strictChatRequest(body)
@@ -316,6 +323,13 @@ func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body [
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
+	input, textSnapshot, err := textReservation(a.config, "chat.completions.create", model, len(body), maximum)
+	if err != nil {
+		return nil, err
+	}
+	row.TextInputSnapshot = textSnapshot
+	row.ReservationQuantity = int64(input)
+	row.ReservationOutput = int64(maximum)
 	var rates []Rate
 	if err := a.client.do(ctx, http.MethodGet, "/internal/v1/rates", "", nil, &rates); err != nil {
 		return nil, err
@@ -354,7 +368,7 @@ func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body [
 	if chosen == nil {
 		return nil, ErrInvalid
 	}
-	amount, err := reserveBound(*chosen, a.config.MaxInputTokens, maximum)
+	amount, err := reserveBound(*chosen, input, maximum)
 	if err != nil {
 		return nil, err
 	}
@@ -519,6 +533,10 @@ func (s *Session) observe(raw *dto.Usage) {
 	}
 	u, err := NormalizeUsage(raw)
 	if err != nil {
+		s.invalidateUsage()
+		return
+	}
+	if s.call.TextInputSnapshot != "" && (int64(raw.PromptTokens) > s.call.ReservationQuantity || int64(raw.CompletionTokens) > s.call.ReservationOutput) {
 		s.invalidateUsage()
 		return
 	}

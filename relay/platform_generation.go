@@ -43,6 +43,9 @@ func platformGeneration(c *gin.Context, info *relaycommon.RelayInfo) *types.NewA
 		return types.NewError(fmt.Errorf("managed adaptor unavailable"), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
 	adaptor.Init(info)
+	if target, e := adaptor.GetRequestURL(info); e != nil || session.ValidateTextInputTarget(info.ChannelId, info.ChannelType, info.UpstreamModelName, target) != nil {
+		return types.NewError(fmt.Errorf("admitted text input route unavailable"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
 	if session.WireOperation().ID == "responses.compact" {
 		target, e := adaptor.GetRequestURL(info)
 		parsed, parseErr := url.Parse(target)

@@ -446,6 +446,12 @@ func DoRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	return doRequest(c, req, info)
 }
 func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
+	if info.PlatformMode && info.PlatformBilling != nil {
+		if err := info.PlatformBilling.ValidateTextInputOutbound(info.ChannelId, info.ChannelType, info.UpstreamModelName, req, common2.TLSInsecureSkipVerify); err != nil {
+			info.PlatformBilling.Rejected()
+			return nil, errors.New("admitted text input request did not match its reservation")
+		}
+	}
 	if info.PlatformMode && info.PlatformBilling != nil && info.PlatformBilling.AliEmbeddingV4() {
 		if err := info.PlatformBilling.ValidateAliEmbeddingOutbound(info.ChannelId, info.ResolvedModelNameOrOrigin(), info.ApiKey, req); err != nil || common2.TLSInsecureSkipVerify {
 			info.PlatformBilling.Rejected()

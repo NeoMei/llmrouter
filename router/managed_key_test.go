@@ -104,6 +104,7 @@ func TestManagedKeyStandardChatUsesOnlyCentralBilling(t *testing.T) {
 			assert.Equal(t, "task_"+input["call_id"], input["task_id"])
 			if input["credential"] == "uh_key_budget" {
 				w.WriteHeader(402)
+				_, _ = w.Write([]byte(`{"error":"insufficient_credits"}`))
 				return
 			}
 			remote := platformbilling.RemoteCall{WireOperation: input["wire_operation"], CallID: input["call_id"], Status: "RESERVED", ActorID: "actor", AccountID: "payer", OriginProductID: "client", InstanceID: "instance-a", CredentialID: input["credential"] + "-id", RequestDigest: input["request_digest"], Rate: rate}

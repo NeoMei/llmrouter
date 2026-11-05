@@ -105,14 +105,22 @@ func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 			return
 		}
 		body, err := io.ReadAll(io.LimitReader(c.Request.Body, adapter.BodyLimit()+1))
-		if err != nil || int64(len(body)) > adapter.BodyLimit() {
-			c.AbortWithStatusJSON(413, gin.H{"error": gin.H{"code": "request_too_large"}})
+		if int64(len(body)) > adapter.BodyLimit() {
+			c.AbortWithStatusJSON(413, gin.H{"error": gin.H{"code": "platform_request_body_too_large", "stage": "pre_admission", "max_body_bytes": adapter.BodyLimit()}})
+			return
+		}
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "platform_request_body_read_failed", "stage": "pre_admission"}})
 			return
 		}
 		if strings.HasPrefix(c.GetHeader("Authorization"), "Bearer uh_key_") {
-			body, err = adapter.ManagedRequestBody("chat", body)
+			body, err = adapter.ManagedRequestBody("chat", body, c.GetHeader("Idempotency-Key"))
 			if err != nil {
-				c.AbortWithStatusJSON(400, gin.H{"error": gin.H{"code": "invalid_model_request"}})
+				status, code := platformbilling.HTTPStatus(err), "invalid_model_request"
+				if status == http.StatusServiceUnavailable {
+					code = "platform_billing_unavailable"
+				}
+				c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"code": code}})
 				return
 			}
 		}
@@ -124,6 +132,9 @@ func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 		if err != nil {
 			status := platformbilling.HTTPStatus(err)
 			code := "platform_billing_unavailable"
+			if status == http.StatusPaymentRequired {
+				code = "platform_insufficient_funds"
+			}
 			if errors.Is(err, platformbilling.ErrDuplicate) {
 				code = "logical_call_already_exists"
 			}
@@ -288,8 +299,12 @@ func registerPlatformOperation(engine gin.IRoutes, adapter *platformbilling.Adap
 		}
 		limit := adapter.OperationBodyLimit(billingOperation)
 		body, err := io.ReadAll(io.LimitReader(c.Request.Body, limit+1))
-		if err != nil || int64(len(body)) > limit {
-			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"error": gin.H{"code": "request_too_large"}})
+		if int64(len(body)) > limit {
+			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"error": gin.H{"code": "platform_request_body_too_large", "stage": "pre_admission", "max_body_bytes": limit}})
+			return
+		}
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "platform_request_body_read_failed", "stage": "pre_admission"}})
 			return
 		}
 		ct := platformbilling.ValidatedContentType(c.GetHeader("Content-Type"))
@@ -298,9 +313,13 @@ func registerPlatformOperation(engine gin.IRoutes, adapter *platformbilling.Adap
 			return
 		}
 		if strings.HasPrefix(c.GetHeader("Authorization"), "Bearer uh_key_") {
-			body, err = adapter.ManagedRequestBody(operation, body)
+			body, err = adapter.ManagedRequestBody(operation, body, c.GetHeader("Idempotency-Key"))
 			if err != nil {
-				c.AbortWithStatusJSON(400, gin.H{"error": gin.H{"code": "invalid_model_request"}})
+				status, code := platformbilling.HTTPStatus(err), "invalid_model_request"
+				if status == http.StatusServiceUnavailable {
+					code = "platform_billing_unavailable"
+				}
+				c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"code": code}})
 				return
 			}
 		}

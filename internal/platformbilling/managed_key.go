@@ -1,9 +1,12 @@
 package platformbilling
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -121,7 +124,7 @@ func (a *Adapter) ManagedTask(ctx context.Context, credential, id string) (Call,
 
 // ManagedRequestBody applies deployment-owned output bounds when SDKs omit
 // them. Existing task credentials retain their explicit-bounds contract.
-func (a *Adapter) ManagedRequestBody(operation string, body []byte) ([]byte, error) {
+func (a *Adapter) ManagedRequestBody(operation string, body []byte, callIDs ...string) ([]byte, error) {
 	if operation != "chat" && operation != "responses" && operation != "claude.messages.create" && operation != "gemini.generate" {
 		return body, nil
 	}
@@ -157,6 +160,52 @@ func (a *Adapter) ManagedRequestBody(operation string, body []byte) ([]byte, err
 	if _, present := request[field]; present {
 		return body, nil
 	}
-	request[field] = a.config.MaxOutputTokens
+	output := a.config.MaxOutputTokens
+	model, _ := request["model"].(string)
+	wire := legacyWireOperation(operation)
+	p, preserveBytes := a.config.TextInputPolicies[wire][model]
+	if preserveBytes {
+		output = min(output, p.MaxOutputTokens)
+	}
+	if len(callIDs) == 1 && stableID.MatchString(callIDs[0]) && a.db != nil {
+		var old Call
+		err := a.db.First(&old, "call_id = ?", callIDs[0]).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrPending
+		}
+		oldWire := old.WireOperation
+		if oldWire == "" && old.Operation == "" {
+			oldWire = "chat.completions.create"
+		} else if oldWire == "" {
+			oldWire = legacyWireOperation(old.Operation)
+		}
+		if err == nil && old.Model == model && oldWire == wire {
+			// Normalization grants no authority: Admit/Receipt still authenticate
+			// and compare the original scope. Preserve historical serialization,
+			// or the new call's frozen output, before that duplicate comparison.
+			preserveBytes = old.TextInputSnapshot != ""
+			output = a.config.MaxOutputTokens
+			if old.ReservationOutput > 0 && old.ReservationOutput <= 32768 {
+				output = int(old.ReservationOutput)
+			} else if preserveBytes {
+				return nil, ErrInvalid
+			}
+		}
+	}
+	if preserveBytes {
+		// Keep every original byte when adding the server-owned default so the
+		// full-body reservation cannot discard whitespace or JSON escape bytes.
+		end := bytes.LastIndexByte(body, '}')
+		if end < 0 {
+			return nil, ErrInvalid
+		}
+		addition := `,"` + field + `":` + strconv.Itoa(output)
+		out := make([]byte, 0, len(body)+len(addition))
+		out = append(out, body[:end]...)
+		out = append(out, addition...)
+		out = append(out, body[end:]...)
+		return out, nil
+	}
+	request[field] = output
 	return common.Marshal(request)
 }

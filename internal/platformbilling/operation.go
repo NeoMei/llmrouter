@@ -27,13 +27,14 @@ type OperationLimits struct {
 	ProviderUnit    string `json:"provider_unit"`
 }
 type operationRequest struct {
-	MediaSnapshot   string
-	Model           string
-	Canonical       []byte
-	Quantity        int
-	Output          int
-	VideoResolution string
-	MeasurementKey  string
+	MediaSnapshot     string
+	TextInputSnapshot string
+	Model             string
+	Canonical         []byte
+	Quantity          int
+	Output            int
+	VideoResolution   string
+	MeasurementKey    string
 }
 
 func parseOperation(c Config, op, contentType string, body []byte) (operationRequest, error) {
@@ -160,8 +161,14 @@ func parseOperation(c Config, op, contentType string, body []byte) (operationReq
 			}
 		}
 		result.Output, err = count(key, 0)
-		if err != nil || result.Output < 1 || result.Output > c.MaxOutputTokens || (result.MediaSnapshot == "" && len(body) > c.MaxInputTokens/2) {
+		if err != nil || result.Output < 1 || result.Output > c.MaxOutputTokens {
 			return result, ErrInvalid
+		}
+		if result.MediaSnapshot == "" {
+			result.Quantity, result.TextInputSnapshot, err = textReservation(c, legacyWireOperation(op), result.Model, len(body), result.Output)
+			if err != nil {
+				return result, err
+			}
 		}
 		if op == "chat" {
 			messages, ok := request["messages"].([]any)

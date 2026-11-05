@@ -49,7 +49,7 @@ func (a *Adapter) admitWireOperation(ctx context.Context, credential, task, id s
 	if !a.Enabled() || !stableID.MatchString(id) || !stableID.MatchString(task) || !IsModelCredential(credential) || int64(len(body)) > a.OperationBodyLimit(operation) {
 		return nil, ErrInvalid
 	}
-	if nativeHistoryWire(wire.ID) {
+	if nativeHistoryWire(wire.ID) || wire.ID == "chat.completions.create" {
 		if exists, e := a.NativeHistoryReplay(ctx, credential, task, id, wire, body); exists || e != nil {
 			return nil, e
 		}
@@ -444,6 +444,7 @@ func (a *Adapter) admitWireOperation(ctx context.Context, credential, task, id s
 		req.Quantity = limit.MaxQuantity
 	}
 	row.MediaSnapshot = req.MediaSnapshot
+	row.TextInputSnapshot = req.TextInputSnapshot
 	row.ReservationQuantity = int64(req.Quantity)
 	row.ReservationOutput = int64(req.Output)
 	amount, err := meteredReserve(*chosen.Metered, req)
@@ -493,11 +494,17 @@ func (a *Adapter) admitWireOperation(ctx context.Context, credential, task, id s
 	}
 	var remote RemoteCall
 	err = a.client.do(ctx, http.MethodPost, "/internal/v1/calls/reserve", id, map[string]string{"credential": credential, "task_id": task, "call_id": id, "request_digest": row.Digest, "rate_id": row.RateID, "amount": amount, "instance_id": a.config.InstanceID, "wire_operation": row.WireOperation}, &remote)
-	if err != nil || !remote.matches(row) || remote.Status != "RESERVED" || (strings.HasPrefix(credential, "uh_key_") && (remote.InstanceID != a.config.InstanceID || remote.CredentialID != grant.ID)) {
-		_ = a.db.WithContext(ctx).Model(&Call{}).Where("call_id = ?", id).Update("status", "RESERVE_UNKNOWN").Error
-		if err != nil {
-			return nil, err
+	if err != nil {
+		status := "RESERVE_UNKNOWN"
+		var re *remoteError
+		if errors.As(err, &re) && re.reserveRejected {
+			status = "REJECTED"
 		}
+		_ = a.db.WithContext(ctx).Model(&Call{}).Where("call_id = ?", id).Update("status", status).Error
+		return nil, err
+	}
+	if !remote.matches(row) || remote.Status != "RESERVED" || (strings.HasPrefix(credential, "uh_key_") && (remote.InstanceID != a.config.InstanceID || remote.CredentialID != grant.ID)) {
+		_ = a.db.WithContext(ctx).Model(&Call{}).Where("call_id = ?", id).Update("status", "RESERVE_UNKNOWN").Error
 		return nil, ErrPending
 	}
 	row.FundingSnapshot = remote.fundingSnapshot()
@@ -585,7 +592,7 @@ func (s *Session) ObserveMetering(ctx context.Context, u metering.Usage) error {
 			}
 		}
 	}
-	if u.State == "confirmed" && nativeHistoryWire(s.WireOperation().ID) {
+	if u.State == "confirmed" && (nativeHistoryWire(s.WireOperation().ID) || s.call.TextInputSnapshot != "") {
 		input, output := new(big.Int), new(big.Int)
 		for _, m := range u.Measurements {
 			n, ok := new(big.Int).SetString(m.Quantity.Value, 10)

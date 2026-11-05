@@ -122,6 +122,7 @@ type Config struct {
 	KnowledgePolicies               map[string]map[string]KnowledgePolicy
 	CompactPolicies                 map[string]CompactPolicy
 	NativeInputPolicies             map[string]map[string]NativeInputPolicy
+	TextInputPolicies               map[string]map[string]TextInputPolicy
 	OperationLimits                 map[string]map[string]OperationLimits
 	OperationRateIDs                map[string]map[string]map[string]string
 	Enabled                         bool
@@ -141,7 +142,10 @@ type client struct {
 	origin, token string
 	http          *http.Client
 }
-type remoteError struct{ status int }
+type remoteError struct {
+	status          int
+	reserveRejected bool
+}
 
 func (e *remoteError) Error() string { return fmt.Sprintf("UniHub service returned HTTP %d", e.status) }
 func validIdentityIssuer(raw string) bool {
@@ -199,7 +203,17 @@ func (c *client) do(ctx context.Context, method, path, key string, body, out any
 		return ErrPending
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &remoteError{status: resp.StatusCode}
+		remote := &remoteError{status: resp.StatusCode}
+		if resp.StatusCode == http.StatusPaymentRequired && method == http.MethodPost && path == "/internal/v1/calls/reserve" {
+			// Only the center's persisted reserve rejection contract proves there
+			// is no hold. Proxy errors and malformed or ambiguous replies remain unknown.
+			var problem map[string]string
+			if common.UnmarshalUnique(data, &problem) != nil || len(problem) != 1 || (problem["error"] != "insufficient_credits" && problem["error"] != "insufficient_funds") {
+				return ErrPending
+			}
+			remote.reserveRejected = true
+		}
+		return remote
 	}
 	if out != nil && common.Unmarshal(data, out) != nil {
 		return ErrPending
@@ -280,6 +294,9 @@ func HTTPStatus(err error) int {
 	}
 	var re *remoteError
 	if errors.As(err, &re) && re.status >= 400 && re.status < 500 {
+		if re.status == http.StatusPaymentRequired && !re.reserveRejected {
+			return http.StatusServiceUnavailable
+		}
 		return re.status
 	}
 	return 503

@@ -237,6 +237,9 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	}
 
 	if info.PlatformMode {
+		if target, e := adaptor.GetRequestURL(info); e != nil || info.PlatformBilling.ValidateTextInputTarget(info.ChannelId, info.ChannelType, info.UpstreamModelName, target) != nil {
+			return types.NewError(fmt.Errorf("admitted text input route unavailable"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
 		if err := info.PlatformBilling.Dispatch(c.Request.Context(), info.ChannelId); err != nil {
 			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 		}

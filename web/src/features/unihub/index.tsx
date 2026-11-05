@@ -273,7 +273,9 @@ function ProductShellContent(props: {
               >
                 {t('Open UniHub user management')}
               </a>
-              <Link to='/keys'>{t('API Keys and usage budget')}</Link>
+              <Link to='/keys'>
+                {t('LLMRouter product API keys and usage budget')}
+              </Link>
             </div>
           </section>
         ) : null}

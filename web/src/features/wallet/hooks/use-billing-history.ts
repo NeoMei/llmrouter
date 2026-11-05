@@ -16,11 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useQuery } from '@tanstack/react-query'
 import i18next from 'i18next'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { toast } from 'sonner'
 
 import { useIsAdmin } from '@/hooks/use-admin'
+import { useAuthIdentity } from '@/hooks/use-auth-identity'
 import { useAuthStore } from '@/stores/auth-store'
 
 import {
@@ -29,7 +31,6 @@ import {
   completeOrder,
   isApiSuccess,
 } from '../api'
-import type { TopupRecord } from '../types'
 
 // ============================================================================
 // Billing History Hook
@@ -37,6 +38,8 @@ import type { TopupRecord } from '../types'
 
 interface UseBillingHistoryOptions {
   enabled?: boolean
+  unifiedCash?: boolean
+  fundingResolved?: boolean
   /** Initial page number */
   initialPage?: number
   /** Initial page size */
@@ -49,53 +52,44 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
   const unifiedCash = useAuthStore(
     (state) => state.auth.user?.funding?.mode === 'unified_cash'
   )
-  const isAdmin = administrator && !unifiedCash
+  const identity = useAuthIdentity()
+  const isAdmin =
+    administrator &&
+    options.fundingResolved !== false &&
+    !(options.unifiedCash || unifiedCash)
 
-  const [records, setRecords] = useState<TopupRecord[]>([])
-  const [total, setTotal] = useState(0)
   const [page, setPage] = useState(initialPage)
   const [pageSize, setPageSize] = useState(initialPageSize)
   const [keyword, setKeyword] = useState('')
-  const [loading, setLoading] = useState(false)
   const [completing, setCompleting] = useState(false)
 
-  /**
-   * Fetch billing history
-   */
-  const fetchBillingHistory = useCallback(async () => {
-    setLoading(true)
-    try {
+  const history = useQuery({
+    queryKey: ['billing-history', identity, isAdmin, page, pageSize, keyword],
+    queryFn: async () => {
       const response = isAdmin
         ? await getAllBillingHistory(page, pageSize, keyword)
         : await getUserBillingHistory(page, pageSize, keyword)
-
-      if (isApiSuccess(response) && response.data) {
-        setRecords(response.data.items || [])
-        setTotal(response.data.total || 0)
-      } else {
-        toast.error(
-          response.message || i18next.t('Failed to load billing history')
-        )
-        setRecords([])
-        setTotal(0)
+      if (!isApiSuccess(response) || !response.data) {
+        throw new Error(i18next.t('Failed to load billing history'))
       }
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('Failed to fetch billing history:', error)
-      toast.error(i18next.t('Failed to load billing history'))
-      setRecords([])
-      setTotal(0)
-    } finally {
-      setLoading(false)
-    }
-  }, [isAdmin, page, pageSize, keyword])
+      return response.data
+    },
+    enabled: options.enabled !== false,
+    retry: false,
+    gcTime: 0,
+    staleTime: 0,
+  })
+  const fetchBillingHistory = history.refetch
+  const records = history.data?.items ?? []
+  const total = history.data?.total ?? 0
+  const loading = history.isPending || history.isFetching
 
   /**
    * Complete a pending order (admin only)
    */
   const handleCompleteOrder = useCallback(
     async (tradeNo: string) => {
-      if (!isAdmin) {
+      if (!isAdmin || !history.isSuccess || history.isFetching) {
         toast.error(i18next.t('Admin access required'))
         return false
       }
@@ -121,7 +115,7 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
         setCompleting(false)
       }
     },
-    [isAdmin, fetchBillingHistory]
+    [isAdmin, fetchBillingHistory, history.isSuccess, history.isFetching]
   )
 
   /**
@@ -147,11 +141,6 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
     setPage(1) // Reset to first page when searching
   }, [])
 
-  // Fetch data when dependencies change
-  useEffect(() => {
-    if (options.enabled !== false) fetchBillingHistory()
-  }, [fetchBillingHistory, options.enabled])
-
   return {
     records,
     total,
@@ -160,6 +149,8 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
     keyword,
     loading,
     completing,
+    error: history.isError,
+    hasData: history.data !== undefined,
     isAdmin,
     handlePageChange,
     handlePageSizeChange,

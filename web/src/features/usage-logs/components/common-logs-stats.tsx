@@ -20,12 +20,13 @@ import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
+import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useAuthIdentity } from '@/hooks/use-auth-identity'
 import { formatLogQuota } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import { getLogStats, getUserLogStats } from '../api'
-import { DEFAULT_LOG_STATS } from '../constants'
 import { buildApiParams } from '../lib/utils'
 import { useLogsViewScope, useUsageLogsContext } from './usage-logs-provider'
 
@@ -53,8 +54,15 @@ export function CommonLogsStats() {
   const searchParams = route.useSearch()
   const { sensitiveVisible } = useUsageLogsContext()
 
-  const { data: stats, isLoading } = useQuery({
-    queryKey: ['usage-logs-stats', isAdmin, searchParams],
+  const identity = useAuthIdentity()
+  const {
+    data: stats,
+    isPending,
+    isError,
+    isFetching,
+    refetch,
+  } = useQuery({
+    queryKey: ['usage-logs-stats', identity, isAdmin, searchParams],
     queryFn: async () => {
       const params = buildApiParams({
         page: 1,
@@ -68,14 +76,16 @@ export function CommonLogsStats() {
         ? await getLogStats(params)
         : await getUserLogStats(params)
 
-      return result.success
-        ? result.data || DEFAULT_LOG_STATS
-        : DEFAULT_LOG_STATS
+      if (!result.success || !result.data) {
+        throw new Error('Usage statistics unavailable')
+      }
+      return result.data
     },
-    placeholderData: (previousData) => previousData,
+    retry: false,
+    gcTime: 0,
   })
 
-  if (isLoading) {
+  if (isPending) {
     return (
       <div className='flex items-center gap-2'>
         <Skeleton className='h-7 w-[150px] rounded-md' />
@@ -87,21 +97,42 @@ export function CommonLogsStats() {
 
   return (
     <div className='flex flex-wrap items-center gap-2'>
-      <StatBadge
-        label={t('Usage')}
-        value={sensitiveVisible ? formatLogQuota(stats?.quota || 0) : '••••'}
-        accent='bg-sky-500/70'
-      />
-      <StatBadge
-        label={t('RPM')}
-        value={stats?.rpm || 0}
-        accent='bg-rose-500/65'
-      />
-      <StatBadge
-        label={t('TPM')}
-        value={stats?.tpm || 0}
-        accent='bg-slate-400/70'
-      />
+      {isError ? (
+        <p role='alert' className='text-destructive text-sm'>
+          {stats
+            ? t('Showing previous statistics. Refresh failed.')
+            : t('Usage statistics unavailable')}
+        </p>
+      ) : null}
+      <Button
+        size='sm'
+        variant='outline'
+        disabled={isFetching}
+        onClick={() => void refetch()}
+      >
+        {isError ? t('Retry statistics') : t('Refresh statistics')}
+      </Button>
+      {stats ? (
+        <>
+          <StatBadge
+            label={t('LLMRouter product usage')}
+            value={
+              sensitiveVisible ? formatLogQuota(stats?.quota || 0) : '••••'
+            }
+            accent='bg-sky-500/70'
+          />
+          <StatBadge
+            label={t('RPM')}
+            value={stats?.rpm || 0}
+            accent='bg-rose-500/65'
+          />
+          <StatBadge
+            label={t('TPM')}
+            value={stats?.tpm || 0}
+            accent='bg-slate-400/70'
+          />
+        </>
+      ) : null}
     </div>
   )
 }

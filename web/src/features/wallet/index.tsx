@@ -16,13 +16,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useQuery } from '@tanstack/react-query'
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
+import { Button } from '@/components/ui/button'
+import { useAuthIdentity } from '@/hooks/use-auth-identity'
 import { useStatus } from '@/hooks/use-status'
 import { useSystemConfig } from '@/hooks/use-system-config'
 import { getSelf } from '@/lib/api'
+import { unifiedCashFundingSchema } from '@/lib/funding'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { AffiliateRewardsCard } from './components/affiliate-rewards-card'
@@ -64,13 +68,53 @@ interface WalletProps {
 }
 
 export function Wallet(props: WalletProps) {
+  const identity = useAuthIdentity()
+  return <WalletContent key={identity} {...props} identity={identity} />
+}
+
+function WalletContent(props: WalletProps & { identity: string }) {
   const { t } = useTranslation()
   const cashSession = useAuthStore(
     (state) => state.auth.user?.funding?.mode === 'unified_cash'
   )
-  const [user, setUser] = useState<UserWalletData | null>(null)
+  const userID = useAuthStore((state) => state.auth.user?.id)
+  const wallet = useQuery({
+    queryKey: ['wallet-self', props.identity],
+    queryFn: async () => {
+      const response = await getSelf()
+      if (
+        !response.success ||
+        !response.data ||
+        response.data.id !== userID ||
+        ![
+          response.data.quota,
+          response.data.used_quota,
+          response.data.request_count,
+        ].every(
+          (value) =>
+            typeof value === 'number' && Number.isFinite(value) && value >= 0
+        ) ||
+        (response.data.funding != null &&
+          !unifiedCashFundingSchema.safeParse(response.data.funding).success) ||
+        (cashSession && response.data.funding?.mode !== 'unified_cash')
+      ) {
+        throw new Error('Wallet unavailable')
+      }
+      return response.data as UserWalletData
+    },
+    enabled: userID !== undefined,
+    retry: false,
+    gcTime: 0,
+    staleTime: 0,
+  })
+  const user = wallet.data ?? null
+  const userLoading = wallet.isPending
+  const financialReady = wallet.isSuccess && !wallet.isFetching
   const unifiedCash = cashSession || user?.funding?.mode === 'unified_cash'
-  const [userLoading, setUserLoading] = useState(true)
+  const refreshWallet = wallet.refetch
+  const fetchUser = useCallback(async () => {
+    await refreshWallet()
+  }, [refreshWallet])
   const [topupAmount, setTopupAmount] = useState(0)
   const [selectedPreset, setSelectedPreset] = useState<number | null>(null)
   const [selectedPaymentMethod, setSelectedPaymentMethod] =
@@ -110,34 +154,14 @@ export function Wallet(props: WalletProps) {
     loading: affiliateLoading,
     transferQuota,
     transferring,
-  } = useAffiliate(!userLoading && !unifiedCash)
+  } = useAffiliate(financialReady && !unifiedCash)
   const { redeeming, redeemCode } = useRedemption()
   const { processing: creemProcessing, processCreemPayment } = useCreemPayment()
   const { processing: waffoProcessing, processWaffoPayment } = useWaffoPayment()
   const { processing: pancakeProcessing, processWaffoPancakePayment } =
     useWaffoPancakePayment()
 
-  // Fetch and refresh user data
-  const fetchUser = useCallback(async () => {
-    try {
-      setUserLoading(true)
-      const response = await getSelf()
-      if (response.success && response.data) {
-        setUser(response.data as UserWalletData)
-      }
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('Failed to fetch user data:', error)
-    } finally {
-      setUserLoading(false)
-    }
-  }, [])
-
   const weChatPayment = useWeChatNativePayment({ onSuccess: fetchUser })
-
-  useEffect(() => {
-    fetchUser()
-  }, [fetchUser])
 
   useEffect(() => {
     if (props.initialShowHistory) {
@@ -148,15 +172,29 @@ export function Wallet(props: WalletProps) {
 
   // Initialize topup amount when topup info is loaded
   useEffect(() => {
-    if (topupInfo && topupAmount === 0 && !userLoading) {
+    if (topupInfo && topupAmount === 0 && financialReady) {
       const minTopup = getMinTopupAmount(topupInfo)
       setTopupAmount(minTopup)
 
       // Calculate initial payment amount with default payment type
       const defaultPaymentType = getDefaultPaymentType(topupInfo)
-      if (!unifiedCash) calculatePaymentAmount(minTopup, defaultPaymentType)
+      if (
+        !unifiedCash &&
+        (topupInfo.enable_online_topup ||
+          topupInfo.enable_stripe_topup ||
+          topupInfo.enable_waffo_topup ||
+          topupInfo.enable_waffo_pancake_topup)
+      ) {
+        calculatePaymentAmount(minTopup, defaultPaymentType)
+      }
     }
-  }, [topupInfo, topupAmount, calculatePaymentAmount, unifiedCash, userLoading])
+  }, [
+    topupInfo,
+    topupAmount,
+    calculatePaymentAmount,
+    unifiedCash,
+    financialReady,
+  ])
 
   // Get current payment type (selected or default)
   const getCurrentPaymentType = useCallback(() => {
@@ -165,6 +203,7 @@ export function Wallet(props: WalletProps) {
 
   // Handle preset selection
   const handleSelectPreset = (preset: PresetAmount) => {
+    if (!financialReady) return
     setTopupAmount(preset.value)
     setSelectedPreset(preset.value)
     calculatePaymentAmount(preset.value, getCurrentPaymentType())
@@ -172,6 +211,7 @@ export function Wallet(props: WalletProps) {
 
   // Handle topup amount change
   const handleTopupAmountChange = (amount: number) => {
+    if (!financialReady) return
     setTopupAmount(amount)
     setSelectedPreset(null)
     calculatePaymentAmount(amount, getCurrentPaymentType())
@@ -179,6 +219,7 @@ export function Wallet(props: WalletProps) {
 
   // Handle payment method selection
   const handlePaymentMethodSelect = async (method: PaymentMethod) => {
+    if (!financialReady) return
     setSelectedPaymentMethod(method)
     setSelectedWaffoMethodIndex(null)
     setPaymentLoading(method.type)
@@ -200,6 +241,7 @@ export function Wallet(props: WalletProps) {
 
   // Handle payment confirmation
   const handlePaymentConfirm = async () => {
+    if (!financialReady) return
     if (!selectedPaymentMethod) return
 
     const success = await dispatchSelectedPayment(
@@ -221,6 +263,7 @@ export function Wallet(props: WalletProps) {
 
   // Handle redemption
   const handleRedeem = async () => {
+    if (!financialReady) return
     if (!redemptionCode) return
 
     const success = await redeemCode(redemptionCode)
@@ -232,6 +275,7 @@ export function Wallet(props: WalletProps) {
 
   // Handle transfer
   const handleTransfer = async (amount: number) => {
+    if (!financialReady) return false
     const success = await transferQuota(amount)
     if (success) {
       await fetchUser()
@@ -241,12 +285,14 @@ export function Wallet(props: WalletProps) {
 
   // Handle Creem product selection
   const handleCreemProductSelect = (product: CreemProduct) => {
+    if (!financialReady) return
     setSelectedCreemProduct(product)
     setCreemDialogOpen(true)
   }
 
   // Handle Creem payment confirmation
   const handleCreemConfirm = async () => {
+    if (!financialReady) return
     if (!selectedCreemProduct) return
 
     const success = await processCreemPayment(selectedCreemProduct.productId)
@@ -261,6 +307,7 @@ export function Wallet(props: WalletProps) {
     method: WaffoPayMethod,
     index: number
   ) => {
+    if (!financialReady) return
     const loadingKey = `waffo-${index}`
     setSelectedPaymentMethod({
       name: method.name,
@@ -290,17 +337,55 @@ export function Wallet(props: WalletProps) {
     []
   )
 
+  let fundingExplanation = t('Wallet funding source is not confirmed yet.')
+  if (unifiedCash) {
+    fundingExplanation = t(
+      'Shared cash funds native LLMRouter API keys. LR_QUOTA measures product usage; it is not a confirmed UniHub cash charge.'
+    )
+  } else if (user) {
+    fundingExplanation = t(
+      'Native LLMRouter quota and usage remain separate from UniHub cash wallets.'
+    )
+  }
+
   return (
     <>
       <SectionPageLayout>
         <SectionPageLayout.Title>{t('Wallet')}</SectionPageLayout.Title>
         <SectionPageLayout.Content>
           <div className='mx-auto flex w-full max-w-7xl flex-col gap-4 sm:gap-5'>
+            <div className='flex flex-wrap justify-end gap-2'>
+              <Button
+                variant='outline'
+                disabled={wallet.isFetching}
+                onClick={() => void fetchUser()}
+              >
+                {wallet.isError ? t('Retry wallet') : t('Refresh wallet')}
+              </Button>
+              <Button
+                variant='outline'
+                onClick={() => setBillingDialogOpen(true)}
+              >
+                {t('Order History')}
+              </Button>
+            </div>
+            {wallet.isError ? (
+              <p role='alert' className='text-destructive text-sm'>
+                {user
+                  ? t('Showing previous wallet data. Refresh failed.')
+                  : t('Wallet unavailable')}
+              </p>
+            ) : null}
             <WalletStatsCard user={user} loading={userLoading} />
+            <p className='text-muted-foreground text-sm'>
+              {fundingExplanation}
+            </p>
 
-            <div
+            <fieldset
+              disabled={!financialReady || topupLoading || !topupInfo}
+              aria-busy={wallet.isFetching}
               className={
-                showSubscriptionPanel
+                financialReady && showSubscriptionPanel
                   ? 'grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)] xl:items-start'
                   : 'grid gap-4'
               }
@@ -333,7 +418,6 @@ export function Wallet(props: WalletProps) {
                   loading={topupLoading}
                   priceRatio={(status?.price as number) || 1}
                   usdExchangeRate={effectiveUsdExchangeRate}
-                  onOpenBilling={() => setBillingDialogOpen(true)}
                   creemProducts={topupInfo?.creem_products}
                   enableCreemTopup={topupInfo?.enable_creem_topup}
                   onCreemProductSelect={handleCreemProductSelect}
@@ -347,15 +431,17 @@ export function Wallet(props: WalletProps) {
                 />
               </div>
 
-              <SubscriptionPlansCard
-                topupInfo={topupInfo}
-                onAvailabilityChange={handleSubscriptionAvailabilityChange}
-                userQuota={user?.quota}
-                onPurchaseSuccess={fetchUser}
-              />
-            </div>
+              {financialReady ? (
+                <SubscriptionPlansCard
+                  topupInfo={topupInfo}
+                  onAvailabilityChange={handleSubscriptionAvailabilityChange}
+                  userQuota={user?.quota}
+                  onPurchaseSuccess={fetchUser}
+                />
+              ) : null}
+            </fieldset>
 
-            {!unifiedCash && (
+            {financialReady && !unifiedCash && (
               <AffiliateRewardsCard
                 user={user}
                 affiliateLink={affiliateLink}
@@ -371,7 +457,7 @@ export function Wallet(props: WalletProps) {
       </SectionPageLayout>
 
       <PaymentConfirmDialog
-        open={confirmDialogOpen}
+        open={confirmDialogOpen && financialReady}
         onOpenChange={setConfirmDialogOpen}
         onConfirm={handlePaymentConfirm}
         topupAmount={topupAmount}
@@ -384,7 +470,7 @@ export function Wallet(props: WalletProps) {
       />
 
       <TransferDialog
-        open={transferDialogOpen}
+        open={transferDialogOpen && financialReady}
         onOpenChange={setTransferDialogOpen}
         onConfirm={handleTransfer}
         availableQuota={user?.aff_quota ?? 0}
@@ -394,10 +480,12 @@ export function Wallet(props: WalletProps) {
       <BillingHistoryDialog
         open={billingDialogOpen}
         onOpenChange={setBillingDialogOpen}
+        unifiedCash={unifiedCash}
+        fundingResolved={financialReady}
       />
 
       <CreemConfirmDialog
-        open={creemDialogOpen}
+        open={creemDialogOpen && financialReady}
         onOpenChange={setCreemDialogOpen}
         onConfirm={handleCreemConfirm}
         product={selectedCreemProduct}

@@ -62,6 +62,7 @@ import {
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { useAuthIdentity } from '@/hooks/use-auth-identity'
 import { useStatus } from '@/hooks/use-status'
 import { getUserModels, getUserGroups } from '@/lib/api'
 import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
@@ -95,6 +96,7 @@ export function ApiKeysMutateDrawer({
   currentRow,
 }: ApiKeyMutateDrawerProps) {
   const { t } = useTranslation()
+  const identity = useAuthIdentity()
   const isUpdate = !!currentRow
   const { triggerRefresh } = useApiKeys()
   const { status } = useStatus()
@@ -104,7 +106,7 @@ export function ApiKeysMutateDrawer({
 
   // Fetch models
   const { data: modelsData } = useQuery({
-    queryKey: ['user-models'],
+    queryKey: ['user-models', identity],
     queryFn: getUserModels,
     enabled: open,
     staleTime: 0,
@@ -112,7 +114,7 @@ export function ApiKeysMutateDrawer({
 
   // Fetch groups
   const { data: groupsData } = useQuery({
-    queryKey: ['user-groups'],
+    queryKey: ['user-groups', identity],
     queryFn: getUserGroups,
     enabled: open,
     staleTime: 0,
@@ -276,9 +278,9 @@ export function ApiKeysMutateDrawer({
             {isUpdate ? t('Update API Key') : t('Create API Key')}
           </SheetTitle>
           <SheetDescription>
-            {isUpdate
-              ? t('Update the API key by providing necessary info.')
-              : t('Add a new API key by providing necessary info.')}
+            {t(
+              'This creates native LLMRouter product API keys, including when signed in with UniHub. SuperWagie managed credentials use a separate path.'
+            )}
           </SheetDescription>
         </SheetHeader>
         <Form {...form}>
@@ -307,52 +309,6 @@ export function ApiKeysMutateDrawer({
                   </FormItem>
                 )}
               />
-
-              <FormField
-                control={form.control}
-                name='group'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('Group')}</FormLabel>
-                    <FormControl>
-                      <ApiKeyGroupCombobox
-                        options={groups}
-                        value={field.value}
-                        onValueChange={field.onChange}
-                        placeholder={t('Select a group')}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              {selectedGroup === 'auto' && (
-                <FormField
-                  control={form.control}
-                  name='cross_group_retry'
-                  render={({ field }) => (
-                    <FormItem className={sideDrawerSwitchItemClassName()}>
-                      <div className='flex flex-col gap-0.5'>
-                        <FormLabel className='text-sm'>
-                          {t('Cross-group retry')}
-                        </FormLabel>
-                        <FormDescription className='line-clamp-2 text-xs sm:line-clamp-none'>
-                          {t(
-                            'When enabled, if channels in the current group fail, it will try channels in the next group in order.'
-                          )}
-                        </FormDescription>
-                      </div>
-                      <FormControl>
-                        <Switch
-                          checked={!!field.value}
-                          onCheckedChange={field.onChange}
-                        />
-                      </FormControl>
-                    </FormItem>
-                  )}
-                />
-              )}
 
               <FormField
                 control={form.control}
@@ -412,37 +368,6 @@ export function ApiKeysMutateDrawer({
                   </FormItem>
                 )}
               />
-
-              {!isUpdate && (
-                <FormField
-                  control={form.control}
-                  name='tokenCount'
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t('Quantity')}</FormLabel>
-                      <FormControl>
-                        <Input
-                          {...field}
-                          type='number'
-                          min='1'
-                          placeholder={t('Number of keys to create')}
-                          onChange={(e) =>
-                            field.onChange(
-                              Number.parseInt(e.target.value, 10) || 1
-                            )
-                          }
-                        />
-                      </FormControl>
-                      <FormDescription>
-                        {t(
-                          'Create multiple API keys at once (random suffix will be added to names)'
-                        )}
-                      </FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              )}
             </SideDrawerSection>
 
             <SideDrawerSection>
@@ -509,6 +434,42 @@ export function ApiKeysMutateDrawer({
               />
             </SideDrawerSection>
 
+            <SideDrawerSection>
+              <SideDrawerSectionHeader
+                title={t('Model access')}
+                description={t('Limit which models can be used with this key')}
+              />
+              <FormField
+                control={form.control}
+                name='model_limits'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Model Limits')}</FormLabel>
+                    <FormControl>
+                      <MultiSelect
+                        options={models.map((m) => ({
+                          label: m,
+                          value: m,
+                        }))}
+                        selected={field.value}
+                        onChange={field.onChange}
+                        placeholder={t('Select models (empty for allow all)')}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t('Limit which models can be used with this key')}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </SideDrawerSection>
+
+            <p className='text-muted-foreground text-sm'>
+              {t('Routing group: {{group}}', {
+                group: selectedGroup || 'default',
+              })}
+            </p>
             <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
               <SideDrawerSection>
                 <CollapsibleTrigger
@@ -522,7 +483,9 @@ export function ApiKeysMutateDrawer({
                   <SideDrawerSectionHeader
                     className='flex-1'
                     title={t('Advanced Settings')}
-                    description={t('Set API key access restrictions')}
+                    description={t(
+                      'Batch creation, routing, retry and IP restrictions'
+                    )}
                     icon={<Settings2 className='size-4' />}
                   />
                   <ChevronDown
@@ -534,32 +497,81 @@ export function ApiKeysMutateDrawer({
                 </CollapsibleTrigger>
                 <CollapsibleContent>
                   <div className='flex flex-col gap-4 pt-2'>
+                    {!isUpdate && (
+                      <FormField
+                        control={form.control}
+                        name='tokenCount'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('Quantity')}</FormLabel>
+                            <FormControl>
+                              <Input
+                                {...field}
+                                type='number'
+                                min='1'
+                                placeholder={t('Number of keys to create')}
+                                onChange={(e) =>
+                                  field.onChange(
+                                    Number.parseInt(e.target.value, 10) || 1
+                                  )
+                                }
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              {t(
+                                'Create multiple API keys at once (random suffix will be added to names)'
+                              )}
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    )}
                     <FormField
                       control={form.control}
-                      name='model_limits'
+                      name='group'
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel>{t('Model Limits')}</FormLabel>
+                          <FormLabel>{t('Group')}</FormLabel>
                           <FormControl>
-                            <MultiSelect
-                              options={models.map((m) => ({
-                                label: m,
-                                value: m,
-                              }))}
-                              selected={field.value}
-                              onChange={field.onChange}
-                              placeholder={t(
-                                'Select models (empty for allow all)'
-                              )}
+                            <ApiKeyGroupCombobox
+                              options={groups}
+                              value={field.value}
+                              onValueChange={field.onChange}
+                              placeholder={t('Select a group')}
                             />
                           </FormControl>
-                          <FormDescription>
-                            {t('Limit which models can be used with this key')}
-                          </FormDescription>
                           <FormMessage />
                         </FormItem>
                       )}
                     />
+
+                    {selectedGroup === 'auto' && (
+                      <FormField
+                        control={form.control}
+                        name='cross_group_retry'
+                        render={({ field }) => (
+                          <FormItem className={sideDrawerSwitchItemClassName()}>
+                            <div className='flex flex-col gap-0.5'>
+                              <FormLabel className='text-sm'>
+                                {t('Cross-group retry')}
+                              </FormLabel>
+                              <FormDescription className='line-clamp-2 text-xs sm:line-clamp-none'>
+                                {t(
+                                  'When enabled, if channels in the current group fail, it will try channels in the next group in order.'
+                                )}
+                              </FormDescription>
+                            </div>
+                            <FormControl>
+                              <Switch
+                                checked={!!field.value}
+                                onCheckedChange={field.onChange}
+                              />
+                            </FormControl>
+                          </FormItem>
+                        )}
+                      />
+                    )}
 
                     <FormField
                       control={form.control}

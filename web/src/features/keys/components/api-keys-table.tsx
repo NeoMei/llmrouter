@@ -41,6 +41,7 @@ import {
 } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useAuthIdentity } from '@/hooks/use-auth-identity'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { formatQuota } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -188,6 +189,7 @@ function ApiKeysMobileList({
 
 export function ApiKeysTable() {
   const { t } = useTranslation()
+  const identity = useAuthIdentity()
   const { refreshTrigger } = useApiKeys()
   const [now, setNow] = useState(() => Date.now())
   const columns = useApiKeysColumns(now)
@@ -235,6 +237,7 @@ export function ApiKeysTable() {
   const { data, isLoading, isFetching } = useQuery({
     queryKey: [
       'keys',
+      identity,
       pagination.pageIndex + 1,
       pagination.pageSize,
       globalFilter,
@@ -272,6 +275,7 @@ export function ApiKeysTable() {
       }
     },
     placeholderData: (previousData) => previousData,
+    gcTime: 0,
   })
 
   const apiKeys = data?.items || []

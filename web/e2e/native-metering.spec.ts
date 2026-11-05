@@ -149,7 +149,7 @@ test('user native receipts distinguish pending from confirmed zero', async ({
   const pending = page
     .getByRole('listitem')
     .filter({ hasText: 'pending-fixture' })
-  await expect(pending).toContainText('Final charge: Pending')
+  await expect(pending).toContainText('Final product measurement: Pending')
   const zero = page.getByRole('listitem').filter({ hasText: 'zero-fixture' })
-  await expect(zero).toContainText('Final charge: 0')
+  await expect(zero).toContainText('Final product measurement: 0 LR_QUOTA')
 })

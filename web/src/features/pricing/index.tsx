@@ -188,7 +188,7 @@ export function Pricing() {
             </p>
             <p className='text-muted-foreground/60 mx-auto mt-2 max-w-2xl text-xs leading-relaxed sm:text-sm'>
               {t(
-                'Discover curated AI models, compare pricing and capabilities, and choose the right model for every scenario.'
+                'Model and pricing directory for reference. Availability depends on the current key, permissions and consumer support; a listing does not guarantee a successful call.'
               )}
             </p>
             <SearchBar

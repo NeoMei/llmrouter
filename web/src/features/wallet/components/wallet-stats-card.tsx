@@ -47,6 +47,8 @@ export function WalletStatsCard(props: WalletStatsCardProps) {
     )
   }
 
+  if (!props.user) return null
+
   const funding = props.user?.funding
   const stats: {
     label: string
@@ -65,11 +67,11 @@ export function WalletStatsCard(props: WalletStatsCardProps) {
       tone: 'success',
     },
     {
-      label: funding ? t('Product quota usage') : t('Total Usage'),
+      label: funding ? t('Product quota usage') : t('LLMRouter product usage'),
       value: funding
         ? `${(props.user?.used_quota ?? 0).toLocaleString()} LR_QUOTA`
         : formatQuota(props.user?.used_quota ?? 0),
-      description: t('Total consumed quota'),
+      description: t('Product measurement, not confirmed cash charge'),
       icon: BarChart3,
       tone: 'info',
     },
@@ -90,7 +92,7 @@ export function WalletStatsCard(props: WalletStatsCardProps) {
             <IconBadge tone={item.tone} size='stat'>
               <item.icon />
             </IconBadge>
-            <div className='text-muted-foreground truncate text-[11px] font-medium tracking-wider uppercase sm:text-xs'>
+            <div className='text-muted-foreground min-h-9 min-w-0 text-[11px] leading-tight font-medium break-words sm:min-h-0 sm:text-xs'>
               {item.label}
             </div>
           </div>

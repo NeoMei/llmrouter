@@ -57,6 +57,8 @@ import {
 } from '../../lib/billing'
 
 interface BillingHistoryDialogProps {
+  unifiedCash?: boolean
+  fundingResolved?: boolean
   open: boolean
   onOpenChange: (open: boolean) => void
 }
@@ -64,6 +66,8 @@ interface BillingHistoryDialogProps {
 export function BillingHistoryDialog({
   open,
   onOpenChange,
+  unifiedCash,
+  fundingResolved,
 }: BillingHistoryDialogProps) {
   const { t } = useTranslation()
   const {
@@ -73,13 +77,16 @@ export function BillingHistoryDialog({
     pageSize,
     keyword,
     loading,
+    error,
+    hasData,
+    refresh,
     completing,
     isAdmin,
     handlePageChange,
     handlePageSizeChange,
     handleSearch,
     handleCompleteOrder,
-  } = useBillingHistory({ enabled: open })
+  } = useBillingHistory({ enabled: open, unifiedCash, fundingResolved })
 
   const [confirmTradeNo, setConfirmTradeNo] = useState<string | null>(null)
   const { copyToClipboard, copiedText } = useCopyToClipboard({ notify: false })
@@ -146,9 +153,26 @@ export function BillingHistoryDialog({
             </Select>
           </div>
 
+          <div className='flex flex-wrap items-center gap-2'>
+            <Button
+              variant='outline'
+              size='sm'
+              disabled={loading}
+              onClick={() => void refresh()}
+            >
+              {error ? t('Retry history') : t('Refresh history')}
+            </Button>
+            {error ? (
+              <p role='alert' className='text-destructive text-sm'>
+                {hasData
+                  ? t('Showing previous history. Refresh failed.')
+                  : t('Failed to load billing history')}
+              </p>
+            ) : null}
+          </div>
           {/* Records List */}
           <div className='max-h-[min(54vh,520px)] overflow-y-auto pr-1'>
-            {loading ? (
+            {loading && (
               <div className='space-y-3'>
                 {Array.from({ length: 5 }).map((_, i) => (
                   <div key={i} className='rounded-lg border p-3 sm:p-4'>
@@ -167,7 +191,8 @@ export function BillingHistoryDialog({
                   </div>
                 ))}
               </div>
-            ) : records.length === 0 ? (
+            )}
+            {!loading && !error && records.length === 0 && (
               <div className='text-muted-foreground flex min-h-40 flex-col items-center justify-center py-10 text-center'>
                 <p className='text-sm font-medium'>
                   {t('No billing records found')}
@@ -178,7 +203,8 @@ export function BillingHistoryDialog({
                     : t('Your transaction history will appear here')}
                 </p>
               </div>
-            ) : (
+            )}
+            {!loading && records.length > 0 && (
               <div className='space-y-3'>
                 {records.map((record) => {
                   const statusConfig = getStatusConfig(record.status)
@@ -283,7 +309,7 @@ export function BillingHistoryDialog({
                             size='sm'
                             variant='outline'
                             onClick={() => setConfirmTradeNo(record.trade_no)}
-                            disabled={completing}
+                            disabled={completing || error || loading}
                           >
                             {t('Complete Order')}
                           </Button>

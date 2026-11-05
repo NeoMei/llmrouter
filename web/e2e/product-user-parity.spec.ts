@@ -419,7 +419,10 @@ for (const source of ['native', 'unihub'] as const) {
     const { requests, writes } = await fixture(page, source)
     await page.goto('/keys')
     await expect(
-      page.getByRole('heading', { name: 'API Keys', exact: true })
+      page.getByRole('heading', {
+        name: 'LLMRouter product API keys',
+        exact: true,
+      })
     ).toBeVisible()
     await expect(
       page.getByRole('button', { name: /^Local ·|^UniHub account$/ })
@@ -429,11 +432,14 @@ for (const source of ['native', 'unihub'] as const) {
       .click()
     await expect(
       page.getByText('Cross-group retry', { exact: true })
-    ).toBeVisible()
+    ).toHaveCount(0)
     await expect(
       page.getByText('Expiration Time', { exact: true })
     ).toBeVisible()
     await page.getByText('Advanced Settings', { exact: true }).click()
+    await expect(
+      page.getByText('Cross-group retry', { exact: true })
+    ).toBeVisible()
     await expect(
       page.getByText('IP Whitelist (supports CIDR)', { exact: true })
     ).toBeVisible()
@@ -591,7 +597,9 @@ for (const source of ['native', 'unihub'] as const) {
       page.getByRole('button', { name: /^Local ·|^UniHub account$/ })
     ).toHaveCount(0)
     await expect(
-      page.getByText('Native usage and receipts', { exact: true })
+      page.getByText('Native product measurements and receipts', {
+        exact: true,
+      })
     ).toBeVisible()
     await expect(page.getByText('Product key', { exact: true })).toBeVisible()
     await expect(page.getByText('0.246912', { exact: true })).toBeVisible()

@@ -60,3 +60,41 @@ keys into SuperWagie settings.
 This runbook proves the LLMRouter gateway and local accounting contract. It does
 not certify supplier availability, SuperWagie's installed skill runtimes, or
 real payment collection.
+
+## Console state and credential boundaries
+
+`/keys` manages native **LLMRouter product API keys**, including after UniHub
+sign-in. It still writes the native `/api/token/` contract; it does not issue or
+convert managed `uh_key` credentials. Budget, expiration and model access remain
+visible. Batch quantity, routing groups, cross-group retry and IP restrictions
+are retained under Advanced Settings, with the existing defaults preserved.
+
+The wallet distinguishes a pending read, an unavailable read, a successful zero
+and a failed refresh. Failed refreshes may show explicitly labeled previous
+values. Financial controls are unavailable until the current wallet read
+succeeds. Switching user, session or authentication realm clears the visible
+wallet, its open confirmations and unfinished native-key drafts; responses from the previous identity cannot
+populate the new identity's finance queries. Order History remains a separate
+action, and history/statistics failures provide safe read retries instead of
+claiming that records or usage are zero. Unresolved wallet funding limits even
+administrators to personal order history until the funding source is confirmed.
+
+A native account's local quota and a native key's `unified_cash` funding are
+different sources. The shared cash display preserves exact CNY quantities and
+does not identify it as the SuperWagie managed-call product wallet. `LR_QUOTA`
+and native receipt values are product measurements; confirmed UniHub cash
+charges belong to the financial receipt. A model/pricing directory entry does
+not certify that a particular key, permission set or client supports the model.
+Configured payment availability does not certify real collection.
+
+For isolated UI regression (no backend required), run from `web/`:
+
+```bash
+bun x playwright test --config playwright.settings.config.ts
+```
+
+This uses the real app entry and components, intercepts all API requests, and
+adds a separate test entry exposing the real auth boundary for controlled
+account transitions. The production build does not import that test entry.
+The fixture's token and accounts are synthetic and never call a real provider,
+create a real key, or submit a real payment.

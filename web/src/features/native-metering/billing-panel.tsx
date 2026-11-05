@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { useAuthIdentity } from '@/hooks/use-auth-identity'
 import { api } from '@/lib/api'
 
 import { formatQuantity, type NativePrice } from './contract'
@@ -42,6 +43,11 @@ type Bill = {
 }
 type AdminBill = { ID: string; State: string; Platform: boolean }
 export function NativeBillingPanel(props: { admin?: boolean }) {
+  const identity = useAuthIdentity()
+  return <NativeBillingContent key={identity} {...props} identity={identity} />
+}
+
+function NativeBillingContent(props: { admin?: boolean; identity: string }) {
   const { t } = useTranslation()
   const client = useQueryClient()
   const [selected, setSelected] = useState('')
@@ -50,16 +56,22 @@ export function NativeBillingPanel(props: { admin?: boolean }) {
   const [actionID, setActionID] = useState('')
   const [action, setAction] = useState('confirm_measurement')
   const list = useQuery({
-    queryKey: ['native-billing', Boolean(props.admin)],
-    queryFn: async () =>
-      (
-        await api.get<{ data: Bill[] | AdminBill[] }>(
-          props.admin ? '/api/native-billing/' : '/api/native-billing/self'
-        )
-      ).data.data,
+    queryKey: ['native-billing', props.identity, Boolean(props.admin)],
+    queryFn: async () => {
+      const response = await api.get<{
+        success: boolean
+        data?: Bill[] | AdminBill[]
+      }>(props.admin ? '/api/native-billing/' : '/api/native-billing/self')
+      if (!response.data.success || !Array.isArray(response.data.data)) {
+        throw new Error('Native receipts unavailable')
+      }
+      return response.data.data
+    },
+    retry: false,
+    gcTime: 0,
   })
   const detail = useQuery({
-    queryKey: ['native-billing-detail', selected],
+    queryKey: ['native-billing-detail', props.identity, selected],
     enabled: Boolean(props.admin && selected),
     queryFn: async () =>
       (await api.get(`/api/native-billing/${encodeURIComponent(selected)}`))
@@ -86,17 +98,33 @@ export function NativeBillingPanel(props: { admin?: boolean }) {
         {t(
           props.admin
             ? 'Native billing reconciliation'
-            : 'Native usage and receipts'
+            : 'Native product measurements and receipts'
         )}
       </h3>
       <p className='text-muted-foreground text-sm'>
         {t(
-          'Pending measurements retain the reservation. A confirmed zero is a final zero charge.'
+          'LR_QUOTA is product measurement. Pending measurements retain the reservation; a final zero here does not confirm a UniHub cash charge. Check the UniHub financial receipt for cash settlement.'
         )}
       </p>
       {list.isPending ? <p>{t('Loading')}</p> : null}
-      {list.error ? <p role='alert'>{list.error.message}</p> : null}
-      {list.data?.length === 0 ? <p>{t('No native billing records')}</p> : null}
+      {list.error ? (
+        <p role='alert'>
+          {list.data
+            ? t('Showing previous receipts. Refresh failed.')
+            : t('Native receipts unavailable')}
+        </p>
+      ) : null}
+      <Button
+        variant='outline'
+        size='sm'
+        disabled={list.isFetching}
+        onClick={() => void list.refetch()}
+      >
+        {list.isError ? t('Retry receipts') : t('Refresh receipts')}
+      </Button>
+      {!list.isError && list.data?.length === 0 ? (
+        <p>{t('No native billing records')}</p>
+      ) : null}
       <ul className='space-y-2'>
         {list.data?.map((row) => {
           if ('ID' in row) {
@@ -116,36 +144,42 @@ export function NativeBillingPanel(props: { admin?: boolean }) {
           }
           return (
             <li className='rounded border p-3' key={row.id}>
+              <p>{row.state}</p>
               <p>
-                {row.id} · {row.state}
+                {t('Reserved product measurement')}: {row.reserved} LR_QUOTA
               </p>
               <p>
-                {t('Reserved')}: {row.reserved} {t('quota units')}
-              </p>
-              <p>
-                {t('Final charge')}:{' '}
-                {row.final === undefined ? t('Pending') : row.final}
+                {t('Final product measurement')}:{' '}
+                {row.final === undefined
+                  ? t('Pending')
+                  : `${row.final} LR_QUOTA`}
               </p>
               {row.platform ? (
                 <p>{t('Platform financial receipt is owned by UniHub.')}</p>
               ) : null}
-              {row.price ? (
-                <p>
-                  {row.price.operation} · {row.price.policy} ·{' '}
-                  {row.price.version}
-                </p>
-              ) : null}
-              {row.measurements?.map((m) => (
-                <p key={m.key}>
-                  {m.key}: {formatQuantity(m.quantity)} {m.unit}
-                </p>
-              ))}
-              {row.price?.terms.map((term) => (
-                <p key={term.key}>
-                  {term.key}: {term.price.numerator}/{term.price.denominator} /{' '}
-                  {term.unit}
-                </p>
-              ))}
+              <details>
+                <summary className='cursor-pointer'>
+                  {t('Measurement details')}
+                </summary>
+                <p>{row.id}</p>
+                {row.price ? (
+                  <p>
+                    {row.price.operation} · {row.price.policy} ·{' '}
+                    {row.price.version}
+                  </p>
+                ) : null}
+                {row.measurements?.map((m) => (
+                  <p key={m.key}>
+                    {m.key}: {formatQuantity(m.quantity)} {m.unit}
+                  </p>
+                ))}
+                {row.price?.terms.map((term) => (
+                  <p key={term.key}>
+                    {term.key}: {term.price.numerator}/{term.price.denominator}{' '}
+                    / {term.unit}
+                  </p>
+                ))}
+              </details>
             </li>
           )
         })}
@@ -193,6 +227,8 @@ export function NativeBillingPanel(props: { admin?: boolean }) {
           ) : null}
           <Button
             disabled={
+              !list.isSuccess ||
+              list.isFetching ||
               resolve.isPending ||
               !reason.trim() ||
               !actionID ||

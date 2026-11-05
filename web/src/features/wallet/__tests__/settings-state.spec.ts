@@ -343,3 +343,103 @@ test('unresolved admin funding keeps order history personal and cannot complete 
   ).toHaveCount(0)
   expect(writes).toEqual([])
 })
+
+for (const malformed of [
+  { name: 'missing history fields', data: {} },
+  { name: 'nonarray items', data: { items: {}, total: 0 } },
+  { name: 'wrong total type', data: { items: [], total: '0' } },
+  { name: 'negative total', data: { items: [], total: -1 } },
+  { name: 'fractional total', data: { items: [], total: 0.5 } },
+]) {
+  test(`malformed history success with ${malformed.name} stays unavailable and safe retry accepts empty history`, async ({
+    page,
+  }) => {
+    const { writes } = await fixture(page)
+    let valid = false
+    await page.route('**/api/user/topup/self**', (route) =>
+      route.fulfill({
+        json: {
+          success: true,
+          data: valid ? { items: [], total: 0 } : malformed.data,
+        },
+      })
+    )
+    await page.goto('/wallet')
+    await page
+      .getByRole('button', { name: 'Order History', exact: true })
+      .click()
+    const dialog = page.getByRole('dialog', {
+      name: 'Billing History',
+      exact: true,
+    })
+    await expect(dialog.getByRole('alert')).toContainText(
+      'Failed to load billing history'
+    )
+    await expect(
+      dialog.getByText('No billing records found', { exact: true })
+    ).toHaveCount(0)
+    valid = true
+    await dialog
+      .getByRole('button', { name: 'Retry history', exact: true })
+      .click()
+    await expect(
+      dialog.getByText('No billing records found', { exact: true })
+    ).toBeVisible()
+    expect(writes).toEqual([])
+  })
+}
+
+test('malformed history refresh retains previous records with a stale label', async ({
+  page,
+}) => {
+  const { writes } = await fixture(page)
+  let malformed = false
+  await page.route('**/api/user/topup/self**', (route) =>
+    route.fulfill({
+      json: {
+        success: true,
+        data: malformed
+          ? {}
+          : {
+              items: [
+                {
+                  id: 1,
+                  trade_no: 'fixture-confirmed-history',
+                  amount: 1,
+                  money: 1,
+                  create_time: 1,
+                  payment_method: 'wechat_native',
+                  status: 'pending',
+                },
+              ],
+              total: 1,
+            },
+      },
+    })
+  )
+  await page.goto('/wallet')
+  await page.getByRole('button', { name: 'Order History', exact: true }).click()
+  const dialog = page.getByRole('dialog', {
+    name: 'Billing History',
+    exact: true,
+  })
+  await expect(
+    dialog.getByText('fixture-confirmed-history', { exact: true })
+  ).toBeVisible()
+  malformed = true
+  await dialog
+    .getByRole('button', { name: 'Refresh history', exact: true })
+    .click()
+  await expect(
+    dialog.getByText('Showing previous history. Refresh failed.', {
+      exact: true,
+    })
+  ).toBeVisible()
+  await expect(
+    dialog.getByText('fixture-confirmed-history', { exact: true })
+  ).toBeVisible()
+  await expect(
+    dialog.getByText('No billing records found', { exact: true })
+  ).toHaveCount(0)
+  expect(writes).toEqual([])
+})

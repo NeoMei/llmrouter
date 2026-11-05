@@ -76,7 +76,13 @@ export function CommonLogsStats() {
         ? await getLogStats(params)
         : await getUserLogStats(params)
 
-      if (!result.success || !result.data) {
+      if (
+        !result.success ||
+        !result.data ||
+        ![result.data.quota, result.data.rpm, result.data.tpm].every(
+          Number.isFinite
+        )
+      ) {
         throw new Error('Usage statistics unavailable')
       }
       return result.data
@@ -116,19 +122,17 @@ export function CommonLogsStats() {
         <>
           <StatBadge
             label={t('LLMRouter product usage')}
-            value={
-              sensitiveVisible ? formatLogQuota(stats?.quota || 0) : '••••'
-            }
+            value={sensitiveVisible ? formatLogQuota(stats.quota) : '••••'}
             accent='bg-sky-500/70'
           />
           <StatBadge
             label={t('RPM')}
-            value={stats?.rpm || 0}
+            value={stats.rpm}
             accent='bg-rose-500/65'
           />
           <StatBadge
             label={t('TPM')}
-            value={stats?.tpm || 0}
+            value={stats.tpm}
             accent='bg-slate-400/70'
           />
         </>

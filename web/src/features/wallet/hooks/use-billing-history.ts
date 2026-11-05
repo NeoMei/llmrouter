@@ -69,7 +69,13 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
       const response = isAdmin
         ? await getAllBillingHistory(page, pageSize, keyword)
         : await getUserBillingHistory(page, pageSize, keyword)
-      if (!isApiSuccess(response) || !response.data) {
+      if (
+        !isApiSuccess(response) ||
+        !response.data ||
+        !Array.isArray(response.data.items) ||
+        !Number.isSafeInteger(response.data.total) ||
+        response.data.total < 0
+      ) {
         throw new Error(i18next.t('Failed to load billing history'))
       }
       return response.data
@@ -80,8 +86,8 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
     staleTime: 0,
   })
   const fetchBillingHistory = history.refetch
-  const records = history.data?.items ?? []
-  const total = history.data?.total ?? 0
+  const records = history.data ? history.data.items : []
+  const total = history.data ? history.data.total : 0
   const loading = history.isPending || history.isFetching
 
   /**

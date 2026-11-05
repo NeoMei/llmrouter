@@ -265,11 +265,14 @@ func PreparePlatformFaultWaiver(ctx context.Context, db *gorm.DB, raw []byte, di
 		// captured results nor separately retained overage fit this waiver contract.
 		for _, observation := range []any{&knowledgeResultRow{}, &knowledgeRejectedUsage{}} {
 			if tx.Migrator().HasTable(observation) {
-				var count int64
-				if err := tx.Model(observation).Where("call_id = ?", p.CallID).Count(&count).Error; err != nil {
+				// A normal Count can retain the decision SELECT's older snapshot
+				// on MySQL REPEATABLE READ. Read current rows under the same
+				// locks; an aggregate FOR UPDATE is invalid on PostgreSQL.
+				var found []struct{ CallID string }
+				if err := waiverLockedRead(tx).Model(observation).Select("call_id").Where("call_id = ?", p.CallID).Limit(1).Find(&found).Error; err != nil {
 					return err
 				}
-				if count != 0 {
+				if len(found) != 0 {
 					return ErrConflict
 				}
 			}

@@ -73,6 +73,13 @@ func waiverFixture(t *testing.T) (*gorm.DB, Call, Attempt, map[string]any) {
 	require.NoError(t, db.First(&persistedAttempt, attempt.ID).Error)
 	require.True(t, attempt.CreatedAt.Equal(persistedAttempt.CreatedAt))
 	attempt = persistedAttempt
+	return db, row, attempt, waiverApprovalForCall(t, row, attempt)
+}
+
+func waiverApprovalForCall(t *testing.T, row Call, attempt Attempt) map[string]any {
+	t.Helper()
+	var rate Rate
+	require.NoError(t, common.UnmarshalUnique([]byte(row.RateSnapshot), &rate))
 	remote := RemoteCall{CallID: row.CallID, ActorID: row.ActorID, AccountID: row.AccountID, OriginProductID: row.OriginProductID, InstanceID: row.InstanceID, CredentialID: row.CredentialID, RequestDigest: row.Digest, Rate: rate, Held: row.Amount, Charged: "0", Status: "RESERVED", ChargeAsset: row.Asset, FundingMode: row.FundingMode, FundingProductID: row.FundingProductID}
 	remote.WireOperation = row.WireOperation
 	remoteJSON, err := common.Marshal(remote)
@@ -84,7 +91,7 @@ func waiverFixture(t *testing.T) (*gorm.DB, Call, Attempt, map[string]any) {
 	approval := map[string]any{"schema": 1, "case_id": "reviewed-case", "operator_id": "finance-admin", "reason": "customer waived for platform fault; supplier outcome remains unresolved", "call_id": row.CallID, "actor_id": row.ActorID, "account_id": row.AccountID, "origin_product_id": row.OriginProductID, "instance_id": row.InstanceID, "asset": row.Asset, "held": row.Amount, "provider_state": "PROVIDER_UNRESOLVED", "original_evidence_sha256": strings.Repeat("1", 64), "followup_evidence_sha256": strings.Repeat("2", 64), "expected_central_row": map[string]any{"id": row.CallID, "account_id": row.AccountID, "request_digest": "original-reservation-digest", "snapshot": snapshot}, "gateway_call": row, "gateway_attempts": []Attempt{attempt}}
 	approval["approval_statement"] = "The customer fee is waived for the platform fault; supplier usage and cost remain unresolved."
 	approval["approval_source_sha256"] = strings.Repeat("3", 64)
-	return db, row, attempt, approval
+	return approval
 }
 
 func waiverApprovalBytes(t *testing.T, approval map[string]any) ([]byte, string) {

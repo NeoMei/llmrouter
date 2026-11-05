@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,6 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 // The normalized record deliberately has no metering.Usage envelope or output.
@@ -43,6 +46,9 @@ func rejectedKnowledgeFixture(t *testing.T, op string) (*Session, string, string
 
 func rejectedKnowledgeFixtureOnDB(t *testing.T, op string, db *gorm.DB) (*Session, string, string, string) {
 	t.Helper()
+	// Callback removal is expected fixture cleanup. Keep actual SQL errors
+	// visible while suppressing that warning and normal missing-row probes.
+	db.Logger = logger.New(log.New(os.Stderr, "", log.LstdFlags), logger.Config{LogLevel: logger.Error, IgnoreRecordNotFoundError: true})
 	s, key, upstream := responseFixtureOnDB(t, op, db)
 	s.uncertain = true
 	s.adapter.config.AllowAliEmbeddingV4, s.adapter.config.AllowAliRerank = true, true
@@ -462,6 +468,110 @@ func TestKnowledgeRejectedUsagePreservesSuccessfulCapture(t *testing.T) {
 			var n int64
 			require.NoError(t, s.adapter.db.Model(&knowledgeRejectedUsage{}).Count(&n).Error)
 			assert.Zero(t, n)
+		})
+	}
+}
+
+// The first ordinary SELECT establishes a stale snapshot on MySQL REPEATABLE
+// READ. Capture commits while waiver is paused before its first row lock.
+// The exclusion must read current locked observation rows, not that snapshot.
+func TestKnowledgeRejectedUsageWaiverCurrentRead(t *testing.T) {
+	for _, dialect := range []string{"mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			dsn := os.Getenv(map[string]string{"mysql": "KNOWLEDGE_RESULT_TEST_MYSQL_DSN", "postgres": "KNOWLEDGE_RESULT_TEST_POSTGRES_DSN"}[dialect])
+			if dsn == "" {
+				t.Skip("explicit disposable " + dialect + " database not configured")
+			}
+			for _, op := range []string{"embedding", "rerank"} {
+				t.Run(op, func(t *testing.T) {
+					db := knowledgeResultTestDB(t, dialect, dsn)
+					if dialect == "mysql" {
+						var isolation string
+						require.NoError(t, db.Raw("SELECT @@transaction_isolation").Scan(&isolation).Error)
+						require.Equal(t, "REPEATABLE-READ", isolation, "exercise the supported default isolation, without overriding it")
+					}
+					s, key, upstream, body := rejectedKnowledgeFixtureOnDB(t, op, db)
+					// Bind this real capture fixture to the existing cash-waiver contract.
+					frozen, err := s.adapter.knowledgeSnapshot(s.call)
+					require.NoError(t, err)
+					frozen.BodyCiphertext, frozen.BodyKeyID = nil, ""
+					frozen.Policy.RateIDs = map[string]string{"CNY/6": "rate"}
+					snapshot, err := common.Marshal(frozen)
+					require.NoError(t, err)
+					s.call.MediaSnapshot = string(snapshot)
+					s.call.OriginProductID, s.call.Asset, s.call.FundingMode = "llmrouter", "CNY/6", "prepaid_cash"
+					var rate Rate
+					require.NoError(t, common.UnmarshalUnique([]byte(s.call.RateSnapshot), &rate))
+					rate.Asset = "CNY/6"
+					encodedRate, err := common.Marshal(rate)
+					require.NoError(t, err)
+					s.call.RateSnapshot = string(encodedRate)
+					require.NoError(t, s.adapter.sealKnowledgeSnapshot(&s.call))
+					require.NoError(t, db.Save(&s.call).Error)
+					require.NoError(t, InstallPlatformFaultWaiverSchema(context.Background(), db))
+					var original Call
+					var attempt Attempt
+					require.NoError(t, db.First(&original, "call_id = ?", s.call.CallID).Error)
+					require.NoError(t, db.First(&attempt, "id = ?", s.attempt.ID).Error)
+					approval, digest := waiverApprovalBytes(t, waiverApprovalForCall(t, original, attempt))
+					require.NoError(t, ValidatePlatformFaultWaiverApproval(approval, digest))
+
+					ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+					defer cancel()
+					snapshotRead := make(chan struct{})
+					resume := make(chan struct{})
+					var paused atomic.Bool
+					var resumeOnce sync.Once
+					release := func() { resumeOnce.Do(func() { close(resume) }) }
+					defer release()
+					require.NoError(t, db.Callback().Query().After("gorm:query").Register("fixture:waiver_snapshot_barrier", func(tx *gorm.DB) {
+						if tx.Statement.Table == "platform_model_fault_waiver_decisions" && paused.CompareAndSwap(false, true) {
+							close(snapshotRead)
+							select {
+							case <-resume:
+							case <-ctx.Done():
+								tx.AddError(ctx.Err())
+							}
+						}
+					}))
+					defer func() { require.NoError(t, db.Callback().Query().Remove("fixture:waiver_snapshot_barrier")) }()
+					finished := make(chan error, 1)
+					go func() {
+						_, waiverErr := PreparePlatformFaultWaiver(ctx, db, approval, digest, true)
+						finished <- waiverErr
+					}()
+					select {
+					case <-snapshotRead:
+					case waiverErr := <-finished:
+						t.Fatalf("waiver finished before snapshot barrier: %v", waiverErr)
+					case <-ctx.Done():
+						t.Fatal("waiver did not reach snapshot barrier")
+					}
+					raw, captureErr := s.CaptureKnowledgeResult(ctx, 1, upstream, key, []byte(body))
+					// Capture returned only after its rejected observation transaction committed.
+					release()
+					var waiverErr error
+					select {
+					case waiverErr = <-finished:
+					case <-ctx.Done():
+						t.Fatal("waiver did not finish after capture commit")
+					}
+					require.ErrorIs(t, captureErr, ErrInvalid)
+					assert.Empty(t, raw)
+					assert.ErrorIs(t, waiverErr, ErrConflict, "committed supplier overage must block a waiver that began from an older snapshot")
+					var current Call
+					require.NoError(t, db.First(&current, "call_id = ?", original.CallID).Error)
+					assert.True(t, waiverCallEqual(original, current), "call, hold, state, financial evidence and intent remain unchanged")
+					var retained knowledgeRejectedUsage
+					require.NoError(t, db.First(&retained, "call_id = ?", original.CallID).Error)
+					assert.Equal(t, "NONCHARGEABLE", retained.Disposition)
+					assert.Contains(t, retained.Measurements, `"value":"101"`)
+					var decisions int64
+					require.NoError(t, db.Model(&PlatformFaultWaiverDecision{}).Count(&decisions).Error)
+					assert.Zero(t, decisions)
+					assertRejectedKnowledgeUncharged(t, s)
+				})
+			}
 		})
 	}
 }

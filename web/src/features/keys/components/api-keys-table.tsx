@@ -283,6 +283,7 @@ export function ApiKeysTable() {
   const { table } = useDataTable({
     data: apiKeys,
     columns,
+    getRowId: (apiKey) => String(apiKey.id),
     enableRowSelection: true,
     columnFilters,
     columnVisibilityStorageKey: API_KEYS_COLUMN_VISIBILITY_STORAGE_KEY,

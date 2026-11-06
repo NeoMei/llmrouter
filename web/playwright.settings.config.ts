@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test'
 
 export default defineConfig({
   testDir: '.',
-  testMatch: /(?:settings-state|key-quota-edit)\.spec\.ts/,
+  testMatch: /(?:settings-state|key-quota-edit|key-menu)\.spec\.ts/,
   workers: 1,
   reporter: 'line',
   timeout: 20000,

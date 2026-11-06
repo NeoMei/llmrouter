@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service/ocr"
 	"net/http"
@@ -27,10 +28,18 @@ func TestManagedNativeOCRZeroPriceSettlesBeforeOwnedDocument(t *testing.T) {
 		if pooled {
 			name = "single-member-pool"
 		}
-		t.Run(name, func(t *testing.T) { testManagedNativeOCRLifecycle(t, pooled) })
+		t.Run(name, func(t *testing.T) { testManagedNativeOCRLifecycle(t, pooled, false, false) })
 	}
 }
-func testManagedNativeOCRLifecycle(t *testing.T, pooled bool) {
+func TestManagedNativeOCROfficialBOSResultAndExistingJobRecovery(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("existing-single-origin=%v", existing), func(t *testing.T) {
+			testManagedNativeOCRLifecycle(t, true, true, existing)
+		})
+	}
+}
+
+func testManagedNativeOCRLifecycle(t *testing.T, pooled, officialBOS, existingSnapshot bool) {
 	var remote platformbilling.RemoteCall
 	var final platformbilling.NativeSettleRequest
 	var f *ocrGatewayFixture
@@ -69,7 +78,11 @@ func testManagedNativeOCRLifecycle(t *testing.T, pooled bool) {
 		_, _ = w.Write(b)
 	}))
 	defer hub.Close()
-	f = newOCRGatewayFixture(t, "success", hub.URL, "service-service-service-service-token", "", "")
+	variant := "success"
+	if officialBOS {
+		variant = "native-bos"
+	}
+	f = newOCRGatewayFixture(t, variant, hub.URL, "service-service-service-service-token", "", "")
 	oldPrices := ratio_setting.ModelPrice2JSONString()
 	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(oldPrices)) })
 	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"PaddleOCR-VL-1.6":0}`))
@@ -158,6 +171,66 @@ func testManagedNativeOCRLifecycle(t *testing.T, pooled bool) {
 		}
 		require.NoError(t, f.db.Model(&model.Channel{}).Where("id = ?", 1).Updates(map[string]any{"channel_info": model.ChannelInfo{IsMultiKey: true, MultiKeySize: 1, MultiKeyStatusList: map[int]int{0: common.ChannelStatusEnabled}}, "key": "synthetic-paddle-key\n"}).Error)
 	}
+	var preservedExecution string
+	if officialBOS {
+		var job model.OCRJob
+		require.NoError(t, f.db.Where("platform_call_id = ?", call).First(&job).Error)
+		var execution model.OCRExecution
+		require.NoError(t, common.UnmarshalJsonStr(job.Execution, &execution))
+		if existingSnapshot {
+			// Reproduce the already accepted rc21 job; recovery must not rewrite it.
+			execution.ResourceOrigins = []string{"https://paddleocr.aistudio-app.com"}
+			encoded, err := common.Marshal(execution)
+			require.NoError(t, err)
+			require.NoError(t, f.db.Model(&job).Updates(map[string]any{"execution": string(encoded), "provider_state": "done", "total_pages": 1, "extracted_pages": 1}).Error)
+			f.polls = 1 // The original supplier has already completed the accepted job.
+			var originalCall platformbilling.Call
+			require.NoError(t, f.db.First(&originalCall, "call_id = ?", call).Error)
+			for _, change := range []map[string]any{
+				{"pricing_source": ""},
+				{"status": "RESERVED"},
+				{"provider_task_id": "different-provider-job"},
+				{"credential_kind": "task"},
+			} {
+				require.NoError(t, f.db.Model(&platformbilling.Call{}).Where("call_id = ?", call).Updates(change).Error)
+				_, err := f.runtime.Service.Status(context.Background(), job.ID, job.UserID, job.TokenID)
+				require.Error(t, err)
+				assert.Zero(t, f.downloads)
+				assert.Zero(t, f.settles)
+				require.NoError(t, f.db.Save(&originalCall).Error)
+			}
+			custom := execution
+			custom.JobsURL = "https://custom-paddle.example/api/v2/ocr/jobs"
+			customRaw, err := common.Marshal(custom)
+			require.NoError(t, err)
+			require.NoError(t, f.db.Model(&job).Update("execution", string(customRaw)).Error)
+			_, err = f.runtime.Service.Status(context.Background(), job.ID, job.UserID, job.TokenID)
+			require.Error(t, err)
+			assert.Zero(t, f.downloads)
+			require.NoError(t, f.db.Model(&job).Update("execution", string(encoded)).Error)
+		} else {
+			assert.Contains(t, execution.ResourceOrigins, "https://paddleocr-store.bj.bcebos.com")
+		}
+		require.NoError(t, f.db.First(&job, "id = ?", job.ID).Error)
+		preservedExecution = job.Execution
+		for _, deniedOrigin := range []string{
+			"https://paddleocr-store.bj.bcebos.com.attacker.example",
+			"https://other-bucket.bj.bcebos.com",
+			"http://paddleocr-store.bj.bcebos.com",
+			"https://paddleocr-store.bj.bcebos.com:8443",
+			"https://user@paddleocr-store.bj.bcebos.com",
+			"https://paddleocr-store.bj.bcebos.com#fragment",
+			"http://127.0.0.1",
+		} {
+			f.polls = max(f.polls, 1)
+			f.resultOrigin = deniedOrigin
+			_, err := f.runtime.Service.Status(context.Background(), job.ID, job.UserID, job.TokenID)
+			require.Error(t, err, deniedOrigin)
+			assert.Zero(t, f.downloads)
+			assert.Zero(t, f.settles)
+		}
+		f.resultOrigin = "https://paddleocr-store.bj.bcebos.com"
+	}
 	for range 2 {
 		req = httptest.NewRequest(http.MethodGet, "/v1/ocr/"+call, nil)
 		req.Header.Set("Authorization", "Bearer uh_key_ocr")
@@ -174,4 +247,12 @@ func testManagedNativeOCRLifecycle(t *testing.T, pooled bool) {
 	assert.Equal(t, 1, f.sends)
 	assert.Equal(t, 1, f.reserves)
 	assert.Equal(t, 1, f.settles)
+	if officialBOS {
+		var job model.OCRJob
+		require.NoError(t, f.db.Where("platform_call_id = ?", call).First(&job).Error)
+		assert.Equal(t, preservedExecution, job.Execution)
+		assert.Equal(t, "settled", job.BillingState)
+		assert.Equal(t, 1, job.SubmitAttempts)
+		assert.NotEmpty(t, job.ResultResourceID)
+	}
 }

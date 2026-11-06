@@ -8,7 +8,6 @@ import (
 	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"io"
 	"net/http"
-	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -250,7 +249,7 @@ func (h *OCRHandler) Create(c *gin.Context) {
 				h.fail(c, 503, "OCR channel unavailable")
 				return
 			}
-			origin, err := url.Parse(target.JobsURL)
+			origins, err := ocr.ManagedNativeResourceOrigins(target.JobsURL, target.Model)
 			if err != nil {
 				h.fail(c, 503, "OCR target unavailable")
 				return
@@ -258,7 +257,7 @@ func (h *OCRHandler) Create(c *gin.Context) {
 			keyHash := sha256.Sum256([]byte(channelKey))
 			target.KeySHA256 = hex.EncodeToString(keyHash[:])
 			admission.NativePricing = true
-			target.ResourceOrigins = []string{origin.Scheme + "://" + origin.Host}
+			target.ResourceOrigins = origins
 			admission.ValidateTarget = func(id, kind int, upstream, key, base string) error {
 				currentHash := sha256.Sum256([]byte(key))
 				if id != selected.ChannelID || kind != channel.Type || upstream != target.Model || hex.EncodeToString(currentHash[:]) != target.KeySHA256 || base != channel.GetBaseURL() {

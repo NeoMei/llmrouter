@@ -43,6 +43,7 @@ type ocrGatewayFixture struct {
 	sends, polls, reserves, settles, downloads int
 	variant                                    string
 	originProduct                              string
+	resultOrigin                               string
 	denySettlementRead                         bool
 	runtime                                    *ocr.Runtime
 	image                                      []byte
@@ -93,6 +94,13 @@ func newOCRGatewayFixture(t *testing.T, variant, hubOrigin, serviceToken, dbPath
 		common.MemoryCacheEnabled, common.RedisEnabled = oldMemory, oldRedis
 	})
 	origin, upstream, wire, channelType := "https://paddle.example", "PaddleOCR-VL-1.6", "ocr.jobs.create", constant.ChannelTypePaddleOCR
+	if variant == "native-bos" {
+		origin = "https://paddleocr.aistudio-app.com"
+		f.resultOrigin = "https://paddleocr-store.bj.bcebos.com"
+	}
+	if f.resultOrigin == "" {
+		f.resultOrigin = origin
+	}
 	if strings.HasPrefix(variant, "qwen") {
 		origin, upstream, wire, channelType = "https://dashscope.aliyuncs.com", "qwen-vl-ocr-2025-11-20", "dashscope.ocr.recognitions.create", constant.ChannelTypeAli
 	}
@@ -299,7 +307,7 @@ func newOCRGatewayFixture(t *testing.T, variant, hubOrigin, serviceToken, dbPath
 				_, _ = w.Write([]byte(`{"code":0,"data":{"jobId":"provider-owned","state":"pending"}}`))
 				return
 			}
-			fmt.Fprintf(w, `{"code":0,"data":{"jobId":"provider-owned","state":"done","extractProgress":{"totalPages":1,"extractedPages":1},"resultUrl":{"jsonUrl":%q}}}`, origin+"/result.jsonl")
+			fmt.Fprintf(w, `{"code":0,"data":{"jobId":"provider-owned","state":"done","extractProgress":{"totalPages":1,"extractedPages":1},"resultUrl":{"jsonUrl":%q}}}`, f.resultOrigin+"/result.jsonl")
 		case "/result.jsonl":
 			switch variant {
 			case "empty-page":
@@ -326,7 +334,7 @@ func newOCRGatewayFixture(t *testing.T, variant, hubOrigin, serviceToken, dbPath
 				_, _ = w.Write([]byte(`{"result":null}`))
 				return
 			}
-			fmt.Fprintf(w, `{"result":{"layoutParsingResults":[{"markdown":{"text":"recognized ![](image.png)","images":{"image.png":%q}},"preserved":false}]}}`+"\n", origin+"/image.png")
+			fmt.Fprintf(w, `{"result":{"layoutParsingResults":[{"markdown":{"text":"recognized ![](image.png)","images":{"image.png":%q}},"preserved":false}]}}`+"\n", f.resultOrigin+"/image.png")
 		case "/image.png":
 			f.downloads++
 			if variant == "image-expiry" && f.polls == 2 {

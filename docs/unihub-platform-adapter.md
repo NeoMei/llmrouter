@@ -57,7 +57,15 @@ member. The native account selector still enforces cooldown and persists the
 member identity before submission. Polling resolves that original member and
 checks its frozen key hash; disabling or replacing the credential never selects
 another account for the old task. Multi-member pools and gateway profiles remain
-unavailable for managed-native OCR. Selected-scope tariffs keep their existing
+unavailable for managed-native OCR. The official `PaddleOCR-VL-1.6` endpoint
+`https://paddleocr.aistudio-app.com/api/v2/ocr/jobs` also freezes the exact
+`https://paddleocr-store.bj.bcebos.com` result origin. Existing native jobs whose
+snapshot contains only the official API origin may read that same bucket only
+after checking the original native call, quote, provider job, enabled single
+member, owner and key hash. This compatibility check does not rewrite the frozen
+snapshot, submit a new job, or grant the exception to custom endpoints. The
+protected download client still refuses redirects and private-network targets.
+Selected-scope tariffs keep their existing
 single-key restriction. Stored Responses continuations (`store=true` or
 `previous_response_id`, Responses `conversation`, Gemini `cachedContent` or
 Claude `container`) are refused until a separately scoped native history

@@ -397,7 +397,11 @@ func (s *Service) refreshResultGrants(ctx context.Context, jobID string, data []
 func (s *Service) fetchOwnedResult(ctx context.Context, j model.OCRJob, e model.OCRExecution, raw string, limit int64) ([]byte, error) {
 	if j.Funding == "platform" {
 		u, err := url.Parse(raw)
-		if err != nil || u.User != nil || u.Fragment != "" || !slices.Contains(e.ResourceOrigins, u.Scheme+"://"+u.Host) {
+		if err != nil || u.User != nil || u.Fragment != "" {
+			return nil, model.ErrOCRConflict
+		}
+		origin := u.Scheme + "://" + u.Host
+		if !slices.Contains(e.ResourceOrigins, origin) && (origin != paddleOfficialResultOrigin || !s.nativePaddleResultOrigin(ctx, j, e)) {
 			return nil, model.ErrOCRConflict
 		}
 	}

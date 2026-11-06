@@ -1,12 +1,71 @@
 package ocr
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/model"
 )
+
+const paddleOfficialOrigin = "https://paddleocr.aistudio-app.com"
+const paddleOfficialJobsURL = paddleOfficialOrigin + "/api/v2/ocr/jobs"
+const paddleOfficialResultOrigin = "https://paddleocr-store.bj.bcebos.com"
+
+// ManagedNativeResourceOrigins binds the official Paddle result bucket to its
+// exact API endpoint. Custom endpoints retain their original same-origin policy.
+func ManagedNativeResourceOrigins(jobsURL, upstreamModel string) ([]string, error) {
+	u, err := url.Parse(jobsURL)
+	if err != nil || u.Scheme == "" || u.Host == "" || u.User != nil || u.Fragment != "" {
+		return nil, model.ErrOCRConflict
+	}
+	origins := []string{u.Scheme + "://" + u.Host}
+	if jobsURL == paddleOfficialJobsURL && upstreamModel == "PaddleOCR-VL-1.6" {
+		origins = append(origins, paddleOfficialResultOrigin)
+	}
+	return origins, nil
+}
+
+// nativePaddleResultOrigin recovers rc21 jobs whose immutable snapshot omitted
+// the official BOS result origin. It never rewrites that snapshot or grants the
+// exception to selected tariffs, custom endpoints or a different task owner.
+func (s *Service) nativePaddleResultOrigin(ctx context.Context, j model.OCRJob, e model.OCRExecution) bool {
+	if j.Funding != "platform" || j.PlatformCallID == "" || j.ProviderJobID == "" || j.SubmissionState != "submitted" || e.ProfileID != 0 || e.JobsURL != paddleOfficialJobsURL || e.Model != "PaddleOCR-VL-1.6" || len(e.ResourceOrigins) != 1 || e.ResourceOrigins[0] != paddleOfficialOrigin || e.KeySHA256 == "" {
+		return false
+	}
+	var call platformbilling.Call
+	if s.db.WithContext(ctx).Where("call_id = ?", j.PlatformCallID).First(&call).Error != nil || call.PricingSource != "llmrouter_native" || call.Status != "UNKNOWN" || call.CredentialKind != "api_key" || call.CredentialID == "" || call.CredentialVersion < 1 || call.OriginProductID != "superwagie" || call.WireOperation != OCROperation || call.Model != e.RequestedModel || call.ProviderTaskID != j.ProviderJobID {
+		return false
+	}
+	var quote platformbilling.NativeQuote
+	if common.UnmarshalJsonStr(call.NativeQuoteJSON, &quote) != nil || quote.PricingVersion != "lr-native-v1" || quote.PricingDigest == "" || quote.ChannelID != strconv.Itoa(j.ChannelID) || quote.BillingModel != j.Model || quote.WireOperation != OCROperation {
+		return false
+	}
+	var binding model.OCRAccountBinding
+	if common.UnmarshalJsonStr(j.AccountBinding, &binding) != nil || binding.Owner == nil || *binding.Owner != binding.Ref || binding.Ref.ChannelID != j.ChannelID || binding.Ref.MemberID == "" || binding.Ref.MemberID != j.MemberID {
+		return false
+	}
+	channel, err := s.channel(ctx, j.ChannelID, 0)
+	if err != nil {
+		return false
+	}
+	singleKey, available := ManagedNativeChannelKey(channel)
+	if !available {
+		return false
+	}
+	key, err := model.ResolveTaskAccountKey(ctx, s.db, channel, binding.Ref)
+	if err != nil || key != singleKey {
+		return false
+	}
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:]) == e.KeySHA256
+}
 
 // ManagedNativeChannelKey preserves the native account selector for a direct
 // PaddleOCR channel containing exactly one enabled credential. Pool metadata

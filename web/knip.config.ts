@@ -10,10 +10,13 @@ const config: KnipConfig = {
     // Shared fixtures are reached through imports rather than blanket entry globs.
     'playwright.settings.config.ts',
     'playwright.wallet-source.config.ts',
+    'playwright.technical.config.ts',
     'src/features/wallet/__tests__/wallet-source.spec.ts',
     'src/features/keys/__tests__/settings-state.spec.ts',
     'src/features/native-metering/__tests__/settings-state.spec.ts',
     'src/features/usage-logs/__tests__/settings-state.spec.ts',
+    'src/features/usage-logs/__tests__/technical-usage.spec.ts',
+    'src/features/usage-logs/__tests__/technical-usage.test.tsx',
     'src/features/wallet/__tests__/settings-state.spec.ts',
     'src/features/wallet/__tests__/settings-entry.ts',
   ],

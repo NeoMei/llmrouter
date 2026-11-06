@@ -1,10 +1,3 @@
-import assert from 'node:assert/strict'
-import { test } from 'node:test'
-
-import i18n from 'i18next'
-import { renderToStaticMarkup } from 'react-dom/server'
-import { initReactI18next } from 'react-i18next'
-
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -23,6 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+
+import i18n from 'i18next'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { initReactI18next } from 'react-i18next'
+
 import parityCases from '../../../../../pkg/metering/testdata/technical-presentation.json'
 import zeroLegacy from '../../../../../service/testdata/central-zero-legacy.json'
 import { TechnicalUsage } from '../components/technical-usage'

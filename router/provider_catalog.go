@@ -19,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/capability"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service/modelcatalog"
+	"github.com/QuantumNous/new-api/service/ocr"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/gin-gonic/gin"
 )
@@ -241,9 +242,8 @@ func readProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter, 
 }
 
 func providerOCRChannelSupported(channel model.Channel) bool {
-	// Managed OCR currently supports direct PaddleOCR channels. Gateway
-	// profiles and multi-key channels have no matching managed producer yet.
-	return channel.Type == constant.ChannelTypePaddleOCR && channel.Status == common.ChannelStatusEnabled && !channel.ChannelInfo.IsMultiKey && strings.TrimSpace(channel.Key) != ""
+	_, available := ocr.ManagedNativeChannelKey(&channel)
+	return available
 }
 
 func providerEndpointOperation(endpoint constant.EndpointType) string {

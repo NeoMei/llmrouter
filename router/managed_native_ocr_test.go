@@ -2,10 +2,16 @@ package router
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service/ocr"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/internal/platformbilling"
@@ -16,6 +22,15 @@ import (
 )
 
 func TestManagedNativeOCRZeroPriceSettlesBeforeOwnedDocument(t *testing.T) {
+	for _, pooled := range []bool{false, true} {
+		name := "single-key"
+		if pooled {
+			name = "single-member-pool"
+		}
+		t.Run(name, func(t *testing.T) { testManagedNativeOCRLifecycle(t, pooled) })
+	}
+}
+func testManagedNativeOCRLifecycle(t *testing.T, pooled bool) {
 	var remote platformbilling.RemoteCall
 	var final platformbilling.NativeSettleRequest
 	var f *ocrGatewayFixture
@@ -64,6 +79,47 @@ func TestManagedNativeOCRZeroPriceSettlesBeforeOwnedDocument(t *testing.T) {
 	require.NoError(t, e)
 	r := gin.New()
 	SetManagedKeyDispatch(r, a)
+	if pooled {
+		info := model.ChannelInfo{IsMultiKey: true, MultiKeySize: 1, MultiKeyStatusList: map[int]int{0: common.ChannelStatusEnabled}}
+		require.NoError(t, f.db.Model(&model.Channel{}).Where("id = ?", 1).Updates(map[string]any{"channel_info": info, "key": "synthetic-paddle-key\n"}).Error)
+		ct, body := ocrMultipart(t, f.image)
+		reject := func(id string) {
+			req := httptest.NewRequest(http.MethodPost, "/platform/v1/ocr/jobs", bytes.NewReader(body))
+			req.Header.Set("Authorization", "Bearer uh_key_ocr")
+			req.Header.Set("Content-Type", ct)
+			req.Header.Set("Idempotency-Key", id)
+			req.Header.Set("X-UniHub-Task-ID", "ocr-task")
+			w := httptest.NewRecorder()
+			newManagedNativeRouter(a).ServeHTTP(w, req)
+			require.GreaterOrEqual(t, w.Code, 400, w.Body.String())
+			assert.Zero(t, f.sends)
+			assert.Zero(t, f.reserves)
+			var call platformbilling.Call
+			require.NoError(t, f.db.Where("call_id = ?", id).First(&call).Error, "negative case must pass credential admission")
+			assert.Equal(t, "REJECTED", call.Status)
+		}
+		disabled := info
+		disabled.MultiKeyStatusList = map[int]int{0: common.ChannelStatusAutoDisabled}
+		require.NoError(t, f.db.Model(&model.Channel{}).Where("id = ?", 1).Update("channel_info", disabled).Error)
+		reject("disabled-pool")
+		multiple := info
+		multiple.MultiKeySize = 2
+		multiple.MultiKeyStatusList = map[int]int{0: common.ChannelStatusEnabled, 1: common.ChannelStatusAutoDisabled}
+		require.NoError(t, f.db.Model(&model.Channel{}).Where("id = ?", 1).Updates(map[string]any{"channel_info": multiple, "key": "synthetic-paddle-key\nsecond-key"}).Error)
+		reject("multiple-members")
+		require.NoError(t, f.db.Model(&model.Channel{}).Where("id = ?", 1).Updates(map[string]any{"channel_info": info, "key": "synthetic-paddle-key\n"}).Error)
+		var channel model.Channel
+		require.NoError(t, f.db.First(&channel, 1).Error)
+		refs, _, err := model.ChannelAccountRefs(context.Background(), f.db, &channel)
+		require.NoError(t, err)
+		require.Len(t, refs, 1)
+		scope := model.UpstreamAccountScope{Operation: ocr.OCROperation, Model: "PaddleOCR-VL-1.6"}
+		selected, err := model.SelectUpstreamAccount(context.Background(), f.db, refs, scope, nil, time.Now())
+		require.NoError(t, err)
+		require.NoError(t, model.RecordUpstreamAccountFailure(context.Background(), f.db, selected, scope, model.UpstreamAccountFailure{Kind: model.UpstreamAccountCooldown, Reason: "rate_limit", RetryAt: time.Now().Add(time.Hour)}, time.Now()))
+		reject("cooled-member")
+		require.NoError(t, f.db.Where("1 = 1").Delete(&model.UpstreamAccountState{}).Error)
+	}
 	ct, body := ocrMultipart(t, f.image)
 	req := httptest.NewRequest(http.MethodPost, "/platform/v1/ocr/jobs", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer uh_key_ocr")
@@ -75,6 +131,33 @@ func TestManagedNativeOCRZeroPriceSettlesBeforeOwnedDocument(t *testing.T) {
 	require.Equal(t, 202, w.Code, w.Body.String())
 	call := w.Header().Get("X-UniHub-Call-ID")
 	require.NotEmpty(t, call)
+	if pooled {
+		var job model.OCRJob
+		require.NoError(t, f.db.Where("platform_call_id = ?", call).First(&job).Error)
+		var binding model.OCRAccountBinding
+		require.NoError(t, common.UnmarshalJsonStr(job.AccountBinding, &binding))
+		assert.Equal(t, 1, binding.Ref.ChannelID)
+		assert.Equal(t, 0, binding.Ref.KeyIndex)
+		assert.NotEmpty(t, binding.Ref.MemberID)
+		var execution model.OCRExecution
+		require.NoError(t, common.UnmarshalJsonStr(job.Execution, &execution))
+		expected := sha256.Sum256([]byte("synthetic-paddle-key"))
+		assert.Equal(t, hex.EncodeToString(expected[:]), execution.KeySHA256)
+		for _, change := range []map[string]any{
+			{"channel_info": model.ChannelInfo{IsMultiKey: true, MultiKeySize: 1, MultiKeyStatusList: map[int]int{0: common.ChannelStatusAutoDisabled}}},
+			{"channel_info": model.ChannelInfo{IsMultiKey: true, MultiKeySize: 1, MultiKeyStatusList: map[int]int{0: common.ChannelStatusEnabled}}, "key": "rotated-key"},
+		} {
+			require.NoError(t, f.db.Model(&model.Channel{}).Where("id = ?", 1).Updates(change).Error)
+			denied := httptest.NewRequest(http.MethodGet, "/v1/ocr/"+call, nil)
+			denied.Header.Set("Authorization", "Bearer uh_key_ocr")
+			out := httptest.NewRecorder()
+			r.ServeHTTP(out, denied)
+			assert.GreaterOrEqual(t, out.Code, 400, out.Body.String())
+			assert.Zero(t, f.polls)
+			assert.Zero(t, f.settles)
+		}
+		require.NoError(t, f.db.Model(&model.Channel{}).Where("id = ?", 1).Updates(map[string]any{"channel_info": model.ChannelInfo{IsMultiKey: true, MultiKeySize: 1, MultiKeyStatusList: map[int]int{0: common.ChannelStatusEnabled}}, "key": "synthetic-paddle-key\n"}).Error)
+	}
 	for range 2 {
 		req = httptest.NewRequest(http.MethodGet, "/v1/ocr/"+call, nil)
 		req.Header.Set("Authorization", "Bearer uh_key_ocr")

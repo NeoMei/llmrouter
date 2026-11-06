@@ -238,8 +238,15 @@ func TestProviderCatalogSupportsNativeOnlyPricesPerOperation(t *testing.T) {
 			}
 		}
 	}
+	require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 4).Update("channel_info", model.ChannelInfo{IsMultiKey: true, MultiKeySize: 1, MultiKeyStatusList: map[int]int{0: common.ChannelStatusEnabled}}).Error)
+	pooled, err := readProviderCatalog(context.Background(), adapter, platformbilling.Claims{OriginProductID: "superwagie", InstanceID: "fixture", ActorID: "actor", AccountID: "team"})
+	require.NoError(t, err)
+	pooledOCR := pooled.Models[slices.IndexFunc(pooled.Models, func(m ProviderCatalogModel) bool { return m.ID == "native-ocr" })]
+	require.True(t, pooledOCR.Probe)
+	require.True(t, pooledOCR.CapabilityMetadata.Operations[0].Executable)
 	for _, change := range []map[string]any{
-		{"channel_info": model.ChannelInfo{IsMultiKey: true}},
+		{"channel_info": model.ChannelInfo{IsMultiKey: true, MultiKeySize: 1, MultiKeyStatusList: map[int]int{0: common.ChannelStatusAutoDisabled}}},
+		{"channel_info": model.ChannelInfo{IsMultiKey: true, MultiKeySize: 2, MultiKeyStatusList: map[int]int{0: common.ChannelStatusEnabled, 1: common.ChannelStatusAutoDisabled}}, "key": "first-key\nsecond-key"},
 		{"channel_info": model.ChannelInfo{}, "key": ""},
 	} {
 		require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 4).Updates(change).Error)

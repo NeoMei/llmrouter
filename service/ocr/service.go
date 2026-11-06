@@ -164,8 +164,11 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (JobStatus, err
 			return JobStatus{}, errors.New("OCR BYOK owned jobs are not supported; platform fallback forbidden")
 		}
 	}
-	if req.Admission.PlatformCallID != "" && (req.Admission.ValidateTarget == nil || channel.ChannelInfo.IsMultiKey || req.Admission.ValidateTarget(channel.Id, channel.Type, req.Target.Model, channel.Key, channel.GetBaseURL()) != nil) {
-		return JobStatus{}, errors.New("certified OCR target changed")
+	if req.Admission.PlatformCallID != "" {
+		key, available := platformAdmissionKey(req.Admission, channel)
+		if !available || req.Admission.ValidateTarget == nil || req.Admission.ValidateTarget(channel.Id, channel.Type, req.Target.Model, key, channel.GetBaseURL()) != nil {
+			return JobStatus{}, errors.New("certified OCR target changed")
+		}
 	}
 	j, err := s.billing.CreateIntent(ctx, req.Admission)
 	if err != nil {
@@ -259,8 +262,11 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (JobStatus, err
 			}
 			return JobStatus{}, err
 		}
-		if req.Admission.PlatformCallID != "" && (channel.ChannelInfo.IsMultiKey || req.Admission.ValidateTarget(channel.Id, channel.Type, execution.Model, key, channel.GetBaseURL()) != nil) {
-			return JobStatus{}, errors.New("certified OCR target changed")
+		if req.Admission.PlatformCallID != "" {
+			expectedKey, available := platformAdmissionKey(req.Admission, channel)
+			if !available || expectedKey != key || req.Admission.ValidateTarget == nil || req.Admission.ValidateTarget(channel.Id, channel.Type, execution.Model, key, channel.GetBaseURL()) != nil {
+				return JobStatus{}, errors.New("certified OCR target changed")
+			}
 		}
 		claim, err := s.billing.ClaimSubmission(ctx, j.ID, selection, owner)
 		if err != nil {

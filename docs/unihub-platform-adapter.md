@@ -51,7 +51,14 @@ Generic native Chat, Claude Messages, Gemini, Responses, embedding, rerank,
 image and audio handlers retain their established provider wire format. The
 DashScope image endpoint accepts the native Qwen request directly. PaddleOCR
 jobs preserve exact key ownership through asynchronous polling, settlement and
-text-document delivery. Stored Responses continuations (`store=true` or
+text-document delivery. A direct PaddleOCR channel may use single-member pool
+mode only when its actual credential list contains exactly one nonempty enabled
+member. The native account selector still enforces cooldown and persists the
+member identity before submission. Polling resolves that original member and
+checks its frozen key hash; disabling or replacing the credential never selects
+another account for the old task. Multi-member pools and gateway profiles remain
+unavailable for managed-native OCR. Selected-scope tariffs keep their existing
+single-key restriction. Stored Responses continuations (`store=true` or
 `previous_response_id`, Responses `conversation`, Gemini `cachedContent` or
 Claude `container`) are refused until a separately scoped native history
 owner exists. Stateless Responses requests explicitly set `store=false`; the

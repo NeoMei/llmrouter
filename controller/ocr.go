@@ -241,7 +241,12 @@ func (h *OCRHandler) Create(c *gin.Context) {
 				return
 			}
 			var channel model.Channel
-			if h.Runtime.DB.WithContext(c.Request.Context()).First(&channel, selected.ChannelID).Error != nil || channel.Status != common.ChannelStatusEnabled || channel.ChannelInfo.IsMultiKey || target.ProfileID != 0 {
+			if h.Runtime.DB.WithContext(c.Request.Context()).First(&channel, selected.ChannelID).Error != nil || target.ProfileID != 0 {
+				h.fail(c, 503, "OCR channel unavailable")
+				return
+			}
+			channelKey, keyAvailable := ocr.ManagedNativeChannelKey(&channel)
+			if !keyAvailable {
 				h.fail(c, 503, "OCR channel unavailable")
 				return
 			}
@@ -250,8 +255,9 @@ func (h *OCRHandler) Create(c *gin.Context) {
 				h.fail(c, 503, "OCR target unavailable")
 				return
 			}
-			keyHash := sha256.Sum256([]byte(channel.Key))
+			keyHash := sha256.Sum256([]byte(channelKey))
 			target.KeySHA256 = hex.EncodeToString(keyHash[:])
+			admission.NativePricing = true
 			target.ResourceOrigins = []string{origin.Scheme + "://" + origin.Host}
 			admission.ValidateTarget = func(id, kind int, upstream, key, base string) error {
 				currentHash := sha256.Sum256([]byte(key))

@@ -20,6 +20,8 @@ import (
 // AuthorizedAdmission must be built after normal user/token/model/group/channel
 // authorization. No raw media, token secret or provider credential is accepted.
 type AuthorizedAdmission struct {
+	// NativePricing is set only by the verified managed-native HTTP adapter.
+	NativePricing                                   bool
 	PlatformCallID                                  string
 	PlatformPrice                                   *metering.Price
 	ValidateTarget                                  func(int, int, string, string, string) error

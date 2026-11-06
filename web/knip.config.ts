@@ -13,6 +13,7 @@ const config: KnipConfig = {
     'playwright.technical.config.ts',
     'src/features/wallet/__tests__/wallet-source.spec.ts',
     'src/features/keys/__tests__/settings-state.spec.ts',
+    'src/features/keys/__tests__/key-menu.spec.ts',
     'src/features/native-metering/__tests__/settings-state.spec.ts',
     'src/features/usage-logs/__tests__/settings-state.spec.ts',
     'src/features/usage-logs/__tests__/technical-usage.spec.ts',

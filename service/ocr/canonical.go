@@ -48,6 +48,10 @@ func (s *Service) CanonicalResult(ctx context.Context, id string, userID, tokenI
 	if err != nil || len(data) > MaxResultBytes {
 		return nil, errors.New("invalid stored OCR result")
 	}
+	return parseStoredPages(data)
+}
+
+func parseStoredPages(data []byte) (*dto.OCRResult, error) {
 	result := &dto.OCRResult{Pages: []dto.OCRPage{}, Native: []json.RawMessage{}}
 	for _, line := range bytes.Split(data, []byte{'\n'}) {
 		if len(bytes.TrimSpace(line)) == 0 {

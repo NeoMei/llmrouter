@@ -21,7 +21,7 @@ import (
 
 func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
-	if info.PlatformMode && info.NativeBilling != nil && info.NativeBilling.Price.Policy == "server_audio_measurement_v1" {
+	if info.RemoteTariff() && info.NativeBilling != nil && info.NativeBilling.Price.Policy == "server_audio_measurement_v1" {
 		if err := helper.ValidateNativeAudioAdmission(c, info); err != nil {
 			return types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		}
@@ -47,7 +47,7 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
 
-	if info.PlatformMode {
+	if info.RemoteTariff() {
 		if info.PlatformBilling == nil || info.PlatformBilling.ValidateAudioTarget(info.ChannelId, info.ChannelType, request.Model, info.ApiKey, info.ChannelBaseUrl) != nil {
 			return types.NewError(errors.New("certified audio target unavailable"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		}
@@ -63,7 +63,7 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
 
-	if info.PlatformMode {
+	if info.RemoteTariff() {
 		if info.PlatformBilling == nil || info.NativeBilling == nil || info.NativeBilling.Observe == nil {
 			return types.NewError(fmt.Errorf("platform metering context required"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		}

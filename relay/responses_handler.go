@@ -26,7 +26,7 @@ import (
 )
 
 func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
-	if info.PlatformMode && info.PlatformBilling != nil {
+	if info.RemoteTariff() && info.PlatformBilling != nil {
 		if _, metered := info.PlatformBilling.MeteredPrice(); metered {
 			return platformGeneration(c, info)
 		}
@@ -43,7 +43,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	if !passthroughBody && !info.PlatformMode {
 		responsesprobe.DecideResponsesViaChat(c.Request.Context(), info)
 	}
-	if info.PlatformMode && info.ResponsesViaChat {
+	if info.RemoteTariff() && info.ResponsesViaChat {
 		return types.NewError(fmt.Errorf("platform responses conversion is unavailable"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact {
@@ -142,6 +142,10 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			return compactErr
 		}
 		usageDto := usage
+		if info.ManagedNativePricing() {
+			service.PostTextConsumeQuota(c, info, usageDto, nil)
+			return nil
+		}
 		originModelName := info.OriginModelName
 		originPriceData := info.PriceData
 		if _, err := helper.ModelPriceHelper(c, info, info.GetEstimatePromptTokens(), &types.TokenCountMeta{}); err != nil {
@@ -199,7 +203,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		requestBody = body
 	}
 
-	if info.PlatformMode {
+	if info.RemoteTariff() {
 		if info.PlatformBilling == nil || info.NativeBilling == nil {
 			return types.NewError(fmt.Errorf("platform metering context required"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		}
@@ -235,6 +239,10 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 
 	usageDto := usage.(*dto.Usage)
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact {
+		if info.ManagedNativePricing() {
+			service.PostTextConsumeQuota(c, info, usageDto, nil)
+			return nil
+		}
 		originModelName := info.OriginModelName
 		originPriceData := info.PriceData
 
@@ -367,7 +375,7 @@ func PrepareResponsesContinuityForAttempt(c *gin.Context, info *relaycommon.Rela
 	}
 	// Managed native create/compact owns a separate immutable reference index.
 	// Its canonical supplier bytes never enter local TokenID replay or normalization.
-	if info.PlatformMode && info.PlatformBilling != nil {
+	if info.RemoteTariff() && info.PlatformBilling != nil {
 		return nil
 	}
 	if !responsesstate.Enabled() {

@@ -67,6 +67,9 @@ func allowsWire(grant Claims, model, wire string) bool {
 	if wireBillingOperation(wire) == "" {
 		return false
 	}
+	if grant.NativePricing() {
+		return true
+	}
 
 	return slices.Contains(grant.Operations[model], wire)
 }

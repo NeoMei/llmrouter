@@ -21,7 +21,10 @@ func IsModelCredential(credential string) bool {
 }
 
 func (a *Adapter) validateModelCredential(credential, task, model string, grant Claims) error {
-	if grant.ID == "" || grant.Audience != "llmrouter" || grant.ActorID == "" || grant.AccountID == "" || grant.OriginProductID == "" || (model != "" && !slices.Contains(grant.Models, model)) {
+	if grant.ModelScope != "" && grant.ModelScope != "selected" && !grant.NativePricing() {
+		return ErrInvalid
+	}
+	if grant.ID == "" || grant.Audience != "llmrouter" || grant.ActorID == "" || grant.AccountID == "" || grant.OriginProductID == "" || (model != "" && !grant.NativePricing() && !slices.Contains(grant.Models, model)) {
 		return ErrInvalid
 	}
 	if strings.HasPrefix(credential, "uh_key_") {
@@ -40,6 +43,19 @@ func (a *Adapter) validateModelCredential(credential, task, model string, grant 
 		return ErrInvalid
 	}
 	return nil
+}
+
+// NativePricing is explicit delegated catalog authority, never a wildcard in
+// the legacy model list. Identity, membership and revocation remain central.
+func (grant Claims) NativePricing() bool {
+	return grant.ModelScope == "llmrouter_available" && grant.PricingSource == "llmrouter_native" && grant.CredentialVersion > 0 && grant.CredentialKind == "api_key" && grant.OriginProductID == "superwagie" && grant.Asset == "CNY/6" && grant.FundingMode == "prepaid_cash"
+}
+
+func (a *Adapter) NativePrincipal() (int, string) {
+	if a == nil {
+		return 0, ""
+	}
+	return a.config.PrincipalID, a.config.NativeGroup
 }
 
 // ManagedModels returns only the current credential's explicit model grant.

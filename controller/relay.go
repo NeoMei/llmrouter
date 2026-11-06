@@ -589,13 +589,16 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 }
 
 func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) *types.NewAPIError {
+	if info.ManagedNativePricing() {
+		info.InitChannelMeta(c)
+	}
 	// Existing non-runtime native billing remains unchanged. The runtime-only
 	// compatibility path stays closed until local funding and token mutations
 	// have durable, idempotent recovery across process and database failures.
 	if info.NativeLocalLegacy {
 		return types.NewErrorWithStatusCode(errors.New("local native billing recovery is unavailable"), types.ErrorCodeUpdateDataError, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
 	}
-	if info.PlatformMode {
+	if info.RemoteTariff() {
 		if info.PlatformBilling == nil {
 			return types.NewError(errors.New("platform billing missing"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		}
@@ -676,6 +679,9 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 		ratio := helper.HandleGroupRatio(c, info)
 		a := model.NativeAdmission{CallID: info.RequestId, UserID: info.UserId, TokenID: info.TokenId, ChannelID: info.ChannelId, Model: info.BillingModelNameOrOrigin(), Group: info.UsingGroup, Preference: info.UserSetting.BillingPreference, Price: price, GroupRatio: strconv.FormatFloat(ratio.GroupRatio, 'f', -1, 64), QuotaPerUnit: strconv.FormatFloat(common.QuotaPerUnit, 'f', -1, 64), Reservation: reservation}
 		if err := service.BeginNativeBillingForRelay(c.Request.Context(), info, a); err != nil {
+			if info.ManagedNativePricing() {
+				return types.NewErrorWithStatusCode(err, types.ErrorCodeUpdateDataError, platformbilling.HTTPStatus(err), types.ErrOptionWithSkipRetry())
+			}
 			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 		}
 		return nil
@@ -709,6 +715,9 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 	}
 	if priceData.FreeModel {
+		if info.ManagedNativePricing() {
+			return service.PreConsumeBilling(c, 0, info)
+		}
 		if info.NativeLocalLegacy {
 			return types.NewError(errors.New("local native free models are not available during product runtime"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		}
@@ -1239,7 +1248,7 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 	}
 
 	assemble := modelcatalog.AssembleRuntimeCatalog
-	if relayInfo.PlatformMode && relayInfo.PlatformBilling != nil {
+	if relayInfo.RemoteTariff() && relayInfo.PlatformBilling != nil {
 		assemble = modelcatalog.AssembleManagedRuntimeCatalog
 	}
 	catalog, err := assemble(c.Request.Context(), modelcatalog.RuntimeContext{
@@ -1455,6 +1464,9 @@ func advanceRouteCandidate(relayInfo *relaycommon.RelayInfo) bool {
 }
 
 func clientForRequest(c *gin.Context, relayInfo *relaycommon.RelayInfo) string {
+	if relayInfo.ManagedNativePricing() {
+		return relayInfo.PlatformBilling.NativeOriginProduct()
+	}
 	if client := strings.TrimSpace(c.Query("client")); client != "" {
 		return client
 	}

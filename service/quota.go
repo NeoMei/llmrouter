@@ -32,14 +32,15 @@ type TokenDetails struct {
 }
 
 type QuotaInfo struct {
-	ProductPriceSnapshot *types.PriceData
-	InputDetails         TokenDetails
-	OutputDetails        TokenDetails
-	ModelName            string
-	UsePrice             bool
-	ModelPrice           float64
-	ModelRatio           float64
-	GroupRatio           float64
+	ProductPriceSnapshot      *types.PriceData
+	SupplementalPriceSnapshot *types.SupplementalPriceSnapshot
+	InputDetails              TokenDetails
+	OutputDetails             TokenDetails
+	ModelName                 string
+	UsePrice                  bool
+	ModelPrice                float64
+	ModelRatio                float64
+	GroupRatio                float64
 }
 
 func hasCustomModelRatio(modelName string, currentRatio float64) bool {
@@ -53,20 +54,26 @@ func hasCustomModelRatio(modelName string, currentRatio float64) bool {
 func calculateAudioQuota(info QuotaInfo) (int, *common.QuotaClamp) {
 	if info.UsePrice {
 		modelPrice := decimal.NewFromFloat(info.ModelPrice)
-		quotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+		unit := common.QuotaPerUnit
+		if info.SupplementalPriceSnapshot != nil {
+			unit = info.SupplementalPriceSnapshot.QuotaPerUnit
+		}
+		quotaPerUnit := decimal.NewFromFloat(unit)
 		groupRatio := decimal.NewFromFloat(info.GroupRatio)
 
 		quota := modelPrice.Mul(quotaPerUnit).Mul(groupRatio)
 		return common.QuotaFromDecimalChecked(quota)
 	}
 
-	completionRatio := decimal.NewFromFloat(ratio_setting.GetCompletionRatio(info.ModelName))
-	audioRatio := decimal.NewFromFloat(ratio_setting.GetAudioRatio(info.ModelName))
-	audioCompletionRatio := decimal.NewFromFloat(ratio_setting.GetAudioCompletionRatio(info.ModelName))
+	var completionRatio, audioRatio, audioCompletionRatio decimal.Decimal
 	if info.ProductPriceSnapshot != nil {
 		completionRatio = decimal.NewFromFloat(info.ProductPriceSnapshot.CompletionRatio)
 		audioRatio = decimal.NewFromFloat(info.ProductPriceSnapshot.AudioRatio)
 		audioCompletionRatio = decimal.NewFromFloat(info.ProductPriceSnapshot.AudioCompletionRatio)
+	} else {
+		completionRatio = decimal.NewFromFloat(ratio_setting.GetCompletionRatio(info.ModelName))
+		audioRatio = decimal.NewFromFloat(ratio_setting.GetAudioRatio(info.ModelName))
+		audioCompletionRatio = decimal.NewFromFloat(ratio_setting.GetAudioCompletionRatio(info.ModelName))
 	}
 
 	groupRatio := decimal.NewFromFloat(info.GroupRatio)
@@ -321,10 +328,14 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 }
 
 func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData) int {
+	return calcOpenRouterCacheCreateTokens(usage, priceData, common.QuotaPerUnit)
+}
+
+func calcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData, quotaPerUnit float64) int {
 	if priceData.CacheCreationRatio == 1 {
 		return 0
 	}
-	quotaPrice := priceData.ModelRatio / common.QuotaPerUnit
+	quotaPrice := priceData.ModelRatio / quotaPerUnit
 	promptCacheCreatePrice := quotaPrice * priceData.CacheCreationRatio
 	promptCacheReadPrice := quotaPrice * priceData.CacheRatio
 	completionPrice := quotaPrice * priceData.CompletionRatio
@@ -342,8 +353,17 @@ func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData)
 }
 
 func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent string) {
-	if relayInfo != nil && relayInfo.PlatformMode {
+	if relayInfo != nil && relayInfo.RemoteTariff() {
 		recordPlatformRelayTelemetry(ctx, relayInfo)
+		return
+	}
+
+	if relayInfo.ManagedNativePricing() && relayInfo.NativeBilling != nil {
+		recordPlatformRelayTelemetry(ctx, relayInfo)
+		return
+	}
+	if relayInfo.ManagedNativePricing() && relayInfo.ManagedNativeSupplemental == nil {
+		logger.LogError(ctx, "managed native price snapshot missing")
 		return
 	}
 
@@ -377,9 +397,12 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		billingModel = relayInfo.BillingModelNameOrOrigin()
 	}
 	tokenName := ctx.GetString("token_name")
-	completionRatio := decimal.NewFromFloat(ratio_setting.GetCompletionRatio(billingModel))
-	audioRatio := decimal.NewFromFloat(ratio_setting.GetAudioRatio(billingModel))
-	audioCompletionRatio := decimal.NewFromFloat(ratio_setting.GetAudioCompletionRatio(billingModel))
+	var completionRatio, audioRatio, audioCompletionRatio decimal.Decimal
+	if !relayInfo.ManagedNativePricing() {
+		completionRatio = decimal.NewFromFloat(ratio_setting.GetCompletionRatio(billingModel))
+		audioRatio = decimal.NewFromFloat(ratio_setting.GetAudioRatio(billingModel))
+		audioCompletionRatio = decimal.NewFromFloat(ratio_setting.GetAudioCompletionRatio(billingModel))
+	}
 
 	modelRatio := relayInfo.PriceData.ModelRatio
 	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
@@ -402,6 +425,13 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		GroupRatio: groupRatio,
 	}
 
+	if relayInfo.ManagedNativePricing() {
+		quotaInfo.ProductPriceSnapshot = &relayInfo.PriceData
+		quotaInfo.SupplementalPriceSnapshot = relayInfo.ManagedNativeSupplemental
+		completionRatio = decimal.NewFromFloat(relayInfo.PriceData.CompletionRatio)
+		audioRatio = decimal.NewFromFloat(relayInfo.PriceData.AudioRatio)
+		audioCompletionRatio = decimal.NewFromFloat(relayInfo.PriceData.AudioCompletionRatio)
+	}
 	quota, clamp := calculateAudioQuota(quotaInfo)
 	noteQuotaClamp(relayInfo, clamp)
 	if tieredOk {
@@ -438,6 +468,11 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 
 	if err := SettleBilling(ctx, relayInfo, quota); err != nil {
 		logger.LogError(ctx, "error settling billing: "+err.Error())
+	}
+
+	if relayInfo.ManagedNativePricing() {
+		recordPlatformRelayTelemetry(ctx, relayInfo)
+		return
 	}
 
 	logModel := relayInfo.OriginModelName

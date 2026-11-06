@@ -53,7 +53,7 @@ func trimModelThinking(modelName string) string {
 }
 
 func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
-	if info.PlatformMode && info.PlatformBilling != nil {
+	if info.RemoteTariff() && info.PlatformBilling != nil {
 		if _, metered := info.PlatformBilling.MeteredPrice(); metered {
 			return platformGeneration(c, info)
 		}

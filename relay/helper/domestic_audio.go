@@ -133,7 +133,7 @@ func ValidateDomesticAudio(c *gin.Context, info *relaycommon.RelayInfo, channelT
 				return fmt.Errorf("unsupported speech field %q", name)
 			}
 		}
-		if info.PlatformMode {
+		if info.RemoteTariff() {
 			return nil
 		}
 		price, exists := ratio_setting.GetModelPrice(billingModel, false)

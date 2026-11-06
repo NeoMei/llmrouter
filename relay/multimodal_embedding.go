@@ -163,7 +163,7 @@ func MultimodalEmbeddingHelper(c *gin.Context, info *relaycommon.RelayInfo) *typ
 	accountpool.DeferAllStatusNativeOutcome(c)
 	info.UpstreamRequestBodySize = int64(len(raw))
 	info.UpstreamRequestGetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(raw)), nil }
-	if info.PlatformMode {
+	if info.RemoteTariff() {
 		if info.PlatformBilling == nil || info.NativeBilling == nil {
 			return invalidMultimodalResponse()
 		}
@@ -205,7 +205,7 @@ func MultimodalEmbeddingHelper(c *gin.Context, info *relaycommon.RelayInfo) *typ
 	if accountpool.CompleteNativeOutcome(c, nil) != nil {
 		return invalidMultimodalResponse()
 	}
-	if info.PlatformMode {
+	if info.RemoteTariff() {
 		textCap, visualCap := info.PlatformBilling.ReservationBounds()
 		if int64(usage.PromptTokensDetails.TextTokens) > textCap || int64(usage.PromptTokensDetails.ImageTokens) > visualCap {
 			return invalidMultimodalResponse()

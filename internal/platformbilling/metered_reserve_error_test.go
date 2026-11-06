@@ -97,6 +97,7 @@ func TestLegacyReserve402RequiresConfirmedRejection(t *testing.T) {
 	}{
 		{name: "confirmed", body: `{"error":"insufficient_funds"}`, wantCallState: "REJECTED", wantStatus: 402},
 		{name: "ambiguous", body: `{}`, wantCallState: "RESERVE_UNKNOWN", wantStatus: 503},
+		{name: "native-budget-code", body: `{"error":"usage_budget_exceeded"}`, wantCallState: "RESERVE_UNKNOWN", wantStatus: 503},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			failSettle := false

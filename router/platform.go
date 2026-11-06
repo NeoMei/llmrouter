@@ -24,6 +24,7 @@ import (
 // SetPlatformRouter takes an explicit adapter. Disabled deployments register no
 // platform endpoint and keep the legacy router untouched.
 func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
+	adapter.SetNativeMeteringCalculator(service.CalculateManagedNativeQuota)
 	service.PlatformTaskObserver = adapter.ObserveTask
 	service.PlatformTaskSettlementCheck = adapter.VerifyTaskSettlement
 	service.PlatformTaskRelease = adapter.ReleaseTask

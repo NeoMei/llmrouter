@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/internal/platformbilling"
@@ -40,6 +41,7 @@ func unifiedAdmissionCode(status int) string {
 // the platform handlers in process, so a unified key can never enter native
 // authentication, local quota reservation, or an HTTP forwarding fallback.
 func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter) {
+	native := newManagedNativeRouter(adapter)
 	platform := gin.New()
 	if err := platform.SetTrustedProxies(nil); err != nil {
 		panic(err)
@@ -60,6 +62,35 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 				code = "platform_billing_unavailable"
 			}
 			c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"code": code}})
+			return
+		}
+		c.Header("Cache-Control", "no-store")
+		c.Header("X-UniHub-Origin-Product-ID", grant.OriginProductID)
+		c.Header("X-UniHub-Account-ID", grant.AccountID)
+		c.Header("X-UniHub-Instance-ID", grant.InstanceID)
+		if !grant.ExpiresAt.IsZero() {
+			c.Header("X-UniHub-Expires-At", grant.ExpiresAt.UTC().Format(time.RFC3339))
+		}
+		if grant.NativePricing() {
+			catalog, err := readProviderCatalog(c.Request.Context(), adapter, grant)
+			if err != nil {
+				c.AbortWithStatusJSON(503, gin.H{"error": gin.H{"code": "provider_catalog_unavailable"}})
+				return
+			}
+			data := make([]gin.H, 0, len(catalog.Models))
+			for _, m := range catalog.Models {
+				entry := gin.H{"id": m.ID, "object": "model", "created": 0, "owned_by": "superwagie", "catalog_version": catalog.CatalogVersion, "capability_metadata": m.CapabilityMetadata}
+				if c.Param("model") == m.ID {
+					c.JSON(200, entry)
+					return
+				}
+				data = append(data, entry)
+			}
+			if c.Param("model") != "" {
+				c.AbortWithStatusJSON(404, gin.H{"error": gin.H{"code": "model_not_found"}})
+				return
+			}
+			c.JSON(200, gin.H{"object": "list", "data": data, "schemaVersion": 1, "catalog_version": catalog.CatalogVersion, "model_scope": grant.ModelScope, "pricing_source": grant.PricingSource, "credential_version": grant.CredentialVersion})
 			return
 		}
 		models := grant.Models
@@ -134,10 +165,12 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 	SetPlatformRouter(platform, adapter)
 	engine.Use(func(c *gin.Context) {
 		managed := false
-		for _, value := range c.Request.Header.Values("Authorization") {
-			for _, field := range strings.Fields(value) {
-				if strings.HasPrefix(field, "uh_key_") {
-					managed = true
+		for _, name := range []string{"Authorization", "x-api-key", "x-goog-api-key"} {
+			for _, value := range c.Request.Header.Values(name) {
+				for _, field := range strings.Fields(value) {
+					if strings.HasPrefix(field, "uh_key_") {
+						managed = true
+					}
 				}
 			}
 		}
@@ -145,10 +178,33 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 			c.Next()
 			return
 		}
-		values := c.Request.Header.Values("Authorization")
-		fields := strings.Fields(c.GetHeader("Authorization"))
-		if len(values) != 1 || len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") || !platformbilling.IsModelCredential(fields[1]) {
+		credential := ""
+		locations := 0
+		for _, name := range []string{"Authorization", "x-api-key", "x-goog-api-key"} {
+			values := c.Request.Header.Values(name)
+			if len(values) == 0 {
+				continue
+			}
+			locations++
+			if len(values) != 1 {
+				locations++
+				continue
+			}
+			if name == "Authorization" {
+				fields := strings.Fields(values[0])
+				if len(fields) == 2 && strings.EqualFold(fields[0], "Bearer") {
+					credential = fields[1]
+				}
+			} else {
+				credential = values[0]
+			}
+		}
+		if locations != 1 || !strings.HasPrefix(credential, "uh_key_") || !platformbilling.IsModelCredential(credential) {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": gin.H{"code": "invalid_model_credential"}})
+			return
+		}
+		if c.Query("key") != "" {
+			c.AbortWithStatus(http.StatusBadRequest)
 			return
 		}
 		policy, err := unihubaccess.FromEnv()
@@ -156,7 +212,6 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"code": "platform_billing_unavailable"}})
 			return
 		}
-		credential := fields[1]
 		path := c.Request.URL.Path
 		if (path == "/v1/responses/compact" || path == "/v1/audio/speech" || path == "/v1/audio/transcriptions" || path == "/v1/images/generations" || path == "/v1/images/edits" || strings.HasPrefix(path, "/v1/images/edits/") || strings.HasPrefix(path, "/platform/v1/images/edits/") || strings.HasPrefix(path, "/v1/native/")) && c.Request.URL.RawQuery != "" {
 			c.AbortWithStatus(http.StatusBadRequest)
@@ -217,7 +272,13 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 			if operation != "" {
 				parts := strings.Split(id, "/")
 				id = parts[0]
-				if len(parts) == 2 && (parts[1] == "result" || parts[1] == "content") {
+				if len(parts) == 2 && parts[1] == "document" && operation == "ocr" {
+					if c.Request.URL.RawQuery != "" {
+						c.AbortWithStatus(http.StatusBadRequest)
+						return
+					}
+					suffix = "/document"
+				} else if len(parts) == 2 && (parts[1] == "result" || parts[1] == "content") {
 					suffix = "/result"
 				} else if len(parts) != 1 {
 					id = ""
@@ -263,11 +324,26 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 			request.URL.RawQuery = c.Request.URL.RawQuery
 		}
 		request.Header.Set("Authorization", "Bearer "+credential)
+		request.Header.Del("X-Api-Key")
+		request.Header.Del("X-Goog-Api-Key")
 		request.Header.Set("Idempotency-Key", callID)
 		if taskID == "" {
 			taskID = "task_" + callID
 		}
 		request.Header.Set("X-UniHub-Task-ID", taskID)
+		_, nativeGroup := adapter.NativePrincipal()
+		if nativeGroup != "" && request.Method == http.MethodPost && !strings.HasSuffix(target, "/cancel") {
+			grant, err := adapter.ManagedModelGrant(c.Request.Context(), credential)
+			if err != nil {
+				c.AbortWithStatus(platformbilling.HTTPStatus(err))
+				return
+			}
+			if grant.NativePricing() {
+				native.ServeHTTP(c.Writer, request)
+				c.Abort()
+				return
+			}
+		}
 		platform.ServeHTTP(c.Writer, request)
 		c.Abort()
 	})

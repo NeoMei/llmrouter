@@ -17,6 +17,10 @@ import (
 const ProductCashConversionVersion = "lr-quota-usd-cny-v1"
 const ProductCashRoundingVersion = "lr-cumulative-ceil-v1"
 
+// ProductCashConversionRate exposes the same exact conversion to delegated
+// managed-key funding without opening a native user or wallet reservation.
+func ProductCashConversionRate() (string, string, error) { return currentProductCashRate() }
+
 // currentProductCashRate freezes decimal configuration as an exact rational:
 // LR quota / QuotaPerUnit USD * USDExchangeRate CNY * 1e6 micro-CNY.
 func currentProductCashRate() (string, string, error) {

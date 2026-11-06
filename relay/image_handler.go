@@ -95,7 +95,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 
 	statusCodeMappingStr := c.GetString("status_code_mapping")
 
-	if info.PlatformMode {
+	if info.RemoteTariff() {
 		if info.PlatformBilling == nil || info.NativeBilling == nil || info.NativeBilling.Observe == nil {
 			return types.NewError(fmt.Errorf("platform metering context required"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		}

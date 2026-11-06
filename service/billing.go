@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
@@ -19,6 +20,12 @@ const (
 // PreConsumeBilling 根据用户计费偏好创建 BillingSession 并执行预扣费。
 // 会话存储在 relayInfo.Billing 上，供后续 Settle / Refund 使用。
 func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
+	if relayInfo.ManagedNativePricing() {
+		if err := beginManagedNativeFunding(c.Request.Context(), relayInfo, preConsumedQuota, nil); err != nil {
+			return types.NewErrorWithStatusCode(err, types.ErrorCodeUpdateDataError, platformbilling.HTTPStatus(err), types.ErrOptionWithSkipRetry())
+		}
+		return nil
+	}
 	if relayInfo != nil && relayInfo.PlatformMode {
 		return types.NewError(errors.New("platform calls cannot use local quota"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
@@ -65,6 +72,12 @@ func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycom
 // SettleBilling 执行计费结算。如果 RelayInfo 上有 BillingSession 则通过 session 结算，
 // 否则回退到旧的 PostConsumeQuota 路径（兼容按次计费等场景）。
 func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuota int) error {
+	if relayInfo.ManagedNativePricing() {
+		if relayInfo.Billing == nil {
+			return errors.New("managed native funding missing")
+		}
+		return relayInfo.Billing.Settle(actualQuota)
+	}
 	if relayInfo != nil && relayInfo.PlatformMode {
 		return errors.New("platform calls cannot use local quota")
 	}

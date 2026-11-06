@@ -16,6 +16,29 @@ func superwagiePrivateResultBlocked(row platformbilling.Call) bool {
 }
 
 func registerPlatformTaskReads(engine gin.IRoutes, a *platformbilling.Adapter) {
+	engine.GET("/ocr/jobs/:callID/document", func(c *gin.Context) {
+		token := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
+		if len(c.Request.Header.Values("Authorization")) != 1 || !strings.HasPrefix(c.GetHeader("Authorization"), "Bearer uh_key_") || c.Request.URL.RawQuery != "" {
+			c.AbortWithStatus(401)
+			return
+		}
+		row, err := a.ManagedTask(c.Request.Context(), token, c.Param("callID"))
+		if err != nil || row.Operation != "ocr" {
+			c.AbortWithStatus(404)
+			return
+		}
+		c.Set("platform_task_call", row)
+		controller.PlatformOCRDocument(c, func() error {
+			current, err := a.ManagedTask(c.Request.Context(), token, row.CallID)
+			if err != nil {
+				return err
+			}
+			if current.Digest != row.Digest || current.ProviderTaskID != row.ProviderTaskID || current.Model != row.Model || current.Operation != "ocr" {
+				return platformbilling.ErrInvalid
+			}
+			return nil
+		})
+	})
 	for _, op := range []string{"video", "ocr"} {
 		path := "/videos/:callID"
 		if op == "ocr" {

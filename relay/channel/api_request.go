@@ -446,7 +446,7 @@ func DoRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	return doRequest(c, req, info)
 }
 func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
-	if info.PlatformMode && info.PlatformBilling != nil {
+	if info.RemoteTariff() && info.PlatformBilling != nil {
 		if err := info.PlatformBilling.ValidateTextInputOutbound(info.ChannelId, info.ChannelType, info.UpstreamModelName, req, common2.TLSInsecureSkipVerify); err != nil {
 			info.PlatformBilling.Rejected()
 			return nil, errors.New("admitted text input request did not match its reservation")
@@ -542,6 +542,14 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	var cancelSend context.CancelFunc
 	if info.PlatformMode && info.PlatformBilling != nil && (info.PlatformBilling.AliEmbeddingV4() || info.PlatformBilling.AliRerank()) {
 		sendContext, cancelSend = context.WithTimeout(context.WithoutCancel(sendContext), 2*time.Minute)
+	}
+	if info.ManagedNativePricing() {
+		if err := info.PlatformBilling.Dispatch(sendContext, info.ChannelId); err != nil {
+			if cancelSend != nil {
+				cancelSend()
+			}
+			return nil, err
+		}
 	}
 	resp, err := client.Do(req.WithContext(sendContext))
 	if cancelSend != nil {

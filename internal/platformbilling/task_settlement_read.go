@@ -23,6 +23,9 @@ func (a *Adapter) VerifyTaskSettlement(ctx context.Context, id string) error {
 		return ErrPending
 	}
 	var evidence metering.Usage
+	if row.PricingSource == "llmrouter_native" {
+		return a.verifyNativeTaskSettlement(ctx, row)
+	}
 	var intent struct {
 		Usage        Usage  `json:"usage"`
 		ProviderCost string `json:"provider_cost"`

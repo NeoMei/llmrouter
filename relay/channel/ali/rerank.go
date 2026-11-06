@@ -83,7 +83,7 @@ func RerankHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayI
 		return types.NewOpenAIError(fmt.Errorf("Ali rerank response requires nonnegative usage.total_tokens"), types.ErrorCodeBadResponseBody, http.StatusBadGateway), nil
 	}
 
-	if info.PlatformMode {
+	if info.RemoteTariff() {
 		for _, raw := range wire.Output.Results {
 			var item struct {
 				Index    int `json:"index"`
@@ -96,7 +96,7 @@ func RerankHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayI
 			}
 		}
 	}
-	if info.PlatformMode {
+	if info.RemoteTariff() {
 		var envelope struct {
 			Usage map[string]json.RawMessage `json:"usage"`
 		}
@@ -124,7 +124,7 @@ func RerankHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayI
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
 	}
-	if info.PlatformMode {
+	if info.RemoteTariff() {
 		if info.PlatformBilling != nil {
 			cap, _ := info.PlatformBilling.ReservationBounds()
 			if int64(*wire.Usage.TotalTokens) > cap {

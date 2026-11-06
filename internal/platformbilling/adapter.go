@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/internal/knowledgebinding"
 	ci "github.com/QuantumNous/new-api/internal/platformbilling/continuityindex"
+	"github.com/QuantumNous/new-api/pkg/metering"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"net/http"
@@ -23,6 +24,10 @@ import (
 // Call stores immutable verified payer scope and terminal command intent. Model
 // credentials are never persisted: recovery cannot authorize another dispatch.
 type Call struct {
+	PricingSource       string `gorm:"size:32"`
+	CredentialVersion   int64
+	NativePriceSnapshot string `gorm:"type:text"`
+	NativeQuoteJSON     string `gorm:"type:text"`
 	ContinuitySnapshot  string `gorm:"type:text"`
 	NativeRequestDigest string `gorm:"size:64"`
 	NativeObservation   string `gorm:"type:text"`
@@ -88,6 +93,8 @@ type Attempt struct {
 func (Attempt) TableName() string { return "platform_model_attempts" }
 
 type Adapter struct {
+	nativeDispatch   func(context.Context, Claims, string, NativeQuote) error
+	nativeMetering   func(string, metering.Usage) (int, error)
 	bindingResolver  func(*gorm.DB, string, string, string) (ManagedBinding, string, error)
 	bindingRotator   func(*gorm.DB, string) error
 	knowledgeResults *knowledgeResultVault
@@ -98,6 +105,7 @@ type Adapter struct {
 	client           *client
 }
 type Session struct {
+	nativeCredential   string
 	knowledgeAdmission *pinnedKnowledgeAdmission
 	nativeSend         string
 	canonical          []byte
@@ -429,6 +437,9 @@ func compareCall(old, row Call) error {
 	return ErrDuplicate
 }
 func (s *Session) Dispatch(ctx context.Context, channel int) error {
+	if s.NativePricing() {
+		return s.dispatchNative(ctx, channel)
+	}
 	if s.PinnedKnowledge() {
 		if channel != s.knowledgeAdmission.binding.ChannelID {
 			return ErrConflict
@@ -522,8 +533,13 @@ func (s *Session) Rejected() {
 	}
 	s.safeFailure = true
 	s.uncertain = false
+	if s.NativePricing() {
+		s.call.Status = "RESERVED"
+	}
 }
-func (s *Session) CanRetry() bool { return s.err == nil && !s.uncertain && s.confirmed == nil }
+func (s *Session) CanRetry() bool {
+	return !s.NativePricing() && s.err == nil && !s.uncertain && s.confirmed == nil
+}
 func (s *Session) invalidateUsage() {
 	s.confirmed = nil
 	if s.attempt.ID != 0 {
@@ -553,6 +569,9 @@ func (s *Session) observe(raw *dto.Usage) {
 	}
 }
 func (s *Session) Finish(ctx context.Context) error {
+	if s.NativePricing() {
+		return s.finishNative(ctx)
+	}
 	if s.call.Operation != "" {
 		return s.finishMetered(ctx)
 	}
@@ -595,6 +614,9 @@ func (s *Session) Finish(ctx context.Context) error {
 	return nil
 }
 func (a *Adapter) deliver(ctx context.Context, row Call) error {
+	if row.PricingSource == "llmrouter_native" {
+		return a.deliverNative(ctx, row)
+	}
 	var current Call
 	if err := a.db.WithContext(ctx).First(&current, "call_id = ?", row.CallID).Error; err != nil {
 		return err

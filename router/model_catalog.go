@@ -189,6 +189,7 @@ func projectChatCatalog(catalog platformbilling.TechnicalCatalog, mode string, p
 }
 
 func SetModelCatalogRouter(engine *gin.Engine, adapter *platformbilling.Adapter, config platformbilling.CatalogConfig) {
+	SetProviderCatalogRouter(engine, adapter, config)
 	middleware.RegisterUniHubManagementRoute(http.MethodGet, "/api/unihub/chat-models", authz.Permission{Resource: "product", Action: "use"})
 	engine.GET("/api/unihub/chat-models", middleware.UserAuth(), func(c *gin.Context) {
 		c.Header("Cache-Control", "no-store")

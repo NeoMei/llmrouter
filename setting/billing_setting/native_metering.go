@@ -240,6 +240,15 @@ func GetModelNativePricingCopy() map[string]map[string]metering.Price {
 	_ = common.Unmarshal(b, &out)
 	return out
 }
+
+// HasModelNativePricing reports a validated native price contract for routing.
+// Callers still select and validate the price for the actual operation.
+func HasModelNativePricing(model string) bool {
+	nativePricingMu.RLock()
+	defer nativePricingMu.RUnlock()
+	return len(nativePricing.ModelNativePricing[model]) > 0
+}
+
 func ResolveModelNativePrice(model, operation string) (metering.Price, bool) {
 	nativePricingMu.RLock()
 	defer nativePricingMu.RUnlock()

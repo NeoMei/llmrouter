@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/metering"
 	base "github.com/QuantumNous/new-api/service"
 	"math"
+	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -90,6 +91,27 @@ func ResolveAdmission(in AuthorizedAdmission) (model.OCRAdmission, error) {
 		return a, &PriceError{Reason: "OCR native request price is below one quota unit"}
 	}
 	return a, nil
+}
+
+// NativeManagedPrice freezes the native OCR calculation without reserving a
+// native user's wallet. Legacy request pricing retains its truncation rule.
+func NativeManagedPrice(in AuthorizedAdmission) (model.NativeAdmission, error) {
+	a, err := ResolveAdmission(in)
+	if err != nil {
+		return model.NativeAdmission{}, err
+	}
+	n := model.NativeAdmission{Model: in.Model, ChannelID: in.ChannelID, Group: in.UsingGroup, GroupRatio: strconv.FormatFloat(a.GroupRatio, 'g', -1, 64), QuotaPerUnit: strconv.FormatFloat(a.QuotaPerUnit, 'g', -1, 64), Reservation: metering.Usage{Version: "metered_v2", Operation: "ocr", State: "confirmed", Source: "success_request", Measurements: []metering.Measurement{{Key: "requests", Unit: "request", Quantity: metering.Quantity{Value: "1"}}}}}
+	if a.NativePrice != nil {
+		n.Price = *a.NativePrice
+		return n, nil
+	}
+	quota, clamp := common.QuotaFromFloatChecked(a.Price * a.GroupRatio * a.QuotaPerUnit)
+	if clamp != nil {
+		return n, clamp
+	}
+	n.GroupRatio, n.QuotaPerUnit = "1", "1"
+	n.Price = metering.Price{Version: "metered_v2", Operation: "ocr", Policy: "success_request", Terms: []metering.Term{{Key: "requests", Unit: "request", Price: metering.Rational{Numerator: strconv.Itoa(quota), Denominator: "1"}}}}
+	return n, nil
 }
 
 type Billing struct{ *model.OCRBillingStore }

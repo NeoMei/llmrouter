@@ -28,6 +28,9 @@ var (
 )
 
 type Claims struct {
+	ModelScope            string              `json:"model_scope,omitempty"`
+	PricingSource         string              `json:"pricing_source,omitempty"`
+	CredentialVersion     int64               `json:"credential_version,omitempty"`
 	Operations            map[string][]string `json:"operations,omitempty"`
 	CredentialKind        string              `json:"credential_kind"`
 	InstanceID            string              `json:"instance_id"`
@@ -80,6 +83,9 @@ type Allocation struct {
 	Amount  string `json:"amount"`
 }
 type RemoteCall struct {
+	CredentialVersion     int64        `json:"credential_version,omitempty"`
+	TaskID                string       `json:"task_id,omitempty"`
+	NativePricing         *NativeQuote `json:"native_pricing,omitempty"`
 	WireOperation         string       `json:"wire_operation,omitempty"`
 	InstanceID            string       `json:"instance_id"`
 	Held                  string       `json:"held"`
@@ -127,6 +133,7 @@ type Config struct {
 	OperationRateIDs                map[string]map[string]map[string]string
 	Enabled                         bool
 	Origin, ServiceToken, Group     string
+	NativeGroup                     string
 	InstanceID                      string
 	PrincipalID                     int
 	MaxBodyBytes                    int64
@@ -204,11 +211,16 @@ func (c *client) do(ctx context.Context, method, path, key string, body, out any
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		remote := &remoteError{status: resp.StatusCode}
-		if resp.StatusCode == http.StatusPaymentRequired && method == http.MethodPost && path == "/internal/v1/calls/reserve" {
+		if resp.StatusCode == http.StatusPaymentRequired && method == http.MethodPost && (path == "/internal/v1/calls/reserve" || path == "/internal/v1/calls/native-reserve") {
 			// Only the center's persisted reserve rejection contract proves there
 			// is no hold. Proxy errors and malformed or ambiguous replies remain unknown.
 			var problem map[string]string
-			if common.UnmarshalUnique(data, &problem) != nil || len(problem) != 1 || (problem["error"] != "insufficient_credits" && problem["error"] != "insufficient_funds") {
+			if common.UnmarshalUnique(data, &problem) != nil || len(problem) != 1 {
+				return ErrPending
+			}
+			code := problem["error"]
+			nativeBudgetRejected := path == "/internal/v1/calls/native-reserve" && code == "usage_budget_exceeded"
+			if code != "insufficient_credits" && code != "insufficient_funds" && !nativeBudgetRejected {
 				return ErrPending
 			}
 			remote.reserveRejected = true
@@ -303,6 +315,9 @@ func HTTPStatus(err error) int {
 }
 
 func (remote RemoteCall) matches(row Call) bool {
+	if row.PricingSource == "llmrouter_native" {
+		return remote.matchesNative(row)
+	}
 	localInstance, remoteInstance := row.InstanceID, remote.InstanceID
 	if localInstance == "" {
 		localInstance = "default"

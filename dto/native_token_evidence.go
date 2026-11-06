@@ -266,3 +266,28 @@ func (e *NativeTokenEvidence) CompleteStream(clean bool) {
 		e.terminal = true
 	}
 }
+
+// ConfirmedUsage validates raw native counters without inventing a second price.
+// It keeps every counter present in the supplier envelope; pricing remains the
+// caller's frozen native rules.
+func (e *NativeTokenEvidence) ConfirmedUsage(operation string) metering.Usage {
+	price := metering.Price{Operation: operation, Terms: []metering.Term{{Key: "input", Unit: "token"}}}
+	if operation != "embedding" {
+		price.Terms = append(price.Terms, metering.Term{Key: "output", Unit: "token"})
+	}
+	optional := map[string]string{"cache_read": "prompt_tokens_details.cached_tokens", "cache_write": "prompt_tokens_details.cache_write_tokens", "reasoning": "completion_tokens_details.reasoning_tokens"}
+	switch e.Source {
+	case BillingUsageSourceOAIResponses:
+		optional = map[string]string{"cache_read": "input_tokens_details.cached_tokens", "cache_write": "input_tokens_details.cache_write_tokens", "reasoning": "output_tokens_details.reasoning_tokens"}
+	case BillingUsageSourceClaudeMessages:
+		optional = map[string]string{"cache_read": "cache_read_input_tokens", "cache_write": "cache_creation_input_tokens"}
+	case BillingUsageSourceGeminiChat:
+		optional = map[string]string{"cache_read": "cachedContentTokenCount", "reasoning": "thoughtsTokenCount"}
+	}
+	for _, key := range []string{"cache_read", "cache_write", "reasoning"} {
+		if _, exists := e.values[optional[key]]; exists {
+			price.Terms = append(price.Terms, metering.Term{Key: key, Unit: "token"})
+		}
+	}
+	return e.Usage(price)
+}

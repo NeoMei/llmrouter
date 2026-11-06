@@ -7,6 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"gorm.io/gorm"
 )
 
@@ -59,7 +60,7 @@ func (s GormRuntimeSources) CanonicalBillingModel(_ context.Context, modelName s
 	if modelName == "" {
 		return "", false, nil
 	}
-	if helper.HasModelBillingConfig(modelName) {
+	if helper.HasModelBillingConfig(modelName) || billing_setting.HasModelNativePricing(modelName) {
 		return modelName, true, nil
 	}
 	// Pricing metadata may canonicalize a case/pattern alias; only return a

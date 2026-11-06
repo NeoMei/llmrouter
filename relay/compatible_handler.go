@@ -26,14 +26,14 @@ import (
 )
 
 func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
-	if info.PlatformMode && info.PlatformBilling != nil {
+	if info.RemoteTariff() && info.PlatformBilling != nil {
 		if _, metered := info.PlatformBilling.MeteredPrice(); metered {
 			return platformGeneration(c, info)
 		}
 	}
 	toolpolicy.Clear(c)
 	info.InitChannelMeta(c)
-	if info.PlatformMode {
+	if info.RemoteTariff() {
 		if info.PlatformBilling == nil || !platformChatChannel(info.ChannelType) || len(info.ParamOverride) > 0 || len(info.HeadersOverride) > 0 || info.ChannelSetting.SystemPrompt != "" || info.ChannelSetting.PassThroughBodyEnabled || model_setting.GetGlobalSettings().PassThroughRequestEnabled || service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) {
 			return types.NewErrorWithStatusCode(fmt.Errorf("platform route requires unmodified OpenAI Chat provider semantics"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
@@ -80,7 +80,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		}
 	}
 
-	if info.PlatformMode && lo.FromPtrOr(request.Stream, false) {
+	if info.RemoteTariff() && lo.FromPtrOr(request.Stream, false) {
 		request.StreamOptions = &dto.StreamOptions{IncludeUsage: true}
 	}
 	info.ShouldIncludeUsage = includeUsage
@@ -236,7 +236,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		requestBody = body
 	}
 
-	if info.PlatformMode {
+	if info.RemoteTariff() {
 		if target, e := adaptor.GetRequestURL(info); e != nil || info.PlatformBilling.ValidateTextInputTarget(info.ChannelId, info.ChannelType, info.UpstreamModelName, target) != nil {
 			return types.NewError(fmt.Errorf("admitted text input route unavailable"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		}
@@ -256,11 +256,11 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		httpResp = resp.(*http.Response)
 		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		if httpResp.StatusCode != http.StatusOK {
-			if info.PlatformMode && info.NativeBilling == nil {
+			if info.RemoteTariff() && info.NativeBilling == nil {
 				info.PlatformBilling.Rejected()
 			}
 			newApiErr := service.RelayErrorHandler(c.Request.Context(), httpResp, false)
-			if info.PlatformMode && httpResp.StatusCode >= 300 && httpResp.StatusCode < 400 {
+			if info.RemoteTariff() && httpResp.StatusCode >= 300 && httpResp.StatusCode < 400 {
 				return types.NewErrorWithStatusCode(fmt.Errorf("platform provider redirects are unavailable"), types.ErrorCodeBadResponse, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
 			}
 			// reset status code 重置状态码

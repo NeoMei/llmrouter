@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	"github.com/QuantumNous/new-api/pkg/metering"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -233,7 +234,9 @@ type RelayInfo struct {
 	// 若为空，调用 GetFinalRequestRelayFormat 会回退到 RequestConversionChain 的最后一项或 RelayFormat。
 	FinalRequestRelayFormat types.RelayFormat
 
-	StreamStatus *StreamStatus
+	StreamStatus              *StreamStatus
+	ManagedNativeEvidence     *metering.Usage
+	ManagedNativeSupplemental *types.SupplementalPriceSnapshot
 
 	ThinkingContentInfo
 	TokenCountMeta
@@ -242,6 +245,16 @@ type RelayInfo struct {
 	*ResponsesUsageInfo
 	*ChannelMeta
 	*TaskRelayInfo
+}
+
+// ManagedNativePricing changes the price authority while retaining the
+// platform identity, resource namespace and prohibition on local debits.
+func (info *RelayInfo) ManagedNativePricing() bool {
+	return info != nil && info.PlatformMode && info.PlatformBilling != nil && info.PlatformBilling.NativePricing()
+}
+
+func (info *RelayInfo) RemoteTariff() bool {
+	return info != nil && info.PlatformMode && !info.ManagedNativePricing()
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {

@@ -2,7 +2,66 @@
 
 The adapter is opt-in. Existing `/v1` authentication, providers and local billing remain unchanged. Enable `UNIHUB_PLATFORM_ENABLED=true` with the explicit service origin, separate service token, enabled routing principal/group and limits shown in `.env.example`. No local wallet or token funds platform calls. The enabled principal must already belong to the fixed configured group. All gateway instances for the same UniHub service must share the same gateway database; the logical-call dispatch fence lives there.
 
-## HTTP contract
+## SuperWagie all-model account keys
+
+A verified durable `uh_key_` may explicitly carry
+`model_scope=llmrouter_available`, `pricing_source=llmrouter_native` and a
+positive `credential_version`. This mode is restricted to SuperWagie API keys
+funded in prepaid `CNY/6`. Set `UNIHUB_NATIVE_ROUTING_GROUP` to the existing
+published native model group to enable it. Empty disables the mode. The
+existing `selected` scope and task credentials retain their published-rate
+contract below.
+
+The public `/v1` dispatcher preserves the original key, actor, personal or team
+account, instance, expiry and key budget. It never creates a native token or
+uses the routing principal's money. It accepts one of `Authorization: Bearer`,
+Claude `x-api-key` or Gemini `x-goog-api-key`, rejecting ambiguous headers and
+query credentials. Gemini `streamGenerateContent?alt=sse` remains streaming.
+
+`GET /v1/models` projects all currently enabled, priced native routes and
+abilities in that group, without a second central model list or rate table.
+The response includes `capability_metadata`, a catalog version, explicit
+available/executable operation status and the verified account identity
+headers. Adding or removing a native model changes discovery automatically.
+Unknown protocol operations stay visible with a reason; catalog visibility
+never grants an unsupported operation. The same catalog is available through
+`POST /internal/v1/provider-catalog` using the dedicated catalog credential and
+trusted origin-product, instance, actor and account binding. The caller cannot
+choose a routing group, provider URL or prices.
+
+The gateway computes the reservation and final native quota using LLMRouter's
+existing model, group, capability and metering rules. The immutable price
+snapshot and quota-to-cash conversion are hashed before
+`/internal/v1/calls/native-reserve`. The returned hold must bind the original
+key version, task, actor, account, product, instance, model, wire operation and
+complete quote. Key authority and the selected native route are checked again
+immediately before the durable dispatch fence. Removal, key revocation or lost
+team membership prevents a supplier request even after reservation.
+
+Final native quota is converted once using the frozen rational rate and
+cumulative ceiling. A zero-priced model creates a zero-value reservation and
+receipt. A charge above the hold first uses a budget-checked top-up; rejection
+leaves a recoverable pending settlement. It is never silently capped and never
+charged to a platform-difference account. Terminal receipts must return the
+exact charged amount. Ambiguous reservation responses, interrupted transport
+or missing final token usage remain pending/unknown and cannot replay a
+supplier request. Recovery only retries durable monetary intents.
+
+Generic native Chat, Claude Messages, Gemini, Responses, embedding, rerank,
+image and audio handlers retain their established provider wire format. The
+DashScope image endpoint accepts the native Qwen request directly. PaddleOCR
+jobs preserve exact key ownership through asynchronous polling, settlement and
+text-document delivery. Stored Responses continuations (`store=true` or
+`previous_response_id`, Responses `conversation`, Gemini `cachedContent` or
+Claude `container`) are refused until a separately scoped native history
+owner exists. Stateless Responses requests explicitly set `store=false`; the
+non-financial routing principal is never used to authorize
+private results. Provider-owned file, vector-store and container references,
+Gemini file references and background Responses jobs are also refused until
+scoped ownership exists. Inline content, ordinary text and function argument
+payloads remain available; these checks inspect protocol fields only.
+
+## Selected-scope HTTP contract
 
 `POST /platform/v1/chat/completions` accepts an opaque model credential in `Authorization: Bearer uh_model_...`, a stable `Idempotency-Key` for **each logical model request**, and `X-UniHub-Task-ID`. A subsequent tool loop uses a new call ID; provider retries within the original HTTP call reuse the same logical call with distinct persisted attempts. Both IDs allow 1–128 ASCII alphanumeric / `_ . : -` characters, beginning with an alphanumeric character. The gateway returns `X-UniHub-Call-ID` once admitted.
 
@@ -42,3 +101,31 @@ UNIHUB_PLATFORM_E2E=1 UNIHUB_PLATFORM_E2E_ENV_FILE=/absolute/path/to/local/dev.e
 ```
 
 It listens on `127.0.0.1:3001`, uses UniHub at `http://localhost:8088`, model `unihub-synthetic-model`, and immutable rate `local-e2e-chat-v1`. The environment file must contain `MODEL_SERVICE_TOKEN`. Its synthetic SSE emits content, an explicit `finish_reason: stop` frame, final usage and `[DONE]`. Diagnostic logs contain only request byte counts, HTTP status and an allowlisted error code, never credentials or message content. It stops on signal or after 15 minutes. Native production model execution and MySQL/PostgreSQL gateway migration execution are separate acceptance steps; the financial service integration can be exercised locally without real upstream keys.
+
+## Account-key OCR text documents
+
+`GET /v1/ocr/{callID}/document` and its platform alias
+`GET /platform/v1/ocr/jobs/{callID}/document` return a bounded text document for
+an existing completed OCR call. They require the original durable `uh_key_`
+credential and freshly verify its actor, account, product, instance, model scope
+and immutable key ID. Receipt-only `uh_read_` and task `uh_model_` credentials
+cannot use this endpoint. Query-string credentials are refused. Authorization
+is checked again after the stored document is read and projected.
+
+The response is `{id,pages:[{index?,width?,height?,text,layout:[]}]}`. Layout
+blocks contain only `label`, `content` and optional `bbox`. The stored result
+must be complete, centrally settled, unrevoked, unexpired and match its recorded
+size and SHA-256. Resource metadata is checked again after reading. At most
+1000 pages and 16 MiB of projected JSON are returned. Responses use `no-store`.
+This endpoint makes no supplier requests and issues no resource download grants.
+
+Text projection removes image references, HTML tags, reference definitions,
+hyperlinks and resource URLs from text and block labels/content. Tables,
+formulas and available coordinates remain in the text document. Image bytes,
+resource maps, raw provider fields and native payloads are excluded. Existing
+SuperWagie `/result`, native status and bearer resource-download restrictions
+remain unchanged. A settled receipt alone cannot release those resources.
+
+The new route does not change OCR admission, reservation, rates, settlement or
+retry policy. Submission still uses the persisted original idempotency identity;
+an unknown result never authorizes a second supplier dispatch.

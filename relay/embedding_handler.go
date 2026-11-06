@@ -32,7 +32,7 @@ func EmbeddingHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	}
 
 	space := info.ModelCapabilities.EmbeddingSpace
-	if info.PlatformMode && space == nil {
+	if info.RemoteTariff() && space == nil {
 		return types.NewError(fmt.Errorf("certified embedding space required"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
 	if space != nil {
@@ -90,7 +90,7 @@ func EmbeddingHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	var size int64
 	var getBody func() (io.ReadCloser, error)
 	var closer io.Closer
-	if info.PlatformMode && info.PlatformBilling != nil && info.PlatformBilling.AliEmbeddingV4() {
+	if info.RemoteTariff() && info.PlatformBilling != nil && info.PlatformBilling.AliEmbeddingV4() {
 		body = bytes.NewReader(jsonData)
 		size = int64(len(jsonData))
 	} else {
@@ -107,7 +107,7 @@ func EmbeddingHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	info.UpstreamRequestGetBody = getBody
 	var requestBody io.Reader = body
 	statusCodeMappingStr := c.GetString("status_code_mapping")
-	if info.PlatformMode {
+	if info.RemoteTariff() {
 		if info.PlatformBilling == nil || info.NativeBilling == nil {
 			return types.NewError(fmt.Errorf("platform metering context required"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		}
@@ -141,7 +141,7 @@ func EmbeddingHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		if readErr != nil || len(raw) > maxContractEmbeddingResponseBytes {
 			return types.NewErrorWithStatusCode(fmt.Errorf("embedding response unreadable or exceeds size limit"), types.ErrorCodeBadResponseBody, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
 		}
-		if info.PlatformMode && info.PlatformBilling != nil && info.PlatformBilling.AliEmbeddingV4() {
+		if info.RemoteTariff() && info.PlatformBilling != nil && info.PlatformBilling.AliEmbeddingV4() {
 			result, err := info.PlatformBilling.CaptureKnowledgeResult(c.Request.Context(), info.ChannelId, info.ResolvedModelNameOrOrigin(), info.ApiKey, raw)
 			if err != nil {
 				return types.NewErrorWithStatusCode(fmt.Errorf("embedding result pending verification or settlement: %s", err), types.ErrorCodeBadResponseBody, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
@@ -151,7 +151,7 @@ func EmbeddingHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			c.Data(http.StatusOK, "application/json", result)
 			return nil
 		}
-		if info.PlatformMode {
+		if info.RemoteTariff() {
 			count, e := request.InputCount()
 			if e != nil {
 				return types.NewError(e, types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())

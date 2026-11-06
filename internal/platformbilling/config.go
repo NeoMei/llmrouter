@@ -101,6 +101,10 @@ func ConfigFromEnv(get func(string) string) (Config, error) {
 	}
 	c.ServiceToken = get("UNIHUB_MODEL_SERVICE_TOKEN")
 	c.Group = get("UNIHUB_ROUTING_GROUP")
+	c.NativeGroup = strings.TrimSpace(get("UNIHUB_NATIVE_ROUTING_GROUP"))
+	if c.NativeGroup == "auto" || strings.ContainsAny(c.NativeGroup, ",\r\n\t") {
+		return c, ErrInvalid
+	}
 	var err error
 	c.PrincipalID, err = strconv.Atoi(get("UNIHUB_ROUTING_PRINCIPAL_ID"))
 	if err != nil || c.PrincipalID < 1 {

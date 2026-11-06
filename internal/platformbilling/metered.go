@@ -759,6 +759,9 @@ func (a *Adapter) ObserveTask(ctx context.Context, callID, providerTaskID string
 		return ErrInvalid
 	}
 	s := &Session{adapter: a, call: row}
+	if s.NativePricing() {
+		return s.observeNativeTask(ctx, u)
+	}
 	if err := s.ObserveMetering(ctx, u); err != nil {
 		return err
 	}

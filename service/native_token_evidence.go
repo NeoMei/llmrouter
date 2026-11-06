@@ -16,7 +16,7 @@ import (
 func NativeTokenObserver(ctx context.Context, info *relaycommon.RelayInfo, source string) (*dto.NativeTokenEvidence, func()) {
 	evidence := &dto.NativeTokenEvidence{Source: source}
 	return evidence, func() {
-		if info == nil || info.NativeBilling == nil {
+		if info == nil || (info.NativeBilling == nil && !info.ManagedNativePricing()) {
 			return
 		}
 		if info.IsStream && info.StreamStatus != nil {
@@ -25,6 +25,18 @@ func NativeTokenObserver(ctx context.Context, info *relaycommon.RelayInfo, sourc
 				clean = info.StreamStatus.EndError == nil && (info.StreamStatus.EndReason == relaycommon.StreamEndReasonDone || info.StreamStatus.EndReason == relaycommon.StreamEndReasonEOF)
 			}
 			evidence.CompleteStream(clean)
+		}
+		if info.NativeBilling == nil {
+			operation := "chat"
+			if info.PlatformBilling.WireOperation().ID == "embeddings.create" {
+				operation = "embedding"
+			}
+			if info.PlatformBilling.WireOperation().ID == "responses.create" || info.PlatformBilling.WireOperation().ID == "responses.compact" {
+				operation = "responses"
+			}
+			actual := evidence.ConfirmedUsage(operation)
+			info.ManagedNativeEvidence = &actual
+			return
 		}
 		if err := RecordNativeUsageForRelay(ctx, info, evidence.Usage(info.NativeBilling.Price)); err != nil {
 			common.SysError("record native token evidence: " + err.Error())

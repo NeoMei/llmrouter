@@ -89,7 +89,7 @@ func RerankHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		var size int64
 		var getBody func() (io.ReadCloser, error)
 		var closer io.Closer
-		if info.PlatformMode && info.PlatformBilling != nil && info.PlatformBilling.AliRerank() {
+		if info.RemoteTariff() && info.PlatformBilling != nil && info.PlatformBilling.AliRerank() {
 			body = bytes.NewReader(jsonData)
 			size = int64(len(jsonData))
 		} else {
@@ -107,7 +107,7 @@ func RerankHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		requestBody = body
 	}
 
-	if info.PlatformMode {
+	if info.RemoteTariff() {
 		if info.PlatformBilling == nil || info.NativeBilling == nil {
 			return types.NewError(fmt.Errorf("platform metering context required"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		}
@@ -131,7 +131,7 @@ func RerankHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 			return newAPIError
 		}
 	}
-	if info.PlatformMode && info.PlatformBilling != nil && info.PlatformBilling.AliRerank() {
+	if info.RemoteTariff() && info.PlatformBilling != nil && info.PlatformBilling.AliRerank() {
 		if httpResp == nil || httpResp.Body == nil {
 			return types.NewErrorWithStatusCode(fmt.Errorf("missing rerank response"), types.ErrorCodeBadResponseBody, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
 		}

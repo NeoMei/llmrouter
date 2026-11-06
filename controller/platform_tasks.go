@@ -13,8 +13,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func PlatformTaskStatus(c *gin.Context) { platformTaskRead(c, false) }
-func PlatformTaskResult(c *gin.Context) { platformTaskRead(c, true) }
+func PlatformTaskStatus(c *gin.Context) { platformTaskRead(c, false, nil) }
+func PlatformTaskResult(c *gin.Context) { platformTaskRead(c, true, nil) }
+func PlatformOCRDocument(c *gin.Context, authorize func() error) {
+	platformTaskRead(c, true, authorize)
+}
 
 type videoCancelAdaptor interface {
 	CancelTask(baseURL, key, taskID, proxy string) (*http.Response, error)
@@ -122,7 +125,7 @@ func PlatformTaskCancel(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"id": row.CallID, "task_id": task.TaskID, "status": task.Status, "progress": task.Progress})
 }
-func platformTaskRead(c *gin.Context, result bool) {
+func platformTaskRead(c *gin.Context, result bool, documentAuthorization func() error) {
 	value, ok := c.Get("platform_task_call")
 	if !ok {
 		c.AbortWithStatus(404)
@@ -148,6 +151,27 @@ func platformTaskRead(c *gin.Context, result bool) {
 		var binding model.OCRAccountBinding
 		if OCRRuntime.DB.WithContext(c.Request.Context()).Where("call_id = ?", row.CallID).Order("id DESC").First(&attempt).Error != nil || attempt.ChannelID != job.ChannelID || common.UnmarshalJsonStr(job.Execution, &execution) != nil || common.UnmarshalJsonStr(job.AccountBinding, &binding) != nil || binding.Ref.ChannelID != job.ChannelID || binding.Ref.MemberID == "" || execution.RequestedModel != row.Model || execution.KeySHA256 == "" || len(execution.ResourceOrigins) == 0 {
 			c.AbortWithStatusJSON(409, gin.H{"error": gin.H{"code": "ocr_ownership_proof_required"}})
+			return
+		}
+
+		if documentAuthorization != nil {
+			document, err := OCRRuntime.Service.ReadDocument(c.Request.Context(), job.ID, row.CallID, job.UserID, job.TokenID)
+			if err != nil {
+				c.AbortWithStatus(409)
+				return
+			}
+			data, err := common.Marshal(document)
+			if err != nil || len(data) > 16*1024*1024 {
+				c.AbortWithStatus(502)
+				return
+			}
+			if documentAuthorization() != nil {
+				c.AbortWithStatus(404)
+				return
+			}
+			c.Header("Cache-Control", "no-store")
+			c.Header("Referrer-Policy", "no-referrer")
+			c.Data(200, "application/json", data)
 			return
 		}
 		status, err := OCRRuntime.Service.Status(c.Request.Context(), job.ID, job.UserID, job.TokenID)

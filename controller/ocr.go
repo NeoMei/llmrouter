@@ -2,10 +2,13 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -219,18 +222,63 @@ func (h *OCRHandler) Create(c *gin.Context) {
 			return
 		}
 		price, ok := session.MeteredPrice()
-		if !ok || price.Operation != "ocr" {
-			h.fail(c, 400, "platform OCR tariff required")
-			return
+		if session.NativePricing() {
+			native, err := ocr.NativeManagedPrice(admission)
+			if err != nil {
+				h.serviceError(c, err, 400)
+				return
+			}
+			quota, clamp, err := model.NativeQuota(native, native.Reservation, true)
+			if err != nil || clamp != nil {
+				h.fail(c, 400, "OCR native price unavailable")
+				return
+			}
+			snapshot, err := common.Marshal(struct {
+				Native model.NativeAdmission `json:"native"`
+			}{native})
+			if err != nil {
+				h.fail(c, 503, "OCR price snapshot unavailable")
+				return
+			}
+			var channel model.Channel
+			if h.Runtime.DB.WithContext(c.Request.Context()).First(&channel, selected.ChannelID).Error != nil || channel.Status != common.ChannelStatusEnabled || channel.ChannelInfo.IsMultiKey || target.ProfileID != 0 {
+				h.fail(c, 503, "OCR channel unavailable")
+				return
+			}
+			origin, err := url.Parse(target.JobsURL)
+			if err != nil {
+				h.fail(c, 503, "OCR target unavailable")
+				return
+			}
+			keyHash := sha256.Sum256([]byte(channel.Key))
+			target.KeySHA256 = hex.EncodeToString(keyHash[:])
+			target.ResourceOrigins = []string{origin.Scheme + "://" + origin.Host}
+			admission.ValidateTarget = func(id, kind int, upstream, key, base string) error {
+				currentHash := sha256.Sum256([]byte(key))
+				if id != selected.ChannelID || kind != channel.Type || upstream != target.Model || hex.EncodeToString(currentHash[:]) != target.KeySHA256 || base != channel.GetBaseURL() {
+					return platformbilling.ErrConflict
+				}
+				return nil
+			}
+			if err := service.ReserveManagedNativePrice(c.Request.Context(), session, selected.BillingModel, selected.SelectedGroup, selected.RouteID, selected.ChannelID, quota, snapshot); err != nil {
+				h.serviceError(c, err, 503)
+				return
+			}
+			price, ok = native.Price, true
+		} else {
+			if !ok || price.Operation != "ocr" {
+				h.fail(c, 400, "platform OCR tariff required")
+				return
+			}
+			policy, e := session.OCRPolicy()
+			if e != nil || selected.ChannelID != policy.ChannelID || target.ProfileID != 0 || target.Model != policy.UpstreamModel || target.JobsURL != policy.Origin+"/api/v2/ocr/jobs" {
+				h.fail(c, 503, "certified OCR target unavailable")
+				return
+			}
+			admission.ValidateTarget = session.ValidateOCRTarget
+			target.KeySHA256 = policy.ChannelKeySHA256
+			target.ResourceOrigins = policy.ResourceOrigins
 		}
-		policy, e := session.OCRPolicy()
-		if e != nil || selected.ChannelID != policy.ChannelID || target.ProfileID != 0 || target.Model != policy.UpstreamModel || target.JobsURL != policy.Origin+"/api/v2/ocr/jobs" {
-			h.fail(c, 503, "certified OCR target unavailable")
-			return
-		}
-		admission.ValidateTarget = session.ValidateOCRTarget
-		target.KeySHA256 = policy.ChannelKeySHA256
-		target.ResourceOrigins = policy.ResourceOrigins
 		admission.BindTaskTx = session.BindTaskOn
 		admission.PlatformCallID = session.CallID()
 		admission.PlatformPrice = &price

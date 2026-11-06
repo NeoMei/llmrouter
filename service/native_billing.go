@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/metering"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
@@ -88,6 +89,29 @@ func RecordNativeUsageForRelay(ctx context.Context, info *relaycommon.RelayInfo,
 // provider integration must call MarkNativeBillingDispatched immediately before
 // sending; uncertain dispatch is thereafter a durable hold, never a refund.
 func BeginNativeBillingForRelay(ctx context.Context, info *relaycommon.RelayInfo, a model.NativeAdmission) error {
+	if info.ManagedNativePricing() {
+		quota, clamp, err := model.NativeQuota(a, a.Reservation, true)
+		if err != nil {
+			return err
+		}
+		if clamp != nil {
+			return clamp
+		}
+		if err := beginManagedNativeFunding(ctx, info, quota, &a); err != nil {
+			return err
+		}
+		info.NativeBilling = &relaycommon.NativeBillingContext{CallID: info.PlatformBilling.CallID(), Platform: true, Price: a.Price, Policy: a.Price.Policy, Observe: func(ctx context.Context, usage metering.Usage) error {
+			actual, clamp, err := model.NativeQuota(a, usage, false)
+			if err != nil {
+				return err
+			}
+			if clamp != nil {
+				return clamp
+			}
+			return info.PlatformBilling.SettleNative(ctx, actual, &platformbilling.Usage{Metered: &usage})
+		}}
+		return nil
+	}
 	if info == nil || info.PlatformMode || a.Platform || info.Billing != nil {
 		return errors.New("local native funding ownership conflict")
 	}

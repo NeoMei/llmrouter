@@ -1,12 +1,13 @@
-# Managed Ali embedding preparation
+# Managed Ali embedding activation
 
-The Ali `text-embedding-v4` and `qwen3-rerank` paths remain **not ready for
-production activation**. Do not set `UNIHUB_ALI_EMBEDDING_ENABLED=true` or
-`UNIHUB_ALI_RERANK_ENABLED=true` until authenticated result
-recovery, host and background-worker integration, and a complete end-to-end
-settlement/revocation review have been completed.
+Ali `text-embedding-v4` and `qwen3-rerank` require explicit, deployment-specific
+activation. Enable `UNIHUB_ALI_EMBEDDING_ENABLED=true` or
+`UNIHUB_ALI_RERANK_ENABLED=true` only after validating the corresponding producer,
+authenticated result recovery, host and background-worker integration, and
+end-to-end settlement and revocation behavior for that deployment. A feature
+flag or a published release alone is not evidence of an active managed binding.
 
-For an isolated integration environment, the explicit opt-in requires:
+Each approved deployment requires:
 
 - The corresponding explicit opt-in and the existing platform settings.
 - `UNIHUB_KNOWLEDGE_RESULT_KEYS`: JSON mapping of key version IDs to distinct,
@@ -34,10 +35,17 @@ the interval between result authorization and a concurrent revocation.
 ## Public inference with managed API keys
 
 A centrally authorized `uh_key_` can call `/v1/embeddings` with
-`unihub-text-embedding-v4` or `/v1/rerank` with `qwen3-rerank` using the ordinary
+`text-embedding-v4` or `/v1/rerank` with `qwen3-rerank` using the ordinary
 JSON request body. This path requires the existing certified producer to be
 enabled and its managed route binding to be active. It does not activate a
 producer, select a new channel, or change a price.
+
+The embedding route, channel, certified policy and active product bindings must
+agree on the vendor model ID and exact embedding space, including its 1024
+dimensions and input semantics. Migrating a former service-prefixed route
+requires a separately reviewed configuration and binding activation; no
+compatibility alias or automatic user-index migration is provided. Existing
+calls, quotes and historical pins retain their original identities.
 
 Public inference verifies the original key's current actor, account, product,
 instance, model and exact wire-operation authority through UniHub. Reservation

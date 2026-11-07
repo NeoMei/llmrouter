@@ -127,7 +127,7 @@ func parsePlatformFaultWaiver(raw []byte, digest string) (platformFaultWaiverApp
 		return p, ErrInvalid
 	}
 	held, ok := new(big.Int).SetString(p.Held, 10)
-	if p.Schema != 1 || !stableID.MatchString(p.CaseID) || !stableID.MatchString(p.OperatorID) || strings.TrimSpace(p.Reason) == "" || len(p.Reason) > 1024 || strings.TrimSpace(p.ApprovalStatement) == "" || len(p.ApprovalStatement) > 8192 || !waiverDigest.MatchString(p.ApprovalSourceSHA256) || !stableID.MatchString(p.CallID) || !stableID.MatchString(p.ActorID) || !stableID.MatchString(p.AccountID) || p.OriginProductID != "llmrouter" || !stableID.MatchString(p.InstanceID) || p.Asset != "CNY/6" || !ok || held.Sign() <= 0 || held.BitLen() > 63 || held.String() != p.Held || p.ProviderState != "PROVIDER_UNRESOLVED" || !waiverDigest.MatchString(p.OriginalEvidenceSHA256) || !waiverDigest.MatchString(p.FollowupEvidenceSHA256) {
+	if p.Schema != 1 || !stableID.MatchString(p.CaseID) || !stableID.MatchString(p.OperatorID) || strings.TrimSpace(p.Reason) == "" || len(p.Reason) > 1024 || strings.TrimSpace(p.ApprovalStatement) == "" || len(p.ApprovalStatement) > 8192 || !waiverDigest.MatchString(p.ApprovalSourceSHA256) || !stableID.MatchString(p.CallID) || !stableID.MatchString(p.ActorID) || !stableID.MatchString(p.AccountID) || (p.OriginProductID != "llmrouter" && p.OriginProductID != "superwagie") || !stableID.MatchString(p.InstanceID) || p.Asset != "CNY/6" || !ok || held.Sign() <= 0 || held.BitLen() > 63 || held.String() != p.Held || p.ProviderState != "PROVIDER_UNRESOLVED" || !waiverDigest.MatchString(p.OriginalEvidenceSHA256) || !waiverDigest.MatchString(p.FollowupEvidenceSHA256) {
 		return p, ErrInvalid
 	}
 	r := p.GatewayCall

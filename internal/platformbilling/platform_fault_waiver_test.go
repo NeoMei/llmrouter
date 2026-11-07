@@ -79,9 +79,17 @@ func waiverFixture(t *testing.T) (*gorm.DB, Call, Attempt, map[string]any) {
 func waiverApprovalForCall(t *testing.T, row Call, attempt Attempt) map[string]any {
 	t.Helper()
 	var rate Rate
-	require.NoError(t, common.UnmarshalUnique([]byte(row.RateSnapshot), &rate))
+	if row.PricingSource != "llmrouter_native" {
+		require.NoError(t, common.UnmarshalUnique([]byte(row.RateSnapshot), &rate))
+	}
 	remote := RemoteCall{CallID: row.CallID, ActorID: row.ActorID, AccountID: row.AccountID, OriginProductID: row.OriginProductID, InstanceID: row.InstanceID, CredentialID: row.CredentialID, RequestDigest: row.Digest, Rate: rate, Held: row.Amount, Charged: "0", Status: "RESERVED", ChargeAsset: row.Asset, FundingMode: row.FundingMode, FundingProductID: row.FundingProductID}
 	remote.WireOperation = row.WireOperation
+	if row.PricingSource == "llmrouter_native" {
+		var quote NativeQuote
+		require.NoError(t, common.UnmarshalUnique([]byte(row.NativeQuoteJSON), &quote))
+		remote.NativePricing, remote.CredentialVersion, remote.TaskID = &quote, row.CredentialVersion, row.TaskID
+		remote.Rate = Rate{Model: row.Model, Asset: row.Asset, Semantics: "llmrouter_native"}
+	}
 	remoteJSON, err := common.Marshal(remote)
 	require.NoError(t, err)
 	var snapshot map[string]any
@@ -281,4 +289,39 @@ func TestPlatformFaultWaiverRejectsMissingBusinessApprovalEvidence(t *testing.T)
 			require.Error(t, err)
 		})
 	}
+}
+
+func TestPlatformFaultWaiverPreservesSuperWagieNativeScope(t *testing.T) {
+	db, row, attempt, _ := waiverFixture(t)
+	row.OriginProductID = "superwagie"
+	row.PricingSource = "llmrouter_native"
+	row.RateID, row.RateSnapshot = "", ""
+	row.CredentialVersion = 2
+	row.NativePriceSnapshot = `{"price":"frozen"}`
+	sum := sha256.Sum256([]byte(row.NativePriceSnapshot))
+	quote := NativeQuote{PricingVersion: "lr-native-v1", PricingDigest: hex.EncodeToString(sum[:]), BillingModel: row.Model, WireOperation: row.WireOperation, RouteID: "12", ChannelID: "102", Group: "default", NativeQuotaMax: row.Amount, Conversion: NativeConversion{Version: "lr-quota-usd-cny-v1", Numerator: "1", Denominator: "1", Rounding: "lr-cumulative-ceil-v1"}, Asset: row.Asset, MaxAmount: row.Amount}
+	q, e := common.Marshal(quote)
+	require.NoError(t, e)
+	row.NativeQuoteJSON = string(q)
+	require.NoError(t, db.Save(&row).Error)
+	approval := waiverApprovalForCall(t, row, attempt)
+	raw, digest := waiverApprovalBytes(t, approval)
+	_, e = PreparePlatformFaultWaiver(context.Background(), db, raw, digest, true)
+	require.NoError(t, e)
+	_, e = PreparePlatformFaultWaiver(context.Background(), db, raw, digest, true)
+	require.NoError(t, e)
+	var saved Call
+	require.NoError(t, db.First(&saved, "call_id = ?", row.CallID).Error)
+	assert.Equal(t, "superwagie", saved.OriginProductID)
+	assert.Equal(t, "llmrouter", saved.FundingProductID)
+	assert.Equal(t, row.CredentialID, saved.CredentialID)
+	assert.Equal(t, row.AccountID, saved.AccountID)
+	assert.Equal(t, row.NativeQuoteJSON, saved.NativeQuoteJSON)
+	assert.Equal(t, "WAIVER_PENDING", saved.Status)
+	var preserved Attempt
+	require.NoError(t, db.First(&preserved, attempt.ID).Error)
+	assert.Equal(t, attempt, preserved)
+	approval["origin_product_id"] = "unknown-product"
+	raw, digest = waiverApprovalBytes(t, approval)
+	require.Error(t, ValidatePlatformFaultWaiverApproval(raw, digest))
 }

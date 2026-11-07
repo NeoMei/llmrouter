@@ -256,6 +256,12 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		httpResp = resp.(*http.Response)
 		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		if httpResp.StatusCode != http.StatusOK {
+			if info.ManagedNativePricing() {
+				if _, err := info.PlatformBilling.RejectAliMissingChatModel(c.Request.Context(), info.ChannelType, info.ChannelId, httpResp, common.TLSInsecureSkipVerify); err != nil {
+					service.CloseResponseBodyGracefully(httpResp)
+					return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+				}
+			}
 			if info.RemoteTariff() && info.NativeBilling == nil {
 				info.PlatformBilling.Rejected()
 			}

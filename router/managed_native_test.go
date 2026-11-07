@@ -2,6 +2,7 @@ package router
 
 import (
 	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -314,4 +315,39 @@ func TestManagedNativeChatUsesNativePriceAndOriginalKeyWithoutLocalDebit(t *test
 	require.NoError(t, db.First(&uncertain, "status = ?", "UNKNOWN").Error)
 	assert.Equal(t, "original-key-id", uncertain.CredentialID)
 	assert.Zero(t, nativeWrites)
+
+	// An unavailable Ali model is a proved rejection, not an unknown billable
+	// outcome. Exercise the actual managed router and its financial lifecycle.
+	aliBase := "https://dashscope.aliyuncs.com"
+	require.NoError(t, db.Create(&model.Channel{Id: 101, Type: constant.ChannelTypeAli, Key: "supplier-secret", Status: common.ChannelStatusEnabled, BaseURL: &aliBase, Name: "Ali vision", Models: "qwen-vl-max", Group: "default"}).Error)
+	require.NoError(t, db.Create(&model.Ability{Group: "default", Model: "qwen-vl-max", ChannelId: 101, Enabled: true}).Error)
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"qwen-vl-max":1}`))
+	model.InitChannelCache()
+	transport := service.GetHttpClient().Transport
+	t.Cleanup(func() { service.GetHttpClient().Transport = transport })
+	service.GetHttpClient().Transport = aliMissingModelTransport{calls: &providerCalls}
+	request = httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(`{"model":"qwen-vl-max","messages":[{"role":"user","content":"hello"}]}`))
+	request.Header.Set("Authorization", "Bearer uh_key_original")
+	request.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, request)
+	require.Equal(t, 404, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "model_not_found")
+	var rejected platformbilling.Call
+	require.NoError(t, db.First(&rejected, "call_id = ?", w.Header().Get("X-UniHub-Call-ID")).Error)
+	assert.Equal(t, "RELEASED", rejected.Status)
+	assert.Equal(t, "0", rejected.Charged)
+	assert.Contains(t, rejected.Evidence, "supplier_rejection")
+	assert.Equal(t, "superwagie", rejected.OriginProductID)
+	assert.Equal(t, "original-key-id", rejected.CredentialID)
+	assert.Equal(t, 11, providerCalls, "a native rejected request must never be retried")
+	assert.Equal(t, 8, settles)
+	assert.Zero(t, nativeWrites)
+}
+
+type aliMissingModelTransport struct{ calls *int }
+
+func (tr aliMissingModelTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	*tr.calls++
+	return &http.Response{StatusCode: http.StatusNotFound, Request: req, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"Model not exist.","type":"invalid_request_error","param":null,"code":"model_not_found"},"request_id":"supplier-test"}`))}, nil
 }

@@ -313,6 +313,9 @@ func (p *Producer) Send(ctx context.Context, r Request) (Result, error) {
 			return result, errResponse
 		}
 		audio, err = readBounded(audioResp.Body, p.target.Limits.MaxAudioBytes)
+		if err == nil {
+			audio = normalizeBailianWAV(audio, audioResp.ContentLength, len(audioResp.TransferEncoding) != 0)
+		}
 		ct = "audio/wav"
 	} else {
 		result.Usage = elevenUsage(resp.Header)

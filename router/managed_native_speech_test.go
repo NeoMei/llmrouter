@@ -2,10 +2,13 @@ package router
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -33,6 +36,7 @@ type managedSpeechFixture struct {
 	verifies                            int
 	text, reserveQuota                  string
 	supplierCharacters                  int
+	supplierAudio                       []byte
 	settlement                          platformbilling.NativeSettleRequest
 }
 
@@ -76,7 +80,12 @@ func newManagedSpeechFixture(t *testing.T) *managedSpeechFixture {
 				return
 			}
 			w.Header().Set("Content-Type", "audio/wav")
-			_, _ = w.Write(audioWAV())
+			audio := audioWAV()
+			if f.supplierAudio != nil {
+				audio = f.supplierAudio
+				w.Header().Set("Content-Length", strconv.Itoa(len(audio)))
+			}
+			_, _ = w.Write(audio)
 			return
 		}
 		f.sends++
@@ -273,6 +282,48 @@ func TestManagedBailianSpeechSameKeyCatalogProtocolAndSupplierSettlement(t *test
 	duplicate := f.request(managedSpeechBody, "speech-success")
 	assert.Equal(t, 409, duplicate.Code)
 	assert.Equal(t, 1, f.sends)
+}
+
+func TestManagedBailianPlaceholderWAVSettlesOriginalSupplierCharacters(t *testing.T) {
+	f := newManagedSpeechFixture(t)
+	f.supplierCharacters = 14
+	f.supplierAudio = audioWAV()
+	binary.LittleEndian.PutUint32(f.supplierAudio[4:], 0x7fffffbf)
+	binary.LittleEndian.PutUint32(f.supplierAudio[24:], 24000)
+	binary.LittleEndian.PutUint32(f.supplierAudio[28:], 48000)
+	binary.LittleEndian.PutUint32(f.supplierAudio[40:], 0x7fffff9b)
+	out := f.request(managedSpeechBody, "speech-placeholder")
+	require.Equal(t, 200, out.Code, out.Body.String())
+	assert.Equal(t, "audio/wav", out.Header().Get("Content-Type"))
+	require.Len(t, out.Body.Bytes(), 16044)
+	assert.Equal(t, uint32(16036), binary.LittleEndian.Uint32(out.Body.Bytes()[4:]))
+	assert.Equal(t, uint32(16000), binary.LittleEndian.Uint32(out.Body.Bytes()[40:]))
+	assert.Equal(t, f.supplierAudio[44:], out.Body.Bytes()[44:])
+	assert.Equal(t, uint32(0x7fffffbf), binary.LittleEndian.Uint32(f.supplierAudio[4:]), "supplier bytes stay immutable")
+	require.NoError(t, nativespeech.ValidateAudioFile(out.Body.Bytes(), "audio/wav", 10))
+	assert.Equal(t, 1, f.sends)
+	assert.Equal(t, 1, f.downloads)
+	assert.Equal(t, 1, f.reserves)
+	assert.Equal(t, 1, f.settles)
+	assert.Equal(t, "140", f.settlement.NativeQuota)
+	require.NotNil(t, f.settlement.Usage)
+	require.NotNil(t, f.settlement.Usage.Metered)
+	assert.Equal(t, "14", f.settlement.Usage.Metered.Measurements[0].Quantity.Value)
+	var call platformbilling.Call
+	require.NoError(t, f.db.First(&call, "call_id = ?", out.Header().Get("X-UniHub-Call-ID")).Error)
+	assert.Equal(t, "SETTLED", call.Status)
+	assert.Equal(t, "original-key", call.CredentialID)
+	assert.Equal(t, "team", call.AccountID)
+	assert.Contains(t, call.AudioObservation, fmt.Sprintf("%x", sha256.Sum256(out.Body.Bytes())))
+	assert.NotContains(t, call.AudioObservation, "signature=private")
+	var user model.User
+	require.NoError(t, f.db.First(&user, 1).Error)
+	assert.Equal(t, 777, user.Quota)
+	assert.Equal(t, 8, user.UsedQuota)
+	duplicate := f.request(managedSpeechBody, "speech-placeholder")
+	assert.Equal(t, 409, duplicate.Code)
+	assert.Equal(t, 1, f.sends, "duplicate cannot synthesize or charge again")
+	assert.Equal(t, 1, f.settles)
 }
 
 func TestManagedBailianSpeechFailureDoesNotReturnAudioOrInventUsage(t *testing.T) {

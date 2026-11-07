@@ -1481,6 +1481,9 @@ func clientForRequest(c *gin.Context, relayInfo *relaycommon.RelayInfo) string {
 }
 
 func selectWireForRequest(relayInfo *relaycommon.RelayInfo, resolved *modelcatalog.ResolvedModel) (relayprotocol.Decision, error) {
+	if operationOnlyCandidate(relayInfo, resolved) {
+		return relayprotocol.Decision{Source: "declared_operation"}, nil
+	}
 	expectedWire := expectedWireForFormat(relayInfo.RelayFormat)
 	if expectedWire == "" {
 		return relayprotocol.Decision{}, errors.New("no wire for request format")

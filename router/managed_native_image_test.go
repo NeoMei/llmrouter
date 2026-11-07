@@ -66,7 +66,7 @@ func testManagedNativeImageProtocol(t *testing.T, compatible bool) {
 		nativePrice := metering.Price{Version: "metered_v2", Operation: "image_generation", Policy: "successful_outputs_v1", Terms: []metering.Term{{Key: "images", Unit: "image", Price: metering.Rational{Numerator: "1", Denominator: "100"}}}}
 		require.NoError(t, billing_setting.SetModelNativePricing(map[string]map[string]metering.Price{"qwen-image-2.0": {"image_generation": nativePrice}}))
 	}
-	calls, settles := 0, 0
+	calls, settles, reserves := 0, 0, 0
 	mode := "success"
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -94,7 +94,7 @@ func testManagedNativeImageProtocol(t *testing.T, compatible bool) {
 	require.NoError(t, db.Create(&model.Channel{Id: 3, Type: constant.ChannelTypeAli, Key: "supplier-image-secret", Status: common.ChannelStatusEnabled, BaseURL: &base, Group: "native", Models: "qwen-image-2.0"}).Error)
 	require.NoError(t, db.Create(&model.Ability{Group: "native", Model: "qwen-image-2.0", ChannelId: 3, Enabled: true}).Error)
 	require.NoError(t, db.Create(&model.ClientModelRoute{Id: 1, PublicId: "qwen-image-2.0", DisplayName: "Image model", Client: "all", Enabled: true, Metadata: `{"operations":["dashscope.images.generate","images.generations.create"],"input_modalities":["text"],"output_modalities":["image"]}`}).Error)
-	require.NoError(t, db.Create(&model.ClientModelTarget{Id: 1, RouteId: 1, ChannelId: 3, UpstreamModel: "qwen-image-2.0", BillingModel: "qwen-image-2.0", PreferredWires: `["openai_chat"]`, Enabled: true, Weight: 1}).Error)
+	require.NoError(t, db.Create(&model.ClientModelTarget{Id: 1, RouteId: 1, ChannelId: 3, UpstreamModel: "qwen-image-2.0", BillingModel: "qwen-image-2.0", PreferredWires: `[]`, Enabled: true, Weight: 1}).Error)
 	model.InitChannelCache()
 	var remote platformbilling.RemoteCall
 	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -103,6 +103,7 @@ func testManagedNativeImageProtocol(t *testing.T, compatible bool) {
 		case r.URL.Path == "/internal/v1/model-credentials/verify":
 			output = platformbilling.Claims{ID: "original-key", CredentialKind: "api_key", InstanceID: "fixture", Audience: "llmrouter", ActorID: "actor", AccountID: "team", OriginProductID: "superwagie", ModelScope: "llmrouter_available", PricingSource: "llmrouter_native", CredentialVersion: 2, Asset: "CNY/6", FundingMode: "prepaid_cash"}
 		case r.URL.Path == "/internal/v1/calls/native-reserve":
+			reserves++
 			if mode == "budget" {
 				w.WriteHeader(402)
 				_, _ = w.Write([]byte(`{"error":"insufficient_funds"}`))
@@ -141,6 +142,21 @@ func testManagedNativeImageProtocol(t *testing.T, compatible bool) {
 	engine := gin.New()
 	SetManagedKeyDispatch(engine, adapter)
 	SetRelayRouter(engine)
+	discovery := httptest.NewRequest("GET", "/v1/models", nil)
+	discovery.Header.Set("Authorization", "Bearer uh_key_same")
+	discoveryOut := httptest.NewRecorder()
+	engine.ServeHTTP(discoveryOut, discovery)
+	require.Equal(t, 200, discoveryOut.Code, discoveryOut.Body.String())
+	require.Contains(t, discoveryOut.Body.String(), `"id":"qwen-image-2.0"`)
+	chat := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"qwen-image-2.0","messages":[{"role":"user","content":"hello"}],"max_tokens":1}`))
+	chat.Header.Set("Authorization", "Bearer uh_key_same")
+	chat.Header.Set("Content-Type", "application/json")
+	chat.Header.Set("Idempotency-Key", "image-as-chat")
+	chatOut := httptest.NewRecorder()
+	engine.ServeHTTP(chatOut, chat)
+	require.Equal(t, 400, chatOut.Code, chatOut.Body.String())
+	require.Zero(t, reserves, "image-only model must reject chat before any funding reservation")
+	require.Zero(t, calls, "image-only model must reject chat before supplier dispatch")
 	send := func(call string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("POST", "/v1/native/dashscope/images/generations", strings.NewReader(`{"model":"qwen-image-2.0","input":{"messages":[{"role":"user","content":[{"text":"a tiny green square"}]}]},"parameters":{"n":1,"size":"1024*1024","seed":0,"watermark":false}}`))
 		if compatible {

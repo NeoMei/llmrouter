@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relay/capability"
 )
 
 var ErrAuthorizerRequired = errors.New("model catalog authorizer is required")
@@ -178,7 +179,7 @@ func NewCatalog(routes []model.ClientModelRoute, targets []model.ClientModelTarg
 		if err := validateID(strings.TrimSpace(target.BillingModel), "billing model"); err != nil {
 			return nil, fmt.Errorf("target %d has no billing configuration: %w", target.Id, err)
 		}
-		wires, err := decodeWires(target.PreferredWires)
+		wires, err := decodeWires(target.PreferredWires, entries[i].model.Operations...)
 		if err != nil {
 			return nil, fmt.Errorf("target %d: %w", target.Id, err)
 		}
@@ -294,7 +295,7 @@ func (c *Catalog) listAuthorized(snapshot AuthorizedRuntimeSnapshot) []ClientMod
 			if !entryTargetVisible(target, visibleGroups) {
 				continue
 			}
-			wires, _ := decodeWires(target.PreferredWires)
+			wires, _ := decodeWires(target.PreferredWires, entry.model.Operations...)
 			for _, wire := range wires {
 				if _, exists := seenWires[wire]; exists {
 					continue
@@ -354,7 +355,7 @@ func (c *Catalog) resolveCandidatesAuthorized(snapshot AuthorizedRuntimeSnapshot
 		if !entryTargetVisible(target, snapshot.Groups) {
 			continue
 		}
-		wires, err := decodeWires(target.PreferredWires)
+		wires, err := decodeWires(target.PreferredWires, entry.model.Operations...)
 		if err != nil {
 			return nil, err
 		}
@@ -597,12 +598,35 @@ func decodeRouteMetadata(raw string) (routeMetadata, error) {
 	return metadata, nil
 }
 
-func decodeWires(raw string) ([]WireProtocol, error) {
+// OperationOnlyRoute permits routes whose protocol is fully declared by a
+// supported native operation. Such routes never negotiate a conversational wire.
+// Keep this positive list explicit: unknown, absent or mixed chat operations
+// must still provide the original preferred-wire contract.
+func OperationOnlyRoute(operations []string) bool {
+	if len(operations) == 0 {
+		return false
+	}
+	for _, op := range operations {
+		switch capability.Operation(op) {
+		case capability.OperationImageGeneration, capability.OperationImageEdit, capability.OperationQwenImage,
+			capability.OperationEmbeddingCreate, capability.OperationMultimodalEmbedding, capability.OperationRerankCreate,
+			capability.OperationAudioSpeech, capability.OperationAudioTranscription, capability.OperationOCRCreate:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func decodeWires(raw string, operations ...string) ([]WireProtocol, error) {
 	values, err := decodeStrings(raw)
 	if err != nil {
 		return nil, err
 	}
 	if len(values) == 0 {
+		if OperationOnlyRoute(operations) {
+			return []WireProtocol{}, nil
+		}
 		return nil, fmt.Errorf("preferred wires are required")
 	}
 	result := make([]WireProtocol, 0, len(values))

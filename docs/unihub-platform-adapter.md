@@ -29,6 +29,13 @@ never grants an unsupported operation. The same catalog is available through
 trusted origin-product, instance, actor and account binding. The caller cannot
 choose a routing group, provider URL or prices.
 
+Routes declaring only supported native image, embedding, rerank, audio or OCR
+operations may keep `preferred_wires` empty. These operations use their fixed
+endpoint protocol and do not invent a Chat wire. The catalog and resolver
+apply the same explicit operation allowlist; absent, unknown or mixed Chat
+operations still require the original preferred-wire contract. Request format,
+relay mode and declared operation must all agree before native reservation.
+
 The gateway computes the reservation and final native quota using LLMRouter's
 existing model, group, capability and metering rules. The immutable price
 snapshot and quota-to-cash conversion are hashed before

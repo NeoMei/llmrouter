@@ -61,6 +61,8 @@ type NativeSettleRequest struct {
 // can remain discoverable while an unimplemented wire contract is unavailable.
 func NativeOperationAvailable(wire string) bool {
 	switch wire {
+	case "bailian.audio.speech.create":
+		return true
 	case "dashscope.images.generate", "chat.completions.create", "claude.messages.create", "gemini.generate", "responses.create", "responses.compact", "embeddings.create", "rerank.create", "multimodal.embeddings.create", "images.generations.create", "images.edits.create", "audio.speech.create", "audio.transcriptions.create", "ocr.jobs.create", "ocr.jobs.retrieve", "ocr.results.retrieve":
 		return true
 	}
@@ -152,6 +154,18 @@ func (a *Adapter) SetNativeDispatchAuthorizer(authorize func(context.Context, Cl
 	if a != nil {
 		a.nativeDispatch = authorize
 	}
+}
+
+// BindNativeDispatchGuard binds a producer's exact target to this admission.
+// It runs after the final remote key verification and shared authorization,
+// immediately before the durable dispatch fence. It cannot be replaced after
+// binding or attached after reservation, and is never shared across sessions.
+func (s *Session) BindNativeDispatchGuard(guard func(context.Context) error) error {
+	if !s.NativePricing() || s.call.Status != "ADMITTED" || guard == nil || s.nativeDispatchGuard != nil {
+		return ErrInvalid
+	}
+	s.nativeDispatchGuard = guard
+	return nil
 }
 
 func (s *Session) observeNativeTask(ctx context.Context, u metering.Usage) error {
@@ -312,6 +326,14 @@ func (s *Session) dispatchNative(ctx context.Context, channel int) error {
 	}
 	if err := s.adapter.nativeDispatch(ctx, grant, s.call.Model, q); err != nil {
 		return err
+	}
+	if s.call.WireOperation == "bailian.audio.speech.create" && s.nativeDispatchGuard == nil {
+		return ErrPending
+	}
+	if s.nativeDispatchGuard != nil {
+		if err := s.nativeDispatchGuard(ctx); err != nil {
+			return err
+		}
 	}
 	attempt := Attempt{CallID: s.call.CallID, ChannelID: channel, Status: "DISPATCHED"}
 	err = s.adapter.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {

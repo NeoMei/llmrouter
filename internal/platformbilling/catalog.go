@@ -78,12 +78,26 @@ type CatalogOperation struct {
 	RateIDs           map[string]string  `json:"rate_ids,omitempty"`
 }
 
+// CatalogDisplayName attributes the legacy embedding route from its declared
+// space without changing the public routing identity or durable knowledge pins.
+func CatalogDisplayName(name string, capabilities dto.ModelCapabilities) string {
+	space := capabilities.EmbeddingSpace
+	if space == nil || !strings.EqualFold(strings.TrimSpace(space.Provider), "aliyun") || !strings.EqualFold(strings.TrimSpace(space.Model), "text-embedding-v4") {
+		return name
+	}
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	if strings.Contains(normalized, "text-embedding-v4") && (strings.HasPrefix(normalized, "alibaba ") || strings.HasPrefix(normalized, "aliyun ") || strings.HasPrefix(normalized, "阿里云")) {
+		return name
+	}
+	return "Alibaba / text-embedding-v4"
+}
+
 // ProjectCatalog publishes only validated public metadata and configured
 // measurement constraints. Native monetary prices are not sale tariffs.
 func (a *Adapter) ProjectCatalog(product string, models []CatalogSourceModel) (TechnicalCatalog, error) {
 	out := TechnicalCatalog{SchemaVersion: 1, ProductID: product, InstanceID: a.config.InstanceID, Models: []CatalogModel{}}
 	for _, source := range models {
-		m := CatalogModel{ID: source.PublicID, Name: source.DisplayName, Capabilities: source.ModelCapabilities, ContextWindow: source.ContextWindow, SupportsTools: source.SupportsTools, SupportsReasoningSummary: source.SupportsReasoningSummary, ReasoningEfforts: source.ReasoningEfforts, Operations: []CatalogOperation{}}
+		m := CatalogModel{ID: source.PublicID, Name: CatalogDisplayName(source.DisplayName, source.ModelCapabilities), Capabilities: source.ModelCapabilities, ContextWindow: source.ContextWindow, SupportsTools: source.SupportsTools, SupportsReasoningSummary: source.SupportsReasoningSummary, ReasoningEfforts: source.ReasoningEfforts, Operations: []CatalogOperation{}}
 		// Public limits describe this gateway's effective contract, not only
 		// the upstream declaration. Allocate every changed pointer independently.
 		tokenOperations := false

@@ -142,7 +142,7 @@ func readProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter, 
 		}
 	}
 	var channels []model.Channel
-	if err := model.DB.WithContext(ctx).Select("id", "type", "status", "settings", "key", "channel_info").Where("status = ?", common.ChannelStatusEnabled).Find(&channels).Error; err != nil {
+	if err := model.DB.WithContext(ctx).Select("id", "type", "status", "settings", "setting", "key", "channel_info", "base_url", "param_override", "header_override").Where("status = ?", common.ChannelStatusEnabled).Find(&channels).Error; err != nil {
 		return out, err
 	}
 	channelByID := map[int]model.Channel{}
@@ -160,6 +160,14 @@ func readProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter, 
 			billingModels = append(billingModels, candidate.BillingModel)
 		}
 		for i, op := range projected.CapabilityMetadata.Operations {
+			if op.ID == "bailian.audio.speech.create" && !slices.ContainsFunc(candidates, func(candidate modelcatalog.ResolvedModel) bool {
+				_, _, err := managedBailianSpeechTariff(candidate.BillingModel)
+				return err == nil && managedBailianSpeechChannelSupported(candidate, channelByID[candidate.ChannelID])
+			}) {
+				op.Available, op.Executable = false, false
+				op.DisabledReason = "native_speech_target_unavailable"
+				projected.CapabilityMetadata.Operations[i] = op
+			}
 			if op.ID == "ocr.jobs.create" && !slices.ContainsFunc(candidates, func(candidate modelcatalog.ResolvedModel) bool {
 				return providerOCRChannelSupported(channelByID[candidate.ChannelID])
 			}) {
@@ -274,6 +282,7 @@ func providerEndpointOperation(endpoint constant.EndpointType) string {
 }
 
 func projectProviderModel(m platformbilling.CatalogModel) ProviderCatalogModel {
+	m.Name = platformbilling.CatalogDisplayName(m.Name, m.Capabilities)
 	out := ProviderCatalogModel{ID: m.ID, Name: m.Name, Operations: []string{}, InputModalities: append([]string{}, m.Capabilities.InputModalities...), OutputModalities: append([]string{}, m.Capabilities.OutputModalities...), Context: int64(m.ContextWindow)}
 	if m.Capabilities.MaxOutputTokens != nil {
 		out.MaxOutput = int64(*m.Capabilities.MaxOutputTokens)
@@ -405,6 +414,10 @@ func providerOperation(wire, modelID string) (platformbilling.CatalogOperation, 
 func providerPriceAvailability(m ProviderCatalogModel, billingModels []string) ProviderCatalogModel {
 	for i, op := range m.CapabilityMetadata.Operations {
 		priced := slices.ContainsFunc(billingModels, func(name string) bool {
+			if op.ID == "bailian.audio.speech.create" {
+				_, _, err := managedBailianSpeechTariff(name)
+				return err == nil
+			}
 			if helper.HasModelBillingConfig(name) {
 				return true
 			}

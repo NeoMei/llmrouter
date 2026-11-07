@@ -12,6 +12,7 @@ func TestOperationOnlyCatalogAllowsEmptyPreferredWires(t *testing.T) {
 		{"images.generations.create", "dashscope.images.generate"},
 		{"images.edits.create"}, {"embeddings.create"}, {"multimodal.embeddings.create"},
 		{"rerank.create"}, {"audio.speech.create"}, {"audio.transcriptions.create"}, {"ocr.jobs.create"},
+		{"bailian.audio.speech.create"},
 	} {
 		t.Run(operations[0], func(t *testing.T) {
 			routes := []ClientModelRoute{{Id: 1, PublicId: "operation-only", Client: "all", Enabled: true, Metadata: `{"operations":` + encodeStrings(operations) + `}`}}

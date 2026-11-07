@@ -610,7 +610,7 @@ func OperationOnlyRoute(operations []string) bool {
 		switch capability.Operation(op) {
 		case capability.OperationImageGeneration, capability.OperationImageEdit, capability.OperationQwenImage,
 			capability.OperationEmbeddingCreate, capability.OperationMultimodalEmbedding, capability.OperationRerankCreate,
-			capability.OperationAudioSpeech, capability.OperationAudioTranscription, capability.OperationOCRCreate:
+			capability.OperationAudioSpeech, capability.OperationBailianSpeech, capability.OperationAudioTranscription, capability.OperationOCRCreate:
 		default:
 			return false
 		}

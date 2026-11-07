@@ -105,18 +105,19 @@ type Adapter struct {
 	client           *client
 }
 type Session struct {
-	nativeCredential   string
-	knowledgeAdmission *pinnedKnowledgeAdmission
-	nativeSend         string
-	canonical          []byte
-	adapter            *Adapter
-	call               Call
-	attempt            Attempt
-	requestTariff      bool
-	confirmed          *Usage
-	safeFailure        bool
-	uncertain          bool
-	err                error
+	nativeCredential    string
+	nativeDispatchGuard func(context.Context) error
+	knowledgeAdmission  *pinnedKnowledgeAdmission
+	nativeSend          string
+	canonical           []byte
+	adapter             *Adapter
+	call                Call
+	attempt             Attempt
+	requestTariff       bool
+	confirmed           *Usage
+	safeFailure         bool
+	uncertain           bool
+	err                 error
 }
 
 var stableID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)

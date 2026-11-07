@@ -49,6 +49,7 @@ func newManagedNativeRouter(adapter *platformbilling.Adapter) *gin.Engine {
 		registerManagedNativeOperation(r, adapter, entry.path, entry.target, entry.wire, entry.format)
 	}
 	registerManagedNativeImage(r, adapter)
+	registerManagedNativeSpeech(r, adapter)
 	r.NoRoute(func(c *gin.Context) {
 		c.JSON(http.StatusNotImplemented, gin.H{"error": gin.H{"code": "native_operation_unavailable"}})
 	})

@@ -760,8 +760,20 @@ func prepareRouteCandidateForAttempt(c *gin.Context, info *relaycommon.RelayInfo
 	if validationErr := prepareMultimodalForAttempt(c, info, candidateChannel); validationErr != nil {
 		return types.NewErrorWithStatusCode(validationErr, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 	}
+	if _, image := info.Request.(*dto.ImageRequest); image {
+		c.Set(helper.DomesticImageRequestKey, nil)
+	}
 	if validationErr := validateDomesticUnderstandingForAttempt(c, info, candidateChannel); validationErr != nil {
 		return validationErr
+	}
+	if _, image := info.Request.(*dto.ImageRequest); image {
+		_, operation, err := capability.ResolveRequest(c.Request.Method, c.Request.URL.Path)
+		if err == nil {
+			err = helper.ValidateModelAdmission(c, info, info.ModelCapabilities, operation)
+		}
+		if err != nil {
+			return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
 	}
 
 	if err := modelcatalog.ValidateChannelOperations(info.ModelCapabilities, candidateChannel.Type); err != nil {
@@ -1281,12 +1293,19 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 	if len(resolved) > 0 {
 		_, operation, operationErr := capability.ResolveRequest(c.Request.Method, c.Request.URL.Path)
 		if operationErr == nil {
-			if _, audio := relayInfo.Request.(*dto.AudioRequest); audio {
+			switch relayInfo.Request.(type) {
+			case *dto.AudioRequest, *dto.ImageRequest:
 				selectedChannel, err := model.GetChannelById(resolved[0].ChannelID, true)
 				if err != nil {
 					return types.NewError(err, types.ErrorCodeGetChannelFailed)
 				}
-				if err := helper.ValidateDomesticAudio(c, relayInfo, selectedChannel.Type, resolved[0].UpstreamModel, resolved[0].BillingModel); err != nil {
+				if _, image := relayInfo.Request.(*dto.ImageRequest); image {
+					c.Set(helper.DomesticImageRequestKey, nil)
+					err = helper.ValidateDomesticImage(c, relayInfo, selectedChannel.Type, resolved[0].UpstreamModel, resolved[0].BillingModel)
+				} else {
+					err = helper.ValidateDomesticAudio(c, relayInfo, selectedChannel.Type, resolved[0].UpstreamModel, resolved[0].BillingModel)
+				}
+				if err != nil {
 					return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 				}
 			}

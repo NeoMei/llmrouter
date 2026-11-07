@@ -86,6 +86,10 @@ func testManagedNativeImageProtocol(t *testing.T, compatible bool) {
 			_, _ = w.Write([]byte(`{"output":{"choices":[]},"usage":{"image_count":1,"width":1024,"height":1024}}`))
 			return
 		}
+		if mode == "missing-dimensions" {
+			_, _ = w.Write([]byte(`{"output":{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":[{"image":"https://images.example.test/square.png"}]}}]},"usage":{"image_count":1,"height":1024}}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"request_id":"image-request","output":{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":[{"image":"https://images.example.test/square.png"}]}}]},"usage":{"image_count":1,"width":1024,"height":1024},"vendor_diagnostic":"must-not-leak"}`))
 	}))
 	t.Cleanup(provider.Close)
@@ -93,7 +97,7 @@ func testManagedNativeImageProtocol(t *testing.T, compatible bool) {
 	base := provider.URL
 	require.NoError(t, db.Create(&model.Channel{Id: 3, Type: constant.ChannelTypeAli, Key: "supplier-image-secret", Status: common.ChannelStatusEnabled, BaseURL: &base, Group: "native", Models: "qwen-image-2.0"}).Error)
 	require.NoError(t, db.Create(&model.Ability{Group: "native", Model: "qwen-image-2.0", ChannelId: 3, Enabled: true}).Error)
-	require.NoError(t, db.Create(&model.ClientModelRoute{Id: 1, PublicId: "qwen-image-2.0", DisplayName: "Image model", Client: "all", Enabled: true, Metadata: `{"operations":["dashscope.images.generate","images.generations.create"],"input_modalities":["text"],"output_modalities":["image"]}`}).Error)
+	require.NoError(t, db.Create(&model.ClientModelRoute{Id: 1, PublicId: "qwen-image-2.0", DisplayName: "Image model", Client: "all", Enabled: true, Metadata: `{"operations":["dashscope.images.generate","images.generations.create"],"input_modalities":["text","image"],"output_modalities":["image"],"media_limits":{"max_images":4,"max_pixels":16777216,"max_request_bytes":31457280}}`}).Error)
 	require.NoError(t, db.Create(&model.ClientModelTarget{Id: 1, RouteId: 1, ChannelId: 3, UpstreamModel: "qwen-image-2.0", BillingModel: "qwen-image-2.0", PreferredWires: `[]`, Enabled: true, Weight: 1}).Error)
 	model.InitChannelCache()
 	var remote platformbilling.RemoteCall
@@ -157,6 +161,26 @@ func testManagedNativeImageProtocol(t *testing.T, compatible bool) {
 	require.Equal(t, 400, chatOut.Code, chatOut.Body.String())
 	require.Zero(t, reserves, "image-only model must reject chat before any funding reservation")
 	require.Zero(t, calls, "image-only model must reject chat before supplier dispatch")
+	if compatible {
+		for _, invalid := range []struct {
+			name, body, reason string
+		}{
+			{"declared image count", `{"model":"qwen-image-2.0","prompt":"circle","n":5,"size":"1024x1024"}`, "exceeds declared max_images"},
+			{"unknown dimensions", `{"model":"qwen-image-2.0","prompt":"circle","n":1}`, "require verified media metadata"},
+			{"oversized dimensions", `{"model":"qwen-image-2.0","prompt":"circle","n":1,"size":"8192x8192"}`, "image size requires"},
+		} {
+			req := httptest.NewRequest("POST", "/v1/images/generations", strings.NewReader(invalid.body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer uh_key_same")
+			req.Header.Set("Idempotency-Key", "image-invalid-"+strings.ReplaceAll(invalid.name, " ", "-"))
+			out := httptest.NewRecorder()
+			engine.ServeHTTP(out, req)
+			require.Equal(t, 400, out.Code, out.Body.String())
+			require.Contains(t, out.Body.String(), invalid.reason)
+			require.Zero(t, reserves, "image bounds must reject before funding")
+			require.Zero(t, calls, "image bounds must reject before supplier dispatch")
+		}
+	}
 	send := func(call string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("POST", "/v1/native/dashscope/images/generations", strings.NewReader(`{"model":"qwen-image-2.0","input":{"messages":[{"role":"user","content":[{"text":"a tiny green square"}]}]},"parameters":{"n":1,"size":"1024*1024","seed":0,"watermark":false}}`))
 		if compatible {
@@ -195,4 +219,17 @@ func testManagedNativeImageProtocol(t *testing.T, compatible bool) {
 	response = send("native-image-invalid")
 	require.NotEqual(t, 200, response.Code)
 	require.Equal(t, 2, calls)
+	mode = "missing-dimensions"
+	response = send("native-image-missing-dimensions")
+	require.Equal(t, 502, response.Code, response.Body.String())
+	require.NotContains(t, response.Body.String(), "https://images.example.test/square.png")
+	require.Equal(t, 3, calls)
+	require.Equal(t, 1, settles)
+	stored = platformbilling.Call{}
+	require.NoError(t, db.First(&stored, "call_id = ?", response.Header().Get("X-UniHub-Call-ID")).Error)
+	require.Equal(t, "UNKNOWN", stored.Status)
+	response = send("native-image-missing-dimensions")
+	require.NotEqual(t, 200, response.Code)
+	require.Equal(t, 3, calls, "uncertain image results must never replay a supplier request")
+	require.Equal(t, 1, settles)
 }

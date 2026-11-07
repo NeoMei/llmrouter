@@ -284,7 +284,7 @@ func responseAli2OpenAIImage(c *gin.Context, response *AliResponse, originBody [
 }
 
 func aliImageHandler(a *Adaptor, c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.Usage) {
-	if _, ok := c.Get(helper.DomesticImageRequestKey); ok {
+	if _, ok := helper.ValidatedDomesticImageRequest(c); ok {
 		return qwenImageHandler(c, resp, info)
 	}
 	responseFormat := c.GetString("response_format")

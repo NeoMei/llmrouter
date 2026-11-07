@@ -73,15 +73,19 @@ func qwenImageHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	if common.UnmarshalUnique(raw, &result) != nil || result.Code != "" || (len(result.Error) > 0 && string(result.Error) != "null") || result.Output == nil || result.Usage == nil || result.Usage.ImageCount == nil || result.Usage.Width == nil || result.Usage.Height == nil {
 		return syncImageError(), nil
 	}
-	expected, ok := c.Get(helper.DomesticImageRequestKey)
+	request, ok := helper.ValidatedDomesticImageRequest(c)
 	if !ok {
 		return syncImageError(), nil
 	}
-	request := expected.(helper.DomesticImageRequest)
 	n := *result.Usage.ImageCount
 	w, h := *result.Usage.Width, *result.Usage.Height
 	if n < 0 || n > 6 || (info.NativeBilling == nil && n != int(request.Parameters.N)) || w <= 0 || h <= 0 || w > 4194304 || h > 4194304 || w*h < 262144 || w*h > 4194304 {
 		return syncImageError(), nil
+	}
+	if limits := info.ModelCapabilities.MediaLimits; limits != nil {
+		if (limits.MaxPixels != nil && w*h > *limits.MaxPixels) || (limits.MaxImages != nil && n > *limits.MaxImages) {
+			return syncImageError(), nil
+		}
 	}
 	if info.NativeBilling == nil && request.Parameters.Size != "" {
 		width, height, _ := strings.Cut(request.Parameters.Size, "*")

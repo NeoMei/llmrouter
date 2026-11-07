@@ -43,6 +43,14 @@ type DomesticImageMessage struct {
 	Content []map[string]string `json:"content"`
 }
 
+// ValidatedDomesticImageRequest returns the typed body certified for the current candidate.
+// A nil value clears the prior candidate's proof before revalidation.
+func ValidatedDomesticImageRequest(c *gin.Context) (DomesticImageRequest, bool) {
+	value, exists := c.Get(DomesticImageRequestKey)
+	request, ok := value.(DomesticImageRequest)
+	return request, exists && ok
+}
+
 // ValidateDomesticImage builds the only authorized native body before money.
 // Remote references are not fetched: their size/codec cannot be certified.
 func ValidateDomesticImage(c *gin.Context, info *relaycommon.RelayInfo, channelType int, model, billingModel string) error {

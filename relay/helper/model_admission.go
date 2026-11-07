@@ -2,6 +2,7 @@ package helper
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -211,7 +212,21 @@ func ValidateModelAdmission(c *gin.Context, info *relaycommon.RelayInfo, m dto.M
 		if l.MaxImages != nil && counts["image"] > *l.MaxImages {
 			return fmt.Errorf("image count exceeds declared max_images")
 		}
-		if (l.MaxPages != nil && modalities["document"] && !certifiedMedia) || (l.MaxPixels != nil && containsCapability(outputs, "image")) || (l.MaxAudioSeconds != nil && containsCapability(outputs, "audio")) || (l.MaxVideoSeconds != nil && containsCapability(outputs, "video")) {
+		boundedImageOutput := false
+		if l.MaxPixels != nil && operation == capability.OperationImageGeneration {
+			request, image := info.Request.(*dto.ImageRequest)
+			native, validated := ValidatedDomesticImageRequest(c)
+			if image && validated && native.Parameters.Size != "" && request.Size == strings.ReplaceAll(native.Parameters.Size, "*", "x") {
+				widthText, heightText, split := strings.Cut(native.Parameters.Size, "*")
+				width, widthErr := strconv.ParseInt(widthText, 10, 32)
+				height, heightErr := strconv.ParseInt(heightText, 10, 32)
+				if !split || widthErr != nil || heightErr != nil || width <= 0 || height <= 0 || width > *l.MaxPixels/height {
+					return fmt.Errorf("image output size exceeds declared max_pixels")
+				}
+				boundedImageOutput = true
+			}
+		}
+		if (l.MaxPages != nil && modalities["document"] && !certifiedMedia) || (l.MaxPixels != nil && containsCapability(outputs, "image") && !boundedImageOutput) || (l.MaxAudioSeconds != nil && containsCapability(outputs, "audio")) || (l.MaxVideoSeconds != nil && containsCapability(outputs, "video")) {
 			return fmt.Errorf("declared output/document bounds require verified media metadata")
 		}
 		if len(l.Formats) > 0 && ((modalities["document"] && !certifiedMedia) || containsCapability(outputs, "image") || containsCapability(outputs, "audio") || containsCapability(outputs, "video")) {

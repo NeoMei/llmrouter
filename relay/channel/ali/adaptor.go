@@ -189,8 +189,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 }
 
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
-	if value, ok := c.Get(helper.DomesticImageRequestKey); ok {
-		native := value.(helper.DomesticImageRequest)
+	if native, ok := helper.ValidatedDomesticImageRequest(c); ok {
 		if native.Model != request.Model {
 			return nil, errors.New("validated image model changed")
 		}

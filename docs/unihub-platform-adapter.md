@@ -56,7 +56,15 @@ supplier request. Recovery only retries durable monetary intents.
 
 Generic native Chat, Claude Messages, Gemini, Responses, embedding, rerank,
 image and audio handlers retain their established provider wire format. The
-DashScope image endpoint accepts the native Qwen request directly. PaddleOCR
+DashScope image endpoint accepts the native Qwen request directly. For OpenAI
+image generation, declared pixel limits require a current-candidate typed Qwen
+request with an explicit `widthxheight` size. The request must fit the declared
+pixel and image-count limits before reservation. A candidate change clears the
+prior typed request; an unverified provider cannot inherit that proof. Qwen's
+actual response width, height and image count must also fit the frozen route
+limits before returning image URLs or recording native usage. Missing output
+metadata remains an error; native size normalization inside those bounds keeps
+its existing actual-usage semantics. PaddleOCR
 jobs preserve exact key ownership through asynchronous polling, settlement and
 text-document delivery. A direct PaddleOCR channel may use single-member pool
 mode only when its actual credential list contains exactly one nonempty enabled

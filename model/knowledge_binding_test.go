@@ -29,7 +29,7 @@ func TestKnowledgePortableMigrationPreservesNative(t *testing.T) {
 	assert.EqualValues(t, 20, native.UpdatedTime)
 	assert.Contains(t, native.Metadata, "query-document-v1")
 	// Composite scope prevents a second active pointer for the same binding.
-	row := KnowledgeActiveBinding{InstanceID: "default", OriginProductID: "superwagie", Model: "unihub-text-embedding-v4", WireOperation: "embeddings.create", ActivePin: "one"}
+	row := KnowledgeActiveBinding{InstanceID: "default", OriginProductID: "superwagie", Model: "text-embedding-v4", WireOperation: "embeddings.create", ActivePin: "one"}
 	require.NoError(t, db.Create(&row).Error)
 	assert.Error(t, db.Create(&row).Error)
 }

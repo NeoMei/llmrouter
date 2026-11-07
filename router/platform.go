@@ -340,7 +340,7 @@ func registerPlatformOperation(engine gin.IRoutes, adapter *platformbilling.Adap
 			// Canonical paired knowledge has its actual product-scoped DB
 			// resolver in AdmitPinnedKnowledge before reserve. The old global
 			// SuperWagie catalog probe is only for legacy/nonpaired operations.
-			paired := platformbilling.ApprovedKnowledgePair(modelID, wire.ID) || (operation == "embedding" && modelID == "unihub-text-embedding-v4")
+			paired := platformbilling.ApprovedKnowledgePair(modelID, wire.ID) || (operation == "embedding" && modelID == "text-embedding-v4")
 			if !paired {
 				catalog, e := readTechnicalCatalog(c.Request.Context(), adapter, "superwagie")
 				available := false
@@ -450,7 +450,7 @@ func registerPlatformOperation(engine gin.IRoutes, adapter *platformbilling.Adap
 			Model string `json:"model"`
 		}
 		_ = common.UnmarshalUnique(body, &knowledgeRequest)
-		if operation == "embedding" && knowledgeRequest.Model == "unihub-text-embedding-v4" {
+		if operation == "embedding" && knowledgeRequest.Model == "text-embedding-v4" {
 			wire.ID = "embeddings.create"
 		}
 		for name := range c.Request.Header {

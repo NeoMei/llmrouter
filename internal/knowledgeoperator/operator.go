@@ -87,7 +87,7 @@ func Run(ctx context.Context, db *gorm.DB, cfg platformbilling.Config, rawApprov
 		return result, ErrRejected
 	}
 	router.InstallKnowledgeBindings(adapter)
-	for _, pair := range [][2]string{{"unihub-text-embedding-v4", "embeddings.create"}, {"qwen3-rerank", "rerank.create"}} {
+	for _, pair := range [][2]string{{"text-embedding-v4", "embeddings.create"}, {"qwen3-rerank", "rerank.create"}} {
 		activated, activationErr := adapter.ActivateManagedKnowledge(ctx, pair[0], pair[1], []string{"llmrouter", "superwagie"})
 		if activationErr != nil || len(activated) != 2 {
 			return result, ErrRejected
@@ -176,7 +176,7 @@ func lockApprovedRows(tx *gorm.DB) error {
 		return err
 	}
 	var routes []model.ClientModelRoute
-	if err := model.KnowledgeLockedRead(tx).Where("public_id IN ?", []string{"unihub-text-embedding-v4", "qwen3-rerank"}).Order("id").Find(&routes).Error; err != nil {
+	if err := model.KnowledgeLockedRead(tx).Where("public_id IN ?", []string{"text-embedding-v4", "qwen3-rerank"}).Order("id").Find(&routes).Error; err != nil {
 		return err
 	}
 	if len(routes) != 2 {
@@ -206,7 +206,7 @@ func prestateDigest(tx *gorm.DB) (string, error) {
 		state.Routes = append(state.Routes, routeState{ID: row.Id, PublicID: row.PublicId, Client: row.Client, Aliases: row.Aliases, Metadata: row.Metadata, Enabled: row.Enabled, KnowledgeGeneration: row.KnowledgeGeneration})
 	}
 	var pairRoutes []model.ClientModelRoute
-	if err := tx.Where("public_id IN ?", []string{"unihub-text-embedding-v4", "qwen3-rerank"}).Order("id").Find(&pairRoutes).Error; err != nil {
+	if err := tx.Where("public_id IN ?", []string{"text-embedding-v4", "qwen3-rerank"}).Order("id").Find(&pairRoutes).Error; err != nil {
 		return "", err
 	}
 	if len(pairRoutes) != 2 {
@@ -245,13 +245,13 @@ func prestateDigest(tx *gorm.DB) (string, error) {
 	if len(state.Abilities) > 1024 {
 		return "", ErrRejected
 	}
-	if err := tx.Where("model IN ?", []string{"unihub-text-embedding-v4", "qwen3-rerank"}).Order("instance_id, origin_product_id, model, wire_operation").Limit(8193).Find(&state.Active).Error; err != nil {
+	if err := tx.Where("model IN ?", []string{"text-embedding-v4", "qwen3-rerank"}).Order("instance_id, origin_product_id, model, wire_operation").Limit(8193).Find(&state.Active).Error; err != nil {
 		return "", err
 	}
 	if len(state.Active) > 8192 {
 		return "", ErrRejected
 	}
-	if err := tx.Where("model IN ?", []string{"unihub-text-embedding-v4", "qwen3-rerank"}).Order("pin").Limit(8193).Find(&state.Pins).Error; err != nil {
+	if err := tx.Where("model IN ?", []string{"text-embedding-v4", "qwen3-rerank"}).Order("pin").Limit(8193).Find(&state.Pins).Error; err != nil {
 		return "", err
 	}
 	if len(state.Pins) > 8192 {

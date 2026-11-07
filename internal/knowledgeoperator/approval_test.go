@@ -60,7 +60,7 @@ func TestOperatorDryRunApplyAndReplayFence(t *testing.T) {
 						return
 					}
 					var count int64
-					query := tx.Session(&gorm.Session{NewDB: true}).Model(&model.KnowledgeRoutePin{}).Where("model = ?", "unihub-text-embedding-v4").Count(&count)
+					query := tx.Session(&gorm.Session{NewDB: true}).Model(&model.KnowledgeRoutePin{}).Where("model = ?", "text-embedding-v4").Count(&count)
 					sawSecondPairFailure = query.Error == nil && count == 2
 					tx.AddError(errors.New("injected second-pair pin failure"))
 				}))
@@ -170,7 +170,7 @@ func operatorFixture(t *testing.T, breakRerank bool) (*gorm.DB, platformbilling.
 	require.NoError(t, db.Create(&model.Option{Key: "global.pass_through_request_enabled", Value: "false"}).Error)
 	base := "https://dashscope.aliyuncs.com"
 	upstreams := []string{"text-embedding-v4", "qwen3-rerank"}
-	for i, name := range []string{"unihub-text-embedding-v4", "qwen3-rerank"} {
+	for i, name := range []string{"text-embedding-v4", "qwen3-rerank"} {
 		channelID := 102 + i
 		upstream := upstreams[i]
 		require.NoError(t, db.Create(&model.Channel{Id: channelID, Type: 17, Key: "safe-test-key", Status: common.ChannelStatusEnabled, BaseURL: &base, Models: upstream, Group: "platform"}).Error)
@@ -200,7 +200,7 @@ func operatorFixture(t *testing.T, breakRerank bool) (*gorm.DB, platformbilling.
 		_ = policy
 	}
 	policies := map[string]map[string]platformbilling.KnowledgePolicy{}
-	for _, modelName := range []string{"unihub-text-embedding-v4", "qwen3-rerank"} {
+	for _, modelName := range []string{"text-embedding-v4", "qwen3-rerank"} {
 		var route model.ClientModelRoute
 		require.NoError(t, db.First(&route, "public_id = ?", modelName).Error)
 		wire := "embeddings.create"
@@ -298,7 +298,7 @@ func TestOperatorRejectsSourceConfigAndPrestateDrift(t *testing.T) {
 			case "config":
 				cfg.Group = "changed"
 			case "prestate":
-				require.NoError(t, db.Model(&model.ClientModelRoute{}).Where("public_id = ?", "unihub-text-embedding-v4").Update("display_name", "changed").Error)
+				require.NoError(t, db.Model(&model.ClientModelRoute{}).Where("public_id = ?", "text-embedding-v4").Update("display_name", "changed").Error)
 			}
 			_, err := Run(t.Context(), db, cfg, raw, rawSHA, source, true)
 			require.Error(t, err)

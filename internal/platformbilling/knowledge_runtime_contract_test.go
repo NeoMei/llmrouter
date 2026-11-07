@@ -18,7 +18,7 @@ import (
 
 func knowledgeRuntimeEnvironment(t *testing.T, origin string) map[string]string {
 	t.Helper()
-	embedding := KnowledgePolicy{Version: "knowledge_ali_text_v1", ProviderReference: "https://help.aliyun.com/zh/model-studio/text-embedding-v4", PublicModel: "unihub-text-embedding-v4", WireOperation: "embeddings.create", ChannelID: 102, ChannelType: constant.ChannelTypeAli, ChannelKeySHA256: strings.Repeat("a", 64), Origin: "https://dashscope.aliyuncs.com", UpstreamModel: "text-embedding-v4", HardInputTokens: 4096, MaxItemTokens: 4096, MaxBatch: 1, Space: &dto.EmbeddingSpace{Provider: "aliyun", Model: "text-embedding-v4", Version: "v4", Dimensions: 1024, InputSemantics: "text"}, RateIDs: map[string]string{"CNY/6": "knowledge-text-embedding-v4-input-cny-v1"}}
+	embedding := KnowledgePolicy{Version: "knowledge_ali_text_v1", ProviderReference: "https://help.aliyun.com/zh/model-studio/text-embedding-v4", PublicModel: "text-embedding-v4", WireOperation: "embeddings.create", ChannelID: 102, ChannelType: constant.ChannelTypeAli, ChannelKeySHA256: strings.Repeat("a", 64), Origin: "https://dashscope.aliyuncs.com", UpstreamModel: "text-embedding-v4", HardInputTokens: 4096, MaxItemTokens: 4096, MaxBatch: 1, Space: &dto.EmbeddingSpace{Provider: "aliyun", Model: "text-embedding-v4", Version: "v4", Dimensions: 1024, InputSemantics: "text"}, RateIDs: map[string]string{"CNY/6": "knowledge-text-embedding-v4-input-cny-v1"}}
 	rerank := KnowledgePolicy{Version: "knowledge_v1", ProviderReference: "https://help.aliyun.com/zh/model-studio/text-rerank", PublicModel: "qwen3-rerank", WireOperation: "rerank.create", ChannelID: 103, ChannelType: constant.ChannelTypeAli, ChannelKeySHA256: strings.Repeat("b", 64), UpstreamModel: "qwen3-rerank", HardInputTokens: 4096, MaxItemTokens: 2048, MaxBatch: 1, RateIDs: map[string]string{"CNY/6": "knowledge-qwen3-rerank-input-cny-v1"}}
 	policies, err := common.Marshal(map[string]map[string]KnowledgePolicy{"embeddings.create": {embedding.PublicModel: embedding}, "rerank.create": {rerank.PublicModel: rerank}})
 	require.NoError(t, err)
@@ -34,7 +34,7 @@ func TestKnowledgeRuntimeCatalogUsesCertifiedPolicyWithoutGenericLimits(t *testi
 	require.NoError(t, err)
 	require.Empty(t, cfg.OperationLimits)
 	sources := []CatalogSourceModel{
-		{PublicID: "unihub-text-embedding-v4", ModelCapabilities: dto.ModelCapabilities{Operations: []string{"embeddings.create"}, EmbeddingSpace: cfg.KnowledgePolicies["embeddings.create"]["unihub-text-embedding-v4"].Space}},
+		{PublicID: "text-embedding-v4", ModelCapabilities: dto.ModelCapabilities{Operations: []string{"embeddings.create"}, EmbeddingSpace: cfg.KnowledgePolicies["embeddings.create"]["text-embedding-v4"].Space}},
 		{PublicID: "qwen3-rerank", ModelCapabilities: dto.ModelCapabilities{Operations: []string{"rerank.create"}}},
 	}
 	for _, scenario := range []string{"certified-only", "explicit-wrong-policy", "invalid-certificate"} {
@@ -42,7 +42,7 @@ func TestKnowledgeRuntimeCatalogUsesCertifiedPolicyWithoutGenericLimits(t *testi
 			current := cfg
 			current.KnowledgePolicies = cloneKnowledgePolicies(cfg.KnowledgePolicies)
 			if scenario == "explicit-wrong-policy" {
-				current.OperationLimits = map[string]map[string]OperationLimits{"embedding": {"unihub-text-embedding-v4": {Policy: "request_count_v1"}}, "rerank": {"qwen3-rerank": {Policy: "request_count_v1"}}}
+				current.OperationLimits = map[string]map[string]OperationLimits{"embedding": {"text-embedding-v4": {Policy: "request_count_v1"}}, "rerank": {"qwen3-rerank": {Policy: "request_count_v1"}}}
 			}
 			if scenario == "invalid-certificate" {
 				for _, source := range sources {

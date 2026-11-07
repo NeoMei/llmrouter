@@ -63,12 +63,12 @@ func newPairedFixture(t *testing.T, embedding bool) *pairedFixture {
 	require.NoError(t, i18n.Init())
 	f := &pairedFixture{t: t, product: "superwagie", name: "qwen3-rerank", wire: "rerank.create", upstream: "qwen3-rerank", channel: 103, path: "/platform/v1/rerank", body: `{"model":"qwen3-rerank","query":"q","documents":["a"],"top_n":1,"return_documents":false}`, callID: "call", taskID: "task"}
 	if embedding {
-		f.name = "unihub-text-embedding-v4"
+		f.name = "text-embedding-v4"
 		f.wire = "embeddings.create"
 		f.upstream = "text-embedding-v4"
 		f.channel = 102
 		f.path = "/platform/v1/embeddings"
-		f.body = `{"model":"unihub-text-embedding-v4","input":["a"],"dimensions":1024}`
+		f.body = `{"model":"text-embedding-v4","input":["a"],"dimensions":1024}`
 	}
 	var err error
 	f.db, err = gorm.Open(sqlite.Open("file:"+t.TempDir()+"/paired.db"), &gorm.Config{})
@@ -796,7 +796,7 @@ func TestPairedKnowledgePreflightAndReceiptDenials(t *testing.T) {
 	}{
 		{preflight, func(r *http.Request) { r.Header.Set("X-UniHub-Task-ID", "other") }, 403},
 		{preflight, func(r *http.Request) { r.Header.Set("Authorization", "Bearer uh_key_fixture") }, 403},
-		{`{"model":"unihub-text-embedding-v4","model":"qwen3-rerank","wire_operation":"embeddings.create"}`, nil, 400},
+		{`{"model":"text-embedding-v4","model":"qwen3-rerank","wire_operation":"embeddings.create"}`, nil, 400},
 		{`{"model":"qwen3-rerank","wire_operation":"rerank"}`, nil, 400},
 		{f.readBody(), func(r *http.Request) { r.Header.Set("Authorization", "Bearer original-actor") }, 400},
 	} {
@@ -877,14 +877,14 @@ func TestPairedFixwaveIncomingMutationRetires(t *testing.T) {
 			}
 			switch mode {
 			case "alias-map":
-				require.NoError(t, f.db.Model(&model.ClientModelRoute{}).Where("id = ?", 9).Update("aliases", `["unihub-text-embedding-v4"]`).Error)
+				require.NoError(t, f.db.Model(&model.ClientModelRoute{}).Where("id = ?", 9).Update("aliases", `["text-embedding-v4"]`).Error)
 			case "alias-save":
-				unrelated.Aliases = `["unihub-text-embedding-v4"]`
+				unrelated.Aliases = `["text-embedding-v4"]`
 				require.NoError(t, f.db.Save(&unrelated).Error)
 			case "alias-struct":
-				require.NoError(t, f.db.Model(&model.ClientModelRoute{}).Where("id = ?", 9).Updates(model.ClientModelRoute{Aliases: `["unihub-text-embedding-v4"]`}).Error)
+				require.NoError(t, f.db.Model(&model.ClientModelRoute{}).Where("id = ?", 9).Updates(model.ClientModelRoute{Aliases: `["text-embedding-v4"]`}).Error)
 			case "public-name":
-				require.NoError(t, f.db.Model(&model.ClientModelRoute{}).Where("id = ?", 9).Update("public_id", "UNIHUB-TEXT-EMBEDDING-V4").Error)
+				require.NoError(t, f.db.Model(&model.ClientModelRoute{}).Where("id = ?", 9).Update("public_id", "TEXT-EMBEDDING-V4").Error)
 			case "target-map":
 				require.NoError(t, f.db.Model(&model.ClientModelTarget{}).Where("id = ?", 9).Update("route_id", 2).Error)
 			case "target-save":
@@ -921,7 +921,7 @@ func TestPairedFixwavePartialStructMutations(t *testing.T) {
 		f := newPairedFixture(t, true)
 		unrelated := model.ClientModelRoute{Id: 9, PublicId: "native-nine", DisplayName: "native", Client: "all", Aliases: "[]", Enabled: true}
 		require.NoError(t, f.db.Create(&unrelated).Error)
-		require.NoError(t, f.db.Model(&model.ClientModelRoute{}).Where("id = ?", 9).Updates(struct{ Aliases string }{Aliases: `["unihub-text-embedding-v4"]`}).Error)
+		require.NoError(t, f.db.Model(&model.ClientModelRoute{}).Where("id = ?", 9).Updates(struct{ Aliases string }{Aliases: `["text-embedding-v4"]`}).Error)
 		var active model.KnowledgeActiveBinding
 		require.NoError(t, f.db.First(&active, "origin_product_id = ?", "superwagie").Error)
 		assert.Empty(t, active.ActivePin)
@@ -956,7 +956,7 @@ func TestPairedFixwavePartialStructMutations(t *testing.T) {
 		f := newPairedFixture(t, true)
 		unrelated := model.ClientModelRoute{Id: 9, PublicId: "native-nine", DisplayName: "native", Client: "all", Aliases: "[]", Enabled: true}
 		require.NoError(t, f.db.Create(&unrelated).Error)
-		require.NoError(t, f.db.Model(&model.ClientModelRoute{}).Where("id = ?", 9).Omit("aliases").Updates(struct{ Aliases string }{Aliases: `["unihub-text-embedding-v4"]`}).Error)
+		require.NoError(t, f.db.Model(&model.ClientModelRoute{}).Where("id = ?", 9).Omit("aliases").Updates(struct{ Aliases string }{Aliases: `["text-embedding-v4"]`}).Error)
 		var active model.KnowledgeActiveBinding
 		require.NoError(t, f.db.First(&active, "origin_product_id = ?", "superwagie").Error)
 		assert.NotEmpty(t, active.ActivePin, "GORM omitted field must not participate in retirement")

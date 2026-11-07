@@ -45,7 +45,7 @@ func newManagedKnowledgeFixture(t *testing.T, embedding bool) *pairedFixture {
 	t.Helper()
 	f := newPairedFixture(t, embedding)
 	if embedding {
-		f.body = `{"model":"unihub-text-embedding-v4","input":["test"]}`
+		f.body = `{"model":"text-embedding-v4","input":["test"]}`
 	} else {
 		f.body = `{"model":"qwen3-rerank","query":"test","documents":["test"],"top_n":1}`
 	}
@@ -149,7 +149,7 @@ func TestManagedKnowledgeDuplicateCannotSendAgain(t *testing.T) {
 			require.Equal(t, http.StatusOK, first.Code, first.Body.String())
 			body := f.body
 			if changed {
-				body = `{"model":"unihub-text-embedding-v4","input":["different"]}`
+				body = `{"model":"text-embedding-v4","input":["different"]}`
 			}
 			duplicate := managedKnowledgeRequest(f, body, nil)
 			assert.Equal(t, http.StatusConflict, duplicate.Code, duplicate.Body.String())
@@ -264,7 +264,7 @@ func TestManagedKnowledgeRejectsInvalidParentClaims(t *testing.T) {
 		{"other-instance", func(c *platformbilling.Claims) { c.InstanceID = "other" }},
 		{"other-model", func(c *platformbilling.Claims) { c.Models = []string{"other"} }},
 		{"other-wire", func(c *platformbilling.Claims) {
-			c.Operations = map[string][]string{"unihub-text-embedding-v4": {"chat.completions.create"}}
+			c.Operations = map[string][]string{"text-embedding-v4": {"chat.completions.create"}}
 		}},
 		{"missing-actor", func(c *platformbilling.Claims) { c.ActorID = "" }},
 		{"missing-account", func(c *platformbilling.Claims) { c.AccountID = "" }},
@@ -317,4 +317,17 @@ func TestManagedKnowledgeRejectsParentBindingChangedBeforeSend(t *testing.T) {
 			assert.Zero(t, attempts)
 		})
 	}
+}
+
+// A retired service-prefixed model ID must fail before any hold or supplier call.
+func TestManagedKnowledgeRetiredModelIDNeverReachesBilling(t *testing.T) {
+	f := newManagedKnowledgeFixture(t, true)
+	w := managedKnowledgeRequest(f, `{"model":"unihub-text-embedding-v4","input":["test"]}`, nil)
+	assert.GreaterOrEqual(t, w.Code, http.StatusBadRequest, w.Body.String())
+	assert.Zero(t, f.reserves)
+	assert.Zero(t, f.sends)
+	assert.Zero(t, f.settles)
+	var calls int64
+	require.NoError(t, f.db.Model(&platformbilling.Call{}).Count(&calls).Error)
+	assert.Zero(t, calls)
 }

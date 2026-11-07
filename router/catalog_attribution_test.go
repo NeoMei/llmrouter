@@ -18,12 +18,12 @@ func TestCatalogEmbeddingAttributionPreservesRoutingIdentity(t *testing.T) {
 	for _, tc := range []struct {
 		name, id, display, provider, upstream, want string
 	}{
-		{"legacy alias", "unihub-text-embedding-v4", "Text Embedding V4", "aliyun", "text-embedding-v4", "Alibaba / text-embedding-v4"},
+		{"custom public ID", "workspace-text-embedding-v4", "Text Embedding V4", "aliyun", "text-embedding-v4", "Alibaba / text-embedding-v4"},
 		{"metadata rather than ID prefix", "workspace-embedding", "Embedding", "aliyun", "text-embedding-v4", "Alibaba / text-embedding-v4"},
-		{"misleading vendor name", "unihub-text-embedding-v4", "UniHub text-embedding-v4", "aliyun", "text-embedding-v4", "Alibaba / text-embedding-v4"},
+		{"misleading vendor name", "workspace-text-embedding-v4", "UniHub text-embedding-v4", "aliyun", "text-embedding-v4", "Alibaba / text-embedding-v4"},
 		{"canonical display", "text-embedding-v4", "Alibaba text-embedding-v4 (1024)", "aliyun", "text-embedding-v4", "Alibaba text-embedding-v4 (1024)"},
-		{"unknown provider", "unihub-text-embedding-v4", "Text Embedding V4", "unknown", "text-embedding-v4", "Text Embedding V4"},
-		{"missing metadata", "unihub-text-embedding-v4", "Text Embedding V4", "", "text-embedding-v4", "Text Embedding V4"},
+		{"unknown provider", "workspace-text-embedding-v4", "Text Embedding V4", "unknown", "text-embedding-v4", "Text Embedding V4"},
+		{"missing metadata", "workspace-text-embedding-v4", "Text Embedding V4", "", "text-embedding-v4", "Text Embedding V4"},
 		{"unrelated model", "other-embedding", "Custom Embedding V3", "aliyun", "text-embedding-v3", "Custom Embedding V3"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -50,7 +50,7 @@ func TestCatalogEmbeddingAttributionPreservesRoutingIdentity(t *testing.T) {
 			target := model.ClientModelTarget{Id: 10, RouteId: 10, ChannelId: 2, UpstreamModel: tc.upstream, BillingModel: tc.upstream, PreferredWires: `["openai_chat"]`, Enabled: true, Weight: 1}
 			require.NoError(t, db.Create(&target).Error)
 			require.NoError(t, db.First(&route, 10).Error)
-			if tc.id == "unihub-text-embedding-v4" {
+			if tc.id == "text-embedding-v4" {
 				require.NotEmpty(t, route.KnowledgeGeneration)
 			}
 

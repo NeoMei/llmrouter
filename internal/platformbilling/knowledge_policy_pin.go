@@ -27,7 +27,7 @@ type ManagedBinding struct {
 }
 
 func ApprovedKnowledgePair(name, wire string) bool {
-	return name == "unihub-text-embedding-v4" && wire == "embeddings.create" || name == "qwen3-rerank" && wire == "rerank.create"
+	return name == "text-embedding-v4" && wire == "embeddings.create" || name == "qwen3-rerank" && wire == "rerank.create"
 }
 func opaqueKnowledgeID(value string) bool {
 	b, e := hex.DecodeString(value)

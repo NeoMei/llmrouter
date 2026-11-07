@@ -16,7 +16,7 @@ func NewKnowledgeBindingOperatorAdapter(db *gorm.DB, c Config) (*Adapter, error)
 	}
 	c.InstanceID = strings.TrimSpace(c.InstanceID)
 	c.KnowledgePolicies = cloneKnowledgePolicies(c.KnowledgePolicies)
-	for _, pair := range [][2]string{{"unihub-text-embedding-v4", "embeddings.create"}, {"qwen3-rerank", "rerank.create"}} {
+	for _, pair := range [][2]string{{"text-embedding-v4", "embeddings.create"}, {"qwen3-rerank", "rerank.create"}} {
 		policy, ok := c.KnowledgePolicies[pair[1]][pair[0]]
 		if !ok || !policy.valid(c, pair[0], pair[1]) {
 			return nil, ErrInvalid

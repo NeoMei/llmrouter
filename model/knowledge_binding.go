@@ -20,7 +20,7 @@ type KnowledgeActiveBinding = knowledgebinding.KnowledgeActiveBinding
 type KnowledgeRoutePin = knowledgebinding.KnowledgeRoutePin
 
 func KnowledgeModel(name string) bool {
-	return name == "unihub-text-embedding-v4" || name == "qwen3-rerank"
+	return name == "text-embedding-v4" || name == "qwen3-rerank"
 }
 func NewKnowledgeGeneration() (string, error) {
 	b := make([]byte, 32)
@@ -80,7 +80,7 @@ func retireKnowledgeChannels(tx *gorm.DB, ids ...int) error {
 	names := []string{}
 	for _, id := range ids {
 		if id == 102 {
-			names = append(names, "unihub-text-embedding-v4")
+			names = append(names, "text-embedding-v4")
 		}
 		if id == 103 {
 			names = append(names, "qwen3-rerank")
@@ -98,7 +98,7 @@ func (r *ClientModelRoute) BeforeCreate(tx *gorm.DB) error {
 			return nil
 		}
 		for _, name := range append(aliases, r.PublicId) {
-			if strings.EqualFold(strings.TrimSpace(name), "unihub-text-embedding-v4") || strings.EqualFold(strings.TrimSpace(name), "qwen3-rerank") {
+			if strings.EqualFold(strings.TrimSpace(name), "text-embedding-v4") || strings.EqualFold(strings.TrimSpace(name), "qwen3-rerank") {
 				return retireKnowledgeChannels(tx, 102, 103)
 			}
 		}

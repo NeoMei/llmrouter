@@ -220,8 +220,11 @@ func ValidateModelAdmission(c *gin.Context, info *relaycommon.RelayInfo, m dto.M
 				widthText, heightText, split := strings.Cut(native.Parameters.Size, "*")
 				width, widthErr := strconv.ParseInt(widthText, 10, 32)
 				height, heightErr := strconv.ParseInt(heightText, 10, 32)
-				if !split || widthErr != nil || heightErr != nil || width <= 0 || height <= 0 || width > *l.MaxPixels/height {
-					return fmt.Errorf("image output size exceeds declared max_pixels")
+				if !split || widthErr != nil || heightErr != nil {
+					return fmt.Errorf("image output bounds require verified dimensions and count")
+				}
+				if err := ValidateDeclaredImageOutputBounds(l, int(native.Parameters.N), width, height); err != nil {
+					return err
 				}
 				boundedImageOutput = true
 			}

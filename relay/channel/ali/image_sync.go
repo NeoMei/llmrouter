@@ -82,10 +82,8 @@ func qwenImageHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	if n < 0 || n > 6 || (info.NativeBilling == nil && n != int(request.Parameters.N)) || w <= 0 || h <= 0 || w > 4194304 || h > 4194304 || w*h < 262144 || w*h > 4194304 {
 		return syncImageError(), nil
 	}
-	if limits := info.ModelCapabilities.MediaLimits; limits != nil {
-		if (limits.MaxPixels != nil && w*h > *limits.MaxPixels) || (limits.MaxImages != nil && n > *limits.MaxImages) {
-			return syncImageError(), nil
-		}
+	if err := helper.ValidateDeclaredImageOutputBounds(info.ModelCapabilities.MediaLimits, n, w, h); err != nil {
+		return syncImageError(), nil
 	}
 	if info.NativeBilling == nil && request.Parameters.Size != "" {
 		width, height, _ := strings.Cut(request.Parameters.Size, "*")

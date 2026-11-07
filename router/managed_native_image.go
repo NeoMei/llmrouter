@@ -18,10 +18,12 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/metering"
+	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/modelcatalog"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
@@ -171,7 +173,7 @@ func managedQwenImagePrice(selected modelcatalog.ResolvedModel, n, w, h int) (mo
 	return native, quota, err
 }
 
-func observeManagedQwenImage(raw []byte, n int, price metering.Price) ([]byte, metering.Usage, error) {
+func observeManagedQwenImage(raw []byte, n int, price metering.Price, limits *dto.MediaLimits) ([]byte, metering.Usage, error) {
 	var result managedQwenImageResponse
 	if len(raw) > 64<<10 || common.UnmarshalUnique(raw, &result) != nil || result.Code != "" || len(result.Error) > 0 && string(result.Error) != "null" || len(result.RequestID) > 256 || result.Output == nil || result.Usage == nil || result.Usage.ImageCount == nil || result.Usage.Width == nil || result.Usage.Height == nil || len(result.Output.Choices) != 1 {
 		return nil, metering.Usage{}, platformbilling.ErrInvalid
@@ -179,6 +181,9 @@ func observeManagedQwenImage(raw []byte, n int, price metering.Price) ([]byte, m
 	count, w, h := *result.Usage.ImageCount, *result.Usage.Width, *result.Usage.Height
 	if count < 0 || count > n || w < 1 || h < 1 || w > 4096 || h > 4096 || w*h < 512*512 || w*h > 2048*2048 {
 		return nil, metering.Usage{}, platformbilling.ErrInvalid
+	}
+	if err := helper.ValidateDeclaredImageOutputBounds(limits, count, int64(w), int64(h)); err != nil {
+		return nil, metering.Usage{}, err
 	}
 	choice := result.Output.Choices[0]
 	if choice.FinishReason != "stop" || choice.Message == nil || choice.Message.Role != "assistant" || len(choice.Message.Content) != count {
@@ -208,6 +213,7 @@ func observeManagedQwenImage(raw []byte, n int, price metering.Price) ([]byte, m
 type managedNativeImageState struct {
 	request              managedQwenImageRequest
 	count, width, height int
+	requestBytes         int64
 	session              *platformbilling.Session
 }
 
@@ -246,7 +252,7 @@ func registerManagedNativeImage(r *gin.Engine, adapter *platformbilling.Adapter)
 		common.SetContextKey(c, constant.ContextKeyUserGroup, group)
 		common.SetContextKey(c, constant.ContextKeyTokenGroup, group)
 		common.SetContextKey(c, constant.ContextKeyUsingGroup, group)
-		c.Set("managed_native_image", &managedNativeImageState{request: in, count: n, width: width, height: height, session: session})
+		c.Set("managed_native_image", &managedNativeImageState{request: in, count: n, width: width, height: height, requestBytes: int64(len(raw)), session: session})
 		c.Set("platform_billing", session)
 		c.Next()
 	}, middleware.DistributedRateLimit(), middleware.ModelRequestRateLimit(), func(c *gin.Context) {
@@ -255,6 +261,14 @@ func registerManagedNativeImage(r *gin.Engine, adapter *platformbilling.Adapter)
 		selected, channel, err := managedQwenImageTarget(c.Request.Context(), adapter, in.Model)
 		if err != nil {
 			c.AbortWithStatus(503)
+			return
+		}
+		if err := helper.ValidateDeclaredImageOutputBounds(selected.Capabilities.MediaLimits, n, int64(width), int64(height)); err != nil {
+			c.AbortWithStatusJSON(400, gin.H{"error": gin.H{"code": "invalid_request", "message": err.Error()}})
+			return
+		}
+		if limits := selected.Capabilities.MediaLimits; limits != nil && limits.MaxRequestBytes != nil && state.requestBytes > *limits.MaxRequestBytes {
+			c.AbortWithStatusJSON(400, gin.H{"error": gin.H{"code": "invalid_request", "message": "request exceeds declared max_request_bytes"}})
 			return
 		}
 		native, quota, err := managedQwenImagePrice(selected, n, width, height)
@@ -321,7 +335,7 @@ func registerManagedNativeImage(r *gin.Engine, adapter *platformbilling.Adapter)
 			c.AbortWithStatus(502)
 			return
 		}
-		output, usage, err := observeManagedQwenImage(result, n, native.Price)
+		output, usage, err := observeManagedQwenImage(result, n, native.Price, selected.Capabilities.MediaLimits)
 		if err != nil {
 			c.AbortWithStatus(502)
 			return

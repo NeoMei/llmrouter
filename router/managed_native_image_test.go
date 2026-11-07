@@ -97,7 +97,8 @@ func testManagedNativeImageProtocol(t *testing.T, compatible bool) {
 	base := provider.URL
 	require.NoError(t, db.Create(&model.Channel{Id: 3, Type: constant.ChannelTypeAli, Key: "supplier-image-secret", Status: common.ChannelStatusEnabled, BaseURL: &base, Group: "native", Models: "qwen-image-2.0"}).Error)
 	require.NoError(t, db.Create(&model.Ability{Group: "native", Model: "qwen-image-2.0", ChannelId: 3, Enabled: true}).Error)
-	require.NoError(t, db.Create(&model.ClientModelRoute{Id: 1, PublicId: "qwen-image-2.0", DisplayName: "Image model", Client: "all", Enabled: true, Metadata: `{"operations":["dashscope.images.generate","images.generations.create"],"input_modalities":["text","image"],"output_modalities":["image"],"media_limits":{"max_images":4,"max_pixels":16777216,"max_request_bytes":31457280}}`}).Error)
+	routeMetadata := `{"operations":["dashscope.images.generate","images.generations.create"],"input_modalities":["text","image"],"output_modalities":["image"],"media_limits":{"max_images":4,"max_pixels":16777216,"max_request_bytes":31457280}}`
+	require.NoError(t, db.Create(&model.ClientModelRoute{Id: 1, PublicId: "qwen-image-2.0", DisplayName: "Image model", Client: "all", Enabled: true, Metadata: routeMetadata}).Error)
 	require.NoError(t, db.Create(&model.ClientModelTarget{Id: 1, RouteId: 1, ChannelId: 3, UpstreamModel: "qwen-image-2.0", BillingModel: "qwen-image-2.0", PreferredWires: `[]`, Enabled: true, Weight: 1}).Error)
 	model.InitChannelCache()
 	var remote platformbilling.RemoteCall
@@ -181,10 +182,38 @@ func testManagedNativeImageProtocol(t *testing.T, compatible bool) {
 			require.Zero(t, calls, "image bounds must reject before supplier dispatch")
 		}
 	}
+	if !compatible {
+		mode = "budget"
+		for _, invalid := range []struct {
+			name, limits, count, reason string
+		}{
+			{"count", `{"max_images":4,"max_pixels":16777216}`, "5", "exceeds declared max_images"},
+			{"pixels", `{"max_images":4,"max_pixels":262144}`, "1", "exceeds declared max_pixels"},
+			{"bytes", `{"max_request_bytes":16}`, "1", "exceeds declared max_request_bytes"},
+			{"format", `{"formats":["png"]}`, "1", "format requires verified media metadata"},
+		} {
+			metadata := `{"operations":["dashscope.images.generate","images.generations.create"],"input_modalities":["text"],"output_modalities":["image"],"media_limits":` + invalid.limits + `}`
+			require.NoError(t, db.Model(&model.ClientModelRoute{}).Where("id = ?", 1).Update("metadata", metadata).Error)
+			body := `{"model":"qwen-image-2.0","input":{"messages":[{"role":"user","content":[{"text":"a tiny green square"}]}]},"parameters":{"n":` + invalid.count + `,"size":"1024*1024","seed":0,"watermark":false}}`
+			req := httptest.NewRequest("POST", "/v1/native/dashscope/images/generations", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer uh_key_same")
+			req.Header.Set("Idempotency-Key", "native-image-invalid-"+invalid.name)
+			out := httptest.NewRecorder()
+			engine.ServeHTTP(out, req)
+			require.Equal(t, 400, out.Code, out.Body.String())
+			require.Contains(t, out.Body.String(), invalid.reason)
+			require.Zero(t, reserves, "native route limits must reject before funding")
+			require.Zero(t, calls, "native route limits must reject before supplier dispatch")
+		}
+		require.NoError(t, db.Model(&model.ClientModelRoute{}).Where("id = ?", 1).Update("metadata", routeMetadata).Error)
+		mode = "success"
+	}
+	requestSize := "1024x1024"
 	send := func(call string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest("POST", "/v1/native/dashscope/images/generations", strings.NewReader(`{"model":"qwen-image-2.0","input":{"messages":[{"role":"user","content":[{"text":"a tiny green square"}]}]},"parameters":{"n":1,"size":"1024*1024","seed":0,"watermark":false}}`))
+		req := httptest.NewRequest("POST", "/v1/native/dashscope/images/generations", strings.NewReader(strings.ReplaceAll(`{"model":"qwen-image-2.0","input":{"messages":[{"role":"user","content":[{"text":"a tiny green square"}]}]},"parameters":{"n":1,"size":"1024*1024","seed":0,"watermark":false}}`, "1024*1024", strings.ReplaceAll(requestSize, "x", "*"))))
 		if compatible {
-			req = httptest.NewRequest("POST", "/v1/images/generations", strings.NewReader(`{"model":"qwen-image-2.0","prompt":"a tiny green square","n":1,"size":"1024x1024","seed":0,"watermark":false}`))
+			req = httptest.NewRequest("POST", "/v1/images/generations", strings.NewReader(strings.ReplaceAll(`{"model":"qwen-image-2.0","prompt":"a tiny green square","n":1,"size":"1024x1024","seed":0,"watermark":false}`, "1024x1024", requestSize)))
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer uh_key_same")
@@ -231,5 +260,19 @@ func testManagedNativeImageProtocol(t *testing.T, compatible bool) {
 	response = send("native-image-missing-dimensions")
 	require.NotEqual(t, 200, response.Code)
 	require.Equal(t, 3, calls, "uncertain image results must never replay a supplier request")
+	require.Equal(t, 1, settles)
+	mode, requestSize = "success", "512x512"
+	require.NoError(t, db.Model(&model.ClientModelRoute{}).Where("id = ?", 1).Update("metadata", strings.ReplaceAll(routeMetadata, "16777216", "262144")).Error)
+	response = send("native-image-response-outside-route")
+	require.Equal(t, 502, response.Code, response.Body.String())
+	require.NotContains(t, response.Body.String(), "https://images.example.test/square.png")
+	require.Equal(t, 4, calls)
+	require.Equal(t, 1, settles)
+	stored = platformbilling.Call{}
+	require.NoError(t, db.First(&stored, "call_id = ?", response.Header().Get("X-UniHub-Call-ID")).Error)
+	require.Equal(t, "UNKNOWN", stored.Status)
+	response = send("native-image-response-outside-route")
+	require.NotEqual(t, 200, response.Code)
+	require.Equal(t, 4, calls)
 	require.Equal(t, 1, settles)
 }

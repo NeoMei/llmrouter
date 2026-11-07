@@ -59,8 +59,10 @@ image and audio handlers retain their established provider wire format. The
 DashScope image endpoint accepts the native Qwen request directly. For OpenAI
 image generation, declared pixel limits require a current-candidate typed Qwen
 request with an explicit `widthxheight` size. The request must fit the declared
-pixel and image-count limits before reservation. A candidate change clears the
-prior typed request; an unverified provider cannot inherit that proof. Qwen's
+pixel and image-count limits before reservation. The native DashScope endpoint
+applies the same limits to its normalized request and enforces the declared raw
+request byte limit. Declared formats require verified metadata; a URL suffix
+does not prove the output format. A candidate change clears the prior typed request; an unverified provider cannot inherit that proof. Qwen's
 actual response width, height and image count must also fit the frozen route
 limits before returning image URLs or recording native usage. Missing output
 metadata remains an error; native size normalization inside those bounds keeps

@@ -51,6 +51,27 @@ func ValidatedDomesticImageRequest(c *gin.Context) (DomesticImageRequest, bool) 
 	return request, exists && ok
 }
 
+// ValidateDeclaredImageOutputBounds applies the same declared limits to a typed
+// request and to the provider's actual output before it can be returned or charged.
+func ValidateDeclaredImageOutputBounds(limits *dto.MediaLimits, count int, width, height int64) error {
+	if limits == nil {
+		return nil
+	}
+	if count < 0 || width <= 0 || height <= 0 {
+		return fmt.Errorf("image output bounds require verified dimensions and count")
+	}
+	if limits.MaxImages != nil && count > *limits.MaxImages {
+		return fmt.Errorf("image output count exceeds declared max_images")
+	}
+	if limits.MaxPixels != nil && width > *limits.MaxPixels/height {
+		return fmt.Errorf("image output size exceeds declared max_pixels")
+	}
+	if len(limits.Formats) > 0 {
+		return fmt.Errorf("declared image output format requires verified media metadata")
+	}
+	return nil
+}
+
 // ValidateDomesticImage builds the only authorized native body before money.
 // Remote references are not fetched: their size/codec cannot be certified.
 func ValidateDomesticImage(c *gin.Context, info *relaycommon.RelayInfo, channelType int, model, billingModel string) error {

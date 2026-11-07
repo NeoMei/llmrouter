@@ -24,6 +24,22 @@ import type {
   UptimeGroupResult,
 } from './types'
 
+function normalizeHistoricalModelNames<
+  T extends { data?: { model_name?: string }[] },
+>(response: T): T {
+  if (!Array.isArray(response?.data)) return response
+
+  // Display historical embedding usage under its vendor ID without rewriting it.
+  return {
+    ...response,
+    data: response.data.map((row) =>
+      row.model_name === 'unihub-text-embedding-v4'
+        ? { ...row, model_name: 'text-embedding-v4' }
+        : row
+    ),
+  }
+}
+
 // ============================================================================
 // Dashboard APIs
 // ============================================================================
@@ -48,7 +64,7 @@ export async function getUserQuotaDates(
     endpoint,
     { params }
   )
-  return res.data
+  return normalizeHistoricalModelNames(res.data)
 }
 
 // ----------------------------------------------------------------------------
@@ -63,7 +79,7 @@ export async function getUserQuotaDataByUsers(params: {
     '/api/data/users',
     { params }
   )
-  return res.data
+  return normalizeHistoricalModelNames(res.data)
 }
 
 export async function getFlowQuotaDates(
@@ -81,7 +97,7 @@ export async function getFlowQuotaDates(
     data?: FlowQuotaDataItem[]
     message?: string
   }>(endpoint, { params })
-  return res.data
+  return normalizeHistoricalModelNames(res.data)
 }
 
 // Get uptime monitoring status for all services

@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/metering"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"maps"
 	"net/http"
 	"regexp"
 	"strings"
@@ -127,6 +128,20 @@ func New(db *gorm.DB, c Config) (*Adapter, error) {
 		return nil, ErrInvalid
 	}
 	c.KnowledgePolicies = cloneKnowledgePolicies(c.KnowledgePolicies)
+	limits := maps.Clone(c.OperationLimits)
+	for operation, models := range limits {
+		limits[operation] = maps.Clone(models)
+	}
+	c.OperationLimits = limits
+	rates := maps.Clone(c.OperationRateIDs)
+	for operation, assets := range rates {
+		assets = maps.Clone(assets)
+		for asset, models := range assets {
+			assets[asset] = maps.Clone(models)
+		}
+		rates[operation] = assets
+	}
+	c.OperationRateIDs = rates
 	c.InstanceID = strings.TrimSpace(c.InstanceID)
 	if c.InstanceID == "" {
 		c.InstanceID = "default"

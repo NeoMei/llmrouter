@@ -43,3 +43,7 @@ service/openaicompat/chat_responses_live_local_test.go
 
 # Local feature worktrees
 .worktrees/
+
+# Python bytecode
+__pycache__/
+*.py[cod]

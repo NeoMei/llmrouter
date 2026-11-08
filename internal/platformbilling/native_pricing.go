@@ -72,7 +72,8 @@ func NativeOperationAvailable(wire string) bool {
 // Amount uses the frozen native conversion, rounding the cumulative charge up
 // exactly once. No floating point arithmetic or client amount is accepted.
 func (q NativeQuote) Amount(quota int) (string, error) {
-	if quota < 0 || quota > common.MaxQuota || q.Asset != "CNY/6" || q.Conversion.Version != "lr-quota-usd-cny-v1" || q.Conversion.Rounding != "lr-cumulative-ceil-v1" {
+	validFunding := q.Asset == "CNY/6" && q.Conversion.Version == "lr-quota-usd-cny-v1" || q.Asset == "CREDIT/6" && q.Conversion.validCredit()
+	if quota < 0 || quota > common.MaxQuota || !validFunding || q.Conversion.Rounding != "lr-cumulative-ceil-v1" {
 		return "", ErrInvalid
 	}
 	n, nOK := new(big.Int).SetString(q.Conversion.Numerator, 10)
@@ -88,7 +89,7 @@ func (q NativeQuote) Amount(quota int) (string, error) {
 	return value.String(), nil
 }
 
-func (s *Session) NativePricing() bool { return s != nil && s.call.PricingSource == "llmrouter_native" }
+func (s *Session) NativePricing() bool { return s != nil && nativePricingSource(s.call.PricingSource) }
 
 func (a *Adapter) AdmitNative(ctx context.Context, credential, task, id string, wire WireOperation, model string, body []byte) (*Session, error) {
 	if !a.Enabled() || a.config.NativeGroup == "" || !stableID.MatchString(id) || !stableID.MatchString(task) || wireBillingOperation(wire.ID) == "" || model == "" || len(model) > 255 || strings.TrimSpace(model) != model || len(body) > 64<<20 {
@@ -125,7 +126,7 @@ func (a *Adapter) AdmitNative(ctx context.Context, credential, task, id string, 
 		}
 		return nil, compareCall(old, row)
 	}
-	return &Session{adapter: a, call: row, nativeCredential: credential, safeFailure: true}, nil
+	return &Session{adapter: a, call: row, nativeCredential: credential, nativeCreditConversion: grant.NativeCreditConversion, safeFailure: true}, nil
 }
 
 func (s *Session) NativeQuote() (NativeQuote, error) {
@@ -136,8 +137,16 @@ func (s *Session) NativeQuote() (NativeQuote, error) {
 	sum := sha256.Sum256([]byte(s.call.NativePriceSnapshot))
 	maximum, err := strconv.Atoi(q.NativeQuotaMax)
 	amount, amountErr := q.Amount(maximum)
-	if err != nil || amountErr != nil || strconv.Itoa(maximum) != q.NativeQuotaMax || q.PricingVersion != "lr-native-v1" || q.PricingDigest != hex.EncodeToString(sum[:]) || q.WireOperation != s.call.WireOperation || amount != q.MaxAmount {
+	if err != nil || amountErr != nil || strconv.Itoa(maximum) != q.NativeQuotaMax || !((q.PricingVersion == "lr-native-v1" && s.call.PricingSource == "llmrouter_native" && q.Asset == "CNY/6" && s.call.Asset == "CNY/6" && s.call.FundingMode == "prepaid_cash") || (q.PricingVersion == NativeCreditPricingVersion && s.call.PricingSource == NativeCreditPricingSource && q.Asset == "CREDIT/6" && s.call.Asset == "CREDIT/6" && s.call.FundingMode == "credits")) || q.PricingDigest != hex.EncodeToString(sum[:]) || q.WireOperation != s.call.WireOperation || amount != q.MaxAmount {
 		return q, ErrInvalid
+	}
+	if q.Asset == "CREDIT/6" {
+		var frozen struct {
+			Conversion NativeConversion `json:"conversion"`
+		}
+		if common.UnmarshalUnique([]byte(s.call.NativePriceSnapshot), &frozen) != nil || frozen.Conversion != q.Conversion {
+			return q, ErrInvalid
+		}
 	}
 	return q, nil
 }
@@ -243,6 +252,9 @@ func (s *Session) ReserveNative(ctx context.Context, q NativeQuote, snapshot str
 	if !s.NativePricing() || s.nativeCredential == "" || s.call.Status != "ADMITTED" || q.Group != s.adapter.config.NativeGroup || q.BillingModel == "" || len(snapshot) > 1<<20 {
 		return ErrInvalid
 	}
+	if s.call.PricingSource == NativeCreditPricingSource && (s.nativeCreditConversion == nil || q.Conversion != *s.nativeCreditConversion) {
+		return ErrInvalid
+	}
 	channel, e := strconv.Atoi(q.ChannelID)
 	route, re := strconv.ParseInt(q.RouteID, 10, 64)
 	if e != nil || channel < 1 || strconv.Itoa(channel) != q.ChannelID || re != nil || route < 0 || strconv.FormatInt(route, 10) != q.RouteID {
@@ -275,6 +287,11 @@ func (s *Session) ReserveNative(ctx context.Context, q NativeQuote, snapshot str
 		}
 		_ = s.adapter.db.WithContext(ctx).Model(&Call{}).Where("call_id = ? AND status = ?", s.call.CallID, "RESERVING").Update("status", status).Error
 		s.call.Status = status
+		// Purchase guidance requires both a proven no-hold refusal and the
+		// authenticated native CREDIT contract. Budget/cash errors never qualify.
+		if status == "REJECTED" && rejected.reserveCode == "insufficient_credits" && s.call.PricingSource == NativeCreditPricingSource && s.call.Asset == "CREDIT/6" && s.call.FundingMode == "credits" {
+			return ErrNativeCreditsRequired
+		}
 		if err != nil {
 			return err
 		}
@@ -303,10 +320,10 @@ func (remote RemoteCall) matchesNative(row Call) bool {
 	if remote.CredentialVersion != row.CredentialVersion || remote.TaskID != row.TaskID {
 		return false
 	}
-	if remote.Rate.ID != "" || remote.Rate.Asset != "CNY/6" || remote.Rate.Semantics != "llmrouter_native" {
+	if remote.Rate.ID != "" || remote.Rate.Asset != row.Asset || remote.Rate.Semantics != "llmrouter_native" {
 		return false
 	}
-	return remote.InstanceID == row.InstanceID && remote.CallID == row.CallID && remote.CredentialID == row.CredentialID && remote.ActorID == row.ActorID && remote.AccountID == row.AccountID && remote.OriginProductID == row.OriginProductID && remote.RequestDigest == row.Digest && remote.WireOperation == row.WireOperation && remote.Rate.Model == row.Model && remote.ChargeAsset == "CNY/6" && remote.FundingMode == "prepaid_cash" && remote.FundingProductID == "llmrouter" && remote.BillingProfileVersion == row.BillingProfileVersion
+	return remote.InstanceID == row.InstanceID && remote.CallID == row.CallID && remote.CredentialID == row.CredentialID && remote.ActorID == row.ActorID && remote.AccountID == row.AccountID && remote.OriginProductID == row.OriginProductID && remote.RequestDigest == row.Digest && remote.WireOperation == row.WireOperation && remote.Rate.Model == row.Model && remote.ChargeAsset == row.Asset && remote.FundingMode == row.FundingMode && remote.FundingProductID == "llmrouter" && remote.BillingProfileVersion == row.BillingProfileVersion
 }
 
 func (s *Session) dispatchNative(ctx context.Context, channel int) error {
@@ -318,7 +335,7 @@ func (s *Session) dispatchNative(ctx context.Context, channel int) error {
 	if err != nil {
 		return err
 	}
-	if !grant.NativePricing() || grant.ID != s.call.CredentialID || grant.CredentialVersion != s.call.CredentialVersion || grant.ActorID != s.call.ActorID || grant.AccountID != s.call.AccountID || grant.OriginProductID != s.call.OriginProductID || grant.InstanceID != s.call.InstanceID {
+	if !grant.NativePricing() || grant.ID != s.call.CredentialID || grant.CredentialVersion != s.call.CredentialVersion || grant.ActorID != s.call.ActorID || grant.AccountID != s.call.AccountID || grant.OriginProductID != s.call.OriginProductID || grant.InstanceID != s.call.InstanceID || grant.Asset != s.call.Asset || grant.FundingMode != s.call.FundingMode || grant.PricingSource != s.call.PricingSource {
 		return ErrConflict
 	}
 	if s.adapter.nativeDispatch == nil {
@@ -445,12 +462,13 @@ func (a *Adapter) deliverNative(ctx context.Context, row Call) error {
 			if err := a.client.do(ctx, http.MethodPost, "/internal/v1/calls/"+row.CallID+"/topup", row.CallID+":native-topup:"+amount, map[string]string{"amount": strconv.FormatInt(actual-held, 10)}, &remote); err != nil {
 				return err
 			}
-			if !remote.matches(row) || remote.Status != "RESERVED" || remote.Held != amount {
+			if !remote.matchesNativeTopUp(row) || remote.Status != "RESERVED" || remote.Held != amount {
 				return ErrPending
 			}
-			if err := a.db.WithContext(ctx).Model(&Call{}).Where("call_id = ? AND status = ?", row.CallID, "SETTLE_PENDING").Update("amount", amount).Error; err != nil {
+			if err := a.db.WithContext(ctx).Model(&Call{}).Where("call_id = ? AND status = ?", row.CallID, "SETTLE_PENDING").Updates(map[string]any{"amount": amount, "funding_snapshot": remote.fundingSnapshot()}).Error; err != nil {
 				return err
 			}
+			row.Amount, row.FundingSnapshot = amount, remote.fundingSnapshot()
 		}
 		body = settle
 	} else {

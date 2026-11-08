@@ -537,6 +537,13 @@ func (h *OCRHandler) serviceError(c *gin.Context, err error, fallback int) {
 	var unavailable *model.UpstreamAccountUnavailable
 	var price *ocr.PriceError
 	switch {
+	case errors.Is(err, platformbilling.ErrNativeCreditsRequired):
+		apiErr := service.ManagedNativeBillingError(err)
+		if strings.HasPrefix(c.Request.URL.Path, "/api/v2/ocr/") {
+			h.fail(c, apiErr.StatusCode, apiErr.Error())
+		} else {
+			c.JSON(apiErr.StatusCode, gin.H{"error": apiErr.ToOpenAIError()})
+		}
 	case errors.As(err, &price):
 		h.fail(c, 503, "OCR native request price unavailable")
 	case errors.Is(err, ocr.ErrInvalidInput):

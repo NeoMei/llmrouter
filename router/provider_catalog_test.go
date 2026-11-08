@@ -257,3 +257,38 @@ func TestProviderCatalogSupportsNativeOnlyPricesPerOperation(t *testing.T) {
 		require.Equal(t, "native_ocr_target_unavailable", ocr.CapabilityMetadata.Operations[0].DisabledReason)
 	}
 }
+
+func TestNativeCreditProtocolNegotiationRequiresConfiguredService(t *testing.T) {
+	adapter, _ := providerCatalogFixture(t)
+	config := platformbilling.CatalogConfig{Token: strings.Repeat("c", 32), ProductID: "llmrouter", InstanceID: "fixture"}
+	engine := gin.New()
+	SetProviderCatalogRouter(engine, adapter, config)
+	for _, tc := range []struct {
+		body, token string
+		status      int
+	}{
+		{`{"origin_product_id":"superwagie","purpose":"native_credit_readiness"}`, config.Token, 200},
+		{`{"origin_product_id":"superwagie","purpose":"native_credit_readiness"}`, "wrong", 401},
+		{`{"origin_product_id":"superwagie","purpose":"native_credit_readiness","actor_id":"actor"}`, config.Token, 403},
+		{`{"origin_product_id":"other","purpose":"native_credit_readiness"}`, config.Token, 403},
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/internal/v1/provider-catalog", strings.NewReader(tc.body))
+		req.Header.Set("Authorization", "Bearer "+tc.token)
+		res := httptest.NewRecorder()
+		engine.ServeHTTP(res, req)
+		require.Equal(t, tc.status, res.Code, res.Body.String())
+		if tc.status == 200 {
+			var response map[string]any
+			require.NoError(t, common.Unmarshal(res.Body.Bytes(), &response))
+			require.Equal(t, "lr-native-credit-v1", response["native_credit_protocol"])
+			require.Equal(t, "native_credit_readiness", response["purpose"])
+		}
+	}
+	disabled := gin.New()
+	SetProviderCatalogRouter(disabled, nil, config)
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/provider-catalog", strings.NewReader(`{"origin_product_id":"superwagie","purpose":"native_credit_readiness"}`))
+	req.Header.Set("Authorization", "Bearer "+config.Token)
+	res := httptest.NewRecorder()
+	disabled.ServeHTTP(res, req)
+	require.Equal(t, 503, res.Code)
+}

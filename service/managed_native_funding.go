@@ -22,6 +22,16 @@ type managedNativeFunding struct {
 	reserved int
 }
 
+// ManagedNativeBillingError preserves reserve certainty and the bounded public
+// funding refusal across native metered and quota-based relay entry points.
+func ManagedNativeBillingError(err error) *types.NewAPIError {
+	code := types.ErrorCodeUpdateDataError
+	if errors.Is(err, platformbilling.ErrNativeCreditsRequired) {
+		code = types.ErrorCodePlatformModelCreditsRequired
+	}
+	return types.NewErrorWithStatusCode(err, code, platformbilling.HTTPStatus(err), types.ErrOptionWithSkipRetry())
+}
+
 func CalculateManagedNativeQuota(snapshotJSON string, usage metering.Usage) (int, error) {
 	var wrapper struct {
 		PriceSnapshot string `json:"price_snapshot"`
@@ -72,11 +82,22 @@ func beginManagedNativeFunding(ctx context.Context, info *relaycommon.RelayInfo,
 // ReserveManagedNativePrice binds native calculations to the original managed
 // credential and product wallet. Native OCR and synchronous relay share it.
 func ReserveManagedNativePrice(ctx context.Context, session *platformbilling.Session, billingModel, group string, routeID, channelID, quota int, priceSnapshot []byte) error {
-	numerator, denominator, err := model.ProductCashConversionRate()
+	credit, err := session.NativeCreditConversion()
 	if err != nil {
 		return err
 	}
-	conversion := platformbilling.NativeConversion{Version: model.ProductCashConversionVersion, Numerator: numerator, Denominator: denominator, Rounding: model.ProductCashRoundingVersion}
+	pricingVersion, asset := "lr-native-v1", "CNY/6"
+	var conversion platformbilling.NativeConversion
+	if credit != nil {
+		conversion = *credit
+		pricingVersion, asset = platformbilling.NativeCreditPricingVersion, "CREDIT/6"
+	} else {
+		numerator, denominator, e := model.ProductCashConversionRate()
+		if e != nil {
+			return e
+		}
+		conversion = platformbilling.NativeConversion{Version: model.ProductCashConversionVersion, Numerator: numerator, Denominator: denominator, Rounding: model.ProductCashRoundingVersion}
+	}
 	snapshot, err := common.Marshal(struct {
 		PriceSnapshot string                           `json:"price_snapshot"`
 		Conversion    platformbilling.NativeConversion `json:"conversion"`
@@ -85,7 +106,7 @@ func ReserveManagedNativePrice(ctx context.Context, session *platformbilling.Ses
 		return err
 	}
 	digest := sha256.Sum256(snapshot)
-	quote := platformbilling.NativeQuote{PricingVersion: "lr-native-v1", PricingDigest: hex.EncodeToString(digest[:]), BillingModel: billingModel, WireOperation: session.WireOperation().ID, RouteID: strconv.Itoa(routeID), ChannelID: strconv.Itoa(channelID), Group: group, NativeQuotaMax: strconv.Itoa(quota), Conversion: conversion, Asset: "CNY/6"}
+	quote := platformbilling.NativeQuote{PricingVersion: pricingVersion, PricingDigest: hex.EncodeToString(digest[:]), BillingModel: billingModel, WireOperation: session.WireOperation().ID, RouteID: strconv.Itoa(routeID), ChannelID: strconv.Itoa(channelID), Group: group, NativeQuotaMax: strconv.Itoa(quota), Conversion: conversion, Asset: asset}
 	quote.MaxAmount, err = quote.Amount(quota)
 	if err != nil {
 		return err

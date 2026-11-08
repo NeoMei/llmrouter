@@ -106,19 +106,20 @@ type Adapter struct {
 	client           *client
 }
 type Session struct {
-	nativeCredential    string
-	nativeDispatchGuard func(context.Context) error
-	knowledgeAdmission  *pinnedKnowledgeAdmission
-	nativeSend          string
-	canonical           []byte
-	adapter             *Adapter
-	call                Call
-	attempt             Attempt
-	requestTariff       bool
-	confirmed           *Usage
-	safeFailure         bool
-	uncertain           bool
-	err                 error
+	nativeCreditConversion *NativeConversion
+	nativeCredential       string
+	nativeDispatchGuard    func(context.Context) error
+	knowledgeAdmission     *pinnedKnowledgeAdmission
+	nativeSend             string
+	canonical              []byte
+	adapter                *Adapter
+	call                   Call
+	attempt                Attempt
+	requestTariff          bool
+	confirmed              *Usage
+	safeFailure            bool
+	uncertain              bool
+	err                    error
 }
 
 var stableID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
@@ -630,7 +631,7 @@ func (s *Session) Finish(ctx context.Context) error {
 	return nil
 }
 func (a *Adapter) deliver(ctx context.Context, row Call) error {
-	if row.PricingSource == "llmrouter_native" {
+	if nativePricingSource(row.PricingSource) {
 		return a.deliverNative(ctx, row)
 	}
 	var current Call

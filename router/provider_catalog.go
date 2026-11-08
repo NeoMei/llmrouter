@@ -28,15 +28,17 @@ import (
 // response to the authenticated caller; neither groups nor prices are supplied
 // by that caller. Inference separately verifies the original credential.
 type ProviderCatalog struct {
-	SchemaVersion   int                    `json:"schema_version"`
-	CatalogVersion  string                 `json:"catalog_version"`
-	ModelScope      string                 `json:"model_scope"`
-	PricingSource   string                 `json:"pricing_source"`
-	OriginProductID string                 `json:"origin_product_id"`
-	InstanceID      string                 `json:"instance_id"`
-	ActorID         string                 `json:"actor_id"`
-	AccountID       string                 `json:"account_id"`
-	Models          []ProviderCatalogModel `json:"models"`
+	Purpose              string                 `json:"purpose,omitempty"`
+	NativeCreditProtocol string                 `json:"native_credit_protocol,omitempty"`
+	SchemaVersion        int                    `json:"schema_version"`
+	CatalogVersion       string                 `json:"catalog_version"`
+	ModelScope           string                 `json:"model_scope"`
+	PricingSource        string                 `json:"pricing_source"`
+	OriginProductID      string                 `json:"origin_product_id"`
+	InstanceID           string                 `json:"instance_id"`
+	ActorID              string                 `json:"actor_id"`
+	AccountID            string                 `json:"account_id"`
+	Models               []ProviderCatalogModel `json:"models"`
 }
 
 type ProviderCatalogModel struct {
@@ -53,6 +55,7 @@ type ProviderCatalogModel struct {
 }
 
 type providerCatalogRequest struct {
+	Purpose         string `json:"purpose,omitempty"`
 	OriginProductID string `json:"origin_product_id"`
 	InstanceID      string `json:"instance_id"`
 	ActorID         string `json:"actor_id"`
@@ -85,7 +88,24 @@ func SetProviderCatalogRouter(engine *gin.Engine, adapter *platformbilling.Adapt
 		var req providerCatalogRequest
 		decoder := common.NewJsonDecoder(strings.NewReader(string(data)))
 		decoder.DisallowUnknownFields()
-		if common.UnmarshalUnique(data, &req) != nil || decoder.Decode(&req) != nil || req.OriginProductID != "superwagie" || req.InstanceID != config.InstanceID || !providerCatalogIdentity.MatchString(req.ActorID) || !providerCatalogIdentity.MatchString(req.AccountID) {
+		if common.UnmarshalUnique(data, &req) != nil || decoder.Decode(&req) != nil || req.OriginProductID != "superwagie" {
+			c.Status(http.StatusForbidden)
+			return
+		}
+		if req.Purpose == "native_credit_readiness" {
+			if req.InstanceID != "" || req.ActorID != "" || req.AccountID != "" {
+				c.Status(http.StatusForbidden)
+				return
+			}
+			principal, group := adapter.NativePrincipal()
+			if adapter == nil || !adapter.Enabled() || principal < 1 || group == "" {
+				c.Status(http.StatusServiceUnavailable)
+				return
+			}
+			c.JSON(http.StatusOK, ProviderCatalog{Purpose: req.Purpose, NativeCreditProtocol: platformbilling.NativeCreditPricingVersion, SchemaVersion: 1, CatalogVersion: platformbilling.NativeCreditPricingVersion, ModelScope: "llmrouter_available", PricingSource: "llmrouter_native", OriginProductID: req.OriginProductID, Models: []ProviderCatalogModel{}})
+			return
+		}
+		if req.Purpose != "" || req.InstanceID != config.InstanceID || !providerCatalogIdentity.MatchString(req.ActorID) || !providerCatalogIdentity.MatchString(req.AccountID) {
 			c.Status(http.StatusForbidden)
 			return
 		}
@@ -100,7 +120,7 @@ func SetProviderCatalogRouter(engine *gin.Engine, adapter *platformbilling.Adapt
 }
 
 func readProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter, grant platformbilling.Claims) (ProviderCatalog, error) {
-	out := ProviderCatalog{SchemaVersion: 1, ModelScope: "llmrouter_available", PricingSource: "llmrouter_native", OriginProductID: grant.OriginProductID, InstanceID: grant.InstanceID, ActorID: grant.ActorID, AccountID: grant.AccountID, Models: []ProviderCatalogModel{}}
+	out := ProviderCatalog{NativeCreditProtocol: platformbilling.NativeCreditPricingVersion, SchemaVersion: 1, ModelScope: "llmrouter_available", PricingSource: "llmrouter_native", OriginProductID: grant.OriginProductID, InstanceID: grant.InstanceID, ActorID: grant.ActorID, AccountID: grant.AccountID, Models: []ProviderCatalogModel{}}
 	if adapter == nil || !adapter.Enabled() || model.DB == nil || grant.OriginProductID != "superwagie" {
 		return out, errors.New("provider catalog unavailable")
 	}

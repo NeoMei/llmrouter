@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
@@ -22,7 +21,7 @@ const (
 func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
 	if relayInfo.ManagedNativePricing() {
 		if err := beginManagedNativeFunding(c.Request.Context(), relayInfo, preConsumedQuota, nil); err != nil {
-			return types.NewErrorWithStatusCode(err, types.ErrorCodeUpdateDataError, platformbilling.HTTPStatus(err), types.ErrOptionWithSkipRetry())
+			return ManagedNativeBillingError(err)
 		}
 		return nil
 	}

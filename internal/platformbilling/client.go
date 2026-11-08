@@ -21,30 +21,32 @@ import (
 )
 
 var (
-	ErrInvalid   = errors.New("invalid platform request or configuration")
-	ErrConflict  = errors.New("platform logical call scope or body conflict")
-	ErrDuplicate = errors.New("platform logical call already exists; never resend upstream")
-	ErrPending   = errors.New("platform billing pending reconciliation")
+	ErrInvalid               = errors.New("invalid platform request or configuration")
+	ErrConflict              = errors.New("platform logical call scope or body conflict")
+	ErrDuplicate             = errors.New("platform logical call already exists; never resend upstream")
+	ErrPending               = errors.New("platform billing pending reconciliation")
+	ErrNativeCreditsRequired = errors.New("platform_model_credits_required")
 )
 
 type Claims struct {
-	ModelScope            string              `json:"model_scope,omitempty"`
-	PricingSource         string              `json:"pricing_source,omitempty"`
-	CredentialVersion     int64               `json:"credential_version,omitempty"`
-	Operations            map[string][]string `json:"operations,omitempty"`
-	CredentialKind        string              `json:"credential_kind"`
-	InstanceID            string              `json:"instance_id"`
-	ID                    string              `json:"id"`
-	Audience              string              `json:"audience"`
-	ActorID               string              `json:"actor_id"`
-	AccountID             string              `json:"account_id"`
-	OriginProductID       string              `json:"origin_product_id"`
-	Models                []string            `json:"models"`
-	TaskID                string              `json:"task_id"`
-	ExpiresAt             time.Time           `json:"expires_at"`
-	Asset                 string              `json:"asset"`
-	FundingMode           string              `json:"funding_mode"`
-	BillingProfileVersion int                 `json:"billing_profile_version"`
+	NativeCreditConversion *NativeConversion   `json:"native_credit_conversion,omitempty"`
+	ModelScope             string              `json:"model_scope,omitempty"`
+	PricingSource          string              `json:"pricing_source,omitempty"`
+	CredentialVersion      int64               `json:"credential_version,omitempty"`
+	Operations             map[string][]string `json:"operations,omitempty"`
+	CredentialKind         string              `json:"credential_kind"`
+	InstanceID             string              `json:"instance_id"`
+	ID                     string              `json:"id"`
+	Audience               string              `json:"audience"`
+	ActorID                string              `json:"actor_id"`
+	AccountID              string              `json:"account_id"`
+	OriginProductID        string              `json:"origin_product_id"`
+	Models                 []string            `json:"models"`
+	TaskID                 string              `json:"task_id"`
+	ExpiresAt              time.Time           `json:"expires_at"`
+	Asset                  string              `json:"asset"`
+	FundingMode            string              `json:"funding_mode"`
+	BillingProfileVersion  int                 `json:"billing_profile_version"`
 }
 type Rational struct {
 	Numerator   string `json:"numerator"`
@@ -152,6 +154,7 @@ type client struct {
 type remoteError struct {
 	status          int
 	reserveRejected bool
+	reserveCode     string
 }
 
 func (e *remoteError) Error() string { return fmt.Sprintf("UniHub service returned HTTP %d", e.status) }
@@ -224,6 +227,7 @@ func (c *client) do(ctx context.Context, method, path, key string, body, out any
 				return ErrPending
 			}
 			remote.reserveRejected = true
+			remote.reserveCode = code
 		}
 		return remote
 	}
@@ -298,6 +302,9 @@ func reserveBound(rate Rate, input, output int) (string, error) {
 
 // HTTPStatus exposes only bounded classifications, never service bodies/secrets.
 func HTTPStatus(err error) int {
+	if errors.Is(err, ErrNativeCreditsRequired) {
+		return http.StatusPaymentRequired
+	}
 	if errors.Is(err, ErrDuplicate) || errors.Is(err, ErrConflict) {
 		return 409
 	}
@@ -315,7 +322,7 @@ func HTTPStatus(err error) int {
 }
 
 func (remote RemoteCall) matches(row Call) bool {
-	if row.PricingSource == "llmrouter_native" {
+	if nativePricingSource(row.PricingSource) {
 		return remote.matchesNative(row)
 	}
 	localInstance, remoteInstance := row.InstanceID, remote.InstanceID

@@ -680,7 +680,7 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 		a := model.NativeAdmission{CallID: info.RequestId, UserID: info.UserId, TokenID: info.TokenId, ChannelID: info.ChannelId, Model: info.BillingModelNameOrOrigin(), Group: info.UsingGroup, Preference: info.UserSetting.BillingPreference, Price: price, GroupRatio: strconv.FormatFloat(ratio.GroupRatio, 'f', -1, 64), QuotaPerUnit: strconv.FormatFloat(common.QuotaPerUnit, 'f', -1, 64), Reservation: reservation}
 		if err := service.BeginNativeBillingForRelay(c.Request.Context(), info, a); err != nil {
 			if info.ManagedNativePricing() {
-				return types.NewErrorWithStatusCode(err, types.ErrorCodeUpdateDataError, platformbilling.HTTPStatus(err), types.ErrOptionWithSkipRetry())
+				return service.ManagedNativeBillingError(err)
 			}
 			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 		}

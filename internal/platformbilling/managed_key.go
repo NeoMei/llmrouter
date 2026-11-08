@@ -48,7 +48,8 @@ func (a *Adapter) validateModelCredential(credential, task, model string, grant 
 // NativePricing is explicit delegated catalog authority, never a wildcard in
 // the legacy model list. Identity, membership and revocation remain central.
 func (grant Claims) NativePricing() bool {
-	return grant.ModelScope == "llmrouter_available" && grant.PricingSource == "llmrouter_native" && grant.CredentialVersion > 0 && grant.CredentialKind == "api_key" && grant.OriginProductID == "superwagie" && grant.Asset == "CNY/6" && grant.FundingMode == "prepaid_cash"
+	validFunding := grant.PricingSource == "llmrouter_native" && grant.Asset == "CNY/6" && grant.FundingMode == "prepaid_cash" || grant.PricingSource == NativeCreditPricingSource && grant.Asset == "CREDIT/6" && grant.FundingMode == "credits" && grant.NativeCreditConversion != nil && grant.NativeCreditConversion.validCredit()
+	return grant.ModelScope == "llmrouter_available" && validFunding && grant.CredentialVersion > 0 && grant.CredentialKind == "api_key" && grant.OriginProductID == "superwagie"
 }
 
 func (a *Adapter) NativePrincipal() (int, string) {

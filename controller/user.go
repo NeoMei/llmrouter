@@ -390,6 +390,10 @@ func GetAllUsers(c *gin.Context) {
 	sortOptions := model.NewUserSortOptions(c.Query("sort_by"), c.Query("sort_order"))
 	_, productAuthority := authz.ProductPrincipal(c)
 	if productAuthority || middleware.CentralRealmAuthenticated(c) {
+		if productAuthority && platformaccount.RuntimeEnabled() && !middleware.CentralRealmAuthenticated(c) {
+			serveCentralUserView(c, "", nil, nil)
+			return
+		}
 		// A shared row can belong to an unenrolled native owner even when it
 		// has a central mapping. No durable proof currently separates the
 		// native and central profile or serializes enrollment with disclosure.
@@ -437,6 +441,10 @@ func SearchUsers(c *gin.Context) {
 	sortOptions := model.NewUserSortOptions(c.Query("sort_by"), c.Query("sort_order"))
 	_, productAuthority := authz.ProductPrincipal(c)
 	if productAuthority || middleware.CentralRealmAuthenticated(c) {
+		if productAuthority && platformaccount.RuntimeEnabled() && !middleware.CentralRealmAuthenticated(c) {
+			serveCentralUserView(c, keyword, role, status)
+			return
+		}
 		// A shared row can belong to an unenrolled native owner even when it
 		// has a central mapping. No durable proof currently separates the
 		// native and central profile or serializes enrollment with disclosure.

@@ -165,7 +165,8 @@ func TestPaddleOCRBulkProbeSkipsHealthCountsAndWrites(t *testing.T) {
 	}
 }
 
-func assertPaddleOCRProbeStateUnchanged(t *testing.T, db *gorm.DB, user *model.User, channel *model.Channel) {	t.Helper()
+func assertPaddleOCRProbeStateUnchanged(t *testing.T, db *gorm.DB, user *model.User, channel *model.Channel) {
+	t.Helper()
 	var stored model.Channel
 	require.NoError(t, db.First(&stored, channel.Id).Error)
 	assert.Equal(t, channel.Status, stored.Status)

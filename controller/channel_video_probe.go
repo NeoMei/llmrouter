@@ -46,6 +46,12 @@ func testVideoChannel(ctx context.Context, channel *model.Channel, modelName, ke
 		return simpleTestResult(fmt.Errorf("video probe: %s is image-to-video and needs a seed image, so it cannot be auto-tested", modelName))
 	}
 	baseURL := channel.GetBaseURL()
+	if baseURL == "" {
+		baseURL = constant.ChannelBaseURLs[channel.Type]
+	}
+	if baseURL == "" {
+		return simpleTestResult(fmt.Errorf("video probe: channel %d has no base URL", channel.Id))
+	}
 	body, err := common.Marshal(map[string]any{"model": modelName, "prompt": videoProbePrompt})
 	if err != nil {
 		return testResult{localErr: err}

@@ -169,6 +169,17 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	if isSpeechTestModel(testModel) || isTranscriptionTestModel(testModel) {
 		return testAudioChannel(ctx, channel, testUserID, testModel, isSpeechTestModel(testModel), tik)
 	}
+	if isVideoGenerationTestModel(testModel) {
+		key, keyErr := channelProbeKey(ctx, channel, testModel)
+		if keyErr != nil {
+			return testResult{localErr: keyErr}
+		}
+		result := testVideoChannel(ctx, channel, testModel, key)
+		if result.localErr != nil {
+			return testResult{localErr: result.localErr, newAPIError: types.NewError(result.localErr, types.ErrorCodeBadResponse)}
+		}
+		return result
+	}
 
 	requestPath := "/v1/chat/completions"
 

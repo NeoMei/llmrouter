@@ -188,3 +188,24 @@ type audioAdaptor interface {
 func marshalJSON(value any) ([]byte, error) {
 	return common.Marshal(value)
 }
+
+// channelProbeKey takes the first pool-admitted channel key without advancing
+// rotation, so a manual test leaves multi-key state untouched.
+func channelProbeKey(ctx context.Context, channel *model.Channel, modelName string) (string, error) {
+	refs, keys, err := model.ChannelAccountRefs(ctx, model.DB, channel)
+	if err != nil {
+		return "", err
+	}
+	if len(refs) == 0 {
+		return "", fmt.Errorf("channel %d has no available key", channel.Id)
+	}
+	ref := refs[0]
+	if ref.KeyIndex < 0 || ref.KeyIndex >= len(keys) || keys[ref.KeyIndex] == "" {
+		return "", fmt.Errorf("channel %d key %d is unavailable", channel.Id, ref.KeyIndex)
+	}
+	if err := model.CheckUpstreamAccounts(ctx, model.DB, []model.UpstreamAccountRef{ref},
+		model.UpstreamAccountScope{Operation: "channel.test", Model: modelName}, time.Now()); err != nil {
+		return "", fmt.Errorf("channel %d key is cooling down: %v", channel.Id, err)
+	}
+	return keys[ref.KeyIndex], nil
+}

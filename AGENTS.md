@@ -163,8 +163,8 @@ as long as required upstream attribution and license notices are preserved.
 三方交接点是**文件**，不依赖任一客户端的 API：
 
 - 代码交接：`main` 分支
-- 状态记录：`~/项目/codexprojects/U-L-S 综合验收/OPERATIONS.md`（发布/验收记录，**三方只读**）
-- 交接日志：同目录 `HANDOFF.md`（**append-only**）
+- 状态记录：`~/项目/codexprojects/U-L-S 综合验收/OPERATIONS.md`。**发布方追加新段落，不改旧段落**；总控保留验收段落。三方不并发写同一段落。
+- 交接日志：同目录 `HANDOFF.md`。**append-only**：写入前先读文件尾部，只在末尾追加；**禁止整文件覆盖或重写模板**。该文件无技术写保护（2026-11-10 22:19 曾被整体重写丢 3 条记录），整文件写入前必须先确认没有他人条目。
 
 ### 工作区与分支
 
@@ -179,6 +179,23 @@ as long as required upstream attribution and license notices are preserved.
 
 - 分支前缀即所有权，只在自己前缀下提交。`agent/*` 是历史遗留，不再使用。
 - **三方都不直接推 `main`**，只走分支 + 由人合并。合并时机：每轮联调开始前，由人在 `main` 上合入已验收的分支；合完各客户端 `fetch` 后从 `main` 拉新分支。
+
+### 提交身份
+
+分支前缀只是名义所有权，提交作者必须也能区分客户端。每个客户端在自己的 worktree 设 local 作者（不改全局配置）：
+
+| 客户端 | user.name | user.email |
+|---|---|---|
+| Codex | `Codex` | `codex@local` |
+| 犇马 | `SuperWagie` | `sw@local` |
+| WorkBuddy | `WorkBuddy` | `wb@workbuddy.local` |
+
+```sh
+git config user.name "WorkBuddy"
+git config user.email "wb@workbuddy.local"
+```
+
+已推送的提交不改写。
 
 ### 推送陷阱（必须知道）
 

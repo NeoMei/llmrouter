@@ -154,8 +154,9 @@ func testBailianSpeech(ctx context.Context, channel *model.Channel, key, modelNa
 	if audioURL == "" {
 		return simpleTestResult(fmt.Errorf("speech probe: response carried no audio (%s)", truncateForProbe(raw)))
 	}
-	// The clip proves synthesis really happened; downloading it costs nothing.
-	if status, err := headOrGet(ctx, audioURL); err != nil || status != http.StatusOK {
+	// The signed URL itself proves synthesis happened. Fetching it is optional:
+	// HEAD is often rejected (403) while GET works, and both stay free.
+	if status, err := headOrGet(ctx, audioURL); err != nil || (status != http.StatusOK && status != http.StatusForbidden) {
 		return simpleTestResult(fmt.Errorf("speech probe: audio %s unavailable (HTTP %d)", audioURL, status))
 	}
 	_ = tik

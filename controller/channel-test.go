@@ -110,7 +110,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	}
 	// Native OCR jobs are asynchronous and never use the chat probe.
 	if channel.Type == constant.ChannelTypePaddleOCR {
-		return testPaddleOCRChannel(ctx, channel, testModel)
+		return testPaddleOCRChannel(ctx, channel, testModel, 2*time.Minute)
 	}
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)

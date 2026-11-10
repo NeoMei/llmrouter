@@ -43,6 +43,28 @@ func paddleOCRProbeFixture(t *testing.T, state string, requests *atomic.Int32) *
 	return server
 }
 
+// paddleOCRProbeFixtureSequence returns the given states in order, repeating the last.
+func paddleOCRProbeFixtureSequence(t *testing.T, states ...string) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	requests := &atomic.Int32{}
+	var polls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost {
+			_, _ = w.Write([]byte(`{"code":0,"data":{"jobId":"probe-job"}}`))
+			return
+		}
+		index := int(polls.Add(1)) - 1
+		if index >= len(states) {
+			index = len(states) - 1
+		}
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"code":0,"data":{"jobId":"probe-job","state":%q}}`, states[index])))
+	}))
+	t.Cleanup(server.Close)
+	return server, requests
+}
+
 func setupPaddleOCRChannel(t *testing.T, baseURL, key string) (*gorm.DB, *model.User, *model.Channel) {
 	t.Helper()
 	db := setupModelListControllerTestDB(t)
@@ -74,14 +96,13 @@ func TestPaddleOCRChannelProbeSubmitsAndPolls(t *testing.T) {
 	assertPaddleOCRProbeStateUnchanged(t, db, user, channel)
 }
 
-func TestPaddleOCRChannelProbeAcceptsQueuedJob(t *testing.T) {
-	requests := &atomic.Int32{}
-	server := paddleOCRProbeFixture(t, "running", requests)
+func TestPaddleOCRChannelProbeWaitsForTerminalState(t *testing.T) {
+	server, requests := paddleOCRProbeFixtureSequence(t, "running", "success")
 	_, user, channel := setupPaddleOCRChannel(t, server.URL, "fixture-key")
 
 	result := testChannel(context.Background(), channel, user.Id, "", "", false)
-	require.NoError(t, result.localErr, "an accepted job verifies the connection without waiting for extraction")
-	assert.Equal(t, int32(2), requests.Load())
+	require.NoError(t, result.localErr, "a running job must not report success before extraction finishes")
+	assert.Equal(t, int32(3), requests.Load(), "one submit plus one poll per observed state")
 }
 
 func TestPaddleOCRChannelProbeReportsFailedState(t *testing.T) {

@@ -9,12 +9,23 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
+
+// buildChannelAudioProbe returns the request shape a speech or transcription
+// model accepts. Voice is mandatory for synthesis; transcription carries the
+// WAV separately in the multipart body.
+func buildChannelAudioProbe(model string) *dto.AudioRequest {
+	if isTranscriptionTestModel(model) {
+		return &dto.AudioRequest{Model: model, ResponseFormat: "json"}
+	}
+	return &dto.AudioRequest{Model: model, Input: "LLMRouter connection test.", Voice: "Cherry", ResponseFormat: "mp3"}
+}
 
 // channelProbeWAV renders one second of 16 kHz mono silence as PCM WAV. Speech
 // models accept it as valid audio, and it costs a single second of ASR pricing.

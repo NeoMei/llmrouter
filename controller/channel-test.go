@@ -833,11 +833,8 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 			}
 			// Audio models reject chat completions; probe them with their own
 			// request shapes so a connection test proves the real operation.
-			if isSpeechTestModel(model) {
-				return &dto.AudioRequest{Model: model, Input: "LLMRouter connection test.", Voice: "Cherry", ResponseFormat: "mp3"}
-			}
-			if isTranscriptionTestModel(model) {
-				return &dto.AudioRequest{Model: model, ResponseFormat: "json"}
+			if isSpeechTestModel(model) || isTranscriptionTestModel(model) {
+				return buildChannelAudioProbe(model)
 			}
 			req := &dto.GeneralOpenAIRequest{
 				Model:  model,

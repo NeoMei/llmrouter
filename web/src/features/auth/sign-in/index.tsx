@@ -31,6 +31,7 @@ import { AuthLayout } from '../auth-layout'
 import { AccountSwitchCard } from '../components/account-switch-card'
 import { TermsFooter } from '../components/terms-footer'
 import { UserAuthForm } from './components/user-auth-form'
+import { shouldShowLocalOperatorSignIn } from './sign-in-mode'
 
 export function SignIn() {
   const { t } = useTranslation()
@@ -159,7 +160,7 @@ export function SignIn() {
             {t('Sign in with UniHub')}
           </Button>
         ) : null}
-        {config?.native_access ? (
+        {shouldShowLocalOperatorSignIn(config) ? (
           <a
             href={`/sign-in?native=1${redirect ? `&redirect=${encodeURIComponent(redirect)}` : ''}`}
           >

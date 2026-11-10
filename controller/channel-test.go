@@ -174,11 +174,11 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		if keyErr != nil {
 			return testResult{localErr: keyErr}
 		}
-		result := testVideoChannel(ctx, channel, testModel, key)
-		if result.localErr != nil {
-			return testResult{localErr: result.localErr, newAPIError: types.NewError(result.localErr, types.ErrorCodeBadResponse)}
+		res := testVideoChannel(ctx, channel, testModel, key)
+		if res.localErr != nil && res.newAPIError == nil {
+			res.newAPIError = types.NewError(res.localErr, types.ErrorCodeBadResponse)
 		}
-		return result
+		return res
 	}
 
 	requestPath := "/v1/chat/completions"

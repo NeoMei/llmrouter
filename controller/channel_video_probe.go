@@ -43,7 +43,7 @@ func testVideoChannel(ctx context.Context, channel *model.Channel, modelName, ke
 	if isImageToVideoModel(modelName) {
 		// Image-to-video needs a real seed frame; a synthetic one would silently
 		// change what is being verified, so the probe refuses instead of guessing.
-		return testResult{localErr: fmt.Errorf("video probe: %s is image-to-video and needs a seed image, so it cannot be auto-tested", modelName)}
+		return simpleTestResult(fmt.Errorf("video probe: %s is image-to-video and needs a seed image, so it cannot be auto-tested", modelName))
 	}
 	baseURL := channel.GetBaseURL()
 	body, err := common.Marshal(map[string]any{"model": modelName, "prompt": videoProbePrompt})
@@ -74,7 +74,7 @@ func testVideoChannel(ctx context.Context, channel *model.Channel, modelName, ke
 	// GenRelayInfo normally allocates; a probe must provide it too.
 	info.TaskRelayInfo = &relaycommon.TaskRelayInfo{}
 	if taskErr := adaptor.ValidateRequestAndSetAction(c, info); taskErr != nil {
-		return testResult{localErr: taskErr.Error}
+		return simpleTestResult(taskErr.Error)
 	}
 	requestBody, err := adaptor.BuildRequestBody(c, info)
 	if err != nil {
@@ -93,31 +93,37 @@ func testVideoChannel(ctx context.Context, channel *model.Channel, modelName, ke
 	}
 	resp, err := service.GetHttpClient().Do(request)
 	if err != nil {
-		return testResult{localErr: fmt.Errorf("video probe: submit failed (%v)", err)}
+		return simpleTestResult(fmt.Errorf("video probe: submit failed (%v)", err))
 	}
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
-		return testResult{localErr: fmt.Errorf("video probe: submit HTTP %d %s", resp.StatusCode, string(raw))}
+		return simpleTestResult(fmt.Errorf("video probe: submit HTTP %d %s", resp.StatusCode, string(raw)))
 	}
 	taskID, _, taskErr := adaptor.DoResponse(c, resp, info)
 	if taskErr != nil {
-		return testResult{localErr: taskErr.Error}
+		return simpleTestResult(taskErr.Error)
 	}
 	state, err := videoProbeTaskState(ctx, adaptor, baseURL, key, taskID)
 	if err != nil {
-		return testResult{localErr: err}
+		return simpleTestResult(err)
 	}
 	switch state {
 	case "succeed", "succeeded", "success", "completed":
 		return testResult{}
 	}
-	return testResult{localErr: fmt.Errorf("video probe: task %s ended %q", taskID, state)}
+	return simpleTestResult(fmt.Errorf("video probe: task %s ended %q", taskID, state))
 }
 
 // getChannelTaskAdapter resolves the async adaptor that serves this channel type.
 func getChannelTaskAdapter(channel *model.Channel) channel.TaskAdaptor {
 	return relay.GetTaskAdaptor(constant.TaskPlatform(fmt.Sprintf("%d", channel.Type)))
+}
+
+// simpleTestResult keeps video probe failures on the managed renderer, which
+// needs a context, and reports the probe message through the API error.
+func simpleTestResult(err error) testResult {
+	return testResult{localErr: err, newAPIError: types.NewError(err, types.ErrorCodeBadResponse)}
 }
 
 // isImageToVideoModel reports the Wan families whose request requires a source image.

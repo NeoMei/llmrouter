@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -38,6 +39,11 @@ func testVideoChannel(ctx context.Context, channel *model.Channel, modelName, ke
 	adaptor := getChannelTaskAdapter(channel)
 	if adaptor == nil {
 		return testResult{localErr: fmt.Errorf("video probe: channel %d has no async task adaptor", channel.Id)}
+	}
+	if isImageToVideoModel(modelName) {
+		// Image-to-video needs a real seed frame; a synthetic one would silently
+		// change what is being verified, so the probe refuses instead of guessing.
+		return testResult{localErr: fmt.Errorf("video probe: %s is image-to-video and needs a seed image, so it cannot be auto-tested", modelName)}
 	}
 	baseURL := channel.GetBaseURL()
 	body, err := common.Marshal(map[string]any{"model": modelName, "prompt": videoProbePrompt})
@@ -112,6 +118,12 @@ func testVideoChannel(ctx context.Context, channel *model.Channel, modelName, ke
 // getChannelTaskAdapter resolves the async adaptor that serves this channel type.
 func getChannelTaskAdapter(channel *model.Channel) channel.TaskAdaptor {
 	return relay.GetTaskAdaptor(constant.TaskPlatform(fmt.Sprintf("%d", channel.Type)))
+}
+
+// isImageToVideoModel reports the Wan families whose request requires a source image.
+func isImageToVideoModel(modelName string) bool {
+	name := lowerTrim(modelName)
+	return strings.Contains(name, "i2v") || strings.Contains(name, "image2video")
 }
 
 // videoProbeTaskState polls an existing task id through the adaptor's fetch wire

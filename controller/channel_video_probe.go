@@ -13,9 +13,10 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay"
 	"github.com/QuantumNous/new-api/relay/channel"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -53,7 +54,13 @@ func testVideoChannel(ctx context.Context, channel *model.Channel, modelName, ke
 	c.Set(common.KeyBodyStorage, storage)
 	c.Set("channel_test_probe", true)
 	c.Set("platform", fmt.Sprintf("%d", channel.Type))
-	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channel.Id, ChannelType: channel.Type, ChannelBaseUrl: baseURL, ApiKey: key}}
+	// RelayInfo needs the full inner metadata structs initialized; the task
+	// validator writes info.Action through RelayInfo.
+	info := &relaycommon.RelayInfo{
+		ChannelMeta:    &relaycommon.ChannelMeta{ChannelId: channel.Id, ChannelType: channel.Type, ChannelBaseUrl: baseURL, ApiKey: key},
+		PriceData:      types.PriceData{},
+		TokenCountMeta: relaycommon.TokenCountMeta{},
+	}
 	info.UpstreamModelName = modelName
 	info.OriginModelName = modelName
 	info.RelayMode = relayconstant.RelayModeVideoSubmit

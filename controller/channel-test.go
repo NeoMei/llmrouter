@@ -52,7 +52,23 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 	if channel != nil && channel.Type == constant.ChannelTypeCodex {
 		return string(constant.EndpointTypeOpenAIResponse)
 	}
+	if isImageGenerationTestModel(modelName) {
+		return string(constant.EndpointTypeImageGeneration)
+	}
 	return normalized
+}
+
+// isImageGenerationTestModel keeps image models off the chat probe. Only
+// families whose request shape is a single prompt are listed; video families
+// (wan2.x/wanx2.x) stay out.
+func isImageGenerationTestModel(modelName string) bool {
+	name := strings.ToLower(strings.TrimSpace(modelName))
+	for _, prefix := range []string{"qwen-image", "dall-e", "gpt-image", "flux", "seedream", "kolors", "imagen"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveChannelTestUserID(c *gin.Context) (int, error) {
@@ -78,7 +94,6 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	}
 	tik := time.Now()
 	var unsupportedTestChannelTypes = []int{
-		constant.ChannelTypePaddleOCR,
 		constant.ChannelTypeMidjourney,
 		constant.ChannelTypeMidjourneyPlus,
 		constant.ChannelTypeSunoAPI,
@@ -92,6 +107,10 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		return testResult{
 			localErr: fmt.Errorf("%s channel test is not supported", channelTypeName),
 		}
+	}
+	// Native OCR jobs are asynchronous and never use the chat probe.
+	if channel.Type == constant.ChannelTypePaddleOCR {
+		return testPaddleOCRChannel(ctx, channel, testModel, 45*time.Second)
 	}
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -847,15 +866,6 @@ func TestChannel(c *gin.Context) {
 	testModel := c.Query("model")
 	endpointType := c.Query("endpoint_type")
 	isStream, _ := strconv.ParseBool(c.Query("stream"))
-	// Native OCR jobs cannot be checked by the generic model probe.
-	if channel.Type == constant.ChannelTypePaddleOCR {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": fmt.Sprintf("%s channel test is not supported", constant.GetChannelTypeName(channel.Type)),
-			"time":    0.0,
-		})
-		return
-	}
 	testUserID, err := resolveChannelTestUserID(c)
 	if err != nil {
 		common.ApiError(c, err)

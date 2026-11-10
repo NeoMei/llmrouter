@@ -288,7 +288,7 @@ export function MetadataEditor(props: {
           <div className='text-muted-foreground space-y-2 text-xs'>
             <p>
               {t(
-                'OCR uses paddleocr_jobs: create and retrieve are both needed for submit and poll. Native channel 60 has no generic chat connection test. Configure models and per-request price explicitly; OCR public origin and persistent grant secret are server prerequisites.'
+                'OCR uses paddleocr_jobs: create and retrieve are both needed for submit and poll. The channel connection test submits one tiny OCR job and polls it, so a valid key and reachable endpoint are verified without billing. Configure models and per-request price explicitly; OCR public origin and persistent grant secret are server prerequisites.'
               )}
             </p>
             <p>

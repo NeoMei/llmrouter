@@ -192,7 +192,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
               variant='ghost'
               size='icon-sm'
               onClick={handleDirectTest}
-              disabled={isTesting || channel.type === 60}
+              disabled={isTesting}
               aria-label={t('Test Connection')}
             />
           }
@@ -218,7 +218,6 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
                   handleTest()
                 }}
                 aria-label={t('Test Channel Connection')}
-                disabled={channel.type === 60}
               />
             }
           >
@@ -275,7 +274,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           )}
 
           {/* Test Connection */}
-          <DropdownMenuItem disabled={channel.type === 60} onClick={handleTest}>
+          <DropdownMenuItem onClick={handleTest}>
             {t('Test Connection')}
             <DropdownMenuShortcut>
               <PlugZap size={16} />

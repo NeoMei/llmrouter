@@ -155,3 +155,45 @@ as long as required upstream attribution and license notices are preserved.
 - First compare the current git user (`git config user.name` / `git config user.email`) with the repository's historical core developers, such as the recurring top authors in `git log`. Do not change git config.
 - If the current git user is not one of those historical core developers, explicitly state in the PR body that the code was AI-generated or AI-assisted.
 - Always use the repository PR template at `.github/PULL_REQUEST_TEMPLATE.md` when drafting the PR title/body. Preserve the template structure and fill in the relevant sections instead of replacing it with an ad hoc format.
+
+## Multi-Agent Collaboration
+
+多个 agent 可同时在本仓库开发，规则与 UniHub 相同：共享一份 `.git`，各自独立 worktree、分支、本地栈，`main` 是唯一交接点。
+
+### 工作区与分支
+
+- 用独立 git worktree，不要直接改主工作区 `~/项目/codexprojects/llmrouter`。worktree 根目录读 `~/.codex/config.toml` 的 `git-worktree-root`（当前 `/Volumes/codex/new-worktrees`）。
+- 分支前缀即所有权：Codex 用 `codex/*`，WorkBuddy 用 `wb/*`。只在自己前缀下提交。
+- 不直接推 `main`，合并由人决定。
+
+### 推送陷阱（必须知道）
+
+本仓库有两个 remote：
+- `llmrouter` → 自有仓库 `NeoMei/llmrouter`（你的 fork 主干）
+- `origin` → 上游 `QuantumNous/new-api`（只读，无写权限）
+
+`branch.main.remote` 已设为 `llmrouter`，但其他分支**不会**自动用自有仓库。推送时**必须显式指定 `llmrouter`**：
+
+```sh
+git push llmrouter <branch>
+```
+
+不要用 `git push`（可能命中 `origin` 并报权限拒绝），不要 `git push -u origin`（会建立到上游的错误跟踪）。
+
+### 本地运行
+
+- llmrouter 默认吃本机 `127.0.0.1:5432`（Postgres）和 `127.0.0.1:6379`（Redis），端口是全局共享的。
+- 一个 agent 在开发时，其他 agent 的 llmrouter 本地服务会看到同一数据库；不要对同一套数据库并发跑迁移。
+- 需要并行开发时，在各自 worktree 的 `.env` 里用独立的数据库名（如 `llmrouter_wb`）和独立 Redis db 序号，并在交接说明里写清用的哪个。
+- 服务默认端口 3000；同一时间只有一个实例能监听。需要并行起服务时改 `PORT`。
+
+### 依赖与环境
+
+- `node_modules`、`bin`、`.codegraph` 不跨 worktree 共享，每个 worktree 自己准备。
+- `.env` 若存在只属于该 worktree：不复制、不提交。
+
+### 交接
+
+- 收工前把改动提交到自己分支并 `git push llmrouter <branch>`。
+- 接手前 `git fetch llmrouter`，确认 `main` 与 `llmrouter/main` 一致。
+- 交接说明写四件事：做了什么、没做什么、下一步、未合并的依赖分支。

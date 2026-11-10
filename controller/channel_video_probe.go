@@ -79,6 +79,8 @@ func testVideoChannel(ctx context.Context, channel *model.Channel, modelName, ke
 	// The task validator stores the parsed request on TaskRelayInfo, which
 	// GenRelayInfo normally allocates; a probe must provide it too.
 	info.TaskRelayInfo = &relaycommon.TaskRelayInfo{}
+	// The adaptor caches base URL and key at Init time.
+	adaptor.Init(info)
 	if taskErr := adaptor.ValidateRequestAndSetAction(c, info); taskErr != nil {
 		return simpleTestResult(taskErr.Error)
 	}

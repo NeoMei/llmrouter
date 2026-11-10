@@ -23,9 +23,16 @@ export function isCentralUserDirectory(
   user: AuthUser | null,
   session: LoginSession | null
 ): boolean {
+  if (user?.identity_source !== 'unihub') return false
+  if (
+    user.authentication_realm === 'CENTRAL' ||
+    session?.authentication_realm === 'CENTRAL'
+  ) {
+    return true
+  }
   return (
-    user?.identity_source === 'unihub' &&
-    (user.authentication_realm === 'CENTRAL' ||
-      session?.authentication_realm === 'CENTRAL')
+    session?.login_method === 'product_broker' ||
+    session?.login_method === 'unihub' ||
+    session?.login_method === 'central_credential'
   )
 }

@@ -31,8 +31,14 @@ const user = (realm?: AuthUser['authentication_realm'], source?: string) =>
     authentication_realm: realm,
     identity_source: source,
   }) as AuthUser
-const session = (realm?: LoginSession['authentication_realm']) =>
-  ({ authentication_realm: realm }) as LoginSession
+const session = (
+  realm?: LoginSession['authentication_realm'],
+  loginMethod = 'password'
+) =>
+  ({
+    authentication_realm: realm,
+    login_method: loginMethod,
+  }) as LoginSession
 
 test('a verified central UniHub session uses the authoritative user directory', () => {
   assert.equal(
@@ -41,6 +47,13 @@ test('a verified central UniHub session uses the authoritative user directory', 
   )
   assert.equal(
     isCentralUserDirectory(user(undefined, 'unihub'), session('CENTRAL')),
+    true
+  )
+  assert.equal(
+    isCentralUserDirectory(
+      user('LEGACY', 'unihub'),
+      session('LEGACY', 'product_broker')
+    ),
     true
   )
 })
@@ -56,6 +69,13 @@ test('native and unverified UniHub identities keep the original user management 
   )
   assert.equal(
     isCentralUserDirectory(user(undefined, 'unihub'), session('LEGACY')),
+    false
+  )
+  assert.equal(
+    isCentralUserDirectory(
+      user('LOCAL_ONLY', 'unihub'),
+      session('LOCAL_ONLY', 'password')
+    ),
     false
   )
   assert.equal(isCentralUserDirectory(null, null), false)

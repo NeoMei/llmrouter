@@ -34,16 +34,18 @@ var centralActorToken = regexp.MustCompile(`^upa_[0-9a-f]{64}$`)
 
 const centralUserDirectoryLimit = 500
 
+var errCentralUserPermission = errors.New("central user read permission required")
+
 func centralUserAuthority(c *gin.Context) (*userkit.RuntimeClient, string, error) {
 	if !platformaccount.RuntimeEnabled() {
 		return nil, "", errors.New("central directory unavailable")
 	}
 	p, ok := authz.ProductPrincipal(c)
 	if !ok {
-		return nil, "", errors.New("product principal required")
+		return nil, "", errCentralUserPermission
 	}
 	if !authz.CanRequest(c, authz.Permission{Resource: "user", Action: "read"}) {
-		return nil, "", errors.New("user read permission required")
+		return nil, "", errCentralUserPermission
 	}
 	identity, ok := middleware.GetSessionAuthIdentity(c)
 	if !ok || p.LocalUser.ID != strconv.Itoa(identity.UserID) {
@@ -52,6 +54,9 @@ func centralUserAuthority(c *gin.Context) (*userkit.RuntimeClient, string, error
 	config, err := platformaccount.Current()
 	if err != nil {
 		return nil, "", err
+	}
+	if p.Access.Issuer != config.PublicOrigin || p.Access.ProductID != config.ProductID || p.Access.InstanceID != config.InstanceID {
+		return nil, "", errors.New("central authority scope mismatch")
 	}
 	if err = model.VerifyUniHubIdentityBinding(identity.UserID, p.Access.Issuer, p.Access.Subject); err != nil {
 		return nil, "", err
@@ -68,7 +73,7 @@ func centralUserAuthority(c *gin.Context) (*userkit.RuntimeClient, string, error
 		return nil, "", err
 	}
 	now := time.Now().Unix()
-	if current.AuthVersion != identity.UserAuthVersion || current.Binding.UserID != p.Access.Subject || !centralActorToken.MatchString(current.ActorToken) || current.ActorExpiresAt <= now || current.ActorExpiresAt > now+130 {
+	if current.AuthVersion != identity.UserAuthVersion || current.Binding.UserID != p.Access.Subject || current.Access.Subject != p.Access.Subject || current.Access.User.ID != p.Access.Subject || current.Access.Issuer != config.PublicOrigin || current.Access.ProductID != config.ProductID || current.Access.InstanceID != config.InstanceID || !centralActorToken.MatchString(current.ActorToken) || current.ActorExpiresAt <= now || current.ActorExpiresAt > now+130 {
 		return nil, "", errors.New("current actor unavailable")
 	}
 	session, _, validationErr := service.ValidateLoginSession(identity)
@@ -136,6 +141,10 @@ func serveCentralUserView(c *gin.Context, keyword string, roleFilter, statusFilt
 	pageInfo := common.GetPageQuery(c)
 	client, actor, err := centralUserAuthority(c)
 	if err != nil {
+		if errors.Is(err, errCentralUserPermission) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "UNIHUB_PERMISSION_DENIED"})
+			return
+		}
 		common.SysError("central user directory authority unavailable: " + err.Error())
 		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"success": false, "code": "CENTRAL_USER_DIRECTORY_UNAVAILABLE"})
 		return

@@ -51,7 +51,7 @@ func TestCentralUserViewUsesAuthoritativeDirectoryAndKeepsNativeProfilesPrivate(
 			w.WriteHeader(401)
 			return
 		}
-		if strings.HasPrefix(r.URL.Path, "/internal/v1/product-runtime/identity/") {
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/internal/v1/product-runtime/identity/") {
 			current := identity
 			current.Binding.LocalUserID = strconv.FormatInt(rootID.Load(), 10)
 			_ = json.NewEncoder(w).Encode(current)
@@ -67,6 +67,8 @@ func TestCentralUserViewUsesAuthoritativeDirectoryAndKeepsNativeProfilesPrivate(
 			authenticated := identity
 			authenticated.Binding.LocalUserID = strconv.FormatInt(rootID.Load(), 10)
 			_ = json.NewEncoder(w).Encode(authenticated)
+		case "/internal/v1/product-runtime/identity/browser/source/verify":
+			w.WriteHeader(http.StatusNoContent)
 		case "/internal/v1/product-runtime/users":
 			usersCalls.Add(1)
 			if unavailable.Load() != 0 {
@@ -98,9 +100,9 @@ func TestCentralUserViewUsesAuthoritativeDirectoryAndKeepsNativeProfilesPrivate(
 	require.NoError(t, err)
 	identity.Binding.LocalUserID = strconv.Itoa(root.Id)
 	rootID.Store(int64(root.Id))
-	bundle, err := service.CreateUniHubLoginSession(root.Id, time.Now().Add(time.Hour).Unix(), "", "")
+	bundle, err := service.CreateLoginSession(root.Id, "product_broker", "", "")
 	require.NoError(t, err)
-	require.NoError(t, model.BindUniHubSession(bundle.Session.SID, root.Id, access, "test-central-bearer", time.Now().Add(time.Hour).Unix()))
+	require.NoError(t, model.BindBrokerSourceProof(bundle.Session.SID, root.Id, access, cfg, "ubsp_"+strings.Repeat("b", 64), time.Now().Add(time.Hour).Unix()))
 	for _, path := range []string{"/api/user/?p=1&page_size=10", "/api/user/search?keyword=Alice&p=1&page_size=10"} {
 		got := f.request(http.MethodGet, path, bundle.AccessToken, nil)
 		require.Equal(t, http.StatusOK, got.Code, got.Body.String())

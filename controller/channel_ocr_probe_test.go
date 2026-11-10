@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/base64"
 	"context"
 	"fmt"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	relayhelper "github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -206,9 +208,31 @@ func assertPaddleOCRProbeStateUnchanged(t *testing.T, db *gorm.DB, user *model.U
 func TestChannelTestDetectsImageGenerationModels(t *testing.T) {
 	channel := &model.Channel{Type: constant.ChannelTypeAli}
 	assert.Equal(t, string(constant.EndpointTypeImageGeneration), normalizeChannelTestEndpoint(channel, "qwen-image-2.0-pro", ""))
-	assert.Equal(t, "", normalizeChannelTestEndpoint(channel, "wan2.6-t2v", ""), "video families must not be probed as image models")
+	assert.Equal(t, string(constant.EndpointTypeOpenAIVideo), normalizeChannelTestEndpoint(channel, "wan2.6-t2v", ""), "video families use the video endpoint, never the image probe")
 	request := buildTestRequest("qwen-image-2.0", string(constant.EndpointTypeImageGeneration), channel, false)
 	imageRequest, ok := request.(*dto.ImageRequest)
 	require.True(t, ok, "image endpoint must build an image request")
 	assert.Equal(t, "qwen-image-2.0", imageRequest.Model)
+}
+
+func TestChannelTestBuildsAudioProbes(t *testing.T) {
+	channel := &model.Channel{Type: constant.ChannelTypeAli}
+	speech, ok := buildTestRequest("qwen3-tts-flash", string(constant.EndpointTypeOpenAI), channel, false).(*dto.AudioRequest)
+	require.True(t, ok, "speech models must not be probed through chat completions")
+	assert.Equal(t, "Cherry", speech.Voice, "speech requires a voice parameter")
+	assert.NotEmpty(t, speech.Input)
+
+	transcription, ok := buildTestRequest("qwen3-asr-flash", string(constant.EndpointTypeOpenAI), channel, false).(*dto.AudioRequest)
+	require.True(t, ok, "transcription models must not be probed through chat completions")
+	assert.Equal(t, "json", transcription.ResponseFormat)
+
+	wav, err := channelProbeWAV()
+	require.NoError(t, err)
+	assert.Equal(t, 44+32000, len(wav), "one second of 16 kHz mono 16-bit PCM")
+	fact, err := relayhelper.DecodeMediaFact("audio", "data:audio/wav;base64,"+base64.StdEncoding.EncodeToString(wav))
+	require.NoError(t, err)
+	assert.Equal(t, "wav", fact.Format, "the probe audio must pass the relay WAV decoder")
+	assert.InDelta(t, 1.0, fact.Seconds, 0.05)
+	body := channelProbeASRBody("qwen3-asr-flash", wav)
+	assert.Contains(t, string(body), "probe.wav", "multipart body carries the WAV file")
 }

@@ -85,9 +85,10 @@ func TestChannelTestProbesTranscriptionWithWAV(t *testing.T) {
 	server := audioProbeFixture(t, &path, &body)
 	user, channel := setupAudioChannel(t, server.URL, "qwen3-asr-flash")
 
-	// Aliyun Flash ASR refuses a real call without a validated inline carrier, so
-	// the probe must stop before the supplier and say why.
+	// The probe runs the production admission and then the real transcription
+	// wire through the channel's own adaptor.
 	result := testChannel(context.Background(), channel, user.Id, "", "", false)
-	require.ErrorContains(t, result.localErr, "unvalidated Flash ASR request")
-	assert.Nil(t, path.Load(), "no supplier request may be sent without validated audio")
+	require.NoError(t, result.localErr)
+	assert.Equal(t, "/compatible-mode/v1/chat/completions", path.Load(), "Flash ASR forwards the validated inline carrier on the alias chat wire")
+	assert.Contains(t, body.Load(), "data:audio/wav;base64,")
 }

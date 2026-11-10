@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayhelper "github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -27,7 +28,7 @@ import (
 // WAV separately in the multipart body.
 func buildChannelAudioProbe(modelName string) *dto.AudioRequest {
 	if isTranscriptionTestModel(modelName) {
-		return &dto.AudioRequest{Model: modelName}
+		return &dto.AudioRequest{Model: modelName, ResponseFormat: "json"}
 	}
 	return &dto.AudioRequest{Model: modelName, Input: "LLMRouter connection test.", Voice: "Cherry"}
 }
@@ -97,7 +98,12 @@ func testAudioChannel(ctx context.Context, channel *model.Channel, testUserID in
 		requestPath = "/v1/audio/speech"
 	}
 	body, contentType := channelProbeAudioBody(modelName, speech)
-	c.Request = httptest.NewRequestWithContext(ctx, http.MethodPost, requestPath, bytes.NewReader(body))
+	bodyStorage, storageErr := common.CreateBodyStorage(body)
+	if storageErr != nil {
+		return testResult{context: c, localErr: storageErr}
+	}
+	c.Set(common.KeyBodyStorage, bodyStorage)
+	c.Request = httptest.NewRequestWithContext(ctx, http.MethodPost, requestPath, nil)
 	c.Request.Header.Set("Content-Type", contentType)
 	// Marks a router connection probe: no billing, no usage, audio shape only.
 	c.Set("channel_test_probe", true)
@@ -120,11 +126,16 @@ func testAudioChannel(ctx context.Context, channel *model.Channel, testUserID in
 	info.IsChannelTest = true
 	info.InitChannelMeta(c)
 
-	adaptor, ok := relay.GetAdaptor(info.ApiType).(audioAdaptor)
-	if !ok || adaptor == nil {
+	adaptor := newChannelTestAudioAdaptor(channel, info)
+	if adaptor == nil {
 		return testResult{context: c, localErr: fmt.Errorf("channel %d has no audio adaptor", channel.Id)}
 	}
 	adaptor.Init(info)
+	// Run the same domestic validation the relay applies before any send, so the
+	// probe exercises the real admission path rather than a shortcut.
+	if err := relayhelper.ValidateDomesticAudio(c, info, channel.Type, modelName, modelName); err != nil {
+		return testResult{context: c, localErr: err, newAPIError: types.NewError(err, types.ErrorCodeInvalidRequest)}
+	}
 	converted, err := adaptor.ConvertAudioRequest(c, info, *request)
 	if err != nil {
 		return testResult{context: c, localErr: err, newAPIError: types.NewError(err, types.ErrorCodeConvertRequestFailed)}
@@ -155,6 +166,16 @@ func finishAudioChannelTest(c *gin.Context, info *relaycommon.RelayInfo, resp an
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "time": float64(time.Since(tik).Milliseconds()) / 1000.0})
 	return testResult{context: c}
+}
+
+// newChannelTestAudioAdaptor resolves the channel's own API adaptor so the probe
+// follows the production wire instead of assuming OpenAI.
+func newChannelTestAudioAdaptor(channel *model.Channel, info *relaycommon.RelayInfo) audioAdaptor {
+	adaptor, ok := relay.GetAdaptor(info.ApiType).(audioAdaptor)
+	if !ok {
+		return nil
+	}
+	return adaptor
 }
 
 // audioAdaptor narrows the fields used by the audio probe.

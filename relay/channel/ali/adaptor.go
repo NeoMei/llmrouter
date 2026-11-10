@@ -254,7 +254,10 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 
 func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
 	if info.RelayMode == constant.RelayModeAudioTranscription {
-		return convertTranscription(c, request)
+		if c.GetString(helper.DomesticASRDataKey) != "" || c.GetBool("channel_test_probe") {
+			// Flash ASR replays the validated inline carrier verbatim.
+			return convertTranscription(c, request)
+		}
 	}
 	// Compatible mode serves OpenAI-shaped speech; marshal the AudioRequest.
 	raw, err := common.Marshal(request)

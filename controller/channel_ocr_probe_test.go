@@ -224,7 +224,7 @@ func TestChannelTestBuildsAudioProbes(t *testing.T) {
 
 	transcription, ok := buildTestRequest("qwen3-asr-flash", string(constant.EndpointTypeOpenAI), channel, false).(*dto.AudioRequest)
 	require.True(t, ok, "transcription models must not be probed through chat completions")
-	assert.Empty(t, transcription.ResponseFormat, "Flash ASR rejects response_format")
+	assert.Equal(t, "json", transcription.ResponseFormat)
 
 	wav, err := channelProbeWAV()
 	require.NoError(t, err)

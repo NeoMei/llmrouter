@@ -35,12 +35,12 @@ const (
 // testVideoChannel submits one minimal clip through the channel's own async
 // adaptor and polls until the supplier reports a terminal state. Polling is free;
 // the supplier bills the generated clip, so this runs once per test.
-func testVideoChannel(ctx context.Context, channel *model.Channel, modelName, key string) testResult {
+func testVideoChannel(ctx context.Context, channel *model.Channel, modelName, key, seedImage string) testResult {
 	adaptor := getChannelTaskAdapter(channel)
 	if adaptor == nil {
 		return testResult{localErr: fmt.Errorf("video probe: channel %d has no async task adaptor", channel.Id)}
 	}
-	if isImageToVideoModel(modelName) {
+	if isImageToVideoModel(modelName) && seedImage == "" {
 		// Image-to-video needs a real seed frame; a synthetic one would silently
 		// change what is being verified, so the probe refuses instead of guessing.
 		return simpleTestResult(fmt.Errorf("video probe: %s is image-to-video and needs a seed image, so it cannot be auto-tested", modelName))
@@ -52,7 +52,12 @@ func testVideoChannel(ctx context.Context, channel *model.Channel, modelName, ke
 	if baseURL == "" {
 		return simpleTestResult(fmt.Errorf("video probe: channel %d has no base URL", channel.Id))
 	}
-	body, err := common.Marshal(map[string]any{"model": modelName, "prompt": videoProbePrompt})
+	payload := map[string]any{"model": modelName, "prompt": videoProbePrompt}
+	if seedImage != "" {
+		// OpenAI-shaped input_reference; the Wan adaptor also accepts image/images.
+		payload["input_reference"] = seedImage
+	}
+	body, err := common.Marshal(payload)
 	if err != nil {
 		return testResult{localErr: err}
 	}

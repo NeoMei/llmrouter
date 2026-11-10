@@ -147,6 +147,8 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	if channel.Type == constant.ChannelTypePaddleOCR {
 		return testPaddleOCRChannel(ctx, channel, testModel, 2*time.Minute)
 	}
+	// Explicit per-channel probe inputs win over the built-in synthetic fixtures.
+	testSeedImage := channelProbeSeedImage(channel)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
@@ -174,7 +176,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		if keyErr != nil {
 			return testResult{localErr: keyErr}
 		}
-		res := testVideoChannel(ctx, channel, testModel, key)
+		res := testVideoChannel(ctx, channel, testModel, key, testSeedImage)
 		if res.localErr != nil && res.newAPIError == nil {
 			res.newAPIError = types.NewError(res.localErr, types.ErrorCodeBadResponse)
 		}
@@ -851,7 +853,7 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 			// Audio models reject chat completions; probe them with their own
 			// request shapes so a connection test proves the real operation.
 			if isSpeechTestModel(model) || isTranscriptionTestModel(model) {
-				return buildChannelAudioProbe(model)
+				return buildChannelAudioProbe(model, "")
 			}
 			req := &dto.GeneralOpenAIRequest{
 				Model:  model,

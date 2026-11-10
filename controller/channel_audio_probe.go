@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -26,11 +27,14 @@ import (
 // buildChannelAudioProbe returns the request shape a speech or transcription
 // model accepts. Voice is mandatory for synthesis; transcription carries the
 // WAV separately in the multipart body.
-func buildChannelAudioProbe(modelName string) *dto.AudioRequest {
+func buildChannelAudioProbe(modelName, voice string) *dto.AudioRequest {
 	if isTranscriptionTestModel(modelName) {
 		return &dto.AudioRequest{Model: modelName, ResponseFormat: "json"}
 	}
-	return &dto.AudioRequest{Model: modelName, Input: "LLMRouter connection test.", Voice: "Cherry"}
+	if voice == "" {
+		voice = "Cherry"
+	}
+	return &dto.AudioRequest{Model: modelName, Input: "LLMRouter connection test.", Voice: voice}
 }
 
 // channelProbeWAV renders one second of 16 kHz mono silence as PCM WAV. Speech
@@ -65,9 +69,9 @@ func channelProbeWAV() ([]byte, error) {
 }
 
 // channelProbeAudioBody builds the request payload for one audio probe.
-func channelProbeAudioBody(modelName string, speech bool) ([]byte, string) {
+func channelProbeAudioBody(modelName, voice string, speech bool) ([]byte, string) {
 	if speech {
-		raw, err := marshalJSON(buildChannelAudioProbe(modelName))
+		raw, err := marshalJSON(buildChannelAudioProbe(modelName, voice))
 		if err != nil {
 			return nil, "application/json"
 		}
@@ -97,7 +101,8 @@ func testAudioChannel(ctx context.Context, channel *model.Channel, testUserID in
 	if speech {
 		requestPath = "/v1/audio/speech"
 	}
-	body, contentType := channelProbeAudioBody(modelName, speech)
+	voice := channelProbeVoice(channel)
+	body, contentType := channelProbeAudioBody(modelName, voice, speech)
 	bodyStorage, storageErr := common.CreateBodyStorage(body)
 	if storageErr != nil {
 		return testResult{context: c, localErr: storageErr}
@@ -118,7 +123,7 @@ func testAudioChannel(ctx context.Context, channel *model.Channel, testUserID in
 		return testResult{context: c, localErr: newAPIError, newAPIError: newAPIError}
 	}
 
-	request := buildChannelAudioProbe(modelName)
+	request := buildChannelAudioProbe(modelName, voice)
 	info, relayErr := relaycommon.GenRelayInfo(c, types.RelayFormatOpenAIAudio, request, nil)
 	if relayErr != nil {
 		return testResult{context: c, localErr: relayErr, newAPIError: types.NewError(relayErr, types.ErrorCodeGenRelayInfoFailed)}
@@ -208,4 +213,31 @@ func channelProbeKey(ctx context.Context, channel *model.Channel, modelName stri
 		return "", fmt.Errorf("channel %d key is cooling down: %v", channel.Id, err)
 	}
 	return keys[ref.KeyIndex], nil
+}
+
+// channelProbeSeedImage returns the operator-supplied first frame for video
+// probes. It is stored on the channel rather than in code so image-to-video
+// models can be tested against real media.
+func channelProbeSeedImage(channel *model.Channel) string {
+	return channelProbeSetting(channel, "probe_seed_image")
+}
+
+// channelProbeVoice returns the configured synthesis voice, defaulting to the
+// supplier's public voice used by the built-in probe.
+func channelProbeVoice(channel *model.Channel) string {
+	return channelProbeSetting(channel, "probe_voice")
+}
+
+// channelProbeSetting reads one probe input from the channel's other_settings,
+// so operators supply real media instead of changing code.
+func channelProbeSetting(channel *model.Channel, key string) string {
+	if channel == nil {
+		return ""
+	}
+	var settings map[string]any
+	if common.UnmarshalJsonStr(channel.OtherSettings, &settings) != nil {
+		return ""
+	}
+	value, _ := settings[key].(string)
+	return strings.TrimSpace(value)
 }

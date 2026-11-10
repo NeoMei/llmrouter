@@ -183,6 +183,15 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		if constant.EndpointType(endpointType) == constant.EndpointTypeOpenAIVideo {
 			requestPath = "/v1/videos"
 		}
+		if constant.EndpointType(endpointType) == constant.EndpointTypeImageGeneration {
+			if isSpeechTestModel(testModel) {
+				requestPath = "/v1/audio/speech"
+			} else if isTranscriptionTestModel(testModel) {
+				requestPath = "/v1/audio/transcriptions"
+			} else if isVideoGenerationTestModel(testModel) {
+				requestPath = "/v1/videos"
+			}
+		}
 	} else {
 		// 如果没有指定端点类型，使用原有的自动检测逻辑
 
@@ -268,6 +277,12 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			relayFormat = types.RelayFormatRerank
 		case constant.EndpointTypeImageGeneration:
 			relayFormat = types.RelayFormatOpenAIImage
+			switch {
+			case isSpeechTestModel(testModel) || isTranscriptionTestModel(testModel):
+				relayFormat = types.RelayFormatOpenAIAudio
+			case isVideoGenerationTestModel(testModel):
+				relayFormat = types.RelayFormatOpenAIVideo
+			}
 		case constant.EndpointTypeEmbeddings:
 			relayFormat = types.RelayFormatEmbedding
 		default:

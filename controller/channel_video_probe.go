@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay"
 	"github.com/QuantumNous/new-api/relay/channel"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -55,6 +56,7 @@ func testVideoChannel(ctx context.Context, channel *model.Channel, modelName, ke
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channel.Id, ChannelType: channel.Type, ChannelBaseUrl: baseURL, ApiKey: key}}
 	info.UpstreamModelName = modelName
 	info.OriginModelName = modelName
+	info.RelayMode = relayconstant.RelayModeVideoSubmit
 	if taskErr := adaptor.ValidateRequestAndSetAction(c, info); taskErr != nil {
 		return testResult{localErr: taskErr.Error}
 	}

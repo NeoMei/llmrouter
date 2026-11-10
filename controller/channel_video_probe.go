@@ -64,6 +64,9 @@ func testVideoChannel(ctx context.Context, channel *model.Channel, modelName, ke
 	info.UpstreamModelName = modelName
 	info.OriginModelName = modelName
 	info.RelayMode = relayconstant.RelayModeVideoSubmit
+	// The task validator stores the parsed request on TaskRelayInfo, which
+	// GenRelayInfo normally allocates; a probe must provide it too.
+	info.TaskRelayInfo = &relaycommon.TaskRelayInfo{}
 	if taskErr := adaptor.ValidateRequestAndSetAction(c, info); taskErr != nil {
 		return testResult{localErr: taskErr.Error}
 	}

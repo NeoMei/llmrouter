@@ -158,18 +158,33 @@ as long as required upstream attribution and license notices are preserved.
 
 ## Multi-Agent Collaboration
 
-多个 agent 可同时在本仓库开发，规则与 UniHub 相同：共享一份 `.git`，各自独立 worktree、分支、本地栈，`main` 是唯一交接点。
+**Codex、犇马（SuperWagie）、WorkBuddy** 三路可同时在本仓库开发：共享一份 `.git`，各自独立 worktree、分支、本地运行实例。
+
+三方交接点是**文件**，不依赖任一客户端的 API：
+
+- 代码交接：`main` 分支
+- 状态记录：`~/项目/codexprojects/U-L-S 综合验收/OPERATIONS.md`（发布/验收记录，**三方只读**）
+- 交接日志：同目录 `HANDOFF.md`（**append-only**）
 
 ### 工作区与分支
 
-- 用独立 git worktree，不要直接改主工作区 `~/项目/codexprojects/llmrouter`。worktree 根目录读 `~/.codex/config.toml` 的 `git-worktree-root`（当前 `/Volumes/codex/new-worktrees`）。
-- 分支前缀即所有权：Codex 用 `codex/*`，WorkBuddy 用 `wb/*`。只在自己前缀下提交。
-- 不直接推 `main`，合并由人决定。
+- 用独立 git worktree，不要直接改主工作区 `~/项目/codexprojects/llmrouter`。worktree 根目录读 `~/.codex/config.toml` 的 `git-worktree-root`（当前 `/Volumes/codex/new-worktrees`）；外置卷不可用时停下说明，不回退内置盘。
+- 目录用途带所有者前缀：`codex-`、`sw-`（犇马）、`wb-`（WorkBuddy）。
+
+| 客户端 | 分支前缀 |
+|---|---|
+| Codex | `codex/*` |
+| 犇马 | `sw/*` |
+| WorkBuddy | `wb/*` |
+
+- 分支前缀即所有权，只在自己前缀下提交。`agent/*` 是历史遗留，不再使用。
+- **三方都不直接推 `main`**，只走分支 + 由人合并。合并时机：每轮联调开始前，由人在 `main` 上合入已验收的分支；合完各客户端 `fetch` 后从 `main` 拉新分支。
 
 ### 推送陷阱（必须知道）
 
 本仓库有两个 remote：
-- `llmrouter` → 自有仓库 `NeoMei/llmrouter`（你的 fork 主干）
+
+- `llmrouter` → 自有仓库 `NeoMei/llmrouter`（fork 主干）
 - `origin` → 上游 `QuantumNous/new-api`（只读，无写权限）
 
 `branch.main.remote` 已设为 `llmrouter`，但其他分支**不会**自动用自有仓库。推送时**必须显式指定 `llmrouter`**：
@@ -182,18 +197,28 @@ git push llmrouter <branch>
 
 ### 本地运行
 
-- llmrouter 默认吃本机 `127.0.0.1:5432`（Postgres）和 `127.0.0.1:6379`（Redis），端口是全局共享的。
-- 一个 agent 在开发时，其他 agent 的 llmrouter 本地服务会看到同一数据库；不要对同一套数据库并发跑迁移。
-- 需要并行开发时，在各自 worktree 的 `.env` 里用独立的数据库名（如 `llmrouter_wb`）和独立 Redis db 序号，并在交接说明里写清用的哪个。
-- 服务默认端口 3000；同一时间只有一个实例能监听。需要并行起服务时改 `PORT`。
+默认行为（**重要，别按共享 PG/Redis 假设规划**）：
+
+- `SQL_DSN` 为空时走 **SQLite**，库文件在 repo 根 `one-api.db`（由 `SQLITE_PATH` 指定，已 gitignore）——每个 worktree 天然一份，无需分配库名。
+- `REDIS_CONN_STRING` 为空时走**内存缓存**，不碰 Redis。
+
+只有显式配置 `SQL_DSN` / `REDIS_CONN_STRING` 才会使用共享 PG/Redis，此时按下列分配值，且不要对同一套数据库并发跑迁移：
+
+| 客户端 | DB | Redis db | PORT |
+|---|---|---|---|
+| Codex | 默认 SQLite | 内存 | 3000 |
+| WorkBuddy | SQLite（默认）；共享模式用 `llmrouter_wb` | 内存；共享模式 db 1 | 3020 |
+| 犇马 | SQLite（默认）；共享模式用 `llmrouter_sw` | 内存；共享模式 db 2 | 3010 |
+
+并行起服务时用上表 `PORT`，不要都占 3000。
 
 ### 依赖与环境
 
-- `node_modules`、`bin`、`.codegraph` 不跨 worktree 共享，每个 worktree 自己准备。
+- `node_modules`、`bin`、`.codegraph`、`one-api.db` 不跨 worktree 共享，每个 worktree 自己准备。
 - `.env` 若存在只属于该 worktree：不复制、不提交。
 
 ### 交接
 
 - 收工前把改动提交到自己分支并 `git push llmrouter <branch>`。
 - 接手前 `git fetch llmrouter`，确认 `main` 与 `llmrouter/main` 一致。
-- 交接说明写四件事：做了什么、没做什么、下一步、未合并的依赖分支。
+- 在 `HANDOFF.md` 追加一条，写清四件事：做了什么、没做什么、下一步、未合并的依赖分支。不改别人写过的段落。

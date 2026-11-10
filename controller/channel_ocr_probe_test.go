@@ -233,7 +233,7 @@ func TestChannelTestBuildsAudioProbes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "wav", fact.Format, "the probe audio must pass the relay WAV decoder")
 	assert.InDelta(t, 1.0, fact.Seconds, 0.05)
-	body, contentType := channelProbeAudioBody("qwen3-asr-flash", "", false)
+	body, contentType := channelProbeASRBody("qwen3-asr-flash")
 	assert.Contains(t, contentType, "multipart/form-data")
 	assert.Contains(t, string(body), "probe.wav", "multipart body carries the WAV file")
 }

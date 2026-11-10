@@ -169,7 +169,16 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 
 	endpointType = normalizeChannelTestEndpoint(channel, testModel, endpointType)
 	if isSpeechTestModel(testModel) || isTranscriptionTestModel(testModel) {
-		return testAudioChannel(ctx, channel, testUserID, testModel, isSpeechTestModel(testModel), tik)
+		key, keyErr := channelProbeKey(ctx, channel, testModel)
+		if keyErr != nil {
+			return testResult{localErr: keyErr}
+		}
+		speech := isSpeechTestModel(testModel)
+		voice := ""
+		if speech {
+			voice = channelProbeVoice(channel)
+		}
+		return testAudioChannel(ctx, channel, key, testModel, voice, speech, tik)
 	}
 	if isVideoGenerationTestModel(testModel) {
 		key, keyErr := channelProbeKey(ctx, channel, testModel)

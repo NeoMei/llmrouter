@@ -74,6 +74,16 @@ func TestPaddleOCRChannelProbeSubmitsAndPolls(t *testing.T) {
 	assertPaddleOCRProbeStateUnchanged(t, db, user, channel)
 }
 
+func TestPaddleOCRChannelProbeAcceptsQueuedJob(t *testing.T) {
+	requests := &atomic.Int32{}
+	server := paddleOCRProbeFixture(t, "running", requests)
+	_, user, channel := setupPaddleOCRChannel(t, server.URL, "fixture-key")
+
+	result := testChannel(context.Background(), channel, user.Id, "", "", false)
+	require.NoError(t, result.localErr, "an accepted job verifies the connection without waiting for extraction")
+	assert.Equal(t, int32(2), requests.Load())
+}
+
 func TestPaddleOCRChannelProbeReportsFailedState(t *testing.T) {
 	requests := &atomic.Int32{}
 	server := paddleOCRProbeFixture(t, "failed", requests)

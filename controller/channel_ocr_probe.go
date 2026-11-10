@@ -99,7 +99,7 @@ func paddleOCRProbeKey(ctx context.Context, channel *model.Channel, modelName st
 
 // testPaddleOCRChannel submits one tiny OCR job and polls it. It never bills and
 // never writes channel health, so the generic chat probe stays out of this path.
-func testPaddleOCRChannel(ctx context.Context, channel *model.Channel, testModel string, budget time.Duration) testResult {
+func testPaddleOCRChannel(ctx context.Context, channel *model.Channel, testModel string) testResult {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -127,31 +127,25 @@ func testPaddleOCRChannel(ctx context.Context, channel *model.Channel, testModel
 		}
 		return testResult{localErr: fmt.Errorf("PaddleOCR submit failed: %v", err)}
 	}
-	if budget <= 0 {
-		budget = 45 * time.Second
+	select {
+	case <-ctx.Done():
+		return testResult{localErr: fmt.Errorf("PaddleOCR probe cancelled: %v", ctx.Err())}
+	case <-time.After(paddleOCRProbePollInterval):
 	}
-	deadline := time.Now().Add(budget)
-	for {
-		select {
-		case <-ctx.Done():
-			return testResult{localErr: fmt.Errorf("PaddleOCR probe cancelled: %v", ctx.Err())}
-		case <-time.After(paddleOCRProbePollInterval):
+	status, response, err := client.Status(ctx, jobsURL, key, jobID)
+	if err != nil {
+		if response.Status != 0 {
+			return testResult{localErr: fmt.Errorf("PaddleOCR status failed: HTTP %d", response.Status)}
 		}
-		status, response, err := client.Status(ctx, jobsURL, key, jobID)
-		if err != nil {
-			if response.Status != 0 {
-				return testResult{localErr: fmt.Errorf("PaddleOCR status failed: HTTP %d", response.Status)}
-			}
-			return testResult{localErr: fmt.Errorf("PaddleOCR status failed: %v", err)}
-		}
-		switch status.State {
-		case "success", "succeeded", "completed", "finished", "done":
-			return testResult{}
-		case "failed", "error", "cancelled", "canceled", "expired":
-			return testResult{localErr: fmt.Errorf("PaddleOCR job %s ended in state %q", jobID, status.State)}
-		}
-		if time.Now().After(deadline) {
-			return testResult{localErr: fmt.Errorf("PaddleOCR job %s did not finish within %s (state %q)", jobID, budget, status.State)}
-		}
+		return testResult{localErr: fmt.Errorf("PaddleOCR status failed: %v", err)}
+	}
+	switch status.State {
+	case "failed", "error", "cancelled", "canceled", "expired":
+		return testResult{localErr: fmt.Errorf("PaddleOCR job %s ended in state %q", jobID, status.State)}
+	default:
+		// An accepted job proves the key, endpoint and model name. Waiting for the
+		// extraction would turn a connection test into a one-minute request, so any
+		// queued/running/success state counts as connected.
+		return testResult{}
 	}
 }

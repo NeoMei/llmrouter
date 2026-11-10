@@ -224,7 +224,7 @@ func TestChannelTestBuildsAudioProbes(t *testing.T) {
 
 	transcription, ok := buildTestRequest("qwen3-asr-flash", string(constant.EndpointTypeOpenAI), channel, false).(*dto.AudioRequest)
 	require.True(t, ok, "transcription models must not be probed through chat completions")
-	assert.Equal(t, "json", transcription.ResponseFormat)
+	assert.Empty(t, transcription.ResponseFormat, "Flash ASR rejects response_format")
 
 	wav, err := channelProbeWAV()
 	require.NoError(t, err)
@@ -233,6 +233,7 @@ func TestChannelTestBuildsAudioProbes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "wav", fact.Format, "the probe audio must pass the relay WAV decoder")
 	assert.InDelta(t, 1.0, fact.Seconds, 0.05)
-	body := channelProbeASRBody("qwen3-asr-flash", wav)
+	body, contentType := channelProbeAudioBody("qwen3-asr-flash", false)
+	assert.Contains(t, contentType, "multipart/form-data")
 	assert.Contains(t, string(body), "probe.wav", "multipart body carries the WAV file")
 }

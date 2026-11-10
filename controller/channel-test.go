@@ -166,6 +166,9 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	}
 
 	endpointType = normalizeChannelTestEndpoint(channel, testModel, endpointType)
+	if isSpeechTestModel(testModel) || isTranscriptionTestModel(testModel) {
+		return testAudioChannel(ctx, channel, testUserID, testModel, isSpeechTestModel(testModel), tik)
+	}
 
 	requestPath := "/v1/chat/completions"
 
@@ -225,12 +228,6 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	}
 
 	c.Request = httptest.NewRequestWithContext(ctx, http.MethodPost, requestPath, nil)
-	if isTranscriptionTestModel(testModel) {
-		if audio, err := channelProbeWAV(); err == nil {
-			c.Request = httptest.NewRequestWithContext(ctx, http.MethodPost, requestPath, bytes.NewReader(channelProbeASRBody(testModel, audio)))
-			c.Request.Header.Set("Content-Type", channelProbeASRContentType())
-		}
-	}
 
 	cache, err := model.GetUserCache(testUserID)
 	if err != nil {
@@ -490,12 +487,6 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			localErr:    err,
 			newAPIError: types.NewError(err, types.ErrorCodeConvertRequestFailed),
 		}
-	}
-	if convertedRequest == nil {
-		// Audio adaptors return the final body directly; the audio flow already
-		// rewrote c.Request.Body and only needs to send it.
-		resp, err := adaptor.DoRequest(c, info, c.Request.Body)
-		return testAudioChannelResponse(c, channel, info, resp, err, tik)
 	}
 	jsonData, err := common.Marshal(convertedRequest)
 	if err != nil {

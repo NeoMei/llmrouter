@@ -177,8 +177,10 @@ as long as required upstream attribution and license notices are preserved.
 | 犇马 | `sw/*` |
 | WorkBuddy | `wb/*` |
 
-- 分支前缀即所有权，只在自己前缀下提交。`agent/*` 是历史遗留，不再使用。
-- **三方都不直接推 `main`**，只走分支 + 由人合并。合并时机：每轮联调开始前，由人在 `main` 上合入已验收的分支；合完各客户端 `fetch` 后从 `main` 拉新分支。
+- 分支前缀即所有权，只在自己前缀下提交。**`agent/*` 已冻结**：历史遗留分支（`agent/parallel-dev-stack` 已合入 main、`agent/channel-test-probe-20261110` 已完成 rc.28 发布），不再提交、不再新建；新提交只进 `codex/*` / `sw/*` / `wb/*`。本约定立即生效，不等规则合 main。
+- **三方都不直接推 `main`**，只走分支 + 由人合并。常规合并时机：每轮联调开始前，由人在 `main` 上合入已验收的分支；合完各客户端 `fetch` 后从 `main` 拉新分支。
+- 人合并时在 merge commit message 末尾加一行 `merged-by: human`，用来区分「人合并」与「agent 代做」——rc.28 的合并提交混用 `NeoMei` 与 `agent@local` 身份，靠作者判断不出来。2026-11-10 之前这类提交不追溯、不改写。
+- **发布例外**：发布类合并可随时进行，不受「每轮联调开始前」限制，条件是人授权 + 在 `HANDOFF.md` 记下 tag 与 commit。进行中的分支允许 `merge main` 保持同步；**禁止跨客户端 `rebase` 他人分支**，要改造别人的分支就提出来由对方做。
 
 ### 提交身份
 
@@ -187,7 +189,7 @@ as long as required upstream attribution and license notices are preserved.
 | 客户端 | user.name | user.email |
 |---|---|---|
 | Codex | `Codex` | `codex@local` |
-| 犇马 | `SuperWagie` | `sw@local` |
+| 犇马 | `SuperWagie`（或 `犇马`） | `sw@superwagie.local` |
 | WorkBuddy | `WorkBuddy` | `wb@workbuddy.local` |
 
 ```sh
@@ -196,6 +198,15 @@ git config user.email "wb@workbuddy.local"
 ```
 
 已推送的提交不改写。
+
+犇马的 name 写 `SuperWagie` 或 `犇马` 都可以，以 email 区分即可。
+
+### 生产边界
+
+- 生产部署、生产库写入（含直接执行 SQL）**只由总控会话执行，且须先取得人的授权**。客户端会话不自行部署、不自行改生产数据。
+- 渠道连接测试、对外探针类操作**必须写明目标环境**（本地 / 联调 / 生产），不得默认打生产。本仓库的渠道探针最容易踩这条：默认 base URL 指向生产就会直接消耗真实额度。
+- 允许在连接测试里直接调用收费 API——这条既有偏好不变，本约束只增加「声明目标环境」的义务。
+- 生产相关的 tag、镜像、发布动作记入 `OPERATIONS.md`，并在 `HANDOFF.md` 留下 tag 与 commit。rc.28 这类发布走的就是发布例外路径。
 
 ### 推送陷阱（必须知道）
 

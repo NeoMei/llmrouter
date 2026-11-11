@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/base64"
 	"context"
 	"fmt"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	relayhelper "github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -41,6 +43,28 @@ func paddleOCRProbeFixture(t *testing.T, state string, requests *atomic.Int32) *
 	}))
 	t.Cleanup(server.Close)
 	return server
+}
+
+// paddleOCRProbeFixtureSequence returns the given states in order, repeating the last.
+func paddleOCRProbeFixtureSequence(t *testing.T, states ...string) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	requests := &atomic.Int32{}
+	var polls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost {
+			_, _ = w.Write([]byte(`{"code":0,"data":{"jobId":"probe-job"}}`))
+			return
+		}
+		index := int(polls.Add(1)) - 1
+		if index >= len(states) {
+			index = len(states) - 1
+		}
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"code":0,"data":{"jobId":"probe-job","state":%q}}`, states[index])))
+	}))
+	t.Cleanup(server.Close)
+	return server, requests
 }
 
 func setupPaddleOCRChannel(t *testing.T, baseURL, key string) (*gorm.DB, *model.User, *model.Channel) {
@@ -74,14 +98,13 @@ func TestPaddleOCRChannelProbeSubmitsAndPolls(t *testing.T) {
 	assertPaddleOCRProbeStateUnchanged(t, db, user, channel)
 }
 
-func TestPaddleOCRChannelProbeAcceptsQueuedJob(t *testing.T) {
-	requests := &atomic.Int32{}
-	server := paddleOCRProbeFixture(t, "running", requests)
+func TestPaddleOCRChannelProbeWaitsForTerminalState(t *testing.T) {
+	server, requests := paddleOCRProbeFixtureSequence(t, "running", "success")
 	_, user, channel := setupPaddleOCRChannel(t, server.URL, "fixture-key")
 
 	result := testChannel(context.Background(), channel, user.Id, "", "", false)
-	require.NoError(t, result.localErr, "an accepted job verifies the connection without waiting for extraction")
-	assert.Equal(t, int32(2), requests.Load())
+	require.NoError(t, result.localErr, "a running job must not report success before extraction finishes")
+	assert.Equal(t, int32(3), requests.Load(), "one submit plus one poll per observed state")
 }
 
 func TestPaddleOCRChannelProbeReportsFailedState(t *testing.T) {
@@ -186,9 +209,32 @@ func assertPaddleOCRProbeStateUnchanged(t *testing.T, db *gorm.DB, user *model.U
 func TestChannelTestDetectsImageGenerationModels(t *testing.T) {
 	channel := &model.Channel{Type: constant.ChannelTypeAli}
 	assert.Equal(t, string(constant.EndpointTypeImageGeneration), normalizeChannelTestEndpoint(channel, "qwen-image-2.0-pro", ""))
-	assert.Equal(t, "", normalizeChannelTestEndpoint(channel, "wan2.6-t2v", ""), "video families must not be probed as image models")
+	assert.Equal(t, string(constant.EndpointTypeOpenAIVideo), normalizeChannelTestEndpoint(channel, "wan2.6-t2v", ""), "video families use the video endpoint, never the image probe")
 	request := buildTestRequest("qwen-image-2.0", string(constant.EndpointTypeImageGeneration), channel, false)
 	imageRequest, ok := request.(*dto.ImageRequest)
 	require.True(t, ok, "image endpoint must build an image request")
 	assert.Equal(t, "qwen-image-2.0", imageRequest.Model)
+}
+
+func TestChannelTestBuildsAudioProbes(t *testing.T) {
+	channel := &model.Channel{Type: constant.ChannelTypeAli}
+	speech, ok := buildTestRequest("qwen3-tts-flash", string(constant.EndpointTypeOpenAI), channel, false).(*dto.AudioRequest)
+	require.True(t, ok, "speech models must not be probed through chat completions")
+	assert.Equal(t, "Cherry", speech.Voice, "speech requires a voice parameter")
+	assert.NotEmpty(t, speech.Input)
+
+	transcription, ok := buildTestRequest("qwen3-asr-flash", string(constant.EndpointTypeOpenAI), channel, false).(*dto.AudioRequest)
+	require.True(t, ok, "transcription models must not be probed through chat completions")
+	assert.Equal(t, "json", transcription.ResponseFormat)
+
+	wav, err := channelProbeWAV()
+	require.NoError(t, err)
+	assert.Equal(t, 44+32000, len(wav), "one second of 16 kHz mono 16-bit PCM")
+	fact, err := relayhelper.DecodeMediaFact("audio", "data:audio/wav;base64,"+base64.StdEncoding.EncodeToString(wav))
+	require.NoError(t, err)
+	assert.Equal(t, "wav", fact.Format, "the probe audio must pass the relay WAV decoder")
+	assert.InDelta(t, 1.0, fact.Seconds, 0.05)
+	body, contentType := channelProbeASRBody("qwen3-asr-flash")
+	assert.Contains(t, contentType, "multipart/form-data")
+	assert.Contains(t, string(body), "probe.wav", "multipart body carries the WAV file")
 }

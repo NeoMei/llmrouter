@@ -8,6 +8,7 @@ import (
 	"math"
 	"mime"
 	"mime/multipart"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -30,6 +31,17 @@ func ValidateDomesticAudio(c *gin.Context, info *relaycommon.RelayInfo, channelT
 	}
 	switch channelType {
 	case constant.ChannelTypeAli:
+		if info.RelayMode == relayconstant.RelayModeAudioSpeech {
+			// Synthesis on the compatible wire needs a voice; text moderation is
+			// the supplier's job, not this admission step.
+			if strings.TrimSpace(request.Voice) == "" {
+				return fmt.Errorf("Ali speech requires a voice")
+			}
+			if len(request.Input) == 0 || len(request.Input) > MaxInlineMediaBytes {
+				return fmt.Errorf("Ali speech requires bounded input text")
+			}
+			return nil
+		}
 		if info.RelayMode != relayconstant.RelayModeAudioTranscription || model != "qwen3-asr-flash" {
 			return fmt.Errorf("Ali audio supports qwen3-asr-flash transcription only")
 		}

@@ -52,6 +52,9 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 	if channel != nil && channel.Type == constant.ChannelTypeCodex {
 		return string(constant.EndpointTypeOpenAIResponse)
 	}
+	if isVideoGenerationTestModel(modelName) {
+		return string(constant.EndpointTypeOpenAIVideo)
+	}
 	if isImageGenerationTestModel(modelName) {
 		return string(constant.EndpointTypeImageGeneration)
 	}
@@ -60,15 +63,47 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 
 // isImageGenerationTestModel keeps image models off the chat probe. Only
 // families whose request shape is a single prompt are listed; video families
-// (wan2.x/wanx2.x) stay out.
+// (wan2.x/wanx2.x) are handled separately.
 func isImageGenerationTestModel(modelName string) bool {
 	name := strings.ToLower(strings.TrimSpace(modelName))
+	if isVideoGenerationTestModel(name) {
+		return false
+	}
 	for _, prefix := range []string{"qwen-image", "dall-e", "gpt-image", "flux", "seedream", "kolors", "imagen"} {
 		if strings.HasPrefix(name, prefix) {
 			return true
 		}
 	}
 	return false
+}
+
+// isVideoGenerationTestModel names the async video families that must not be
+// probed as chat or image requests.
+func isVideoGenerationTestModel(modelName string) bool {
+	name := strings.ToLower(strings.TrimSpace(modelName))
+	for _, prefix := range []string{"wan2.", "wanx2.", "wan-2.", "sora", "veo-kling", "kling-"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// isSpeechTestModel keeps synthesis models off the chat probe.
+func isSpeechTestModel(modelName string) bool {
+	name := strings.ToLower(strings.TrimSpace(modelName))
+	for _, marker := range []string{"tts", "speech", "cosyvoice"} {
+		if strings.Contains(name, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// isTranscriptionTestModel keeps speech-to-text models off the chat probe.
+func isTranscriptionTestModel(modelName string) bool {
+	name := strings.ToLower(strings.TrimSpace(modelName))
+	return strings.Contains(name, "asr") || strings.Contains(name, "whisper") || strings.Contains(name, "transcribe")
 }
 
 func resolveChannelTestUserID(c *gin.Context) (int, error) {
@@ -110,8 +145,10 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	}
 	// Native OCR jobs are asynchronous and never use the chat probe.
 	if channel.Type == constant.ChannelTypePaddleOCR {
-		return testPaddleOCRChannel(ctx, channel, testModel)
+		return testPaddleOCRChannel(ctx, channel, testModel, 2*time.Minute)
 	}
+	// Explicit per-channel probe inputs win over the built-in synthetic fixtures.
+	testSeedImage := channelProbeSeedImage(channel)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
@@ -131,6 +168,29 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	}
 
 	endpointType = normalizeChannelTestEndpoint(channel, testModel, endpointType)
+	if isSpeechTestModel(testModel) || isTranscriptionTestModel(testModel) {
+		key, keyErr := channelProbeKey(ctx, channel, testModel)
+		if keyErr != nil {
+			return testResult{localErr: keyErr}
+		}
+		speech := isSpeechTestModel(testModel)
+		voice := ""
+		if speech {
+			voice = channelProbeVoice(channel)
+		}
+		return testAudioChannel(ctx, channel, key, testModel, voice, speech, tik)
+	}
+	if isVideoGenerationTestModel(testModel) {
+		key, keyErr := channelProbeKey(ctx, channel, testModel)
+		if keyErr != nil {
+			return testResult{localErr: keyErr}
+		}
+		res := testVideoChannel(ctx, channel, testModel, key, testSeedImage)
+		if res.localErr != nil && res.newAPIError == nil {
+			res.newAPIError = types.NewError(res.localErr, types.ErrorCodeBadResponse)
+		}
+		return res
+	}
 
 	requestPath := "/v1/chat/completions"
 
@@ -138,6 +198,24 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	if endpointType != "" {
 		if endpointInfo, ok := common.GetDefaultEndpointInfo(constant.EndpointType(endpointType)); ok {
 			requestPath = endpointInfo.Path
+		}
+		if constant.EndpointType(endpointType) == constant.EndpointTypeOpenAI && isSpeechTestModel(testModel) {
+			requestPath = "/v1/audio/speech"
+		}
+		if constant.EndpointType(endpointType) == constant.EndpointTypeOpenAI && isTranscriptionTestModel(testModel) {
+			requestPath = "/v1/audio/transcriptions"
+		}
+		if constant.EndpointType(endpointType) == constant.EndpointTypeOpenAIVideo {
+			requestPath = "/v1/videos"
+		}
+		if constant.EndpointType(endpointType) == constant.EndpointTypeImageGeneration {
+			if isSpeechTestModel(testModel) {
+				requestPath = "/v1/audio/speech"
+			} else if isTranscriptionTestModel(testModel) {
+				requestPath = "/v1/audio/transcriptions"
+			} else if isVideoGenerationTestModel(testModel) {
+				requestPath = "/v1/videos"
+			}
 		}
 	} else {
 		// 如果没有指定端点类型，使用原有的自动检测逻辑
@@ -218,6 +296,12 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			relayFormat = types.RelayFormatRerank
 		case constant.EndpointTypeImageGeneration:
 			relayFormat = types.RelayFormatOpenAIImage
+			switch {
+			case isSpeechTestModel(testModel) || isTranscriptionTestModel(testModel):
+				relayFormat = types.RelayFormatOpenAIAudio
+			case isVideoGenerationTestModel(testModel):
+				relayFormat = types.RelayFormatOpenAIVideo
+			}
 		case constant.EndpointTypeEmbeddings:
 			relayFormat = types.RelayFormatEmbedding
 		default:
@@ -246,6 +330,9 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		}
 		if strings.HasPrefix(c.Request.URL.Path, "/v1/responses/compact") {
 			relayFormat = types.RelayFormatOpenAIResponsesCompaction
+		}
+		if c.Request.URL.Path == "/v1/audio/speech" || c.Request.URL.Path == "/v1/audio/transcriptions" {
+			relayFormat = types.RelayFormatOpenAIAudio
 		}
 	}
 
@@ -385,6 +472,22 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 				context:     c,
 				localErr:    errors.New("invalid response compaction request type"),
 				newAPIError: types.NewError(errors.New("invalid response compaction request type"), types.ErrorCodeConvertRequestFailed),
+			}
+		}
+	case relayconstant.RelayModeAudioSpeech, relayconstant.RelayModeAudioTranscription:
+		if audioReq, ok := request.(*dto.AudioRequest); ok {
+			var body io.Reader
+			body, err = adaptor.ConvertAudioRequest(c, info, *audioReq)
+			if err == nil && body != nil {
+				if raw, readErr := io.ReadAll(body); readErr == nil {
+					c.Request.Body = io.NopCloser(bytes.NewReader(raw))
+				}
+			}
+		} else {
+			return testResult{
+				context:     c,
+				localErr:    errors.New("invalid audio request type"),
+				newAPIError: types.NewError(errors.New("invalid audio request type"), types.ErrorCodeConvertRequestFailed),
 			}
 		}
 	default:
@@ -755,6 +858,11 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 			maxTokens := uint(16)
 			if constant.EndpointType(endpointType) == constant.EndpointTypeGemini {
 				maxTokens = 3000
+			}
+			// Audio models reject chat completions; probe them with their own
+			// request shapes so a connection test proves the real operation.
+			if isSpeechTestModel(model) || isTranscriptionTestModel(model) {
+				return buildChannelAudioProbe(model, "")
 			}
 			req := &dto.GeneralOpenAIRequest{
 				Model:  model,

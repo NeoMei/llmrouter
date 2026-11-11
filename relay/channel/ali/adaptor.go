@@ -1,6 +1,7 @@
 package ali
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -127,6 +128,8 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 			} else {
 				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/multimodal-generation/generation", info.ChannelBaseUrl)
 			}
+		case constant.RelayModeAudioSpeech:
+			fullRequestURL = fmt.Sprintf("%s/compatible-mode/v1/audio/speech", info.ChannelBaseUrl)
 		case constant.RelayModeCompletions:
 			fullRequestURL = fmt.Sprintf("%s/compatible-mode/v1/completions", info.ChannelBaseUrl)
 		default:
@@ -251,9 +254,17 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 
 func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
 	if info.RelayMode == constant.RelayModeAudioTranscription {
-		return convertTranscription(c, request)
+		if c.GetString(helper.DomesticASRDataKey) != "" || c.GetBool("channel_test_probe") {
+			// Flash ASR replays the validated inline carrier verbatim.
+			return convertTranscription(c, request)
+		}
 	}
-	return nil, channel.ErrUnsupportedOperation
+	// Compatible mode serves OpenAI-shaped speech; marshal the AudioRequest.
+	raw, err := common.Marshal(request)
+	if err != nil {
+		return nil, err
+	}
+	return bytes.NewReader(raw), nil
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {

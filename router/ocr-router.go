@@ -19,4 +19,8 @@ func SetOCRRouter(router *gin.Engine, h *controller.OCRHandler) {
 	reads.Use(middleware.ProductRelayEntry(), middleware.TokenAuthOwnedJobRead(), middleware.ProductRelayBoundary(), middleware.DistributedRateLimit(), middleware.ModelRequestRateLimit())
 	reads.GET("/api/v2/ocr/jobs/:id", h.Status)
 	reads.GET("/v1/ocr/:id", h.Status)
+	// A job the supplier never accepted may be abandoned by its owner: the
+	// reservation returns instead of staying held until the stale sweep runs.
+	reads.POST("/api/v2/ocr/jobs/:id/cancel", h.Cancel)
+	reads.POST("/v1/ocr/:id/cancel", h.Cancel)
 }

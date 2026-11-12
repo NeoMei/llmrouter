@@ -147,8 +147,9 @@ func (r *Runtime) RunBatch(ctx context.Context, after string, limit int) (string
 	defer cancel()
 	var jobs []model.OCRJob
 	err := r.DB.WithContext(ctx).Where("id > ?", after).Where(
-		"(submission_state = ? AND provider_job_id <> ? AND result_resource_id = ? AND ((provider_state NOT IN ?) OR (provider_state = ? AND billing_state <> ?) OR (provider_state = ? AND (billing_state <> ? OR created_at > ?)))) OR (decision IN ? AND billing_state <> ?)",
-		"submitted", "", "", []string{"done", "failed"}, "failed", "refunded", "done", "settled", r.Service.now().Add(-r.Service.retention).Unix(), []string{"failure", "cancel"}, "refunded").Order("id ASC").Limit(limit).Find(&jobs).Error
+		"(submission_state = ? AND provider_job_id <> ? AND result_resource_id = ? AND ((provider_state NOT IN ?) OR (provider_state = ? AND billing_state <> ?) OR (provider_state = ? AND (billing_state <> ? OR created_at > ?)))) OR (decision IN ? AND billing_state <> ?) OR (billing_state = ? AND provider_job_id = ? AND decision = ? AND submission_state IN ? AND created_at <= ?)",
+		"submitted", "", "", []string{"done", "failed"}, "failed", "refunded", "done", "settled", r.Service.now().Add(-r.Service.retention).Unix(), []string{"failure", "cancel"}, "refunded",
+		"reserved", "", "", []string{"unclaimed", "submitting", "uncertain", "submitted", "rejected"}, r.Service.now().Add(-staleSubmissionGrace).Unix()).Order("id ASC").Limit(limit).Find(&jobs).Error
 	if err != nil {
 		return after, err
 	}
@@ -160,6 +161,19 @@ func (r *Runtime) RunBatch(ctx context.Context, after string, limit int) (string
 			return after, nil
 		}
 		jobCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		// A reservation with no provider job id has nothing to poll: release it
+		// instead of asking the supplier, which would only fail again.
+		if j.ProviderJobID == "" && j.Decision == "" {
+			_, released, err2 := r.Service.ReleaseStaleSubmission(jobCtx, j.ID)
+			if err2 != nil && ctx.Err() == nil {
+				common.SysError("OCR stale reservation release pending: " + j.ID)
+			} else if released {
+				common.SysLog("OCR stale reservation released: " + j.ID)
+			}
+			cancel()
+			after = j.ID
+			continue
+		}
 		_, err := r.Service.Status(jobCtx, j.ID, j.UserID, j.TokenID)
 		cancel()
 		if err != nil && ctx.Err() == nil {

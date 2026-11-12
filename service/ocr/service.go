@@ -395,6 +395,43 @@ func (s *Service) observe(ctx context.Context, selection model.UpstreamAccountSe
 	}
 	return nil
 }
+
+// staleSubmissionGrace is how long a job whose provider submission never
+// returned a definitive answer may keep its reservation before it is released.
+// The send is never replayed: an unclaimed job had nothing executed upstream, and
+// an uncertain one has no provider job id to poll, so holding the money longer
+// only locks the user's quota.
+const staleSubmissionGrace = 15 * time.Minute
+
+// ReleaseStaleSubmission closes a reservation whose provider submission never
+// reached a definite outcome: the money returns and the job becomes terminal.
+// Only jobs past the grace period with no provider job id are eligible; anything
+// the supplier accepted stays with Status/recovery, which owns the real outcome.
+func (s *Service) ReleaseStaleSubmission(ctx context.Context, id string) (model.OCRJob, bool, error) {
+	snapshot, err := s.billing.Inspect(ctx, id)
+	if err != nil {
+		return model.OCRJob{}, false, err
+	}
+	j := snapshot.Job
+	if j.BillingState == "settled" || j.BillingState == "refunded" || j.ProviderJobID != "" || j.Decision != "" {
+		return j, false, nil
+	}
+	if s.now().Unix()-j.CreatedAt < int64(staleSubmissionGrace/time.Second) {
+		return j, false, nil
+	}
+	return s.billing.ReleaseStaleSubmission(ctx, id)
+}
+
+// Cancel abandons an owner's job whose provider submission never confirmed, so
+// its reservation returns instead of waiting for the stale sweep.
+func (s *Service) Cancel(ctx context.Context, id string, userID, tokenID int) (JobStatus, error) {
+	j, err := s.billing.CancelJob(ctx, id, userID, tokenID)
+	if err != nil {
+		return JobStatus{}, err
+	}
+	return s.project(ctx, j)
+}
+
 func (s *Service) Status(ctx context.Context, id string, userID, tokenID int) (JobStatus, error) {
 	snapshot, err := s.billing.Inspect(ctx, id)
 	if err != nil {

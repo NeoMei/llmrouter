@@ -165,6 +165,26 @@ func (b *Billing) OwnedStatus(ctx context.Context, id string, userID, tokenID in
 	return OwnedStatus{ID: j.Job.ID, Model: j.Job.Model, BillingState: j.Job.BillingState, SubmissionState: j.Job.SubmissionState, Reason: j.Job.Reason, Quota: j.Job.Quota}, nil
 }
 
+// ReleaseStaleSubmission forwards the stale fence to the store; the caller has
+// already checked the grace period and that no provider job id exists.
+func (b *Billing) ReleaseStaleSubmission(ctx context.Context, id string) (model.OCRJob, bool, error) {
+	return b.OCRBillingStore.ReleaseStaleSubmission(ctx, id)
+}
+
+// CancelJob lets an owner abandon a job the supplier never accepted. A job with
+// a provider job id is left alone: its outcome is the provider's to prove.
+func (b *Billing) CancelJob(ctx context.Context, id string, userID, tokenID int) (model.OCRJob, error) {
+	snapshot, err := b.OCRBillingStore.Inspect(ctx, id)
+	if err != nil {
+		return model.OCRJob{}, err
+	}
+	j := snapshot.Job
+	if j.UserID != userID || j.TokenID != tokenID {
+		return model.OCRJob{}, model.ErrOCRConflict
+	}
+	return b.OCRBillingStore.AbandonOCRSubmission(ctx, id)
+}
+
 // Finish retains the OCR lifecycle and delegates only financial authority. The
 // model persisted the terminal intent first; retries replay one UniHub command.
 func (b *Billing) Finish(ctx context.Context, id, outcome string) (model.OCRJob, error) {

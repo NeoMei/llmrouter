@@ -177,7 +177,7 @@ func (r *Runtime) RunBatch(ctx context.Context, after string, limit int) (string
 		_, err := r.Service.Status(jobCtx, j.ID, j.UserID, j.TokenID)
 		cancel()
 		if err != nil && ctx.Err() == nil {
-			common.SysError("OCR accepted job recovery pending: " + j.ID + ": " + err.Error())
+			common.SysError("OCR accepted job recovery pending: " + j.ID + ": " + err.Error() + " | sub=" + j.SubmissionState + " prov=" + j.ProviderState + " bill=" + j.BillingState + " dec=" + j.Decision + " rid=" + j.ResultResourceID)
 		}
 		after = j.ID
 	}

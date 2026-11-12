@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -17,6 +18,20 @@ import (
 const paddleOfficialOrigin = "https://paddleocr.aistudio-app.com"
 const paddleOfficialJobsURL = paddleOfficialOrigin + "/api/v2/ocr/jobs"
 const paddleOfficialResultOrigin = "https://paddleocr-store.bj.bcebos.com"
+
+// The official Paddle OCR service shards result buckets across hosts such as
+// paddleocr-store-2.bj.bcebos.com and paddleocr-store-6.bj.bcebos.com for the
+// same API. Only that exact sharded host family belongs to the official
+// endpoint; any other host, scheme or port stays rejected.
+var paddleOfficialResultHost = regexp.MustCompile(`^paddleocr-store(-[0-9]+)?\.bj\.bcebos\.com$`)
+
+func officialPaddleResultOrigin(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.User != nil || u.Fragment != "" || u.Port() != "" {
+		return false
+	}
+	return u.Scheme == "https" && paddleOfficialResultHost.MatchString(u.Host)
+}
 
 // ManagedNativeResourceOrigins binds the official Paddle result bucket to its
 // exact API endpoint. Custom endpoints retain their original same-origin policy.

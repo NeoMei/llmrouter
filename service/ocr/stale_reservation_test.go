@@ -162,3 +162,27 @@ func TestOCRFinishedWithoutDeliverableOutputIsReleased(t *testing.T) {
 	}
 	assert.Equal(t, 1, releaseCalls, "the platform release path must run exactly once")
 }
+
+// The official Paddle OCR service hands out sharded result buckets
+// (paddleocr-store-2, -6, ...). Those are the same trusted service; anything
+// else, including a look-alike suffix, stays rejected.
+func TestOfficialPaddleResultOriginAcceptsShardsOnly(t *testing.T) {
+	for _, host := range []string{
+		"https://paddleocr-store.bj.bcebos.com",
+		"https://paddleocr-store-2.bj.bcebos.com",
+		"https://paddleocr-store-6.bj.bcebos.com",
+	} {
+		assert.True(t, officialPaddleResultOrigin(host), host)
+	}
+	for _, host := range []string{
+		"https://paddleocr-store.bj.bcebos.com.attacker.example",
+		"https://other-bucket.bj.bcebos.com",
+		"http://paddleocr-store.bj.bcebos.com",
+		"https://paddleocr-store.bj.bcebos.com:8443",
+		"https://user@paddleocr-store.bj.bcebos.com",
+		"https://paddleocr-store-6.bj.bcebos.com.evil.test",
+		"https://paddleocr-store-x.bj.bcebos.com",
+	} {
+		assert.False(t, officialPaddleResultOrigin(host), host)
+	}
+}

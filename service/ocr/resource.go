@@ -405,7 +405,10 @@ func (s *Service) fetchOwnedResult(ctx context.Context, j model.OCRJob, e model.
 			return nil, model.ErrOCRConflict
 		}
 		origin := u.Scheme + "://" + u.Host
-		if !slices.Contains(e.ResourceOrigins, origin) && (origin != paddleOfficialResultOrigin || !s.nativePaddleResultOrigin(ctx, j, e)) {
+		// Managed native jobs accept the official bucket family, including the
+		// sharded hosts the service itself hands out (paddleocr-store-N).
+		official := officialPaddleResultOrigin(origin) && s.nativePaddleResultOrigin(ctx, j, e)
+		if !slices.Contains(e.ResourceOrigins, origin) && !official {
 			return nil, model.ErrOCRConflict
 		}
 	}

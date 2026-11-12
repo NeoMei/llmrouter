@@ -25,6 +25,12 @@ const paddleOfficialResultOrigin = "https://paddleocr-store.bj.bcebos.com"
 // endpoint; any other host, scheme or port stays rejected.
 var paddleOfficialResultHost = regexp.MustCompile(`^paddleocr-store(-[0-9]+)?\.bj\.bcebos\.com$`)
 
+// nativeCreditOrNative reports a pricing source that authorizes the official
+// result bucket: plain native pricing and its CREDIT-priced twin.
+func nativeCreditOrNative(source string) bool {
+	return source == "llmrouter_native" || source == platformbilling.NativeCreditPricingSource
+}
+
 func officialPaddleResultOrigin(raw string) bool {
 	u, err := url.Parse(raw)
 	if err != nil || u.User != nil || u.Fragment != "" || u.Port() != "" {
@@ -55,7 +61,7 @@ func (s *Service) nativePaddleResultOrigin(ctx context.Context, j model.OCRJob, 
 		return false
 	}
 	var call platformbilling.Call
-	if s.db.WithContext(ctx).Where("call_id = ?", j.PlatformCallID).First(&call).Error != nil || call.PricingSource != "llmrouter_native" || call.Status != "UNKNOWN" || call.CredentialKind != "api_key" || call.CredentialID == "" || call.CredentialVersion < 1 || call.OriginProductID != "superwagie" || call.WireOperation != OCROperation || call.Model != e.RequestedModel || call.ProviderTaskID != j.ProviderJobID {
+	if s.db.WithContext(ctx).Where("call_id = ?", j.PlatformCallID).First(&call).Error != nil || !nativeCreditOrNative(call.PricingSource) || call.Status != "UNKNOWN" || call.CredentialKind != "api_key" || call.CredentialID == "" || call.CredentialVersion < 1 || call.OriginProductID != "superwagie" || call.WireOperation != OCROperation || call.Model != e.RequestedModel || call.ProviderTaskID != j.ProviderJobID {
 		return false
 	}
 	var quote platformbilling.NativeQuote

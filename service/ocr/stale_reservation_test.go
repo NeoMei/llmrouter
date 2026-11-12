@@ -2,6 +2,7 @@ package ocr
 
 import (
 	"context"
+	"github.com/QuantumNous/new-api/internal/platformbilling"
 	base "github.com/QuantumNous/new-api/service"
 	"net/http"
 	"net/http/httptest"
@@ -184,5 +185,17 @@ func TestOfficialPaddleResultOriginAcceptsShardsOnly(t *testing.T) {
 		"https://paddleocr-store-x.bj.bcebos.com",
 	} {
 		assert.False(t, officialPaddleResultOrigin(host), host)
+	}
+}
+
+// A managed native job prices its calls as either plain native or native CREDIT;
+// both are the same trusted owner. Anything else must not unlock the official
+// result bucket.
+func TestNativePaddleResultOriginAcceptsNativeCreditPricing(t *testing.T) {
+	for _, source := range []string{"llmrouter_native", platformbilling.NativeCreditPricingSource} {
+		assert.True(t, nativeCreditOrNative(source), source)
+	}
+	for _, source := range []string{"", "metered_v2", "native_credits", "llmrouter_native_credit_v2"} {
+		assert.False(t, nativeCreditOrNative(source), source)
 	}
 }

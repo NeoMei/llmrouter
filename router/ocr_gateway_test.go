@@ -797,10 +797,17 @@ func TestOCRReviewedOutputAndRefusalContracts(t *testing.T) {
 				read := "uh_read_" + strings.Repeat("b", 64)
 				require.Equal(t, 200, f.request(t, "GET", "/platform/api/v2/ocr/jobs/ocr-call", read, "", nil).Code)
 				w := f.request(t, "GET", "/platform/api/v2/ocr/jobs/ocr-call", read, "", nil)
-				assert.Equal(t, 502, w.Code, w.Body.String())
 				var resources int64
 				require.NoError(t, f.db.Model(&model.OCRResource{}).Count(&resources).Error)
-				assert.Zero(t, resources)
+				if variant == "empty-page" || variant == "blank-page" {
+					// A blank managed page is a delivered result: the supplier ran the
+					// job, so it is preserved and settled like any other.
+					require.Equal(t, 200, w.Code, w.Body.String())
+					assert.Equal(t, int64(1), resources)
+				} else {
+					assert.Equal(t, 502, w.Code, w.Body.String())
+					assert.Zero(t, resources)
+				}
 			}
 			var row platformbilling.Call
 			require.NoError(t, f.db.First(&row).Error)
@@ -808,10 +815,17 @@ func TestOCRReviewedOutputAndRefusalContracts(t *testing.T) {
 			if variant == "qwen-refusal" {
 				want = "RELEASED"
 			}
+			if variant == "empty-page" || variant == "blank-page" {
+				want = "SETTLED"
+			}
 			assert.Equal(t, want, row.Status)
 			assert.Equal(t, 1, f.sends)
 			assert.Equal(t, 1, f.reserves)
-			assert.Zero(t, f.settles)
+			if variant == "empty-page" || variant == "blank-page" {
+				assert.Equal(t, 1, f.settles)
+			} else {
+				assert.Zero(t, f.settles)
+			}
 		})
 	}
 }

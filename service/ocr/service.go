@@ -505,6 +505,19 @@ func (s *Service) Status(ctx context.Context, id string, userID, tokenID int) (J
 				return JobStatus{}, model.ErrOCRGrant
 			}
 			if err = s.preserveResults(ctx, j); err != nil {
+				// A result the provider no longer serves is as good as no result:
+				// the customer must not pay for output that can never be delivered.
+				// Only an expired object proves that; every other failure retries.
+				if errors.Is(err, errResultGone) {
+					if _, finishErr := s.billing.Finish(ctx, j.ID, "failure"); finishErr != nil {
+						return JobStatus{}, finishErr
+					}
+					snapshot, readErr := s.billing.Inspect(ctx, id)
+					if readErr != nil {
+						return JobStatus{}, readErr
+					}
+					return s.project(ctx, snapshot.Job)
+				}
 				return JobStatus{}, err
 			}
 			snap, e := s.billing.Inspect(ctx, j.ID)

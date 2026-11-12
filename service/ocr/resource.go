@@ -122,6 +122,10 @@ func (s *Service) PurgeExpiredResources(ctx context.Context, limit int) error {
 
 // preservePage rewrites only markdown.images URL values; raw JSON fields at all
 // other levels survive, including tables, formulas and unknown native layout.
+// errResultGone marks a provider result the upstream no longer serves. It is
+// terminal for the job: nothing can deliver output that has expired.
+var errResultGone = errors.New("OCR provider result is no longer available")
+
 func (s *Service) preserveResults(ctx context.Context, j model.OCRJob) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()

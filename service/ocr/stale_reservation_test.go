@@ -110,3 +110,23 @@ func TestOCROwnerCancelReleasesOnlyUnacceptedJobs(t *testing.T) {
 	assert.ErrorIs(t, err, model.ErrOCRConflict)
 	require.NoError(t, svc.db.Where("id = ?", "unaccepted").First(&job).Error)
 }
+
+// A result the provider no longer serves can never be delivered, so the job ends
+// as a failure: retrying forever would keep the reservation held and charge the
+// customer for output nobody can fetch.
+func TestOCRExpiredProviderResultIsTerminal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	svc, req := serviceFixture(t, server)
+	job := model.OCRJob{ID: "expired-result", UserID: req.Admission.UserID, TokenID: req.Admission.TokenID,
+		IdempotencyKey: "expired", Model: req.Target.Model, BillingState: "reserved",
+		SubmissionState: "submitted", ProviderState: "done", ProviderJobID: "provider-1",
+		ResultURL: server.URL + "/v1/job/expired.json", Funding: "wallet", ChannelID: req.Admission.ChannelID,
+		Execution: `{"jobsUrl":"` + server.URL + `/api/v2/ocr/jobs","resourceOrigins":["` + server.URL + `"]}`}
+
+	err := svc.preserveResults(context.Background(), job)
+	require.ErrorIs(t, err, errResultGone, "a 403 from the provider must be terminal, not retryable")
+}

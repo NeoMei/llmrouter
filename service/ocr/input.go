@@ -203,6 +203,10 @@ func (s *Service) fetch(ctx context.Context, raw string, limit int64) ([]byte, e
 		return nil, errors.New("OCR protected download failed")
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusGone || resp.StatusCode == http.StatusNotFound {
+		// The provider stopped serving this object: the output is unrecoverable.
+		return nil, errResultGone
+	}
 	if resp.StatusCode != http.StatusOK || resp.ContentLength > limit {
 		return nil, errors.New("OCR download status or size invalid")
 	}

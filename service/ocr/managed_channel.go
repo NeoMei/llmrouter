@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/url"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -17,6 +19,26 @@ import (
 const paddleOfficialOrigin = "https://paddleocr.aistudio-app.com"
 const paddleOfficialJobsURL = paddleOfficialOrigin + "/api/v2/ocr/jobs"
 const paddleOfficialResultOrigin = "https://paddleocr-store.bj.bcebos.com"
+
+// The official Paddle OCR service shards result buckets across hosts such as
+// paddleocr-store-2.bj.bcebos.com and paddleocr-store-6.bj.bcebos.com for the
+// same API. Only that exact sharded host family belongs to the official
+// endpoint; any other host, scheme or port stays rejected.
+var paddleOfficialResultHost = regexp.MustCompile(`^paddleocr-store(-[0-9]+)?\.bj\.bcebos\.com$`)
+
+// nativeCreditOrNative reports a pricing source that authorizes the official
+// result bucket: plain native pricing and its CREDIT-priced twin.
+func nativeCreditOrNative(source string) bool {
+	return source == "llmrouter_native" || source == platformbilling.NativeCreditPricingSource
+}
+
+func officialPaddleResultOrigin(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.User != nil || u.Fragment != "" || u.Port() != "" {
+		return false
+	}
+	return u.Scheme == "https" && paddleOfficialResultHost.MatchString(u.Host)
+}
 
 // ManagedNativeResourceOrigins binds the official Paddle result bucket to its
 // exact API endpoint. Custom endpoints retain their original same-origin policy.
@@ -36,19 +58,22 @@ func ManagedNativeResourceOrigins(jobsURL, upstreamModel string) ([]string, erro
 // the official BOS result origin. It never rewrites that snapshot or grants the
 // exception to selected tariffs, custom endpoints or a different task owner.
 func (s *Service) nativePaddleResultOrigin(ctx context.Context, j model.OCRJob, e model.OCRExecution) bool {
-	if j.Funding != "platform" || j.PlatformCallID == "" || j.ProviderJobID == "" || j.SubmissionState != "submitted" || e.ProfileID != 0 || e.JobsURL != paddleOfficialJobsURL || e.Model != "PaddleOCR-VL-1.6" || len(e.ResourceOrigins) != 1 || e.ResourceOrigins[0] != paddleOfficialOrigin || e.KeySHA256 == "" {
+	if j.Funding != "platform" || j.PlatformCallID == "" || j.ProviderJobID == "" || j.SubmissionState != "submitted" || e.ProfileID != 0 || e.JobsURL != paddleOfficialJobsURL || e.Model != "PaddleOCR-VL-1.6" || !slices.Contains(e.ResourceOrigins, paddleOfficialOrigin) || e.KeySHA256 == "" {
 		return false
 	}
 	var call platformbilling.Call
-	if s.db.WithContext(ctx).Where("call_id = ?", j.PlatformCallID).First(&call).Error != nil || call.PricingSource != "llmrouter_native" || call.Status != "UNKNOWN" || call.CredentialKind != "api_key" || call.CredentialID == "" || call.CredentialVersion < 1 || call.OriginProductID != "superwagie" || call.WireOperation != OCROperation || call.Model != e.RequestedModel || call.ProviderTaskID != j.ProviderJobID {
+	if s.db.WithContext(ctx).Where("call_id = ?", j.PlatformCallID).First(&call).Error != nil || !nativeCreditOrNative(call.PricingSource) || call.Status != "UNKNOWN" || call.CredentialKind != "api_key" || call.CredentialID == "" || call.CredentialVersion < 1 || call.OriginProductID != "superwagie" || call.WireOperation != OCROperation || call.Model != e.RequestedModel || call.ProviderTaskID != j.ProviderJobID {
 		return false
 	}
 	var quote platformbilling.NativeQuote
-	if common.UnmarshalJsonStr(call.NativeQuoteJSON, &quote) != nil || quote.PricingVersion != "lr-native-v1" || quote.PricingDigest == "" || quote.ChannelID != strconv.Itoa(j.ChannelID) || quote.BillingModel != j.Model || quote.WireOperation != OCROperation {
+	if common.UnmarshalJsonStr(call.NativeQuoteJSON, &quote) != nil || (quote.PricingVersion != "lr-native-v1" && quote.PricingVersion != platformbilling.NativeCreditPricingVersion) || quote.PricingDigest == "" || quote.ChannelID != strconv.Itoa(j.ChannelID) || quote.BillingModel != j.Model || quote.WireOperation != OCROperation {
 		return false
 	}
 	var binding model.OCRAccountBinding
-	if common.UnmarshalJsonStr(j.AccountBinding, &binding) != nil || binding.Owner == nil || *binding.Owner != binding.Ref || binding.Ref.ChannelID != j.ChannelID || binding.Ref.MemberID == "" || binding.Ref.MemberID != j.MemberID {
+	// A single-key channel records no separate owner: the member that dispatched
+	// the job is its owner, and that is exactly what Ref carries. Requiring an
+	// explicit Owner rejected every such job.
+	if common.UnmarshalJsonStr(j.AccountBinding, &binding) != nil || binding.Ref.ChannelID != j.ChannelID || binding.Ref.MemberID == "" || binding.Ref.MemberID != j.MemberID {
 		return false
 	}
 	channel, err := s.channel(ctx, j.ChannelID, 0)

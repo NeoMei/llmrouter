@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"fmt"
 	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
 	"time"
@@ -123,18 +124,18 @@ func (s *OCRBillingStore) RecordOCRProgress(ctx context.Context, id, claim, stat
 			return err
 		}
 		if j.Funding == "platform" && state == "done" && (total < 1 || extracted != total || resultURL == "") {
-			return ErrOCRConflict
+			return fmt.Errorf("%w: ocr job %s done progress total %d extracted %d url %t", ErrOCRConflict, id, total, extracted, resultURL != "")
 		}
 		if j.ClaimID != claim || j.SubmissionState != "submitted" {
-			return ErrOCRConflict
+			return fmt.Errorf("%w: ocr job %s progress claim %q state %q (want claim %q submitted)", ErrOCRConflict, id, j.ClaimID, j.SubmissionState, claim)
 		}
 		if j.ProviderState == "done" || j.ProviderState == "failed" {
 			if j.ProviderState != state {
-				return ErrOCRConflict
+				return fmt.Errorf("%w: ocr job %s provider state %q (stored %q)", ErrOCRConflict, id, state, j.ProviderState)
 			}
 			if j.Funding == "platform" && state == "done" && j.ResultResourceID == "" {
 				if j.TotalPages != total || j.ExtractedPages != extracted {
-					return ErrOCRConflict
+					return fmt.Errorf("%w: ocr job %s progress pages %d/%d (stored %d/%d)", ErrOCRConflict, id, total, extracted, j.TotalPages, j.ExtractedPages)
 				}
 				j.ResultURL = resultURL
 				return ocrSaveJob(tx, j)
@@ -147,6 +148,40 @@ func (s *OCRBillingStore) RecordOCRProgress(ctx context.Context, id, claim, stat
 		j.ResultURL = resultURL
 		return ocrSaveJob(tx, j)
 	})
+}
+
+// ReleaseStaleSubmission frees a reservation whose supplier send never produced
+// an answer: RecordSubmission left the job "uncertain" with no provider job id,
+// and nothing else can settle or cancel it. The fence is deliberately narrow —
+// a provider job id means the supplier may still run the job, and Finish keeps
+// refusing "uncertain" for every other caller.
+func (s *OCRBillingStore) ReleaseStaleSubmission(ctx context.Context, id string) (OCRJob, bool, error) {
+	released := false
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		j, err := ocrLockJob(tx, id)
+		if err != nil {
+			return err
+		}
+		if j.ProviderJobID != "" || j.SubmissionState != "uncertain" || j.BillingState != "reserved" || j.Decision != "" {
+			return nil
+		}
+		// The send never reached the supplier, or its answer was lost before any
+		// job id existed: that is exactly what "rejected" records, so the
+		// ordinary refund path applies without widening Finish's contract.
+		j.SubmissionState = "rejected"
+		j.RetryRefusal = false
+		released = true
+		return ocrSaveJob(tx, j)
+	})
+	if err != nil {
+		return OCRJob{}, false, err
+	}
+	if !released {
+		out, readErr := s.Inspect(ctx, id)
+		return out.Job, false, readErr
+	}
+	job, err := s.Finish(ctx, id, "failure")
+	return job, err == nil, err
 }
 
 // AbandonOCRSubmission fences a local cancellation or exhausted healthy pool

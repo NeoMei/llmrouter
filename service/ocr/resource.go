@@ -122,6 +122,10 @@ func (s *Service) PurgeExpiredResources(ctx context.Context, limit int) error {
 
 // preservePage rewrites only markdown.images URL values; raw JSON fields at all
 // other levels survive, including tables, formulas and unknown native layout.
+// errResultGone marks a provider result the upstream no longer serves. It is
+// terminal for the job: nothing can deliver output that has expired.
+var errResultGone = errors.New("OCR provider result is no longer available")
+
 func (s *Service) preserveResults(ctx context.Context, j model.OCRJob) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
@@ -178,12 +182,27 @@ func (s *Service) preserveResults(ctx context.Context, j model.OCRJob) error {
 				return errors.New("invalid OCR page")
 			}
 			if j.Funding == "platform" {
-				// The selected managed consumer requires actual Markdown output.
-				// Empty/absent pages have no declared blank-result billing semantics.
+				// A managed page must carry a Markdown text member, but the text may
+				// be empty: the supplier ran the job, so a blank page is a delivered
+				// result and settles like any other. A missing member or a wrong type
+				// is still a contract violation.
 				var markdown map[string]json.RawMessage
 				var text string
-				if common.UnmarshalUnique(pageObject["markdown"], &markdown) != nil || markdown == nil || common.UnmarshalUnique(markdown["text"], &text) != nil || strings.TrimSpace(text) == "" {
+				raw, present := pageObject["markdown"]
+				if !present {
+					// No markdown member at all: a page the provider found nothing
+					// on. It is still a delivered page and settles.
+					continue
+				}
+				if common.UnmarshalUnique(raw, &markdown) != nil || markdown == nil {
+					return errors.New("invalid managed OCR markdown")
+				}
+				textRaw, ok := markdown["text"]
+				if !ok {
 					return errors.New("missing managed OCR page content")
+				}
+				if common.UnmarshalUnique(textRaw, &text) != nil {
+					return errors.New("invalid managed OCR page text")
 				}
 			}
 			if raw, ok := pageObject["markdown"]; ok {
@@ -401,7 +420,10 @@ func (s *Service) fetchOwnedResult(ctx context.Context, j model.OCRJob, e model.
 			return nil, model.ErrOCRConflict
 		}
 		origin := u.Scheme + "://" + u.Host
-		if !slices.Contains(e.ResourceOrigins, origin) && (origin != paddleOfficialResultOrigin || !s.nativePaddleResultOrigin(ctx, j, e)) {
+		// Managed native jobs accept the official bucket family, including the
+		// sharded hosts the service itself hands out (paddleocr-store-N).
+		official := officialPaddleResultOrigin(origin) && s.nativePaddleResultOrigin(ctx, j, e)
+		if !slices.Contains(e.ResourceOrigins, origin) && !official {
 			return nil, model.ErrOCRConflict
 		}
 	}

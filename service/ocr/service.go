@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -395,6 +396,71 @@ func (s *Service) observe(ctx context.Context, selection model.UpstreamAccountSe
 	}
 	return nil
 }
+
+// staleSubmissionGrace is how long a job whose provider submission never
+// returned a definitive answer may keep its reservation before it is released.
+// The send is never replayed: an unclaimed job had nothing executed upstream, and
+// an uncertain one has no provider job id to poll, so holding the money longer
+// only locks the user's quota.
+const staleSubmissionGrace = 15 * time.Minute
+
+// ReleaseStaleSubmission closes a reservation whose provider submission never
+// reached a definite outcome: the money returns and the job becomes terminal.
+// Only jobs past the grace period with no provider job id are eligible; anything
+// the supplier accepted stays with Status/recovery, which owns the real outcome.
+func (s *Service) ReleaseStaleSubmission(ctx context.Context, id string) (model.OCRJob, bool, error) {
+	snapshot, err := s.billing.Inspect(ctx, id)
+	if err != nil {
+		return model.OCRJob{}, false, err
+	}
+	j := snapshot.Job
+	if j.BillingState == "settled" || j.BillingState == "refunded" || j.ProviderJobID != "" || j.Decision != "" {
+		return j, false, nil
+	}
+	if s.now().Unix()-j.CreatedAt < int64(staleSubmissionGrace/time.Second) {
+		return j, false, nil
+	}
+	return s.billing.ReleaseStaleSubmission(ctx, id)
+}
+
+// unrecoverableResult reports a download failure that no retry can fix. The
+// provider can answer 403 transiently while a result is still being written, so
+// only an object that has stayed unavailable past its retention window counts:
+// by then the output is gone for good. An origin or identity rejection is never
+// folded in here — it may be an attack and must not move money.
+func unrecoverableResult(err error, j model.OCRJob, now time.Time, retention time.Duration) bool {
+	if !errors.Is(err, errResultGone) {
+		return false
+	}
+	// A job younger than its retention window can still be retried: the provider
+	// may be serving a partially written object.
+	return now.Unix()-j.CreatedAt >= int64(retention/time.Second)
+}
+
+// failWithoutOutput ends a provider-completed job whose output cannot be
+// delivered. The job records the failure and the platform release path returns
+// the reservation, so nothing is charged for output that does not exist.
+func (s *Service) failWithoutOutput(ctx context.Context, id string) (JobStatus, error) {
+	if _, err := s.billing.Finish(ctx, id, "failure"); err != nil {
+		return JobStatus{}, err
+	}
+	snapshot, err := s.billing.Inspect(ctx, id)
+	if err != nil {
+		return JobStatus{}, err
+	}
+	return s.project(ctx, snapshot.Job)
+}
+
+// Cancel abandons an owner's job whose provider submission never confirmed, so
+// its reservation returns instead of waiting for the stale sweep.
+func (s *Service) Cancel(ctx context.Context, id string, userID, tokenID int) (JobStatus, error) {
+	j, err := s.billing.CancelJob(ctx, id, userID, tokenID)
+	if err != nil {
+		return JobStatus{}, err
+	}
+	return s.project(ctx, j)
+}
+
 func (s *Service) Status(ctx context.Context, id string, userID, tokenID int) (JobStatus, error) {
 	snapshot, err := s.billing.Inspect(ctx, id)
 	if err != nil {
@@ -402,7 +468,7 @@ func (s *Service) Status(ctx context.Context, id string, userID, tokenID int) (J
 	}
 	j := snapshot.Job
 	if j.UserID != userID || j.TokenID != tokenID {
-		return JobStatus{}, model.ErrOCRConflict
+		return JobStatus{}, errors.Join(model.ErrOCRConflict, fmt.Errorf("ocr job %s: owner mismatch user %d token %d", j.ID, j.UserID, j.TokenID))
 	}
 	if j.SubmissionState != "submitted" {
 		return s.project(ctx, j)
@@ -418,7 +484,7 @@ func (s *Service) Status(ctx context.Context, id string, userID, tokenID int) (J
 		}
 		ch, err := s.channel(ctx, j.ChannelID, execution.ProfileID)
 		if err != nil {
-			return JobStatus{}, err
+			return JobStatus{}, errors.Join(err, fmt.Errorf("ocr job %s: channel %d profile %d", j.ID, j.ChannelID, execution.ProfileID))
 		}
 		owner := binding.Ref
 		if binding.Owner != nil {
@@ -431,12 +497,12 @@ func (s *Service) Status(ctx context.Context, id string, userID, tokenID int) (J
 			key, err = model.ResolveTaskAccountKey(ctx, s.db, ch, owner)
 		}
 		if err != nil {
-			return JobStatus{}, err
+			return JobStatus{}, errors.Join(err, fmt.Errorf("ocr job %s: account key for channel %d", j.ID, j.ChannelID))
 		}
 		if j.Funding == "platform" {
 			h := sha256.Sum256([]byte(key))
 			if execution.KeySHA256 == "" || execution.KeySHA256 != hex.EncodeToString(h[:]) {
-				return JobStatus{}, model.ErrOCRConflict
+				return JobStatus{}, errors.Join(model.ErrOCRConflict, fmt.Errorf("ocr job %s: key fingerprint %q != snapshot %q", j.ID, hex.EncodeToString(h[:]), execution.KeySHA256))
 			}
 		}
 		status, _, err := s.supplier.Status(ctx, execution.JobsURL, key, j.ProviderJobID)
@@ -468,6 +534,13 @@ func (s *Service) Status(ctx context.Context, id string, userID, tokenID int) (J
 				return JobStatus{}, model.ErrOCRGrant
 			}
 			if err = s.preserveResults(ctx, j); err != nil {
+				// The provider finished, but its output cannot be retrieved. The
+				// customer must not pay for output nobody can deliver, and the
+				// reservation must not stay held forever: the job ends as a failure.
+				// A transient download error still retries.
+				if unrecoverableResult(err, j, s.now(), s.retention) {
+					return s.failWithoutOutput(ctx, id)
+				}
 				return JobStatus{}, err
 			}
 			snap, e := s.billing.Inspect(ctx, j.ID)
@@ -484,6 +557,9 @@ func (s *Service) Status(ctx context.Context, id string, userID, tokenID int) (J
 				return JobStatus{}, model.ErrOCRGrant
 			}
 			if err = s.preserveResults(ctx, j); err != nil {
+				if unrecoverableResult(err, j, s.now(), s.retention) {
+					return s.failWithoutOutput(ctx, id)
+				}
 				return JobStatus{}, err
 			}
 		}

@@ -800,7 +800,10 @@ func (s *OCRBillingStore) Finish(ctx context.Context, id, outcome string) (OCRJo
 			if outcome == "success" && (j.SubmissionState != "submitted" || j.ProviderState != "done") {
 				return ErrOCRConflict
 			}
-			if outcome == "failure" && j.ProviderState != "failed" && j.SubmissionState != "rejected" {
+			// A provider that finished without a deliverable result is a failure
+			// too: the job cannot become a successful delivery, and holding the
+			// reservation forever would charge for output nobody can fetch.
+			if outcome == "failure" && j.ProviderState != "failed" && j.ProviderState != "done" && j.SubmissionState != "rejected" {
 				return ErrOCRConflict
 			}
 			if outcome == "cancel" && j.SubmissionState != "unclaimed" {

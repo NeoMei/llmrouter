@@ -357,6 +357,23 @@ func (h *OCRHandler) Status(c *gin.Context) {
 	h.respond(c, status, name, false)
 }
 
+func (h *OCRHandler) Cancel(c *gin.Context) {
+	if !h.available(c) {
+		return
+	}
+	var job model.OCRJob
+	if err := h.Runtime.DB.WithContext(c.Request.Context()).Where("id = ? AND user_id = ? AND token_id = ? AND funding <> 'platform'", c.Param("id"), c.GetInt("id"), c.GetInt("token_id")).First(&job).Error; err != nil {
+		h.fail(c, 404, "OCR job not found")
+		return
+	}
+	status, err := h.Runtime.Service.Cancel(c.Request.Context(), job.ID, job.UserID, job.TokenID)
+	if err != nil {
+		h.serviceError(c, err, 409)
+		return
+	}
+	h.respond(c, status, job.Model, false)
+}
+
 // candidates rechecks the actual user/token records as well as TokenAuth. No
 // client-provided group/channel/upstream URL can become routing authority.
 func (h *OCRHandler) candidates(c *gin.Context, name string) ([]modelcatalog.ResolvedModel, model.User, model.Token, error) {

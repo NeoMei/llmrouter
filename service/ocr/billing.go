@@ -205,7 +205,11 @@ func (b *Billing) Finish(ctx context.Context, id, outcome string) (model.OCRJob,
 	}
 	if outcome != "success" {
 		refused := j.SubmissionState == "rejected" && !j.RetryRefusal && j.Decision == "failure" && j.ProviderJobID == ""
-		if (!refused && (j.ProviderState != "failed" || j.ProviderJobID == "")) || base.PlatformTaskRelease == nil {
+		// A finished job whose output cannot be delivered reaches the release path
+		// with a provider job id: the supplier has the task, and UniHub must stop
+		// holding the money for output the customer will never receive.
+		undeliverable := j.ProviderState == "done" && j.ProviderJobID != ""
+		if (!refused && !undeliverable && (j.ProviderState != "failed" || j.ProviderJobID == "")) || base.PlatformTaskRelease == nil {
 			return j, errors.New("platform OCR no-output release pending")
 		}
 		if err = base.PlatformTaskRelease(ctx, j.PlatformCallID, j.ProviderJobID); err != nil {

@@ -2,6 +2,7 @@ package ocr
 
 import (
 	"context"
+	base "github.com/QuantumNous/new-api/service"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -129,4 +130,35 @@ func TestOCRExpiredProviderResultIsTerminal(t *testing.T) {
 
 	err := svc.preserveResults(context.Background(), job)
 	require.ErrorIs(t, err, errResultGone, "a 403 from the provider must be terminal, not retryable")
+}
+
+// A provider that finished but whose output can never be fetched must end as a
+// failure with the reservation released. Leaving it pending charges the customer
+// for nothing and holds their quota forever.
+func TestOCRFinishedWithoutDeliverableOutputIsReleased(t *testing.T) {
+	releaseCalls := 0
+	oldRelease := base.PlatformTaskRelease
+	oldBind := base.PlatformTaskBind
+	base.PlatformTaskRelease = func(context.Context, string, string) error { releaseCalls++; return nil }
+	base.PlatformTaskBind = func(context.Context, string, string) error { return nil }
+	t.Cleanup(func() { base.PlatformTaskRelease = oldRelease; base.PlatformTaskBind = oldBind })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+	svc, req := serviceFixture(t, server)
+
+	job := model.OCRJob{ID: "no-output", UserID: req.Admission.UserID, TokenID: req.Admission.TokenID,
+		IdempotencyKey: "no-output", Model: req.Target.Model, BillingState: "reserved",
+		SubmissionState: "submitted", ProviderState: "done", ProviderJobID: "provider-1",
+		ResultURL: server.URL + "/v1/job/gone.json", Funding: "platform", PlatformCallID: "call-1",
+		ChannelID: req.Admission.ChannelID,
+		Execution: `{"jobsUrl":"` + server.URL + `/api/v2/ocr/jobs","resourceOrigins":["` + server.URL + `"]}`}
+	require.NoError(t, svc.db.Create(&job).Error)
+
+	if _, err := svc.billing.Finish(context.Background(), "no-output", "failure"); err != nil {
+		t.Fatalf("a finished job with undeliverable output must be releasable: %v", err)
+	}
+	assert.Equal(t, 1, releaseCalls, "the platform release path must run exactly once")
 }

@@ -507,8 +507,9 @@ func (s *Service) Status(ctx context.Context, id string, userID, tokenID int) (J
 			if err = s.preserveResults(ctx, j); err != nil {
 				// A result the provider no longer serves is as good as no result:
 				// the customer must not pay for output that can never be delivered.
-				// Only an expired object proves that; every other failure retries.
-				if errors.Is(err, errResultGone) {
+				// An expired object or a result URL outside the job's own origins
+				// proves that; every transient failure still retries.
+				if errors.Is(err, errResultGone) || errors.Is(err, model.ErrOCRConflict) {
 					if _, finishErr := s.billing.Finish(ctx, j.ID, "failure"); finishErr != nil {
 						return JobStatus{}, finishErr
 					}

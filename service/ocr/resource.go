@@ -187,6 +187,9 @@ func (s *Service) preserveResults(ctx context.Context, j model.OCRJob) error {
 				var markdown map[string]json.RawMessage
 				var text string
 				if common.UnmarshalUnique(pageObject["markdown"], &markdown) != nil || markdown == nil || common.UnmarshalUnique(markdown["text"], &text) != nil || strings.TrimSpace(text) == "" {
+					// Managed billing declares no blank-result semantics. The reviewed
+					// contract keeps such a job unsettled (the platform call stays
+					// UNKNOWN) instead of refunding or charging it automatically.
 					return errors.New("missing managed OCR page content")
 				}
 			}

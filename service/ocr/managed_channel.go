@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -57,7 +58,7 @@ func ManagedNativeResourceOrigins(jobsURL, upstreamModel string) ([]string, erro
 // the official BOS result origin. It never rewrites that snapshot or grants the
 // exception to selected tariffs, custom endpoints or a different task owner.
 func (s *Service) nativePaddleResultOrigin(ctx context.Context, j model.OCRJob, e model.OCRExecution) bool {
-	if j.Funding != "platform" || j.PlatformCallID == "" || j.ProviderJobID == "" || j.SubmissionState != "submitted" || e.ProfileID != 0 || e.JobsURL != paddleOfficialJobsURL || e.Model != "PaddleOCR-VL-1.6" || len(e.ResourceOrigins) != 1 || e.ResourceOrigins[0] != paddleOfficialOrigin || e.KeySHA256 == "" {
+	if j.Funding != "platform" || j.PlatformCallID == "" || j.ProviderJobID == "" || j.SubmissionState != "submitted" || e.ProfileID != 0 || e.JobsURL != paddleOfficialJobsURL || e.Model != "PaddleOCR-VL-1.6" || !slices.Contains(e.ResourceOrigins, paddleOfficialOrigin) || e.KeySHA256 == "" {
 		return false
 	}
 	var call platformbilling.Call
@@ -65,11 +66,14 @@ func (s *Service) nativePaddleResultOrigin(ctx context.Context, j model.OCRJob, 
 		return false
 	}
 	var quote platformbilling.NativeQuote
-	if common.UnmarshalJsonStr(call.NativeQuoteJSON, &quote) != nil || quote.PricingVersion != "lr-native-v1" || quote.PricingDigest == "" || quote.ChannelID != strconv.Itoa(j.ChannelID) || quote.BillingModel != j.Model || quote.WireOperation != OCROperation {
+	if common.UnmarshalJsonStr(call.NativeQuoteJSON, &quote) != nil || (quote.PricingVersion != "lr-native-v1" && quote.PricingVersion != platformbilling.NativeCreditPricingVersion) || quote.PricingDigest == "" || quote.ChannelID != strconv.Itoa(j.ChannelID) || quote.BillingModel != j.Model || quote.WireOperation != OCROperation {
 		return false
 	}
 	var binding model.OCRAccountBinding
-	if common.UnmarshalJsonStr(j.AccountBinding, &binding) != nil || binding.Owner == nil || *binding.Owner != binding.Ref || binding.Ref.ChannelID != j.ChannelID || binding.Ref.MemberID == "" || binding.Ref.MemberID != j.MemberID {
+	// A single-key channel records no separate owner: the member that dispatched
+	// the job is its owner, and that is exactly what Ref carries. Requiring an
+	// explicit Owner rejected every such job.
+	if common.UnmarshalJsonStr(j.AccountBinding, &binding) != nil || binding.Ref.ChannelID != j.ChannelID || binding.Ref.MemberID == "" || binding.Ref.MemberID != j.MemberID {
 		return false
 	}
 	channel, err := s.channel(ctx, j.ChannelID, 0)

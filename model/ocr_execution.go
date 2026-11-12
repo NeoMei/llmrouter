@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"fmt"
 	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
 	"time"
@@ -123,18 +124,18 @@ func (s *OCRBillingStore) RecordOCRProgress(ctx context.Context, id, claim, stat
 			return err
 		}
 		if j.Funding == "platform" && state == "done" && (total < 1 || extracted != total || resultURL == "") {
-			return ErrOCRConflict
+			return fmt.Errorf("%w: ocr job %s done progress total %d extracted %d url %t", ErrOCRConflict, id, total, extracted, resultURL != "")
 		}
 		if j.ClaimID != claim || j.SubmissionState != "submitted" {
-			return ErrOCRConflict
+			return fmt.Errorf("%w: ocr job %s progress claim %q state %q (want claim %q submitted)", ErrOCRConflict, id, j.ClaimID, j.SubmissionState, claim)
 		}
 		if j.ProviderState == "done" || j.ProviderState == "failed" {
 			if j.ProviderState != state {
-				return ErrOCRConflict
+				return fmt.Errorf("%w: ocr job %s provider state %q (stored %q)", ErrOCRConflict, id, state, j.ProviderState)
 			}
 			if j.Funding == "platform" && state == "done" && j.ResultResourceID == "" {
 				if j.TotalPages != total || j.ExtractedPages != extracted {
-					return ErrOCRConflict
+					return fmt.Errorf("%w: ocr job %s progress pages %d/%d (stored %d/%d)", ErrOCRConflict, id, total, extracted, j.TotalPages, j.ExtractedPages)
 				}
 				j.ResultURL = resultURL
 				return ocrSaveJob(tx, j)

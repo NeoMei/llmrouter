@@ -1,6 +1,11 @@
 package model
 
-import "gorm.io/gorm/clause"
+import (
+	"errors"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
 
 // provider_seed.go — idempotent, cross-DB seed of the 4 codex-gateway provider
 // profiles and their models. Mirrors migrations/002_seed_providers.sql.
@@ -11,6 +16,13 @@ import "gorm.io/gorm/clause"
 //
 // Wired into migrateDB / migrateDBFast alongside the other Initialize* hooks,
 // so the catalog is present on every fresh bring-up without a manual psql step.
+
+const (
+	deepSeekSeedContextWindow       = 1048576
+	deepSeekSeedMaxOutput           = 393216
+	legacyDeepSeekSeedContextWindow = 131072
+	legacyDeepSeekSeedMaxOutput     = 0
+)
 
 // seedProviderCatalog is the single source of truth for the seeded catalog.
 var seedProviderCatalog = []struct {
@@ -29,14 +41,16 @@ var seedProviderCatalog = []struct {
 			{
 				ModelId:       "deepseek-flash",
 				DisplayName:   "DeepSeek V4.1 Flash",
-				ContextWindow: 1048576,
+				ContextWindow: deepSeekSeedContextWindow,
+				MaxOutput:     deepSeekSeedMaxOutput,
 				Status:        "active",
 				QuirkRules:    `{"reasoning_mode": "effort", "preserve_reasoning": true}`,
 			},
 			{
 				ModelId:       "deepseek-v4-pro",
 				DisplayName:   "DeepSeek V4 Pro",
-				ContextWindow: 1048576,
+				ContextWindow: deepSeekSeedContextWindow,
+				MaxOutput:     deepSeekSeedMaxOutput,
 				Status:        "active",
 				QuirkRules:    `{"reasoning_mode": "effort", "preserve_reasoning": true}`,
 			},
@@ -127,6 +141,33 @@ func SeedProviderProfiles() error {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+// UpgradeDeepSeekProviderProfile repairs only values that still match the
+// legacy DeepSeek seed sentinels. Operator-edited context and output limits
+// are preserved independently, and other providers and model IDs are ignored.
+// Run it after SeedProviderProfiles on every database migration.
+func UpgradeDeepSeekProviderProfile() error {
+	var profile ProviderProfile
+	if err := DB.Where("name = ?", "deepseek").Take(&profile).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+
+	modelIDs := []string{"deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"}
+	if err := DB.Model(&ProviderModel{}).
+		Where("profile_id = ? AND model_id IN ? AND context_window = ?", profile.Id, modelIDs, legacyDeepSeekSeedContextWindow).
+		Update("context_window", deepSeekSeedContextWindow).Error; err != nil {
+		return err
+	}
+	if err := DB.Model(&ProviderModel{}).
+		Where("profile_id = ? AND model_id IN ? AND max_output = ?", profile.Id, modelIDs, legacyDeepSeekSeedMaxOutput).
+		Update("max_output", deepSeekSeedMaxOutput).Error; err != nil {
+		return err
 	}
 	return nil
 }

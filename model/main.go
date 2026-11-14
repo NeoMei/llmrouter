@@ -358,6 +358,9 @@ func migrateDB() error {
 	if err := SeedProviderProfiles(); err != nil {
 		return err
 	}
+	if err := UpgradeDeepSeekProviderProfile(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -483,6 +486,9 @@ func migrateDBFast() error {
 		}
 	}
 	if err := SeedProviderProfiles(); err != nil {
+		return err
+	}
+	if err := UpgradeDeepSeekProviderProfile(); err != nil {
 		return err
 	}
 	common.SysLog("database migrated")

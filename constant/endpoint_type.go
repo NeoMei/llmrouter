@@ -7,6 +7,8 @@ const (
 	EndpointTypeOpenAI                EndpointType = "openai"
 	EndpointTypeOpenAIResponse        EndpointType = "openai-response"
 	EndpointTypeOpenAIResponseCompact EndpointType = "openai-response-compact"
+	EndpointTypeDeepSeekToolsSearch   EndpointType = "deepseek-tools-search"
+	EndpointTypeDeepSeekToolsFetch    EndpointType = "deepseek-tools-fetch"
 	EndpointTypeAnthropic             EndpointType = "anthropic"
 	EndpointTypeGemini                EndpointType = "gemini"
 	EndpointTypeJinaRerank            EndpointType = "jina-rerank"
@@ -17,4 +19,10 @@ const (
 	//EndpointTypeSuno           EndpointType = "suno-proxy"
 	//EndpointTypeKling          EndpointType = "kling"
 	//EndpointTypeJimeng         EndpointType = "jimeng"
+)
+
+// DeepSeek Search and Fetch routing names, quoted in channel model lists.
+const (
+	DeepSeekSearchModel = "deepseek-search"
+	DeepSeekFetchModel  = "deepseek-fetch"
 )

@@ -44,6 +44,8 @@ func GetAndValidateRequest(c *gin.Context, format types.RelayFormat) (request dt
 		request, err = GetAndValidateResponsesRequest(c)
 	case types.RelayFormatOpenAIResponsesCompaction:
 		request, err = GetAndValidateResponsesCompactionRequest(c)
+	case types.RelayFormatDeepSeekTools:
+		request, err = GetAndValidateDeepSeekToolsRequest(c)
 
 	case types.RelayFormatOpenAIImage:
 		request, err = GetAndValidOpenAIImageRequest(c, relayMode)
@@ -64,6 +66,33 @@ func GetAndValidateRequest(c *gin.Context, format types.RelayFormat) (request dt
 		_, err = InspectRequestMedia(request)
 	}
 	return request, err
+}
+
+// GetAndValidateDeepSeekToolsRequest keeps the exact upstream body. Search and
+// Fetch have no model in the vendor body; routing supplies their model name.
+func GetAndValidateDeepSeekToolsRequest(c *gin.Context) (*dto.DeepSeekToolsRequest, error) {
+	request := &dto.DeepSeekToolsRequest{}
+	if err := common.UnmarshalBodyReusable(c, request); err != nil {
+		return nil, err
+	}
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return nil, err
+	}
+	rawBody, err := storage.Bytes()
+	if err != nil {
+		return nil, err
+	}
+	if len(rawBody) == 0 {
+		return nil, errors.New("request body is empty")
+	}
+	request.RawBody = append(json.RawMessage(nil), rawBody...)
+	// The vendor endpoints have no model; route identity comes from the path.
+	request.Model = common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
+	if request.Model == "" {
+		return nil, errors.New("routing model is empty")
+	}
+	return request, nil
 }
 
 func GetAndValidAudioRequest(c *gin.Context, relayMode int) (*dto.AudioRequest, error) {

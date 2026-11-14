@@ -56,6 +56,17 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 }
 
 func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
+	if info == nil {
+		return
+	}
+	// DeepSeek bills server-side Search/Fetch traffic with vendor-specific
+	// price keys regardless of the public chat model. The Responses terminal
+	// envelope carries the final counts for those calls.
+	info.WebSearchBillingKey = SearchToolPriceKey
+	info.WebFetchBillingKey = FetchToolPriceKey
+	if info.RelayMode == constant.RelayModeResponses {
+		info.VendorToolUsage = responsesToolUsage
+	}
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
@@ -63,7 +74,13 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		return fmt.Sprintf("%s/v1/chat/completions", info.ChannelBaseUrl), nil
 	}
 	if info.RelayMode == constant.RelayModeResponses {
-		return fmt.Sprintf("%s/v1/responses", info.ChannelBaseUrl), nil
+		return fmt.Sprintf("%s/responses", info.ChannelBaseUrl), nil
+	}
+	if info.RelayMode == constant.RelayModeToolsSearch {
+		return fmt.Sprintf("%s/v1/tools/search", info.ChannelBaseUrl), nil
+	}
+	if info.RelayMode == constant.RelayModeToolsFetch {
+		return fmt.Sprintf("%s/v1/tools/fetch", info.ChannelBaseUrl), nil
 	}
 	fimBaseUrl := info.ChannelBaseUrl
 	switch info.RelayFormat {

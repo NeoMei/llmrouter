@@ -15,6 +15,7 @@ const (
 	RelayFormatRerank                                = "rerank"
 	RelayFormatEmbedding                             = "embedding"
 	RelayFormatMultimodalEmbedding                   = "multimodal_embedding"
+	RelayFormatDeepSeekTools                         = "deepseek_tools"
 
 	RelayFormatTask    = "task"
 	RelayFormatMjProxy = "mj_proxy"

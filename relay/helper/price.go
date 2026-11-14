@@ -2,6 +2,7 @@ package helper
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -249,6 +250,22 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 		GroupRatioInfo: groupRatioInfo,
 	}
 	return priceData, nil
+}
+
+// ModelPriceHelperZeroUsage prices a successful request that reports no tokens,
+// such as DeepSeek Search/Fetch. It only accepts a configured fixed request
+// price; it cannot silently fall back to a free or per-token model.
+func ModelPriceHelperZeroUsage(c *gin.Context, info *relaycommon.RelayInfo) (types.PriceData, error) {
+	modelPrice, ok := ratio_setting.GetModelPrice(info.BillingModelNameOrOrigin(), false)
+	if !ok || modelPrice < 0 || math.IsNaN(modelPrice) || math.IsInf(modelPrice, 0) {
+		return types.PriceData{}, modelPriceNotConfiguredError(info.BillingModelNameOrOrigin(), info.UserId)
+	}
+	groupRatio := HandleGroupRatio(c, info)
+	quota, err := common.QuotaFromFloatStrict(modelPrice * common.QuotaPerUnit * groupRatio.GroupRatio)
+	if err != nil {
+		return types.PriceData{}, err
+	}
+	return types.PriceData{ModelPrice: modelPrice, UsePrice: true, Quota: quota, QuotaToPreConsume: quota, GroupRatioInfo: groupRatio}, nil
 }
 
 func HasModelBillingConfig(modelName string) bool {

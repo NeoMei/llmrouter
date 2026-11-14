@@ -40,6 +40,8 @@ const (
 	OperationCompletionCreate            Operation = "completions.create"
 	OperationResponseCreate              Operation = "responses.create"
 	OperationResponseCompact             Operation = "responses.compact"
+	OperationToolsSearch                 Operation = "tools.search"
+	OperationToolsFetch                  Operation = "tools.fetch"
 	OperationRealtimeConnect             Operation = "realtime.connect"
 	OperationClaudeMessageCreate         Operation = "claude.messages.create"
 	OperationMultimodalEmbedding         Operation = "multimodal.embeddings.create"
@@ -69,6 +71,7 @@ var allOperations = []Operation{
 	OperationOCRCreate, OperationOCRRetrieve, OperationOCRResource,
 	OperationModelList, OperationModelRetrieve, OperationModelDelete,
 	OperationChatCreate, OperationCompletionCreate, OperationResponseCreate, OperationResponseCompact,
+	OperationToolsSearch, OperationToolsFetch,
 	OperationRealtimeConnect, OperationClaudeMessageCreate, OperationEmbeddingCreate, OperationMultimodalEmbedding,
 	OperationAudioTranscription, OperationAudioTranslation, OperationAudioSpeech,
 	OperationImageGeneration, OperationImageEdit, OperationImageVariation,
@@ -158,6 +161,8 @@ var publicRoutes = []routeSpec{
 	route(http.MethodPost, `^/api/v1/services/rerank/text-rerank/text-rerank$`, OperationRerankCreate),
 	route(http.MethodPost, `^/v1/completions$`, OperationCompletionCreate),
 	route(http.MethodPost, `^/v1/responses$`, OperationResponseCreate),
+	route(http.MethodPost, `^/v1/tools/search$`, OperationToolsSearch),
+	route(http.MethodPost, `^/v1/tools/fetch$`, OperationToolsFetch),
 	route(http.MethodPost, `^/v1/responses/compact$`, OperationResponseCompact),
 	route(http.MethodGet, `^/v1/realtime$`, OperationRealtimeConnect),
 	route(http.MethodPost, `^/v1/messages$`, OperationClaudeMessageCreate),

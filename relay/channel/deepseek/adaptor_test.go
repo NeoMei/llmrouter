@@ -15,7 +15,7 @@ import (
 
 func TestConvertOpenAIRequestNormalizesDeveloperRole(t *testing.T) {
 	request := &dto.GeneralOpenAIRequest{
-		Model: "deepseek-v4-flash",
+		Model: "deepseek-flash",
 		Messages: []dto.Message{
 			{Role: "developer", Content: "follow project instructions"},
 			{Role: "user", Content: "hello"},
@@ -39,12 +39,45 @@ func TestGetRequestURLUsesNativeResponsesEndpoint(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, "https://api.deepseek.com/v1/responses", url)
+	assert.Equal(t, "https://api.deepseek.com/responses", url)
+}
+
+func TestGetRequestURLUsesNativeSearchAndFetchEndpoints(t *testing.T) {
+	for _, tc := range []struct {
+		mode int
+		want string
+	}{
+		{constant.RelayModeToolsSearch, "https://api.deepseek.com/v1/tools/search"},
+		{constant.RelayModeToolsFetch, "https://api.deepseek.com/v1/tools/fetch"},
+	} {
+		url, err := (&Adaptor{}).GetRequestURL(&relaycommon.RelayInfo{
+			ChannelMeta: &relaycommon.ChannelMeta{ChannelBaseUrl: "https://api.deepseek.com"},
+			RelayMode:   tc.mode,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, tc.want, url)
+	}
+}
+
+func TestResponsesToolUsageUsesCompletedSearchAndFetchActions(t *testing.T) {
+	raw := []byte(`{"output":[{"type":"web_search_call","status":"completed","action":{"type":"search"}},{"type":"web_search_call","status":"completed","action":{"type":"open_page"}},{"type":"web_search_call","status":"failed","action":{"type":"open_page"}}]}`)
+	assert.Equal(t, map[string]int{SearchToolPriceKey: 1, FetchToolPriceKey: 1}, responsesToolUsage(raw))
+	assert.Nil(t, responsesToolUsage([]byte(`{"status":"completed","output":[]}`)))
+}
+
+func TestInitSetsSearchBillingKeys(t *testing.T) {
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	(&Adaptor{}).Init(info)
+	assert.Equal(t, SearchToolPriceKey, info.WebSearchBillingKey)
+	assert.Equal(t, FetchToolPriceKey, info.WebFetchBillingKey)
+	info.RelayMode = constant.RelayModeResponses
+	(&Adaptor{}).Init(info)
+	assert.NotNil(t, info.VendorToolUsage)
 }
 
 func TestConvertOpenAIResponsesRequestPromotesAdditionalTools(t *testing.T) {
 	request := dto.OpenAIResponsesRequest{
-		Model: "deepseek-v4-flash",
+		Model: "deepseek-flash",
 		Input: json.RawMessage(`[
 			{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"functions","tools":[{"type":"custom","name":"exec","description":"Run shell code","format":{"type":"grammar"}}]}]},
 			{"type":"message","role":"user","content":"read the file"}

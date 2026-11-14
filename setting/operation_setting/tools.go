@@ -24,6 +24,10 @@ var defaultToolPrices = map[string]float64{
 	"web_search_preview": 10.0, // OpenAI web search preview (default: reasoning models)
 	"file_search":        2.5,  // OpenAI file search (Responses API)
 	"google_search":      14.0, // Gemini Grounding with Google Search
+	// DeepSeek Search and Fetch, billed at USD 0.75 per 1,000 successful
+	// requests. Responses-hosted Search is keyed to these names by its adaptor.
+	"deepseek_search": 0.75,
+	"deepseek_fetch":  0.75,
 }
 
 var defaultToolPriceOverrides = map[string]float64{

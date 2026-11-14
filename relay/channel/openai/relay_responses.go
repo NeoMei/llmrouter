@@ -64,6 +64,7 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			return nil, toolpolicy.NewResponseValidationError(err)
 		}
 	}
+	info.ApplyVendorToolUsage(responseBody)
 	persistResponsesTurn(c, info, &responsesResponse)
 
 	// 写入新的 response body
@@ -85,14 +86,13 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	if info == nil || info.ResponsesUsageInfo == nil || info.ResponsesUsageInfo.BuiltInTools == nil {
 		return &usage, nil
 	}
-	// 解析 Tools 用量
-	for _, tool := range responsesResponse.Tools {
-		buildToolinfo, ok := info.ResponsesUsageInfo.BuiltInTools[common.Interface2String(tool["type"])]
-		if !ok || buildToolinfo == nil {
-			logger.LogError(c, fmt.Sprintf("BuiltInTools not found for tool type: %v", tool["type"]))
-			continue
+	// Tools is only a declaration list. Bill completed output calls, never a
+	// request that declared a hosted tool and did not invoke it.
+	for _, item := range responsesResponse.Output {
+		switch item.Type {
+		case dto.BuildInCallWebSearchCall, dto.BuildInToolFileSearch:
+			info.CountBillableToolCall(item.Type)
 		}
-		buildToolinfo.CallCount++
 	}
 	return &usage, nil
 }
@@ -186,6 +186,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					c.Set("image_generation_call_size", streamResponse.Response.GetSize())
 				}
 			}
+			info.ApplyVendorToolUsage(common.StringToByteSlice(data))
 		case "response.failed", "response.error", "response.incomplete", "error":
 			terminalSeen = true
 			terminalValid = false
@@ -198,11 +199,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			if streamResponse.Item != nil {
 				switch streamResponse.Item.Type {
 				case dto.BuildInCallWebSearchCall:
-					if info != nil && info.ResponsesUsageInfo != nil && info.ResponsesUsageInfo.BuiltInTools != nil {
-						if webSearchTool, exists := info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearchPreview]; exists && webSearchTool != nil {
-							webSearchTool.CallCount++
-						}
-					}
+					info.CountBillableToolCall(dto.BuildInCallWebSearchCall)
+				case dto.BuildInToolFileSearch:
+					info.CountBillableToolCall(dto.BuildInToolFileSearch)
 				}
 			}
 		}

@@ -299,7 +299,10 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	}
 
 	if oaiError := simpleResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
-		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
+		// Generated failures can carry the tokens actually consumed before the
+		// failure. Preserve them for the caller while keeping the client outcome
+		// an error.
+		return responsesUsage(&simpleResponse.Usage), types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 	if err := toolpolicy.ValidateChatResponseContext(c, &simpleResponse); err != nil {
 		return nil, toolpolicy.NewResponseValidationError(err)

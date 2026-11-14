@@ -118,3 +118,31 @@ func TestResponsesStreamFailedTerminalKeepsUsage(t *testing.T) {
 	// separate concern and is verified directly above so it remains available
 	// for the upstream handler without turning failure into success.
 }
+
+func TestChatHandlersPreserveUsageFromFailedUpstream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Run("chat completions", func(t *testing.T) {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "deepseek-flash"}}
+		body := `{"error":{"type":"server_error","message":"failed"},"usage":{"input_tokens":9,"output_tokens":2,"total_tokens":11}}`
+		resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}
+		usage, apiErr := OpenaiHandler(c, info, resp)
+		require.NotNil(t, apiErr)
+		require.NotNil(t, usage)
+		assert.Equal(t, 9, usage.PromptTokens)
+		assert.Equal(t, 2, usage.CompletionTokens)
+	})
+	t.Run("responses to chat", func(t *testing.T) {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "deepseek-flash"}}
+		body := `{"status":"failed","error":{"type":"server_error","message":"failed"},"usage":{"input_tokens":6,"output_tokens":1,"total_tokens":7}}`
+		resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}
+		usage, apiErr := OaiResponsesToChatHandler(c, info, resp)
+		require.NotNil(t, apiErr)
+		require.NotNil(t, usage)
+		assert.Equal(t, 6, usage.PromptTokens)
+		assert.Equal(t, 1, usage.CompletionTokens)
+	})
+}

@@ -42,7 +42,7 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	}
 
 	if oaiError := responsesResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
-		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
+		return responsesUsage(responsesResp.Usage), types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 	if err := toolpolicy.ValidateResponsesResponseForChatContext(c, &responsesResp); err != nil {
 		return nil, toolpolicy.NewResponseValidationError(err)
@@ -93,6 +93,7 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 	accumulator := relayconvert.NewResponsesBufferedAccumulator()
 	var finalResponse *dto.OpenAIResponsesResponse
 	var streamErr *types.NewAPIError
+	var failedUsage *dto.Usage
 
 	scanner := helper.NewStreamScanner(resp.Body)
 	scanner.Split(bufio.ScanLines)
@@ -134,6 +135,9 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 			}
 		case "response.failed", "response.error":
 			if streamResp.Response != nil {
+				if streamResp.Response.Usage != nil {
+					failedUsage = responsesUsage(streamResp.Response.Usage)
+				}
 				if oaiErr := streamResp.Response.GetOpenAIError(); oaiErr != nil && oaiErr.Type != "" {
 					streamErr = types.WithOpenAIError(*oaiErr, http.StatusInternalServerError)
 					break
@@ -146,7 +150,7 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 		}
 	}
 	if streamErr != nil {
-		return nil, streamErr
+		return failedUsage, streamErr
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
@@ -217,6 +221,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	streamErr := (*types.NewAPIError)(nil)
+	var failedUsage *dto.Usage
 	streamValidator := toolpolicy.NewStreamValidatorForChatContext(c)
 	stopStream := func(sr *helper.StreamResult) {
 		if sr != nil {
@@ -303,6 +308,9 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 		if streamResp.Type == "response.error" || streamResp.Type == "response.failed" {
 			if streamResp.Response != nil {
+				if streamResp.Response.Usage != nil {
+					failedUsage = responsesUsage(streamResp.Response.Usage)
+				}
 				if oaiErr := streamResp.Response.GetOpenAIError(); oaiErr != nil && oaiErr.Type != "" {
 					streamErr = types.WithOpenAIError(*oaiErr, http.StatusInternalServerError)
 					stopStream(sr)
@@ -348,14 +356,14 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	})
 
 	if streamErr != nil {
-		return nil, streamErr
+		return failedUsage, streamErr
 	}
 	if abortErr := abortInvalidStreamTransport(c, info, streamValidator); abortErr != nil {
-		return nil, abortErr
+		return failedUsage, abortErr
 	}
 	flushed, err := streamValidator.Finish()
 	if err != nil {
-		return nil, toolpolicy.NewResponseValidationError(err)
+		return failedUsage, toolpolicy.NewResponseValidationError(err)
 	}
 	for _, frame := range flushed {
 		if !convertValidatedData(string(frame), nil) {

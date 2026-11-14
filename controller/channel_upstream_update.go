@@ -181,6 +181,7 @@ func collectPendingUpstreamModelChangesFromModels(
 	upstreamModels []string,
 	ignoredModels []string,
 	modelMapping map[string]string,
+	channelType int,
 ) (pendingAddModels []string, pendingRemoveModels []string) {
 	localSet := make(map[string]struct{})
 	localModels = normalizeModelNames(localModels)
@@ -194,6 +195,15 @@ func collectPendingUpstreamModelChangesFromModels(
 	}
 
 	normalizedIgnoredModels := normalizeModelNames(ignoredModels)
+	isIgnoredModel := func(modelName string) bool {
+		return lo.ContainsBy(normalizedIgnoredModels, func(ignoredModel string) bool {
+			if regexBody, ok := strings.CutPrefix(ignoredModel, "regex:"); ok {
+				matched, err := regexp.MatchString(strings.TrimSpace(regexBody), modelName)
+				return err == nil && matched
+			}
+			return ignoredModel == modelName
+		})
+	}
 
 	redirectSourceSet := make(map[string]struct{}, len(modelMapping))
 	redirectTargetSet := make(map[string]struct{}, len(modelMapping))
@@ -214,21 +224,24 @@ func collectPendingUpstreamModelChangesFromModels(
 		if _, ok := coveredUpstreamSet[modelName]; ok {
 			return false
 		}
-		if lo.ContainsBy(normalizedIgnoredModels, func(ignoredModel string) bool {
-			if regexBody, ok := strings.CutPrefix(ignoredModel, "regex:"); ok {
-				matched, err := regexp.MatchString(strings.TrimSpace(regexBody), modelName)
-				return err == nil && matched
-			}
-			return ignoredModel == modelName
-		}) {
+		if isIgnoredModel(modelName) {
 			return false
 		}
 		return true
 	})
 	pendingRemove := lo.Filter(localModels, func(modelName string, _ int) bool {
+		if channelType == constant.ChannelTypeDeepSeek &&
+			(modelName == constant.DeepSeekSearchModel || modelName == constant.DeepSeekFetchModel) {
+			// DeepSeek's internal tool routes are exposed as local models but are
+			// not part of the upstream model list.
+			return false
+		}
 		// Redirect source models are virtual aliases and should not be removed
 		// only because they are absent from upstream model list.
 		if _, ok := redirectSourceSet[modelName]; ok {
+			return false
+		}
+		if isIgnoredModel(modelName) {
 			return false
 		}
 		_, ok := upstreamSet[modelName]
@@ -247,6 +260,7 @@ func collectPendingUpstreamModelChanges(channel *model.Channel, settings dto.Cha
 		upstreamModels,
 		settings.UpstreamModelUpdateIgnoredModels,
 		normalizeChannelModelMapping(channel),
+		channel.Type,
 	)
 	return pendingAddModels, pendingRemoveModels, nil
 }

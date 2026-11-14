@@ -10,6 +10,9 @@
       "name": "获取模型列表"
     },
     {
+      "name": "DeepSeek 搜索与抓取"
+    },
+    {
       "name": "OpenAI格式(Chat)"
     },
     {
@@ -137,6 +140,114 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {}
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/tools/search": {
+      "post": {
+        "summary": "DeepSeek 网页搜索",
+        "deprecated": false,
+        "description": "调用 DeepSeek 网页搜索接口。仅 DeepSeek 渠道支持；成功且 results 非空时计费。",
+        "operationId": "search",
+        "tags": [
+          "DeepSeek 搜索与抓取"
+        ],
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeepSeekSearchRequest"
+              },
+              "example": {
+                "query": "DeepSeek API documentation",
+                "count": 1,
+                "need_content": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "搜索成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeepSeekSearchResponse"
+                },
+                "example": {
+                  "results": [
+                    {
+                      "rerank_score": 2.4,
+                      "title": "DeepSeek V4 model released",
+                      "url": "https://example.com/deepseek-v4",
+                      "snippet": "DeepSeek V4 is now available, with tool calling and long-context support.",
+                      "summary": "DeepSeek has released the V4 model. The release adds improved tool calling and long-context support for agent workflows.",
+                      "content": "",
+                      "site_name": "Example News",
+                      "site_icon": "https://example.com/favicon.ico",
+                      "date": "2026-06-01T00:00:00+00:00",
+                      "authority": 3
+                    }
+                  ]
+                }
+              }
+            },
+            "headers": {}
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/tools/fetch": {
+      "post": {
+        "summary": "DeepSeek 网页抓取",
+        "deprecated": false,
+        "description": "抓取网页并返回页面标题与 Markdown 格式正文。仅 DeepSeek 渠道支持；成功返回正文时计费。",
+        "operationId": "fetch",
+        "tags": [
+          "DeepSeek 搜索与抓取"
+        ],
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeepSeekFetchRequest"
+              },
+              "example": {
+                "url": "https://api-docs.deepseek.com/zh-cn/"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "抓取成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeepSeekFetchResponse"
+                },
+                "example": {
+                  "title": "首次调用 API | DeepSeek API Docs",
+                  "content": "# 首次调用 API\n\nDeepSeek API 使用与 OpenAI/Anthropic 兼容的 API 格式，通过修改配置，您可以使用 OpenAI/Anthropic SDK 来访问 DeepSeek API，或使用与 OpenAI/Anthropic API 兼容的软件。"
                 }
               }
             },
@@ -4064,6 +4175,157 @@
             "minimum": 0.25,
             "maximum": 4,
             "default": 1
+          }
+        }
+      },
+      "DeepSeekSearchRequest": {
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "搜索词，必须为 1～128 个 Unicode 字符且不能全为空白。支持 site:、-site:、引号等搜索语法。"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 10,
+            "description": "返回条数，默认为 10。"
+          },
+          "ori_question": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "触发搜索的用户原始问题，有助于理解搜索意图；传 null 视为未提供。"
+          },
+          "localization": {
+            "type": "string",
+            "default": "",
+            "description": "用于优先返回本地化搜索结果的 IP 地址，默认为空字符串。"
+          },
+          "need_content": {
+            "type": "boolean",
+            "default": false,
+            "description": "是否在 content 中返回网页正文；为 false 时 content 恒为空字符串。"
+          }
+        }
+      },
+      "DeepSeekSearchResponse": {
+        "type": "object",
+        "required": [
+          "results"
+        ],
+        "properties": {
+          "results": {
+            "type": "array",
+            "description": "搜索结果；没有匹配结果时为空数组。",
+            "items": {
+              "$ref": "#/components/schemas/DeepSeekSearchResult"
+            }
+          }
+        }
+      },
+      "DeepSeekSearchResult": {
+        "type": "object",
+        "required": [
+          "rerank_score",
+          "title",
+          "url",
+          "snippet",
+          "summary",
+          "content",
+          "site_name",
+          "site_icon",
+          "date",
+          "authority"
+        ],
+        "properties": {
+          "rerank_score": {
+            "type": "number",
+            "format": "float",
+            "minimum": 0,
+            "maximum": 3,
+            "description": "排序分数；大于等于 1.5 为优质结果。"
+          },
+          "title": {
+            "type": "string",
+            "description": "搜索结果标题。"
+          },
+          "url": {
+            "type": "string",
+            "description": "搜索结果链接。"
+          },
+          "snippet": {
+            "type": "string",
+            "description": "与查询相关的短摘要，通常为 100～200 字符，适用于前端展示。"
+          },
+          "summary": {
+            "type": "string",
+            "description": "与查询相关的长摘要，通常为 600～800 字符，适用于给模型阅读。"
+          },
+          "content": {
+            "type": "string",
+            "description": "网页正文；need_content 为 false 或正文缺失时为空字符串。"
+          },
+          "site_name": {
+            "type": "string",
+            "nullable": true,
+            "description": "站点名称；缺失时为 null。"
+          },
+          "site_icon": {
+            "type": "string",
+            "nullable": true,
+            "description": "站点图标 URL；缺失时为 null。"
+          },
+          "date": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "UTC 的 RFC 3339 发布时间；未知时为 null。",
+            "example": "2026-06-01T00:00:00+00:00"
+          },
+          "authority": {
+            "type": "integer",
+            "minimum": -1,
+            "maximum": 4,
+            "description": "网页权威性，0～4；-1 表示未知，大于等于 3 为极权威结果。"
+          }
+        }
+      },
+      "DeepSeekFetchRequest": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192,
+            "description": "要抓取的网页地址；必须为含 host 的 HTTP/HTTPS URL，且不能携带用户名或密码。"
+          }
+        }
+      },
+      "DeepSeekFetchResponse": {
+        "type": "object",
+        "required": [
+          "title",
+          "content"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "页面标题；缺失时为空字符串。"
+          },
+          "content": {
+            "type": "string",
+            "description": "抓取后的 Markdown 正文。"
           }
         }
       },

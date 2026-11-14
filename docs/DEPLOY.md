@@ -65,10 +65,15 @@ curl -H "Authorization: Bearer $MANAGEMENT_TOKEN" http://localhost:3000/readyz
 2. 类型选择 **Codex Gateway**
 3. 模型列表填入所有 provider_models 的 model_id：
    ```
-   deepseek-v4-flash,deepseek-v4-pro,kimi-for-coding,k3,glm-5.2,qwen3-coder-next
+   deepseek-flash,deepseek-v4-pro,kimi-for-coding,k3,glm-5.2,qwen3-coder-next
    ```
 4. base_url 和 key 留空（由 provider_profile 提供）
 5. 保存
+
+`deepseek-flash` 与 `deepseek-v4-pro` 是当前主模型名。DeepSeek 仍接受旧名
+`deepseek-v4-flash`，并按 Flash 提供服务。DeepSeek 的 `deepseek-search` 与
+`deepseek-fetch` 是内部工具请求路由，不属于上游 `/models` 目录，也不会作为
+普通模型出现在网关 `/models` 中；渠道启用这两类工具时不要因其缺席而判定为过期模型。
 
 ### 添加平台 Key
 
@@ -113,7 +118,7 @@ curl -X POST http://localhost:3000/api/gateway/byok \
 npx codex-gateway init
 
 # 或手动配置 ~/.codex/config.toml
-model = "deepseek-v4-flash"
+model = "deepseek-flash"
 model_provider = "gateway"
 
 [model_providers.gateway]

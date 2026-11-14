@@ -598,5 +598,12 @@ func (u *ClaudeUsage) GetCacheCreationTotalTokens() int {
 }
 
 type ClaudeServerToolUse struct {
-	WebSearchRequests int `json:"web_search_requests"`
+	// ToolSearch, ToolFetch, and ToolImageSearch are the vendor-billed
+	// counters on DeepSeek's Anthropic-compatible endpoint. The web_* fields
+	// count result blocks, including failed calls, and are display-only.
+	ToolSearch        int `json:"tool_search,omitempty"`
+	ToolFetch         int `json:"tool_fetch,omitempty"`
+	ToolImageSearch   int `json:"tool_image_search,omitempty"`
+	WebSearchRequests int `json:"web_search_requests,omitempty"`
+	WebFetchRequests  int `json:"web_fetch_requests,omitempty"`
 }

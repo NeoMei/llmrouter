@@ -47,7 +47,10 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	if oaiError := responsesResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
-		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
+		// A generated response can fail after DeepSeek has already billed its
+		// input, output, and server tools. Preserve that terminal usage so the
+		// caller can settle it even though this request returns an error.
+		return responsesUsage(responsesResponse.Usage), types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 	if err := toolpolicy.ValidateResponsesResponseContext(c, &responsesResponse); err != nil {
 		return nil, toolpolicy.NewResponseValidationError(err)
@@ -64,37 +67,40 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			return nil, toolpolicy.NewResponseValidationError(err)
 		}
 	}
-	info.ApplyVendorToolUsage(responseBody)
-	persistResponsesTurn(c, info, &responsesResponse)
-
-	// 写入新的 response body
-	service.IOCopyBytesGracefully(c, resp, responseBody)
-
-	// compute usage
-	usage := dto.Usage{}
-	if responsesResponse.Usage != nil {
-		usage.PromptTokens = responsesResponse.Usage.InputTokens
-		usage.CompletionTokens = responsesResponse.Usage.OutputTokens
-		usage.TotalTokens = responsesResponse.Usage.TotalTokens
-		if responsesResponse.Usage.InputTokensDetails != nil {
-			usage.PromptTokensDetails = *responsesResponse.Usage.InputTokensDetails
-		}
-		if responsesResponse.Usage.OutputTokensDetails != nil {
-			usage.CompletionTokenDetails = *responsesResponse.Usage.OutputTokensDetails
-		}
-	}
-	if info == nil || info.ResponsesUsageInfo == nil || info.ResponsesUsageInfo.BuiltInTools == nil {
-		return &usage, nil
-	}
-	// Tools is only a declaration list. Bill completed output calls, never a
-	// request that declared a hosted tool and did not invoke it.
+	// Bill protocol output items first, then let the vendor's terminal counts
+	// replace the same keys. Applying vendor counts before these protocol
+	// counts would double-bill a completed Search or Fetch.
 	for _, item := range responsesResponse.Output {
 		switch item.Type {
 		case dto.BuildInCallWebSearchCall, dto.BuildInToolFileSearch:
 			info.CountBillableToolCall(item.Type)
 		}
 	}
-	return &usage, nil
+	info.ApplyVendorToolUsage(responseBody)
+	persistResponsesTurn(c, info, &responsesResponse)
+
+	// 写入新的 response body
+	service.IOCopyBytesGracefully(c, resp, responseBody)
+
+	return responsesUsage(responsesResponse.Usage), nil
+}
+
+func responsesUsage(source *dto.Usage) *dto.Usage {
+	usage := &dto.Usage{}
+	if source == nil {
+		return usage
+	}
+	usage.PromptTokens = source.InputTokens
+	usage.CompletionTokens = source.OutputTokens
+	usage.TotalTokens = source.TotalTokens
+	if source.InputTokensDetails != nil {
+		usage.PromptTokensDetails = *source.InputTokensDetails
+	}
+	if source.OutputTokensDetails != nil {
+		usage.CompletionTokenDetails = *source.OutputTokensDetails
+		usage.OutputTokensDetails = source.OutputTokensDetails
+	}
+	return usage
 }
 
 func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
@@ -112,6 +118,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	terminalSeen := false
 	terminalValid := false
 	var terminalResponse *dto.OpenAIResponsesResponse
+	var failedTerminalUsage *dto.Usage
 	streamValidator := toolpolicy.NewStreamValidatorFromContext(c)
 	var streamErr *types.NewAPIError
 	stopStream := func(sr *helper.StreamResult) {
@@ -191,6 +198,10 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			terminalSeen = true
 			terminalValid = false
 			terminalResponse = nil
+			if streamResponse.Response != nil {
+				applyResponsesStreamUsage(usage, streamResponse.Response.Usage)
+			}
+			info.ApplyVendorToolUsage(common.StringToByteSlice(data))
 		case "response.output_text.delta":
 			// 处理输出文本
 			responseTextBuilder.WriteString(streamResponse.Delta)
@@ -214,6 +225,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			sr.Stop(streamErr)
 			return
 		}
+		captureResponsesFailedTerminalUsage(data, info, &failedTerminalUsage)
 		emitted, err := streamValidator.Accept(common.StringToByteSlice(data))
 		if err != nil {
 			streamErr = toolpolicy.NewResponseValidationError(err)
@@ -227,18 +239,18 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 	})
 	if streamErr != nil {
-		return nil, streamErr
+		return failedTerminalUsage, streamErr
 	}
 	// A clean upstream EOF is a legitimate Responses transport boundary. The
 	// validator still requires a valid, ordered success terminal before release.
 	if info.StreamStatus.EndReason != relaycommon.StreamEndReasonEOF || info.StreamStatus.HasErrors() || c.Request.Context().Err() != nil {
 		if abortErr := abortInvalidStreamTransport(c, info, streamValidator); abortErr != nil {
-			return nil, abortErr
+			return failedTerminalUsage, abortErr
 		}
 	}
 	flushed, err := streamValidator.Finish()
 	if err != nil {
-		return nil, toolpolicy.NewResponseValidationError(err)
+		return failedTerminalUsage, toolpolicy.NewResponseValidationError(err)
 	}
 	for _, frame := range flushed {
 		if !handleValidatedData(string(frame), nil) {
@@ -246,7 +258,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 	}
 	if !terminalSeen {
-		return nil, toolpolicy.NewResponseValidationError(fmt.Errorf("%w: responses stream ended without a delivered success terminal", toolpolicy.ErrIncompleteToolCall))
+		return failedTerminalUsage, toolpolicy.NewResponseValidationError(fmt.Errorf("%w: responses stream ended without a delivered success terminal", toolpolicy.ErrIncompleteToolCall))
 	}
 
 	if terminalValid && terminalResponse != nil && info.StreamStatus != nil && info.StreamStatus.IsNormalEnd() && !info.StreamStatus.HasErrors() && c.Request.Context().Err() == nil {
@@ -263,13 +275,62 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 	}
 
-	if usage.PromptTokens == 0 && usage.CompletionTokens != 0 {
+	if usage.PromptTokens == 0 && (usage.CompletionTokens != 0 || usage.TotalTokens != 0) {
 		usage.PromptTokens = info.GetEstimatePromptTokens()
 	}
 
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 
 	return usage, nil
+}
+
+// captureResponsesFailedTerminalUsage keeps usage from a provider terminal that
+// proves generation and server tools ran. The stream validator deliberately
+// rejects the failure as a client success, but the provider still bills the
+// work. Returning this usage on the error path lets the caller settle it once.
+func captureResponsesFailedTerminalUsage(data string, info *relaycommon.RelayInfo, destination **dto.Usage) {
+	if info == nil {
+		return
+	}
+	var event dto.ResponsesStreamResponse
+	if err := common.UnmarshalJsonStr(data, &event); err != nil || event.Response == nil {
+		return
+	}
+	switch event.Type {
+	case "response.failed", "response.incomplete", "response.error":
+	default:
+		return
+	}
+	if event.Response.Usage == nil {
+		return
+	}
+	usage := responsesUsage(event.Response.Usage)
+	info.ApplyVendorToolUsage(common.StringToByteSlice(data))
+	if *destination == nil || usage.TotalTokens != 0 || usage.PromptTokens != 0 || usage.CompletionTokens != 0 {
+		*destination = usage
+	}
+}
+
+func applyResponsesStreamUsage(usage *dto.Usage, source *dto.Usage) {
+	if usage == nil || source == nil {
+		return
+	}
+	if source.InputTokens != 0 {
+		usage.PromptTokens = source.InputTokens
+	}
+	if source.OutputTokens != 0 {
+		usage.CompletionTokens = source.OutputTokens
+	}
+	if source.TotalTokens != 0 {
+		usage.TotalTokens = source.TotalTokens
+	}
+	if source.InputTokensDetails != nil {
+		usage.PromptTokensDetails = *source.InputTokensDetails
+	}
+	if source.OutputTokensDetails != nil {
+		usage.CompletionTokenDetails = *source.OutputTokensDetails
+		usage.OutputTokensDetails = source.OutputTokensDetails
+	}
 }
 
 // persistResponsesTurn stores a completed Responses turn for later

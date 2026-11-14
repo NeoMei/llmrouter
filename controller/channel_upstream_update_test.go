@@ -481,6 +481,7 @@ func TestCollectPendingUpstreamModelChangesFromModels_WithModelMapping(t *testin
 		map[string]string{
 			"alias-model": "mapped-target",
 		},
+		constant.ChannelTypeOpenAI,
 	)
 
 	require.Equal(t, []string{}, pendingAddModels)
@@ -493,10 +494,89 @@ func TestCollectPendingUpstreamModelChangesFromModels_WithIgnoredRegexPatterns(t
 		[]string{"gpt-4o", "claude-3-5-sonnet", "sora-video", "gpt-4.1"},
 		[]string{"regex:^sora-.*$", "gpt-4.1"},
 		nil,
+		constant.ChannelTypeOpenAI,
 	)
 
 	require.Equal(t, []string{"claude-3-5-sonnet"}, pendingAddModels)
 	require.Equal(t, []string{}, pendingRemoveModels)
+}
+
+func TestCollectPendingUpstreamModelChangesFromModels_IgnoredModelsPreventRemoval(t *testing.T) {
+	pendingAddModels, pendingRemoveModels := collectPendingUpstreamModelChangesFromModels(
+		[]string{"gpt-4o", "keep-exact", "keep-regex-1", "keep-regex-2", "stale-model"},
+		[]string{"gpt-4o", "new-model", "gpt-4.1", "sora-video"},
+		[]string{"keep-exact", "regex:^keep-regex-", "gpt-4.1", "regex:^sora-"},
+		nil,
+		constant.ChannelTypeOpenAI,
+	)
+
+	require.Equal(t, []string{"new-model"}, pendingAddModels)
+	require.Equal(t, []string{"stale-model"}, pendingRemoveModels)
+}
+
+func TestCollectPendingUpstreamModelChangesFromModels_ProtectsDeepSeekInternalRoutes(t *testing.T) {
+	localModels := []string{
+		"gpt-4o",
+		constant.DeepSeekSearchModel,
+		constant.DeepSeekFetchModel,
+		"stale-model",
+	}
+
+	tests := []struct {
+		name        string
+		channelType int
+		wantRemove  []string
+	}{
+		{
+			name:        "DeepSeek channel",
+			channelType: constant.ChannelTypeDeepSeek,
+			wantRemove:  []string{"stale-model"},
+		},
+		{
+			name:        "other channel type",
+			channelType: constant.ChannelTypeOpenAI,
+			wantRemove:  []string{constant.DeepSeekSearchModel, constant.DeepSeekFetchModel, "stale-model"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pendingAddModels, pendingRemoveModels := collectPendingUpstreamModelChangesFromModels(
+				localModels,
+				[]string{"gpt-4o"},
+				nil,
+				nil,
+				test.channelType,
+			)
+
+			require.Equal(t, []string{}, pendingAddModels)
+			require.Equal(t, test.wantRemove, pendingRemoveModels)
+		})
+	}
+}
+
+func TestCollectPendingUpstreamModelChangesForDeepSeekPreservesInternalRoutes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"deepseek-chat"},{"id":"deepseek-reasoner"}]}`))
+	}))
+	defer server.Close()
+
+	baseURL := server.URL
+	channel := &model.Channel{
+		Type:    constant.ChannelTypeDeepSeek,
+		Key:     "fixture-key",
+		BaseURL: &baseURL,
+		Models:  "deepseek-chat,deepseek-reasoner,deepseek-search,deepseek-fetch,vendor-retired",
+	}
+
+	pendingAddModels, pendingRemoveModels, err := collectPendingUpstreamModelChanges(
+		channel,
+		dto.ChannelOtherSettings{},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{}, pendingAddModels)
+	require.Equal(t, []string{"vendor-retired"}, pendingRemoveModels)
 }
 
 func TestBuildUpstreamModelUpdateTaskNotificationContent_OmitOverflowDetails(t *testing.T) {

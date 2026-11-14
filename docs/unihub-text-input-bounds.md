@@ -35,11 +35,11 @@ The environment value is strict JSON keyed by wire and then public model:
 ```json
 {
   "chat.completions.create": {
-    "deepseek-v4-flash": {
+    "deepseek-flash": {
       "version": "full_body_bytes_v1",
       "channel_id": 3,
       "channel_type": 43,
-      "upstream_model": "deepseek-v4-flash",
+      "upstream_model": "deepseek-flash",
       "endpoint": "https://api.deepseek.com/v1/chat/completions",
       "max_input_tokens": 262144,
       "context_tokens": 1048576,
@@ -54,9 +54,9 @@ This example's route identifiers require deployment-specific verification. The
 [official model metadata](https://api-docs.deepseek.com/api/list-models/) defines
 context as input plus output, and documents 1048576 for DeepSeek Flash and V4 Pro.
 The deployment safety cap above deliberately remains 262144 and output 4096.
-The old flash alias must be verified against the selected provider route before
-using that certificate. A 99750-byte request reserves 199500 input units; a small
-request reserves its own B, not the full 262144.
+`deepseek-flash` is the current primary name for this route. A 99750-byte request
+reserves 199500 input units; a small request reserves its own B, not the full
+262144.
 
 Set `UNIHUB_MAX_BODY_BYTES=1048576` to admit the larger transport body, retain
 `UNIHUB_MAX_INPUT_TOKENS=65536` for unconfigured models, and retain output 4096.

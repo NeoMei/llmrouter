@@ -59,9 +59,16 @@ func TestGetRequestURLUsesNativeSearchAndFetchEndpoints(t *testing.T) {
 	}
 }
 
-func TestResponsesToolUsageUsesCompletedSearchAndFetchActions(t *testing.T) {
-	raw := []byte(`{"output":[{"type":"web_search_call","status":"completed","action":{"type":"search"}},{"type":"web_search_call","status":"completed","action":{"type":"open_page"}},{"type":"web_search_call","status":"failed","action":{"type":"open_page"}}]}`)
-	assert.Equal(t, map[string]int{SearchToolPriceKey: 1, FetchToolPriceKey: 1}, responsesToolUsage(raw))
+func TestResponsesToolUsageUsesVendorBillingCounters(t *testing.T) {
+	raw := []byte(`{"status":"completed","usage":{"input_tokens":10,"output_tokens":2,"server_tool_use":{"web_search_requests":7,"web_fetch_requests":9,"tool_search":3,"tool_fetch":4,"tool_image_search":2}}}`)
+	assert.Equal(t, map[string]int{SearchToolPriceKey: 3, FetchToolPriceKey: 4, ImageSearchToolPriceKey: 2}, responsesToolUsage(raw))
+
+	terminal := []byte(`{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":10,"output_tokens":2,"server_tool_use":{"tool_search":1,"tool_fetch":0,"tool_image_search":0}}}}`)
+	assert.Equal(t, map[string]int{SearchToolPriceKey: 1, FetchToolPriceKey: 0, ImageSearchToolPriceKey: 0}, responsesToolUsage(terminal))
+
+	// DeepSeek omits server_tool_use when every counter is zero. The final
+	// usage is authoritative and must replace provisional streamed counts.
+	assert.Equal(t, map[string]int{SearchToolPriceKey: 0, FetchToolPriceKey: 0, ImageSearchToolPriceKey: 0}, responsesToolUsage([]byte(`{"status":"completed","usage":{"input_tokens":10}}`)))
 	assert.Nil(t, responsesToolUsage([]byte(`{"status":"completed","output":[]}`)))
 }
 
@@ -132,4 +139,47 @@ func TestRewriteDeepSeekResponsesSSEConvertsCustomToolCall(t *testing.T) {
 	assert.Contains(t, text, `"type":"custom_tool_call"`)
 	assert.Contains(t, text, `"input":"cat proof"`)
 	assert.NotContains(t, text, `"namespace":"functions"`)
+}
+
+func TestRewriteDeepSeekResponsesSSERepairsMessageAndReasoningIDs(t *testing.T) {
+	upstream := strings.Join([]string{
+		`event: response.output_item.added`,
+		`data: {"type":"response.output_item.added","item":{"type":"reasoning","id":"11111111-2222","status":"in_progress"},"output_index":0,"sequence_number":1}`,
+		``,
+		`event: response.reasoning_text.delta`,
+		`data: {"type":"response.reasoning_text.delta","item_id":"11111111-2222","output_index":0,"delta":"thinking","sequence_number":2}`,
+		``,
+		`event: response.output_item.done`,
+		`data: {"type":"response.output_item.done","item":{"type":"reasoning","id":"11111111-2222","status":"completed"},"output_index":0,"sequence_number":3}`,
+		``,
+		`event: response.output_item.added`,
+		`data: {"type":"response.output_item.added","item":{"type":"message","id":"33333333-4444","status":"in_progress"},"output_index":1,"sequence_number":4}`,
+		``,
+		`event: response.output_item.added`,
+		`data: {"type":"response.output_item.added","item":{"type":"function_call","id":"call-item","call_id":"call-1","name":"lookup","status":"in_progress"},"output_index":2,"sequence_number":5}`,
+		``,
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"reasoning","id":"11111111-2222"},{"type":"message","id":"33333333-4444"},{"type":"function_call","id":"call-item","call_id":"call-1"}]}}`,
+		``,
+	}, "\n")
+
+	result, err := io.ReadAll(rewriteDeepSeekResponsesSSE(io.NopCloser(strings.NewReader(upstream)), nil))
+	require.NoError(t, err)
+	text := string(result)
+	assert.Contains(t, text, `"id":"rs_11111111-2222"`)
+	assert.Contains(t, text, `"item_id":"rs_11111111-2222"`)
+	assert.Contains(t, text, `"id":"msg_33333333-4444"`)
+	assert.Contains(t, text, `"id":"call-item"`)
+	assert.Contains(t, text, `"call_id":"call-1"`)
+	assert.Equal(t, 3, strings.Count(text, `"id":"rs_11111111-2222"`))
+}
+
+func TestRewriteDeepSeekResponsesJSONRepairsMessageAndReasoningIDs(t *testing.T) {
+	body := `{"status":"completed","output":[{"type":"reasoning","id":"r-bare"},{"type":"message","id":"msg_already"},{"type":"message"}]}`
+	result, err := io.ReadAll(rewriteDeepSeekResponsesJSON(io.NopCloser(strings.NewReader(body)), nil))
+	require.NoError(t, err)
+	text := string(result)
+	assert.Contains(t, text, `"id":"rs_r-bare"`)
+	assert.Contains(t, text, `"id":"msg_already"`)
+	assert.Contains(t, text, `"id":"msg_deepseek_2"`)
 }

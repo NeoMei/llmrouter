@@ -1,14 +1,95 @@
 package claude
 
 import (
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/dto"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service/relayconvert"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCountClaudeBillableBlocksUsesVendorTerminalCounts(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		ChannelMeta:        &relaycommon.ChannelMeta{},
+		ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{BuiltInTools: map[string]*relaycommon.BuildInToolInfo{}},
+	}
+	info.WebSearchBillingKey = "deepseek_search"
+	info.WebFetchBillingKey = "deepseek_fetch"
+	info.VendorToolUsage = func(raw []byte) map[string]int {
+		var payload struct {
+			Usage struct {
+				ServerToolUse struct {
+					ToolSearch int `json:"tool_search"`
+					ToolFetch  int `json:"tool_fetch"`
+				} `json:"server_tool_use"`
+			} `json:"usage"`
+		}
+		require.NoError(t, json.Unmarshal(raw, &payload))
+		return map[string]int{"deepseek_search": payload.Usage.ServerToolUse.ToolSearch, "deepseek_fetch": payload.Usage.ServerToolUse.ToolFetch}
+	}
+
+	countClaudeBillableBlocks(info, &dto.ClaudeResponse{Type: "content_block_start", ContentBlock: &dto.ClaudeMediaMessage{Type: "web_search_tool_result", Content: []any{}}}, "")
+	countClaudeBillableBlocks(info, &dto.ClaudeResponse{Type: "content_block_start", ContentBlock: &dto.ClaudeMediaMessage{Type: "web_search_tool_result", Content: []any{}}}, "")
+	require.Equal(t, 2, info.ResponsesUsageInfo.BuiltInTools["deepseek_search"].CallCount)
+
+	countClaudeBillableBlocks(info, &dto.ClaudeResponse{Type: "message_delta", Usage: &dto.ClaudeUsage{}}, `{"type":"message_delta","usage":{"server_tool_use":{"tool_search":1,"tool_fetch":2}}}`)
+	require.Equal(t, 1, info.ResponsesUsageInfo.BuiltInTools["deepseek_search"].CallCount)
+	require.Equal(t, 2, info.ResponsesUsageInfo.BuiltInTools["deepseek_fetch"].CallCount)
+}
+
+func TestClaudeHandlerFailureKeepsBillableUsageAndServerTools(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	info := &relaycommon.RelayInfo{
+		ChannelMeta:        &relaycommon.ChannelMeta{UpstreamModelName: "deepseek-flash"},
+		ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{BuiltInTools: map[string]*relaycommon.BuildInToolInfo{}},
+	}
+	info.VendorToolUsage = func(raw []byte) map[string]int {
+		var payload struct {
+			Usage struct {
+				ServerToolUse struct {
+					ToolSearch int `json:"tool_search"`
+					ToolFetch  int `json:"tool_fetch"`
+				} `json:"server_tool_use"`
+			} `json:"usage"`
+		}
+		require.NoError(t, json.Unmarshal(raw, &payload))
+		return map[string]int{"deepseek_search": payload.Usage.ServerToolUse.ToolSearch, "deepseek_fetch": payload.Usage.ServerToolUse.ToolFetch}
+	}
+	body := `{"type":"error","error":{"type":"api_error","message":"generation failed"},"usage":{"input_tokens":19,"output_tokens":4,"server_tool_use":{"tool_search":1,"tool_fetch":2}}}`
+	resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}
+
+	usage, apiErr := ClaudeHandler(c, resp, info)
+	require.NotNil(t, apiErr)
+	require.NotNil(t, usage)
+	assert.Equal(t, 19, usage.PromptTokens)
+	assert.Equal(t, 4, usage.CompletionTokens)
+	assert.Equal(t, 1, info.ResponsesUsageInfo.BuiltInTools["deepseek_search"].CallCount)
+	assert.Equal(t, 2, info.ResponsesUsageInfo.BuiltInTools["deepseek_fetch"].CallCount)
+}
+
+func TestClaudeHandlerReturnsNilUsageForValidationFailureWithoutUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "deepseek-flash"}}
+	body := `{"type":"error","error":{"type":"invalid_request","message":"bad request"}}`
+	resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}
+
+	usage, apiErr := ClaudeHandler(c, resp, info)
+	require.NotNil(t, apiErr)
+	assert.Nil(t, usage)
+}
 
 func commonPointer[T any](value T) *T {
 	return &value

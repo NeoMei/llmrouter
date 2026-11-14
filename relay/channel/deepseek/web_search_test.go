@@ -19,13 +19,16 @@ func TestVendorToolUsageReplacesProvisionalStreamCounts(t *testing.T) {
 	}
 	require.Equal(t, 3, info.ResponsesUsageInfo.BuiltInTools[SearchToolPriceKey].CallCount)
 
-	// The terminal answer has one completed search and one fetch; the failed
-	// fetch is free. Counts replace, rather than add to, the streamed count.
-	info.ApplyVendorToolUsage([]byte(`{"type":"response.completed","response":{"output":[
-		{"type":"web_search_call","status":"completed","action":{"type":"search"}},
-		{"type":"web_search_call","status":"completed","action":{"type":"open_page"}},
-		{"type":"web_search_call","status":"failed","action":{"type":"open_page"}}
-	]}}`))
+	// The terminal usage reports one billed search query and one billed fetch.
+	// Display counters include failed calls and must not affect the bill.
+	info.ApplyVendorToolUsage([]byte(`{"type":"response.completed","response":{"usage":{
+		"server_tool_use":{"web_search_requests":3,"web_fetch_requests":2,"tool_search":1,"tool_fetch":1,"tool_image_search":0}
+	}}}`))
 	require.Equal(t, 1, info.ResponsesUsageInfo.BuiltInTools[SearchToolPriceKey].CallCount)
 	require.Equal(t, 1, info.ResponsesUsageInfo.BuiltInTools[FetchToolPriceKey].CallCount)
+	require.Zero(t, info.ResponsesUsageInfo.BuiltInTools[ImageSearchToolPriceKey].CallCount)
+
+	// An absent usage object is inconclusive and keeps the provisional counts.
+	info.ApplyVendorToolUsage([]byte(`{"type":"response.failed","response":{"status":"failed","output":[]}}`))
+	require.Equal(t, 1, info.ResponsesUsageInfo.BuiltInTools[SearchToolPriceKey].CallCount)
 }

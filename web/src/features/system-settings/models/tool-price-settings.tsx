@@ -40,8 +40,9 @@ const DEFAULT_PRICES: Record<string, number> = {
   'web_search_preview:gpt-4.1-mini*': 25.0,
   file_search: 2.5,
   google_search: 14.0,
-  deepseek_search: 0.75,
-  deepseek_fetch: 0.75,
+  deepseek_search: (0.005 / 7.3) * 1000,
+  deepseek_fetch: (0.005 / 7.3) * 1000,
+  deepseek_image_search: (0.005 / 7.3) * 1000,
 }
 
 type ToolPriceRow = {

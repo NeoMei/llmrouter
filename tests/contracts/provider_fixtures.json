@@ -15,6 +15,8 @@
     "completions.create",
     "responses.create",
     "responses.compact",
+    "tools.search",
+    "tools.fetch",
     "realtime.connect",
     "claude.messages.create",
     "embeddings.create",

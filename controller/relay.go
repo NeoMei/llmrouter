@@ -63,6 +63,8 @@ func relayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIErro
 		err = relay.EmbeddingHelper(c, info)
 	case relayconstant.RelayModeResponses, relayconstant.RelayModeResponsesCompact:
 		err = relay.ResponsesHelper(c, info)
+	case relayconstant.RelayModeToolsSearch, relayconstant.RelayModeToolsFetch:
+		err = relay.DeepSeekToolsHelper(c, info)
 	default:
 		err = relay.TextHelper(c, info)
 	}
@@ -108,6 +110,8 @@ func relaySelectedChannel(c *gin.Context, relayInfo *relaycommon.RelayInfo, chan
 		return relay.WssHelper(c, relayInfo), true
 	case types.RelayFormatClaude:
 		return relay.ClaudeHelper(c, relayInfo), true
+	case types.RelayFormatDeepSeekTools:
+		return relay.DeepSeekToolsHelper(c, relayInfo), true
 	case types.RelayFormatGemini:
 		return geminiRelayHandler(c, relayInfo), true
 	default:
@@ -646,6 +650,8 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 		operation = "chat"
 	case relayconstant.RelayModeResponses:
 		operation = "responses"
+	case relayconstant.RelayModeToolsSearch, relayconstant.RelayModeToolsFetch:
+		// Fixed request prices, not token billing. Skip native token admission.
 	case relayconstant.RelayModeEmbeddings, relayconstant.RelayModeMultimodalEmbedding:
 		operation = "embedding"
 	case relayconstant.RelayModeAudioSpeech:
@@ -659,6 +665,17 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 	}
 	if info.NativeBilling != nil {
 		return types.NewError(errors.New("native dispatch cannot be retried without final evidence"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+	if info.RelayMode == relayconstant.RelayModeToolsSearch || info.RelayMode == relayconstant.RelayModeToolsFetch {
+		priceData, err := helper.ModelPriceHelperZeroUsage(c, info)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest), types.ErrOptionWithSkipRetry())
+		}
+		info.PriceData = priceData
+		if apiErr := service.PreConsumeBilling(c, priceData.QuotaToPreConsume, info); apiErr != nil {
+			return apiErr
+		}
+		return nil
 	}
 	if price, configured := billing_setting.ResolveModelNativePrice(info.BillingModelNameOrOrigin(), operation); configured {
 		if info.NativeLocalLegacy {
@@ -1527,6 +1544,8 @@ func expectedWireForFormat(format types.RelayFormat) modelcatalog.WireProtocol {
 	switch format {
 	case types.RelayFormatMultimodalEmbedding:
 		return modelcatalog.WireMultimodalEmbedding
+	case types.RelayFormatDeepSeekTools:
+		return ""
 	case types.RelayFormatOpenAIResponses, types.RelayFormatOpenAIResponsesCompaction:
 		return modelcatalog.WireResponses
 	case types.RelayFormatGemini:

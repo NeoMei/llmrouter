@@ -25,16 +25,16 @@ var seedProviderCatalog = []struct {
 		},
 		Models: []ProviderModel{
 			{
-				ModelId:       "deepseek-v4-flash",
-				DisplayName:   "DeepSeek V4 Flash",
-				ContextWindow: 131072,
+				ModelId:       "deepseek-flash",
+				DisplayName:   "DeepSeek V4.1 Flash",
+				ContextWindow: 1048576,
 				Status:        "active",
 				QuirkRules:    `{"reasoning_mode": "effort", "preserve_reasoning": true}`,
 			},
 			{
 				ModelId:       "deepseek-v4-pro",
 				DisplayName:   "DeepSeek V4 Pro",
-				ContextWindow: 131072,
+				ContextWindow: 1048576,
 				Status:        "active",
 				QuirkRules:    `{"reasoning_mode": "effort", "preserve_reasoning": true}`,
 			},

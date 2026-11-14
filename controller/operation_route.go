@@ -44,6 +44,13 @@ func operationOnlyCandidate(info *relaycommon.RelayInfo, resolved *modelcatalog.
 		case relayconstant.RelayModeAudioTranscription:
 			operation = capability.OperationAudioTranscription
 		}
+	case types.RelayFormatDeepSeekTools:
+		switch info.RelayMode {
+		case relayconstant.RelayModeToolsSearch:
+			operation = capability.OperationToolsSearch
+		case relayconstant.RelayModeToolsFetch:
+			operation = capability.OperationToolsFetch
+		}
 	}
 	return operation != "" && slices.Contains(resolved.Capabilities.Operations, string(operation))
 }

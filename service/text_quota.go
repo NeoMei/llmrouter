@@ -55,12 +55,21 @@ type textQuotaSummary struct {
 	AudioInputPrice          float64
 	ImageGenerationCallPrice float64
 	ToolCallSurchargeQuota   decimal.Decimal
+	// ToolSurcharges lists the billed hosted-tool keys. This keeps DeepSeek
+	// Search and Fetch independent from the legacy web-search log fields.
+	ToolSurcharges []toolSurcharge
+}
+
+type toolSurcharge struct {
+	Name  string
+	Count int
+	Price float64
 }
 
 // hasBillableUsage includes Claude cache tokens, which are reported separately
 // from ordinary input/output counts, and separately charged tool calls.
 func (s *textQuotaSummary) hasBillableUsage() bool {
-	return s.NativeImages > 0 || s.TotalTokens > 0 ||
+	return s.NativeImages > 0 || s.TotalTokens > 0 || s.ModelPrice > 0 ||
 		(s.IsClaudeUsageSemantic && (s.CacheTokens > 0 || s.CacheCreationTokens > 0 || s.CacheCreationTokens5m > 0 || s.CacheCreationTokens1h > 0)) ||
 		!s.ToolCallSurchargeQuota.IsZero()
 }
@@ -94,6 +103,35 @@ func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.Rel
 	dQuotaPerUnit := decimal.NewFromFloat(relayQuotaPerUnit(relayInfo))
 
 	var surcharge decimal.Decimal
+	addSurcharge := func(name string, count int, price float64) {
+		if count <= 0 || price <= 0 {
+			return
+		}
+		summary.ToolSurcharges = append(summary.ToolSurcharges, toolSurcharge{Name: name, Count: count, Price: price})
+		surcharge = surcharge.Add(decimal.NewFromFloat(price).
+			Mul(decimal.NewFromInt(int64(count))).
+			Div(decimal.NewFromInt(1000)).
+			Mul(dGroupRatio).
+			Mul(dQuotaPerUnit))
+	}
+
+	if relayInfo.ResponsesUsageInfo != nil {
+		for name, tool := range relayInfo.ResponsesUsageInfo.BuiltInTools {
+			if tool == nil || name == dto.BuildInToolWebSearchPreview || name == dto.BuildInToolWebSearch || name == dto.BuildInToolFileSearch {
+				continue
+			}
+			price := operation_setting.GetToolPriceForModel(name, summary.ModelName)
+			if relayInfo.ManagedNativeSupplemental != nil {
+				switch name {
+				case "deepseek_search":
+					price = relayInfo.ManagedNativeSupplemental.WebSearchPrice
+				case "deepseek_fetch":
+					price = relayInfo.ManagedNativeSupplemental.FileSearchPrice
+				}
+			}
+			addSurcharge(name, tool.CallCount, price)
+		}
+	}
 
 	if relayInfo.ResponsesUsageInfo != nil {
 		if webSearchTool, exists := relayInfo.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearchPreview]; exists && webSearchTool.CallCount > 0 {
@@ -103,11 +141,16 @@ func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.Rel
 			} else {
 				summary.WebSearchPrice = operation_setting.GetToolPriceForModel("web_search_preview", summary.ModelName)
 			}
-			surcharge = surcharge.Add(decimal.NewFromFloat(summary.WebSearchPrice).
-				Mul(decimal.NewFromInt(int64(webSearchTool.CallCount))).
-				Div(decimal.NewFromInt(1000)).
-				Mul(dGroupRatio).
-				Mul(dQuotaPerUnit))
+			addSurcharge(dto.BuildInToolWebSearchPreview, webSearchTool.CallCount, summary.WebSearchPrice)
+		}
+		if webSearchTool, exists := relayInfo.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearch]; exists && webSearchTool.CallCount > 0 {
+			summary.WebSearchCallCount += webSearchTool.CallCount
+			price := operation_setting.GetToolPriceForModel(dto.BuildInToolWebSearch, summary.ModelName)
+			if relayInfo.ManagedNativeSupplemental != nil {
+				price = relayInfo.ManagedNativeSupplemental.WebSearchPrice
+			}
+			summary.WebSearchPrice = price
+			addSurcharge(dto.BuildInToolWebSearch, webSearchTool.CallCount, price)
 		}
 	} else if strings.HasSuffix(summary.ModelName, "search-preview") {
 		summary.WebSearchCallCount = 1
@@ -116,10 +159,7 @@ func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.Rel
 		} else {
 			summary.WebSearchPrice = operation_setting.GetToolPriceForModel("web_search_preview", summary.ModelName)
 		}
-		surcharge = surcharge.Add(decimal.NewFromFloat(summary.WebSearchPrice).
-			Div(decimal.NewFromInt(1000)).
-			Mul(dGroupRatio).
-			Mul(dQuotaPerUnit))
+		addSurcharge(dto.BuildInToolWebSearchPreview, 1, summary.WebSearchPrice)
 	}
 
 	summary.ClaudeWebSearchCallCount = ctx.GetInt("claude_web_search_requests")
@@ -129,11 +169,7 @@ func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.Rel
 		} else {
 			summary.ClaudeWebSearchPrice = operation_setting.GetToolPrice("web_search")
 		}
-		surcharge = surcharge.Add(decimal.NewFromFloat(summary.ClaudeWebSearchPrice).
-			Div(decimal.NewFromInt(1000)).
-			Mul(dGroupRatio).
-			Mul(dQuotaPerUnit).
-			Mul(decimal.NewFromInt(int64(summary.ClaudeWebSearchCallCount))))
+		addSurcharge("web_search", summary.ClaudeWebSearchCallCount, summary.ClaudeWebSearchPrice)
 	}
 
 	if relayInfo.ResponsesUsageInfo != nil {
@@ -144,11 +180,7 @@ func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.Rel
 			} else {
 				summary.FileSearchPrice = operation_setting.GetToolPrice("file_search")
 			}
-			surcharge = surcharge.Add(decimal.NewFromFloat(summary.FileSearchPrice).
-				Mul(decimal.NewFromInt(int64(fileSearchTool.CallCount))).
-				Div(decimal.NewFromInt(1000)).
-				Mul(dGroupRatio).
-				Mul(dQuotaPerUnit))
+			addSurcharge(dto.BuildInToolFileSearch, fileSearchTool.CallCount, summary.FileSearchPrice)
 		}
 	}
 
@@ -425,6 +457,12 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if summary.FileSearchCallCount > 0 {
 		extraContent = append(extraContent, fmt.Sprintf("File Search 调用 %d 次，调用花费 %s", summary.FileSearchCallCount, decimal.NewFromFloat(summary.FileSearchPrice).Mul(decimal.NewFromInt(int64(summary.FileSearchCallCount))).Div(decimal.NewFromInt(1000)).Mul(decimal.NewFromFloat(summary.GroupRatio)).Mul(decimal.NewFromFloat(relayQuotaPerUnit(relayInfo))).String()))
 	}
+	for _, item := range summary.ToolSurcharges {
+		if item.Name == dto.BuildInToolWebSearch || item.Name == dto.BuildInToolWebSearchPreview || item.Name == dto.BuildInToolFileSearch {
+			continue
+		}
+		extraContent = append(extraContent, fmt.Sprintf("%s 调用 %d 次，调用花费 %s", item.Name, item.Count, decimal.NewFromFloat(item.Price).Mul(decimal.NewFromInt(int64(item.Count))).Div(decimal.NewFromInt(1000)).Mul(decimal.NewFromFloat(summary.GroupRatio)).Mul(decimal.NewFromFloat(relayQuotaPerUnit(relayInfo))).String()))
+	}
 	if summary.AudioInputPrice > 0 && summary.AudioTokens > 0 {
 		extraContent = append(extraContent, fmt.Sprintf("Audio Input 花费 %s", decimal.NewFromFloat(summary.AudioInputPrice).Div(decimal.NewFromInt(1000000)).Mul(decimal.NewFromInt(int64(summary.AudioTokens))).Mul(decimal.NewFromFloat(summary.GroupRatio)).Mul(decimal.NewFromFloat(relayQuotaPerUnit(relayInfo))).String()))
 	}
@@ -513,6 +551,13 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other["file_search"] = true
 		other["file_search_call_count"] = summary.FileSearchCallCount
 		other["file_search_price"] = summary.FileSearchPrice
+	}
+	if len(summary.ToolSurcharges) > 0 {
+		items := make([]map[string]any, 0, len(summary.ToolSurcharges))
+		for _, item := range summary.ToolSurcharges {
+			items = append(items, map[string]any{"name": item.Name, "count": item.Count, "price": item.Price})
+		}
+		other["tool_surcharges"] = items
 	}
 	if summary.AudioInputPrice > 0 && summary.AudioTokens > 0 {
 		other["audio_input_seperate_price"] = true

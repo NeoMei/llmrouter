@@ -143,6 +143,7 @@ func defaultDeclarations() []Declaration {
 	support([]int{constant.ChannelTypeMiniMax}, OperationAudioSpeech)
 
 	support([]int{constant.ChannelTypeAli}, OperationMultimodalEmbedding)
+	support([]int{constant.ChannelTypeDeepSeek}, OperationToolsSearch, OperationToolsFetch)
 	support([]int{constant.ChannelTypeCohere, constant.ChannelTypeJina, constant.ChannelTypeSiliconFlow, constant.ChannelTypeAli}, OperationRerankCreate)
 
 	support([]int{

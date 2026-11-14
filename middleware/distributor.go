@@ -349,6 +349,15 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 	var modelRequest ModelRequest
 	shouldSelectChannel := true
 	var err error
+	// Search and Fetch bodies contain no model; their route names are fixed
+	// channel capabilities and cannot be overridden by client JSON.
+	if strings.HasPrefix(c.Request.URL.Path, "/v1/tools/search") || strings.HasPrefix(c.Request.URL.Path, "/v1/tools/fetch") {
+		modelName := constant.DeepSeekSearchModel
+		if strings.HasPrefix(c.Request.URL.Path, "/v1/tools/fetch") {
+			modelName = constant.DeepSeekFetchModel
+		}
+		return &ModelRequest{Model: modelName}, shouldSelectChannel, nil
+	}
 	if strings.Contains(c.Request.URL.Path, "/mj/") {
 		relayMode := relayconstant.Path2RelayModeMidjourney(c.Request.URL.Path)
 		if relayMode == relayconstant.RelayModeMidjourneyTaskFetch ||

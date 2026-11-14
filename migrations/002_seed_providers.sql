@@ -13,13 +13,13 @@ VALUES ('deepseek', 'DeepSeek', 'https://api.deepseek.com', 'api_key')
 ON CONFLICT (name) DO NOTHING;
 
 INSERT INTO provider_models (profile_id, model_id, display_name, context_window, quirk_rules)
-SELECT p.id, 'deepseek-v4-flash', 'DeepSeek V4 Flash', 131072,
+SELECT p.id, 'deepseek-flash', 'DeepSeek V4.1 Flash', 1048576,
        '{"reasoning_mode": "effort", "preserve_reasoning": true}'::jsonb
 FROM provider_profiles p WHERE p.name = 'deepseek'
 ON CONFLICT (profile_id, model_id) DO NOTHING;
 
 INSERT INTO provider_models (profile_id, model_id, display_name, context_window, quirk_rules)
-SELECT p.id, 'deepseek-v4-pro', 'DeepSeek V4 Pro', 131072,
+SELECT p.id, 'deepseek-v4-pro', 'DeepSeek V4 Pro', 1048576,
        '{"reasoning_mode": "effort", "preserve_reasoning": true}'::jsonb
 FROM provider_profiles p WHERE p.name = 'deepseek'
 ON CONFLICT (profile_id, model_id) DO NOTHING;

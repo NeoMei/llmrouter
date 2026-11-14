@@ -242,6 +242,12 @@ var defaultModelRatio = map[string]float64{
 	"deepseek-chat":          0.27 / 2,
 	"deepseek-coder":         0.27 / 2,
 	"deepseek-reasoner":      0.55 / 2, // 0.55 / 1k tokens
+	// Current DeepSeek peak prices (USD/1M): Flash input/cache/output
+	// 2/0.04/8, Pro input/cache/output 9/0.30/27. The existing ratio unit is
+	// USD/1M per unit input. Off-peak prices need a tiered expression.
+	"deepseek-flash":    2.0,
+	"deepseek-v4-flash": 2.0,
+	"deepseek-v4-pro":   9.0,
 	// Perplexity online 模型对搜索额外收费，有需要应自行调整，此处不计入搜索费用
 	"llama-3-sonar-small-32k-chat":   0.2 / 1000 * USD,
 	"llama-3-sonar-small-32k-online": 0.2 / 1000 * USD,
@@ -301,6 +307,10 @@ var defaultModelPrice = map[string]float64{
 	"veo-3.0-fast-generate-001":      0.15,
 	"veo-3.1-generate-preview":       0.4,
 	"veo-3.1-fast-generate-preview":  0.15,
+	// DeepSeek Search and Fetch are USD 0.75 per 1,000 successful requests.
+	// Their route bodies carry no model and bill once at this fixed request price.
+	"deepseek-search": 0.00075,
+	"deepseek-fetch":  0.00075,
 }
 
 var defaultAudioRatio = map[string]float64{

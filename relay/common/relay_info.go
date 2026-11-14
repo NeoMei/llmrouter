@@ -63,6 +63,69 @@ type ResponsesUsageInfo struct {
 	BuiltInTools map[string]*BuildInToolInfo
 }
 
+// CountBillableToolCall records one completed built-in tool call. Search
+// declarations can be either web_search or its legacy preview spelling; bill
+// under the declared name when it is a priced built-in tool.
+func (info *RelayInfo) CountBillableToolCall(toolType string) {
+	if info == nil || toolType == "" {
+		return
+	}
+	if info.ResponsesUsageInfo == nil {
+		info.ResponsesUsageInfo = &ResponsesUsageInfo{BuiltInTools: map[string]*BuildInToolInfo{}}
+	}
+	if info.ResponsesUsageInfo.BuiltInTools == nil {
+		info.ResponsesUsageInfo.BuiltInTools = map[string]*BuildInToolInfo{}
+	}
+	name := toolType
+	if toolType == dto.BuildInCallWebSearchCall {
+		if info.WebSearchBillingKey != "" {
+			name = info.WebSearchBillingKey
+		} else {
+			switch {
+			case info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearch] != nil:
+				name = dto.BuildInToolWebSearch
+			case info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearchPreview] != nil:
+				name = dto.BuildInToolWebSearchPreview
+			default:
+				name = dto.BuildInToolWebSearchPreview
+			}
+		}
+	}
+	if toolType == dto.BuildInToolFileSearch && info.WebFetchBillingKey != "" {
+		name = info.WebFetchBillingKey
+	}
+	if tool := info.ResponsesUsageInfo.BuiltInTools[name]; tool != nil {
+		tool.CallCount++
+		return
+	}
+	info.ResponsesUsageInfo.BuiltInTools[name] = &BuildInToolInfo{ToolName: name, CallCount: 1}
+}
+
+// ApplyVendorToolUsage replaces provisional per-item counts with the final
+// vendor-owned counts. A zero value is intentional and suppresses protocol
+// counts under the same key.
+func (info *RelayInfo) ApplyVendorToolUsage(raw []byte) {
+	if info == nil || info.VendorToolUsage == nil || len(raw) == 0 {
+		return
+	}
+	for name, count := range info.VendorToolUsage(raw) {
+		if count < 0 {
+			continue
+		}
+		if info.ResponsesUsageInfo == nil {
+			info.ResponsesUsageInfo = &ResponsesUsageInfo{BuiltInTools: map[string]*BuildInToolInfo{}}
+		}
+		if info.ResponsesUsageInfo.BuiltInTools == nil {
+			info.ResponsesUsageInfo.BuiltInTools = map[string]*BuildInToolInfo{}
+		}
+		if tool := info.ResponsesUsageInfo.BuiltInTools[name]; tool != nil {
+			tool.CallCount = count
+			continue
+		}
+		info.ResponsesUsageInfo.BuiltInTools[name] = &BuildInToolInfo{ToolName: name, CallCount: count}
+	}
+}
+
 type ChannelMeta struct {
 	// ActualUsageValidated is set only by a pre-output actual-usage gate.
 	NativeUsageCharacters *int64
@@ -234,7 +297,14 @@ type RelayInfo struct {
 	// 若为空，调用 GetFinalRequestRelayFormat 会回退到 RequestConversionChain 的最后一项或 RelayFormat。
 	FinalRequestRelayFormat types.RelayFormat
 
-	StreamStatus              *StreamStatus
+	StreamStatus *StreamStatus
+	// VendorToolUsage returns final billed-tool counts from a complete JSON
+	// response or a Responses terminal upstream frame.
+	VendorToolUsage func(raw []byte) map[string]int
+	// DeepSeek bills server-side Search/Fetch under its own price keys. Other
+	// channels leave these empty and retain web_search/web_search_preview.
+	WebSearchBillingKey       string
+	WebFetchBillingKey        string
 	ManagedNativeEvidence     *metering.Usage
 	ManagedNativeSupplemental *types.SupplementalPriceSnapshot
 
@@ -700,6 +770,18 @@ func GenRelayInfo(c *gin.Context, relayFormat types.RelayFormat, request dto.Req
 			return GenRelayInfoResponsesCompaction(c, request), nil
 		}
 		return nil, errors.New("request is not a OpenAIResponsesCompactionRequest")
+	case types.RelayFormatDeepSeekTools:
+		info = genBaseRelayInfo(c, request)
+		info.RelayFormat = types.RelayFormatDeepSeekTools
+		if request, ok := request.(*dto.DeepSeekToolsRequest); ok {
+			switch common.GetContextKeyString(c, constant.ContextKeyOriginalModel) {
+			case constant.DeepSeekFetchModel:
+				info.RelayMode = relayconstant.RelayModeToolsFetch
+			default:
+				info.RelayMode = relayconstant.RelayModeToolsSearch
+			}
+			request.Model = common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
+		}
 	case types.RelayFormatTask:
 		info = genBaseRelayInfo(c, nil)
 		info.TaskRelayInfo = &TaskRelayInfo{}

@@ -1,5 +1,7 @@
 package model
 
+import "gorm.io/gorm/clause"
+
 // provider_seed.go — idempotent, cross-DB seed of the 4 codex-gateway provider
 // profiles and their models. Mirrors migrations/002_seed_providers.sql.
 //
@@ -110,18 +112,18 @@ var seedProviderCatalog = []struct {
 func SeedProviderProfiles() error {
 	for _, p := range seedProviderCatalog {
 		var profile ProviderProfile
-		if err := DB.Where(ProviderProfile{Name: p.Profile.Name}).
-			FirstOrCreate(&profile, p.Profile).Error; err != nil {
+		profile = p.Profile
+		if err := DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&profile).Error; err != nil {
 			return err
 		}
-		if profile.Id == 0 {
-			continue
+		if err := DB.Where(ProviderProfile{Name: p.Profile.Name}).First(&profile).Error; err != nil {
+			return err
 		}
 		for _, m := range p.Models {
 			m.ProfileId = profile.Id
-			var existing ProviderModel
-			if err := DB.Where("profile_id = ? AND model_id = ?", profile.Id, m.ModelId).
-				FirstOrCreate(&existing, m).Error; err != nil {
+			// Seed only a missing model. Existing rows remain untouched so
+			// operator edits survive a restart without a duplicate-key race.
+			if err := DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&m).Error; err != nil {
 				return err
 			}
 		}

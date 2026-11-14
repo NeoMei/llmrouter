@@ -74,7 +74,7 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		return fmt.Sprintf("%s/v1/chat/completions", info.ChannelBaseUrl), nil
 	}
 	if info.RelayMode == constant.RelayModeResponses {
-		return fmt.Sprintf("%s/v1/responses", info.ChannelBaseUrl), nil
+		return fmt.Sprintf("%s/responses", info.ChannelBaseUrl), nil
 	}
 	if info.RelayMode == constant.RelayModeToolsSearch {
 		return fmt.Sprintf("%s/v1/tools/search", info.ChannelBaseUrl), nil

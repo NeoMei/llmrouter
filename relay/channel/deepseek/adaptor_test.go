@@ -39,7 +39,7 @@ func TestGetRequestURLUsesNativeResponsesEndpoint(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, "https://api.deepseek.com/v1/responses", url)
+	assert.Equal(t, "https://api.deepseek.com/responses", url)
 }
 
 func TestGetRequestURLUsesNativeSearchAndFetchEndpoints(t *testing.T) {

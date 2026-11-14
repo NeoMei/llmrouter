@@ -230,12 +230,6 @@ func collectPendingUpstreamModelChangesFromModels(
 		return true
 	})
 	pendingRemove := lo.Filter(localModels, func(modelName string, _ int) bool {
-		if channelType == constant.ChannelTypeDeepSeek &&
-			(modelName == constant.DeepSeekSearchModel || modelName == constant.DeepSeekFetchModel) {
-			// DeepSeek's internal tool routes are exposed as local models but are
-			// not part of the upstream model list.
-			return false
-		}
 		// Redirect source models are virtual aliases and should not be removed
 		// only because they are absent from upstream model list.
 		if _, ok := redirectSourceSet[modelName]; ok {
@@ -247,7 +241,18 @@ func collectPendingUpstreamModelChangesFromModels(
 		_, ok := upstreamSet[modelName]
 		return !ok
 	})
-	return normalizeModelNames(pendingAdd), normalizeModelNames(pendingRemove)
+	return normalizeModelNames(pendingAdd), protectInternalModelRoutes(channelType, normalizeModelNames(pendingRemove))
+}
+
+// protectInternalModelRoutes keeps local-only capability routes out of the
+// removal proposal. They are deliberately absent from provider model discovery.
+func protectInternalModelRoutes(channelType int, models []string) []string {
+	if channelType != constant.ChannelTypeDeepSeek {
+		return models
+	}
+	return lo.Filter(models, func(modelName string, _ int) bool {
+		return modelName != constant.DeepSeekSearchModel && modelName != constant.DeepSeekFetchModel
+	})
 }
 
 func collectPendingUpstreamModelChanges(channel *model.Channel, settings dto.ChannelOtherSettings) (pendingAddModels []string, pendingRemoveModels []string, err error) {

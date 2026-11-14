@@ -555,6 +555,19 @@ func TestCollectPendingUpstreamModelChangesFromModels_ProtectsDeepSeekInternalRo
 	}
 }
 
+func TestCollectPendingUpstreamModelChangesFromModels_RemovesInternalRoutesFromPersistedProposal(t *testing.T) {
+	// A prior detection may already have stored internal tool routes in the
+	// pending-removal setting. Re-running the collector must sanitize that list
+	// even when the local model set no longer contains those routes.
+	settings := dto.ChannelOtherSettings{
+		UpstreamModelUpdateLastDetectedModels: []string{constant.DeepSeekSearchModel, constant.DeepSeekFetchModel, "missing"},
+		UpstreamModelUpdateLastRemovedModels:  []string{constant.DeepSeekSearchModel, constant.DeepSeekFetchModel, "missing"},
+	}
+	protected := protectInternalModelRoutes(constant.ChannelTypeDeepSeek, settings.UpstreamModelUpdateLastRemovedModels)
+	require.Equal(t, []string{"missing"}, protected)
+	require.Equal(t, []string{constant.DeepSeekSearchModel, constant.DeepSeekFetchModel, "missing"}, settings.UpstreamModelUpdateLastRemovedModels, "sanitizing must not mutate the stored source")
+}
+
 func TestCollectPendingUpstreamModelChangesForDeepSeekPreservesInternalRoutes(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"data":[{"id":"deepseek-chat"},{"id":"deepseek-reasoner"}]}`))

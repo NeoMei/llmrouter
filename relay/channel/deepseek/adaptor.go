@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	appconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/claude"
@@ -64,7 +65,11 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 	// envelope carries the final counts for those calls.
 	info.WebSearchBillingKey = SearchToolPriceKey
 	info.WebFetchBillingKey = FetchToolPriceKey
-	if info.RelayMode == constant.RelayModeResponses {
+	// The Anthropic-format endpoint also reports the billed tool counts in
+	// usage.server_tool_use. Keep the field unset for non-DeepSeek providers
+	// so their display counters cannot replace protocol billing counts.
+	if info.RelayMode == constant.RelayModeResponses || info.RelayFormat == types.RelayFormatClaude ||
+		(info.ChannelMeta != nil && info.ChannelType == appconstant.ChannelTypeDeepSeek) {
 		info.VendorToolUsage = responsesToolUsage
 	}
 }
@@ -230,12 +235,20 @@ func customToolInput(arguments any) string {
 	return text
 }
 
-func rewriteDeepSeekResponsesPayload(payload map[string]any, customTools map[string]struct{}, trackedItems map[string]struct{}) (bool, error) {
+func rewriteDeepSeekResponsesPayload(payload map[string]any, customTools map[string]struct{}, trackedItems map[string]struct{}, itemIDs map[string]string) (bool, error) {
 	eventType := common.Interface2String(payload["type"])
 	switch eventType {
 	case "response.output_item.added", "response.output_item.done":
 		item, ok := payload["item"].(map[string]any)
-		if ok && rewriteDeepSeekResponsesItem(item, customTools) {
+		if ok {
+			rawID := common.Interface2String(item["id"])
+			outputIndex, _ := payload["output_index"].(float64)
+			if repairDeepSeekResponseItemID(item, int(outputIndex)) {
+				if repairedID := common.Interface2String(item["id"]); rawID != "" && repairedID != "" {
+					itemIDs[rawID] = repairedID
+				}
+			}
+			rewriteDeepSeekResponsesItem(item, customTools)
 			if itemID := common.Interface2String(item["id"]); itemID != "" {
 				trackedItems[itemID] = struct{}{}
 			}
@@ -256,13 +269,60 @@ func rewriteDeepSeekResponsesPayload(payload map[string]any, customTools map[str
 			break
 		}
 		output, _ := response["output"].([]any)
-		for _, value := range output {
+		for index, value := range output {
 			if item, ok := value.(map[string]any); ok {
+				rawID := common.Interface2String(item["id"])
+				if repairDeepSeekResponseItemID(item, index) {
+					if repairedID := common.Interface2String(item["id"]); rawID != "" && repairedID != "" {
+						itemIDs[rawID] = repairedID
+					}
+				}
 				rewriteDeepSeekResponsesItem(item, customTools)
 			}
 		}
 	}
+	if itemID := common.Interface2String(payload["item_id"]); itemID != "" {
+		if repairedID, ok := itemIDs[itemID]; ok {
+			payload["item_id"] = repairedID
+		}
+	}
 	return false, nil
+}
+
+// repairDeepSeekResponseItemID gives DeepSeek's bare message/reasoning UUIDs
+// the canonical prefix Codex expects. Function calls and their call_id are
+// upstream protocol identities and are never changed.
+func repairDeepSeekResponseItemID(item map[string]any, outputIndex int) bool {
+	k := common.Interface2String(item["type"])
+	prefix := ""
+	switch k {
+	case "message":
+		prefix = "msg_"
+	case "reasoning":
+		prefix = "rs_"
+	default:
+		return false
+	}
+	itemID := common.Interface2String(item["id"])
+	if strings.HasPrefix(itemID, prefix) {
+		return false
+	}
+	if itemID == "" {
+		item["id"] = fmt.Sprintf("%sdeepseek_%d", prefix, outputIndex)
+		return true
+	}
+	item["id"] = prefix + itemID
+	return true
+}
+
+func repairDeepSeekResponseOutputItems(output []any) bool {
+	changed := false
+	for index, value := range output {
+		if item, ok := value.(map[string]any); ok {
+			changed = repairDeepSeekResponseItemID(item, index) || changed
+		}
+	}
+	return changed
 }
 
 func rewriteDeepSeekResponsesSSE(body io.ReadCloser, customTools map[string]struct{}) io.ReadCloser {
@@ -272,6 +332,7 @@ func rewriteDeepSeekResponsesSSE(body io.ReadCloser, customTools map[string]stru
 		scanner := bufio.NewScanner(body)
 		scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 		trackedItems := make(map[string]struct{})
+		itemIDs := make(map[string]string)
 		pendingEvent := ""
 		skipBlank := false
 		for scanner.Scan() {
@@ -283,7 +344,7 @@ func rewriteDeepSeekResponsesSSE(body io.ReadCloser, customTools map[string]stru
 			if strings.HasPrefix(line, "data:") {
 				var payload map[string]any
 				if err := common.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &payload); err == nil {
-					drop, err := rewriteDeepSeekResponsesPayload(payload, customTools, trackedItems)
+					drop, err := rewriteDeepSeekResponsesPayload(payload, customTools, trackedItems, itemIDs)
 					if err != nil {
 						writer.CloseWithError(err)
 						return
@@ -344,6 +405,7 @@ func rewriteDeepSeekResponsesJSON(body io.ReadCloser, customTools map[string]str
 			rewriteDeepSeekResponsesItem(item, customTools)
 		}
 	}
+	repairDeepSeekResponseOutputItems(output)
 	encoded, err := common.Marshal(response)
 	if err != nil {
 		return io.NopCloser(bytes.NewReader(data))

@@ -31,6 +31,12 @@ type Adaptor interface {
 	ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error)
 }
 
+// ResponsesRequestFinalizer applies provider-specific rules to the effective
+// JSON request after channel parameter overrides. Passthrough bypasses this hook.
+type ResponsesRequestFinalizer interface {
+	FinalizeResponsesRequest(info *relaycommon.RelayInfo, body []byte) ([]byte, error)
+}
+
 type TaskAdaptor interface {
 	Init(info *relaycommon.RelayInfo)
 

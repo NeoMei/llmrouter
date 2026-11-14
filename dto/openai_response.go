@@ -243,6 +243,21 @@ type Usage struct {
 
 	// OpenRouter Params
 	Cost any `json:"cost,omitempty"`
+
+	// ServerToolUse is the vendor-billed count of server-side tools. DeepSeek
+	// reports it on Responses usage; web_search_requests and
+	// web_fetch_requests are display counts and must not be used for billing.
+	ServerToolUse *ServerToolUse `json:"server_tool_use,omitempty"`
+}
+
+type ServerToolUse struct {
+	ToolSearch      int `json:"tool_search,omitempty"`
+	ToolFetch       int `json:"tool_fetch,omitempty"`
+	ToolImageSearch int `json:"tool_image_search,omitempty"`
+	// Display-only counters. Keep them in the wire type for clients that show
+	// search/fetch progress, but never bill from them.
+	WebSearchRequests int `json:"web_search_requests,omitempty"`
+	WebFetchRequests  int `json:"web_fetch_requests,omitempty"`
 }
 
 type OpenAIVideoResponse struct {
@@ -409,7 +424,8 @@ const (
 )
 
 const (
-	BuildInCallWebSearchCall = "web_search_call"
+	BuildInCallWebSearchCall  = "web_search_call"
+	BuildInCallFileSearchCall = "file_search_call"
 )
 
 const (

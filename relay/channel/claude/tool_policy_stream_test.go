@@ -2,6 +2,7 @@ package claude
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -135,6 +136,40 @@ func TestClaudeTextOnlyTruncatedStreamReturnsNilUsageWithoutSuccessTerminal(t *t
 			assert.NotContains(t, recorder.Body.String(), "message_stop")
 		})
 	}
+}
+
+func TestClaudeFailedTerminalStillReportsBillableUsage(t *testing.T) {
+	previousTimeout := appconstant.StreamingTimeout
+	appconstant.StreamingTimeout = 30
+	t.Cleanup(func() { appconstant.StreamingTimeout = previousTimeout })
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat:        types.RelayFormatClaude,
+		DisablePing:        true,
+		ChannelMeta:        &relaycommon.ChannelMeta{UpstreamModelName: "deepseek-flash"},
+		ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{BuiltInTools: map[string]*relaycommon.BuildInToolInfo{}},
+	}
+	info.VendorToolUsage = func(raw []byte) map[string]int {
+		var payload struct {
+			Usage struct {
+				ServerToolUse struct {
+					ToolSearch int `json:"tool_search"`
+				} `json:"server_tool_use"`
+			} `json:"usage"`
+		}
+		require.NoError(t, json.Unmarshal(raw, &payload))
+		return map[string]int{"deepseek_search": payload.Usage.ServerToolUse.ToolSearch}
+	}
+	body := claudeSSE(`{"type":"error","error":{"type":"api_error","message":"generation failed"},"usage":{"input_tokens":13,"output_tokens":2,"server_tool_use":{"tool_search":1}}}`)
+
+	usage, apiErr := ClaudeStreamHandler(c, &http.Response{Body: io.NopCloser(strings.NewReader(body))}, info)
+	require.NotNil(t, apiErr)
+	require.NotNil(t, usage)
+	assert.Equal(t, 13, usage.PromptTokens)
+	assert.Equal(t, 2, usage.CompletionTokens)
+	assert.Equal(t, 1, info.ResponsesUsageInfo.BuiltInTools["deepseek_search"].CallCount)
 }
 
 func claudeSSE(frames ...string) string {

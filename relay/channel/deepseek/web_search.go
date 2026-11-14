@@ -1,32 +1,49 @@
 package deepseek
 
 import (
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/tidwall/gjson"
 )
 
-// responsesToolUsage replaces provisional stream counts with the completed
-// web_search_call items of the final response. open_page is a Fetch call; all
-// other actions are Search. Failed calls are free. An absent output array is
-// inconclusive and leaves stream counts intact.
+// responsesToolUsage returns DeepSeek's authoritative server-tool billing
+// counters from a complete response or a Responses terminal envelope.
+//
+// usage.server_tool_use.tool_search, tool_fetch, and tool_image_search are the
+// billed counts. web_search_requests and web_fetch_requests count display
+// result blocks and include failed calls, so they must never be used for
+// billing. DeepSeek omits server_tool_use entirely when every counter is zero;
+// a present usage object therefore proves the final billed counts are zero and
+// intentionally replaces the provisional counts gathered from stream items.
+// When usage itself is absent, return nil so an incomplete frame does not erase
+// those provisional counts.
 func responsesToolUsage(raw []byte) map[string]int {
-	output := gjson.GetBytes(raw, "output")
-	if !output.Exists() {
-		output = gjson.GetBytes(raw, "response.output")
+	usagePath := "usage"
+	usage := gjson.GetBytes(raw, usagePath)
+	if (!usage.Exists() || usage.Type == gjson.Null) && gjson.GetBytes(raw, "response").Exists() {
+		usagePath = "response.usage"
+		usage = gjson.GetBytes(raw, usagePath)
 	}
-	if !output.IsArray() || len(output.Array()) == 0 {
+	if !usage.Exists() || usage.Type == gjson.Null {
 		return nil
 	}
-	counts := map[string]int{SearchToolPriceKey: 0, FetchToolPriceKey: 0}
-	for _, item := range output.Array() {
-		if item.Get("type").String() != dto.BuildInCallWebSearchCall || item.Get("status").String() != "completed" {
-			continue
-		}
-		if item.Get("action.type").String() == "open_page" {
-			counts[FetchToolPriceKey]++
-		} else {
-			counts[SearchToolPriceKey]++
-		}
+	serverToolUsePath := usagePath + ".server_tool_use"
+	serverToolUse := gjson.GetBytes(raw, serverToolUsePath)
+	if !serverToolUse.Exists() || serverToolUse.Type == gjson.Null {
+		return map[string]int{SearchToolPriceKey: 0, FetchToolPriceKey: 0, ImageSearchToolPriceKey: 0}
 	}
-	return counts
+	return map[string]int{
+		SearchToolPriceKey:      nonNegativeInt(serverToolUse.Get("tool_search")),
+		FetchToolPriceKey:       nonNegativeInt(serverToolUse.Get("tool_fetch")),
+		ImageSearchToolPriceKey: nonNegativeInt(serverToolUse.Get("tool_image_search")),
+	}
+}
+
+func nonNegativeInt(value gjson.Result) int {
+	if !value.Exists() {
+		return 0
+	}
+	count := int(value.Int())
+	if count < 0 {
+		return 0
+	}
+	return count
 }

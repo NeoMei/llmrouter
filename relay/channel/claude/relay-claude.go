@@ -93,6 +93,11 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		return types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
 	if claudeError := claudeResponse.GetClaudeError(); claudeError != nil && claudeError.Type != "" {
+		// Generated failures may still carry billable usage and server tools.
+		if claudeInfo != nil && claudeResponse.Usage != nil {
+			applyClaudeFailureUsage(claudeInfo.Usage, claudeResponse.Usage)
+			info.ApplyVendorToolUsage(common.StringToByteSlice(data))
+		}
 		return types.WithClaudeError(*claudeError, http.StatusInternalServerError)
 	}
 	if claudeResponse.StopReason != "" {
@@ -101,6 +106,9 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	if claudeResponse.Delta != nil && claudeResponse.Delta.StopReason != nil {
 		maybeMarkClaudeRefusal(c, *claudeResponse.Delta.StopReason)
 	}
+	// Count billable server side blocks, then use message_delta's final usage
+	// to replace those provisional counts when the channel provides them.
+	countClaudeBillableBlocks(info, &claudeResponse, data)
 	if info.RelayFormat == types.RelayFormatClaude {
 		FormatClaudeResponseInfo(&claudeResponse, nil, claudeInfo)
 
@@ -130,6 +138,21 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		}
 	}
 	return nil
+}
+
+func countClaudeBillableBlocks(info *relaycommon.RelayInfo, response *dto.ClaudeResponse, data string) {
+	if info == nil || response == nil {
+		return
+	}
+	if response.Type == "content_block_start" && response.ContentBlock != nil &&
+		response.ContentBlock.Type == "web_search_tool_result" && info.WebSearchBillingKey != "" {
+		if _, ok := response.ContentBlock.Content.([]any); ok {
+			info.CountBillableToolCall(dto.BuildInCallWebSearchCall)
+		}
+	}
+	if response.Type == "message_delta" && response.Usage != nil {
+		info.ApplyVendorToolUsage(common.StringToByteSlice(data))
+	}
 }
 
 func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo) {
@@ -201,6 +224,7 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 	}
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		nativeEvidence.Observe([]byte(data), true)
+		captureClaudeFailedTerminalUsage(data, info, claudeInfo)
 		emitted, validateErr := validator.Accept(common.StringToByteSlice(data))
 		if validateErr != nil {
 			err = toolpolicy.NewResponseValidationError(validateErr)
@@ -215,7 +239,7 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		}
 	})
 	if err != nil {
-		return nil, err
+		return claudeUsageOnError(claudeInfo), err
 	}
 	if c == nil || c.Request == nil || c.Request.Context().Err() != nil ||
 		info != nil && info.StreamStatus != nil && (!info.StreamStatus.IsNormalEnd() || info.StreamStatus.HasErrors()) {
@@ -225,20 +249,38 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		} else if info != nil && info.StreamStatus != nil {
 			reason = info.StreamStatus.Summary()
 		}
-		return nil, toolpolicy.NewResponseValidationError(validator.Abort(fmt.Errorf("%s", reason)))
+		return claudeUsageOnError(claudeInfo), toolpolicy.NewResponseValidationError(validator.Abort(fmt.Errorf("%s", reason)))
 	}
 	flushed, validateErr := validator.Finish()
 	if validateErr != nil {
-		return nil, toolpolicy.NewResponseValidationError(validateErr)
+		return claudeUsageOnError(claudeInfo), toolpolicy.NewResponseValidationError(validateErr)
 	}
 	for _, frame := range flushed {
 		if !process(string(frame)) {
-			return nil, err
+			return claudeUsageOnError(claudeInfo), err
 		}
 	}
 
 	HandleStreamFinalResponse(c, info, claudeInfo)
 	return claudeInfo.Usage, nil
+}
+
+// captureClaudeFailedTerminalUsage runs before the stream validator rejects an
+// upstream error terminal. The event's usage still proves billed generation and
+// server tools, so it must survive a failed client outcome.
+func captureClaudeFailedTerminalUsage(data string, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo) {
+	if info == nil || claudeInfo == nil {
+		return
+	}
+	var response dto.ClaudeResponse
+	if err := common.UnmarshalJsonStr(data, &response); err != nil || response.Usage == nil || response.GetClaudeError() == nil {
+		return
+	}
+	if claudeInfo.Usage == nil {
+		claudeInfo.Usage = &dto.Usage{}
+	}
+	applyClaudeFailureUsage(claudeInfo.Usage, response.Usage)
+	info.ApplyVendorToolUsage(common.StringToByteSlice(data))
 }
 
 func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo, httpResp *http.Response, data []byte) *types.NewAPIError {
@@ -251,6 +293,13 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		return types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
 	if claudeError := claudeResponse.GetClaudeError(); claudeError != nil && claudeError.Type != "" {
+		if claudeInfo != nil && claudeResponse.Usage != nil {
+			if claudeInfo.Usage == nil {
+				claudeInfo.Usage = &dto.Usage{}
+			}
+			applyClaudeFailureUsage(claudeInfo.Usage, claudeResponse.Usage)
+			info.ApplyVendorToolUsage(data)
+		}
 		return types.WithClaudeError(*claudeError, http.StatusInternalServerError)
 	}
 	if err := toolpolicy.ValidateClaudeResponseContext(c, &claudeResponse); err != nil {
@@ -270,6 +319,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		claudeInfo.Usage.PromptTokensDetails.CachedCreationTokens = claudeResponse.Usage.CacheCreationInputTokens
 		claudeInfo.Usage.ClaudeCacheCreation5mTokens = claudeResponse.Usage.GetCacheCreation5mTokens()
 		claudeInfo.Usage.ClaudeCacheCreation1hTokens = claudeResponse.Usage.GetCacheCreation1hTokens()
+		info.ApplyVendorToolUsage(data)
 	}
 	var responseData []byte
 	switch info.RelayFormat {
@@ -312,7 +362,35 @@ func ClaudeHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayI
 	logger.LogDebug(c, "responseBody: %s", responseBody)
 	handleErr := HandleClaudeResponseData(c, info, claudeInfo, resp, responseBody)
 	if handleErr != nil {
-		return nil, handleErr
+		return claudeUsageOnError(claudeInfo), handleErr
 	}
 	return claudeInfo.Usage, nil
+}
+
+func claudeUsageOnError(claudeInfo *ClaudeResponseInfo) *dto.Usage {
+	if claudeInfo == nil || claudeInfo.Usage == nil {
+		return nil
+	}
+	usage := claudeInfo.Usage
+	if usage.PromptTokens != 0 || usage.CompletionTokens != 0 || usage.TotalTokens != 0 ||
+		usage.PromptTokensDetails.CachedTokens != 0 || usage.PromptTokensDetails.CachedCreationTokens != 0 ||
+		usage.ClaudeCacheCreation5mTokens != 0 || usage.ClaudeCacheCreation1hTokens != 0 {
+		return usage
+	}
+	return nil
+}
+
+func applyClaudeFailureUsage(destination *dto.Usage, source *dto.ClaudeUsage) {
+	if destination == nil || source == nil {
+		return
+	}
+	destination.PromptTokens = source.InputTokens
+	destination.CompletionTokens = source.OutputTokens
+	destination.TotalTokens = source.InputTokens + source.OutputTokens
+	destination.UsageSemantic = "anthropic"
+	destination.PromptTokensDetails.CachedTokens = source.CacheReadInputTokens
+	destination.PromptTokensDetails.CachedCreationTokens = source.CacheCreationInputTokens
+	destination.ClaudeCacheCreation5mTokens = source.GetCacheCreation5mTokens()
+	destination.ClaudeCacheCreation1hTokens = source.GetCacheCreation1hTokens()
+	destination.BillingUsage = dto.NewClaudeMessagesBillingUsage(source)
 }

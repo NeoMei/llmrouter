@@ -63,6 +63,15 @@ type ResponsesUsageInfo struct {
 	BuiltInTools map[string]*BuildInToolInfo
 }
 
+// ResponsesServerToolUse records the authoritative per-response server-tool
+// counters. It remains nil when the upstream omitted the field, which means
+// the caller must retain any provisional counts from streamed items.
+type ResponsesServerToolUse struct {
+	ToolSearch      int
+	ToolFetch       int
+	ToolImageSearch int
+}
+
 // CountBillableToolCall records one completed built-in tool call. Search
 // declarations can be either web_search or its legacy preview spelling; bill
 // under the declared name when it is a priced built-in tool.
@@ -234,6 +243,9 @@ type RelayInfo struct {
 	SendResponseCount       int
 	ReceivedResponseCount   int
 	FinalPreConsumedQuota   int // 最终预消耗的配额
+	// FailedUsageConsumed prevents a terminal failure payload from settling the
+	// same observed usage twice on retry or duplicate error handling.
+	FailedUsageConsumed bool
 	// ForcePreConsume 为 true 时禁用 BillingSession 的信任额度旁路，
 	// 强制预扣全额。用于异步任务（视频/音乐生成等），因为请求返回后任务仍在运行，
 	// 必须在提交前锁定全额。

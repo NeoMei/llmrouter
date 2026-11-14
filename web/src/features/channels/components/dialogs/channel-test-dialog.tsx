@@ -95,6 +95,7 @@ import {
 } from '../../lib'
 import type {
   Channel,
+  ChannelTestResponse,
   GetChannelsResponse,
   SearchChannelsResponse,
 } from '../../types'
@@ -121,6 +122,7 @@ type TestResult = {
   completedAt?: number
   error?: string
   errorCode?: string
+  probeMode?: ChannelTestResponse['probe_mode']
 }
 
 type BatchProgress = {
@@ -128,6 +130,7 @@ type BatchProgress = {
   completed: number
   success: number
   failed: number
+  mode: 'connectivity' | 'generation'
 }
 
 type ChannelTestCachePatch = {
@@ -141,6 +144,35 @@ type LatestChannelTestCachePatch = {
 }
 
 type ChannelListCache = GetChannelsResponse | SearchChannelsResponse
+
+function getConnectivityResultLabel(
+  probeMode: ChannelTestResponse['probe_mode'] | undefined,
+  t: (key: string) => string
+) {
+  if (probeMode === 'generation') {
+    return t('Generation capability verified')
+  }
+  if (probeMode === undefined || probeMode === 'inconclusive') {
+    return t('Interface reachable; generation capability not verified')
+  }
+  if (probeMode === 'unsupported') {
+    return t('Read-only check unsupported; generation capability not verified')
+  }
+  return t('Connectivity verified; generation capability not verified')
+}
+
+function getFailedCheckLabel(
+  probeMode: ChannelTestResponse['probe_mode'] | undefined,
+  t: (key: string) => string
+) {
+  if (probeMode === 'generation') {
+    return t('Generation test failed')
+  }
+  if (probeMode === undefined) {
+    return t('Test failed')
+  }
+  return t('Connectivity check failed')
+}
 
 function createChannelTestCachePatch(
   responseTime?: number,
@@ -343,6 +375,9 @@ function ChannelTestDialogContent({
   const [isBatchTesting, setIsBatchTesting] = useState(false)
   const [isBatchStopRequested, setIsBatchStopRequested] = useState(false)
   const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null)
+  const [batchMode, setBatchMode] = useState<'connectivity' | 'generation'>(
+    'connectivity'
+  )
   const [removedModels, setRemovedModels] = useState<Set<string>>(
     () => new Set()
   )
@@ -351,6 +386,10 @@ function ChannelTestDialogContent({
   const [isDeletingFailed, setIsDeletingFailed] = useState(false)
   const [failureDetails, setFailureDetails] =
     useState<FailureDetailsState | null>(null)
+  const [deepTestIntent, setDeepTestIntent] = useState<{
+    model: string
+    batch: boolean
+  } | null>(null)
   const [pagination, setPagination] = useState({
     pageIndex: 0,
     pageSize: 30,
@@ -377,9 +416,14 @@ function ChannelTestDialogContent({
       return
     }
 
+    const isGeneration = batchProgress.mode === 'generation'
     const title = isBatchStopRequested
-      ? t('Stopping batch test...')
-      : t('Batch testing models...')
+      ? isGeneration
+        ? t('Stopping generation tests...')
+        : t('Stopping connectivity checks...')
+      : isGeneration
+        ? t('Running generation tests...')
+        : t('Checking channel connectivity...')
     const completedText = t('{{completed}}/{{total}} completed', {
       completed: batchProgress.completed,
       total: batchProgress.total,
@@ -408,10 +452,12 @@ function ChannelTestDialogContent({
     setIsBatchTesting(false)
     setIsBatchStopRequested(false)
     setBatchProgress(null)
+    setBatchMode('connectivity')
     setRemovedModels(() => new Set())
     setIsDeleteFailedDialogOpen(false)
     setIsDeletingFailed(false)
     setFailureDetails(null)
+    setDeepTestIntent(null)
     setPagination({ pageIndex: 0, pageSize: 30 })
   }, [])
 
@@ -546,7 +592,8 @@ function ChannelTestDialogContent({
     async (
       model: string,
       silent = false,
-      refreshList = true
+      refreshList = true,
+      mode: 'connectivity' | 'generation' = 'connectivity'
     ): Promise<TestResult | undefined> => {
       if (!currentRow) return
 
@@ -557,14 +604,21 @@ function ChannelTestDialogContent({
       try {
         await handleTestChannel(
           currentRow.id,
-          {
-            channelName: currentRow.name,
-            testModel: model,
-            endpointType: endpointType === 'auto' ? undefined : endpointType,
-            stream: effectiveStreamTest || undefined,
-            silent,
-          },
-          (success, responseTime, error, errorCode) => {
+          mode === 'generation'
+            ? {
+                mode: 'generation',
+                channelName: currentRow.name,
+                testModel: model,
+                endpointType:
+                  endpointType === 'auto' ? undefined : endpointType,
+                stream: effectiveStreamTest || undefined,
+                silent,
+              }
+            : {
+                channelName: currentRow.name,
+                silent,
+              },
+          (success, responseTime, error, errorCode, responseProbeMode) => {
             const completedAt = Date.now()
             finalResult = {
               status: success ? 'success' : 'error',
@@ -572,6 +626,7 @@ function ChannelTestDialogContent({
               completedAt,
               error,
               errorCode,
+              probeMode: responseProbeMode,
             }
             updateTestResult(model, finalResult)
           }
@@ -615,7 +670,10 @@ function ChannelTestDialogContent({
   }, [isBatchStopRequested, isBatchTesting])
 
   const handleBatchTest = useCallback(
-    async (modelsToTest: string[]) => {
+    async (
+      modelsToTest: string[],
+      mode: 'connectivity' | 'generation' = 'connectivity'
+    ) => {
       const uniqueModels = [
         ...new Set(modelsToTest.map((model) => model.trim()).filter(Boolean)),
       ]
@@ -624,11 +682,13 @@ function ChannelTestDialogContent({
       batchStopRequestedRef.current = false
       setIsBatchTesting(true)
       setIsBatchStopRequested(false)
+      setBatchMode(mode)
       setBatchProgress({
         total: uniqueModels.length,
         completed: 0,
         success: 0,
         failed: 0,
+        mode,
       })
 
       let resultPatch: ChannelTestCachePatch | undefined
@@ -657,6 +717,7 @@ function ChannelTestDialogContent({
             completed: completedCount,
             success: successCount,
             failed: failedCount,
+            mode,
           })
         }
 
@@ -675,7 +736,7 @@ function ChannelTestDialogContent({
           )
           const batchPromises = batch.map(async (modelName) => {
             try {
-              const result = await testSingleModel(modelName, true, false)
+              const result = await testSingleModel(modelName, true, false, mode)
               const finalResult = result ?? createFallbackResult()
               if (!result) {
                 updateTestResult(modelName, finalResult)
@@ -707,31 +768,37 @@ function ChannelTestDialogContent({
           batchStopRequestedRef.current && completedCount < uniqueModels.length
 
         dismissBatchProgressToast()
+        const stoppedKey =
+          mode === 'generation'
+            ? 'Generation tests stopped: {{completed}}/{{total}} completed, {{success}} succeeded, {{failed}} failed'
+            : 'Connectivity checks stopped: {{completed}}/{{total}} completed, {{success}} succeeded, {{failed}} failed'
+        const failedKey =
+          mode === 'generation'
+            ? 'Generation tests completed: {{success}} succeeded, {{failed}} failed'
+            : 'Connectivity checks completed: {{success}} succeeded, {{failed}} failed'
+        const succeededKey =
+          mode === 'generation'
+            ? 'Generation tests completed: {{count}} succeeded'
+            : 'Connectivity checks completed: {{count}} succeeded'
         if (stopped) {
           toast.info(
-            t(
-              'Batch test stopped: {{completed}}/{{total}} completed, {{success}} succeeded, {{failed}} failed',
-              {
-                completed: completedCount,
-                total: uniqueModels.length,
-                success: successCount,
-                failed: failedCount,
-              }
-            )
+            t(stoppedKey, {
+              completed: completedCount,
+              total: uniqueModels.length,
+              success: successCount,
+              failed: failedCount,
+            })
           )
         } else if (failedCount > 0) {
           toast.error(
-            t(
-              'Batch test completed: {{success}} succeeded, {{failed}} failed',
-              {
-                success: successCount,
-                failed: failedCount,
-              }
-            )
+            t(failedKey, {
+              success: successCount,
+              failed: failedCount,
+            })
           )
         } else {
           toast.success(
-            t('Batch test completed: {{count}} succeeded', {
+            t(succeededKey, {
               count: successCount,
             })
           )
@@ -741,6 +808,7 @@ function ChannelTestDialogContent({
         setIsBatchTesting(false)
         setIsBatchStopRequested(false)
         setBatchProgress(null)
+        setBatchMode('connectivity')
         setRowSelection({})
         refreshChannelLists(resultPatch)
       }
@@ -830,11 +898,31 @@ function ChannelTestDialogContent({
     [handleClose]
   )
 
+  const openDeepTestConfirmation = useCallback(
+    (model: string, batch: boolean) => {
+      if (isBatchTesting) return
+      setDeepTestIntent({ model, batch })
+    },
+    [isBatchTesting]
+  )
+
+  const confirmDeepTest = useCallback(() => {
+    const intent = deepTestIntent
+    setDeepTestIntent(null)
+    if (!intent) return
+
+    if (intent.batch) {
+      void handleBatchTest(filteredModels, 'generation')
+      return
+    }
+    void testSingleModel(intent.model, false, true, 'generation')
+  }, [deepTestIntent, filteredModels, handleBatchTest, testSingleModel])
+
   const isAnyTesting = testingModels.size > 0 || isBatchTesting
   const isFilteringModels = searchTerm.trim().length > 0
   const testAllButtonLabel = isFilteringModels
-    ? t('Test {{count}} matching models', { count: filteredModels.length })
-    : t('Test all {{count}} models', { count: filteredModels.length })
+    ? t('Check {{count}} matching models', { count: filteredModels.length })
+    : t('Check all {{count}} models', { count: filteredModels.length })
 
   const columns = useMemo<ColumnDef<ModelRow>[]>(
     () => [
@@ -923,26 +1011,50 @@ function ChannelTestDialogContent({
           const isTestingModel = testingModels.has(model)
 
           return (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    variant='ghost'
-                    size='icon-sm'
-                    onClick={() => testSingleModel(model)}
-                    disabled={isTestingModel || isBatchTesting}
-                    aria-label={t('Test Connection')}
-                  />
-                }
-              >
-                {isTestingModel ? (
-                  <Loader2 className='size-4 animate-spin' />
-                ) : (
-                  <Gauge className='size-4' />
-                )}
-              </TooltipTrigger>
-              <TooltipContent>{t('Test Connection')}</TooltipContent>
-            </Tooltip>
+            <div className='flex items-center gap-1'>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant='ghost'
+                      size='icon-sm'
+                      onClick={() => testSingleModel(model)}
+                      disabled={isTestingModel || isBatchTesting}
+                      aria-label={t('Check channel connectivity')}
+                    />
+                  }
+                >
+                  {isTestingModel ? (
+                    <Loader2 className='size-4 animate-spin' />
+                  ) : (
+                    <Gauge className='size-4' />
+                  )}
+                </TooltipTrigger>
+                <TooltipContent>
+                  {t('Check channel connectivity')}
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant='ghost'
+                      size='icon-sm'
+                      onClick={() => openDeepTestConfirmation(model, false)}
+                      disabled={isTestingModel || isBatchTesting}
+                      aria-label={t('Run paid generation test for {{model}}', {
+                        model,
+                      })}
+                    />
+                  }
+                >
+                  <Info className='size-4' />
+                </TooltipTrigger>
+                <TooltipContent>
+                  {t('Run paid generation test for {{model}}', { model })}
+                </TooltipContent>
+              </Tooltip>
+            </div>
           )
         },
         enableSorting: false,
@@ -951,6 +1063,7 @@ function ChannelTestDialogContent({
     [
       defaultTestModel,
       isBatchTesting,
+      openDeepTestConfirmation,
       t,
       testResults,
       testingModels,
@@ -979,7 +1092,7 @@ function ChannelTestDialogContent({
         onOpenChange={handleDialogOpenChange}
         title={
           <span className='inline-flex max-w-full min-w-0 items-center gap-1.5'>
-            <span className='shrink-0'>{t('Test Channel Connection')}:</span>
+            <span className='shrink-0'>{t('Check channel connectivity')}:</span>
             <span className='min-w-0 truncate'>{currentRow.name}</span>
           </span>
         }
@@ -993,6 +1106,11 @@ function ChannelTestDialogContent({
         }
       >
         <div className='max-h-[78vh] space-y-4 overflow-y-auto py-4 pr-1'>
+          <p className='text-muted-foreground text-xs'>
+            {t(
+              'Default checks use a read-only request and never generate model content. An explicit paid generation test requires confirmation and may incur upstream charges.'
+            )}
+          </p>
           <div className='grid gap-4 md:grid-cols-2'>
             <div className='grid gap-2'>
               <Label htmlFor='endpoint-type'>{t('Endpoint Type')}</Label>
@@ -1028,7 +1146,7 @@ function ChannelTestDialogContent({
               </Select>
               <p className='text-muted-foreground text-xs'>
                 {t(
-                  'Override the endpoint used for testing. Leave empty to auto detect.'
+                  'Override the endpoint for explicit paid generation tests. Leave empty to auto detect.'
                 )}
               </p>
             </div>
@@ -1046,7 +1164,7 @@ function ChannelTestDialogContent({
                 </span>
               </div>
               <p className='text-muted-foreground text-xs'>
-                {t('Enable streaming mode for the test request.')}
+                {t('Enable streaming for explicit paid generation tests only.')}
               </p>
             </div>
           </div>
@@ -1056,7 +1174,9 @@ function ChannelTestDialogContent({
               <div className='min-w-0 space-y-2'>
                 <p className='text-sm font-medium'>{t('Channel models')}</p>
                 <p className='text-muted-foreground text-xs'>
-                  {t('Select models to run batch tests.')}
+                  {t(
+                    'Default checks only verify the channel interface; they do not test generation for each model.'
+                  )}
                 </p>
                 <div className='flex flex-wrap items-center gap-2'>
                   {isBatchTesting ? (
@@ -1068,7 +1188,9 @@ function ChannelTestDialogContent({
                     >
                       {isBatchStopRequested
                         ? t('Stopping...')
-                        : t('Stop testing')}
+                        : batchMode === 'generation'
+                          ? t('Stop generation tests')
+                          : t('Stop connectivity checks')}
                     </Button>
                   ) : (
                     <>
@@ -1078,6 +1200,16 @@ function ChannelTestDialogContent({
                         disabled={isAnyTesting || filteredModels.length === 0}
                       >
                         {testAllButtonLabel}
+                      </Button>
+                      <Button
+                        variant='outline'
+                        size='sm'
+                        onClick={() => openDeepTestConfirmation('', true)}
+                        disabled={isAnyTesting || filteredModels.length === 0}
+                      >
+                        {t('Run paid generation tests ({{count}})', {
+                          count: filteredModels.length,
+                        })}
                       </Button>
                       {successModels.length > 0 && (
                         <Button
@@ -1174,6 +1306,27 @@ function ChannelTestDialogContent({
         confirmText={t('Delete')}
         handleConfirm={handleDeleteFailedModels}
       />
+      <ConfirmDialog
+        open={deepTestIntent !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setDeepTestIntent(null)
+        }}
+        title={t('Confirm paid generation test')}
+        desc={
+          deepTestIntent?.batch
+            ? t(
+                'This will send {{count}} real generation requests and may incur upstream charges. Scheduled checks remain read-only.',
+                { count: filteredModels.length }
+              )
+            : t(
+                'This will send a real generation request for {{model}} and may incur upstream charges. Scheduled checks remain read-only.',
+                { model: deepTestIntent?.model ?? '' }
+              )
+        }
+        destructive
+        confirmText={t('Run paid generation test')}
+        handleConfirm={confirmDeepTest}
+      />
       <FailureDetailsSheet
         details={failureDetails}
         onOpenChange={(sheetOpen) => {
@@ -1240,12 +1393,15 @@ function TestResultCell({
   }
 
   if (result.status === 'success') {
-    return typeof result.responseTime === 'number' ? (
-      <span className='text-muted-foreground text-sm'>
-        {formatResponseTime(result.responseTime, t)}
-      </span>
-    ) : (
-      <span className='text-muted-foreground text-sm'>-</span>
+    return (
+      <div className='text-muted-foreground flex min-w-0 flex-col gap-0.5 text-sm'>
+        <span className='truncate'>
+          {getConnectivityResultLabel(result.probeMode, t)}
+        </span>
+        {typeof result.responseTime === 'number' && (
+          <span>{formatResponseTime(result.responseTime, t)}</span>
+        )}
+      </div>
     )
   }
 
@@ -1275,7 +1431,7 @@ function FailureResultContent({
   )
   const { summary, details } = getFailureStatusDisplay({
     errorText,
-    fallbackSummary: t('Test failed'),
+    fallbackSummary: getFailedCheckLabel(result.probeMode, t),
     isModelPriceError,
     modelPriceSummary,
   })

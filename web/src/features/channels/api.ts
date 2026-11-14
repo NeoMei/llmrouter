@@ -208,15 +208,36 @@ export async function batchSetChannelTag(
 // ============================================================================
 
 /**
- * Test channel connectivity
+ * Check whether a channel's metadata endpoint is reachable. This request never
+ * generates model content.
  */
-export async function testChannel(
-  id: number,
-  params?: { model?: string; endpoint_type?: string; stream?: boolean }
+export async function testChannelConnectivity(
+  id: number
 ): Promise<ChannelTestResponse> {
-  const res = await api.get(
-    `/api/channel/test/${id}`,
-    channelActionConfig({ params })
+  const res = await api.get(`/api/channel/test/${id}`, channelActionConfig())
+  return res.data
+}
+
+/**
+ * Run an explicitly confirmed model capability test. This can submit a paid
+ * generation request upstream, so the server requires a separate POST,
+ * confirmation header and confirmation body.
+ */
+export async function testChannelDeep(
+  id: number,
+  params?: {
+    model?: string
+    endpoint_type?: string
+    stream?: boolean
+  }
+): Promise<ChannelTestResponse> {
+  const res = await api.post(
+    `/api/channel/test/${id}/deep`,
+    { confirm: true },
+    channelActionConfig({
+      params,
+      headers: { 'X-Channel-Deep-Test': 'confirmed' },
+    })
   )
   return res.data
 }

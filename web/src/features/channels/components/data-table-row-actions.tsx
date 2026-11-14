@@ -193,7 +193,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
               size='icon-sm'
               onClick={handleDirectTest}
               disabled={isTesting}
-              aria-label={t('Test Connection')}
+              aria-label={t('Check channel connectivity')}
             />
           }
         >
@@ -203,7 +203,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
             <Gauge className='size-4' />
           )}
         </TooltipTrigger>
-        <TooltipContent>{t('Test Connection')}</TooltipContent>
+        <TooltipContent>{t('Check channel connectivity')}</TooltipContent>
       </Tooltip>
 
       {layout === 'card' && (
@@ -217,13 +217,13 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
                   e.stopPropagation()
                   handleTest()
                 }}
-                aria-label={t('Test Channel Connection')}
+                aria-label={t('Check channel connectivity')}
               />
             }
           >
             <PlugZap className='size-4' />
           </TooltipTrigger>
-          <TooltipContent>{t('Test Channel Connection')}</TooltipContent>
+          <TooltipContent>{t('Check channel connectivity')}</TooltipContent>
         </Tooltip>
       )}
 
@@ -273,9 +273,9 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
             </DropdownMenuItem>
           )}
 
-          {/* Test Connection */}
+          {/* Check channel connectivity */}
           <DropdownMenuItem onClick={handleTest}>
-            {t('Test Connection')}
+            {t('Check channel connectivity')}
             <DropdownMenuShortcut>
               <PlugZap size={16} />
             </DropdownMenuShortcut>

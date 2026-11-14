@@ -24,10 +24,13 @@ var defaultToolPrices = map[string]float64{
 	"web_search_preview": 10.0, // OpenAI web search preview (default: reasoning models)
 	"file_search":        2.5,  // OpenAI file search (Responses API)
 	"google_search":      14.0, // Gemini Grounding with Google Search
-	// DeepSeek Search and Fetch, billed at USD 0.75 per 1,000 successful
-	// requests. Responses-hosted Search is keyed to these names by its adaptor.
-	"deepseek_search": 0.75,
-	"deepseek_fetch":  0.75,
+	// DeepSeek text search, image search and Fetch. The official price is CNY 5
+	// per 1,000 successful requests; the repository's fixed conversion is 7.3
+	// CNY per USD. Values below are USD per 1,000 calls. Hosted Responses tools
+	// use these same keys, including deepseek_image_search.
+	"deepseek_search":       (0.005 / 7.3) * 1000,
+	"deepseek_fetch":        (0.005 / 7.3) * 1000,
+	"deepseek_image_search": (0.005 / 7.3) * 1000,
 }
 
 var defaultToolPriceOverrides = map[string]float64{

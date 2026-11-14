@@ -6,7 +6,7 @@ This guide documents how to operate the Codex Gateway client-compatibility layer
 
 Public model routes are stored in `client_model_routes` and `client_model_targets`.
 
-- A public model route has a unique `public_id` (e.g. `deepseek/deepseek-v4-flash`),
+- A public model route has a unique `public_id` (e.g. `deepseek/deepseek-flash`),
   an optional list of `aliases`, a client scope (`all`, `codex`, `claude`, or `gemini`),
   and one or more targets.
 - Each target points to an enabled channel, an upstream model name, a billing model,
@@ -35,6 +35,13 @@ selection. The selected wire is determined by:
 The resolved billing model, upstream model, route ID, and selected wire are stored
 in the relay audit metadata.
 
+Use `deepseek-flash` and `deepseek-v4-pro` as the current primary DeepSeek model
+names. DeepSeek still accepts the legacy `deepseek-v4-flash` name and serves it as
+Flash. The internal `deepseek-search` and `deepseek-fetch` request routes are not
+part of the provider model catalog and are not returned by either upstream or
+gateway `/models`; do not remove or flag them as stale because they are absent
+from model discovery.
+
 ## Stateful Responses continuity
 
 The bounded `responsesstate` store replays `previous_response_id` when the
@@ -62,7 +69,7 @@ codex-gateway # restore subcommand is implemented in client-state.ts
 Run the built-in doctor:
 
 ```bash
-codex-gateway doctor -s https://gateway.example -t sk-... -m deepseek/deepseek-v4-flash
+codex-gateway doctor -s https://gateway.example -t sk-... -m deepseek/deepseek-flash
 ```
 
 The doctor checks configuration ownership, `/healthz`, authenticated `/v1/models`,
@@ -103,7 +110,7 @@ Run `scripts/client-e2e.sh` against an isolated deployment before any production
 traffic change:
 
 ```bash
-GATEWAY_URL=https://gateway.example API_TOKEN=sk-... MODEL=deepseek/deepseek-v4-flash \
+GATEWAY_URL=https://gateway.example API_TOKEN=sk-... MODEL=deepseek/deepseek-flash \
   bash scripts/client-e2e.sh
 ```
 

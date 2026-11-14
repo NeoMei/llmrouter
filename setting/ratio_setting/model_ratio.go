@@ -301,10 +301,12 @@ var defaultModelPrice = map[string]float64{
 	"veo-3.0-fast-generate-001":      0.15,
 	"veo-3.1-generate-preview":       0.4,
 	"veo-3.1-fast-generate-preview":  0.15,
-	// DeepSeek Search and Fetch are USD 0.75 per 1,000 successful requests.
-	// Their route bodies carry no model and bill once at this fixed request price.
-	"deepseek-search": 0.00075,
-	"deepseek-fetch":  0.00075,
+	// DeepSeek standalone Search and Fetch cost CNY 5 per 1,000 successful
+	// requests. These are USD per request at the repository's fixed 7.3 CNY/USD
+	// conversion. The route bodies carry no model and bill once at this price.
+	// Image search has no standalone route, so it is priced only as a hosted tool.
+	"deepseek-search": 0.005 / 7.3,
+	"deepseek-fetch":  0.005 / 7.3,
 }
 
 var defaultAudioRatio = map[string]float64{

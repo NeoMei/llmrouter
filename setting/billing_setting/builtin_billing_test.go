@@ -15,10 +15,26 @@ func TestDeepSeekPricingExpressionsCompileAndBillDimensions(t *testing.T) {
 		require.Equal(t, BillingModeTieredExpr, GetBillingMode(model), model)
 		require.NoError(t, SmokeTestExpr(expression), model)
 
-		quota, result, err := billingexpr.RunExpr(expression, billingexpr.TokenParams{P: 1_000_000, CR: 1_000_000, C: 1_000_000})
+		quota, result, err := billingexpr.RunExpr(expression, billingexpr.TokenParams{P: 1, CR: 1, C: 1})
 		require.NoError(t, err, model)
-		assert.Positive(t, quota, model)
-		assert.NotEmpty(t, result.MatchedTier, model)
+		assert.Equal(t, "standard", result.MatchedTier, model)
+		if model == "deepseek-v4-pro" {
+			assert.InDelta(t, (9+0.30+27)/7.3, quota, 1e-9, model)
+		} else {
+			assert.InDelta(t, (2+0.04+8)/7.3, quota, 1e-9, model)
+		}
+	}
+}
+
+// A single standard tier means the same expression price at every clock,
+// weekday and holiday. These literals intentionally pin the selected policy.
+func TestDeepSeekBillingHasNoTimeCondition(t *testing.T) {
+	for _, model := range []string{"deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "deepseek-v4-pro"} {
+		expression, ok := GetBillingExpr(model)
+		require.True(t, ok, model)
+		assert.NotContains(t, expression, "hour(", model)
+		assert.NotContains(t, expression, "weekday(", model)
+		assert.Contains(t, expression, `tier("standard"`, model)
 	}
 }
 

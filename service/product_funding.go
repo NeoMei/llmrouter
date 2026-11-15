@@ -20,6 +20,10 @@ type productFundingSession struct {
 	info  *relaycommon.RelayInfo
 	call  model.ProductRuntimeCall
 	mu    sync.Mutex
+	// reconciliationPending keeps the central reservation open when the
+	// request outcome or a settlement step is uncertain. Central recovery
+	// owns the call; a local release would drop the wrong hold.
+	reconciliationPending bool
 }
 
 func newProductFundingSession(ctx context.Context, info *relaycommon.RelayInfo, quota int) (*productFundingSession, bool, error) {
@@ -76,7 +80,7 @@ func (s *productFundingSession) Settle(actual int) error {
 func (s *productFundingSession) Refund(c *gin.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.call.State == "settled" || s.call.State == "released" {
+	if s.reconciliationPending || s.call.State == "settled" || s.call.State == "released" {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -105,12 +109,30 @@ func MarkProductFundingDispatched(ctx context.Context, info *relaycommon.RelayIn
 func (s *productFundingSession) NeedsRefund() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.call.State != "settled" && s.call.State != "released"
+	return !s.reconciliationPending && s.call.State != "settled" && s.call.State != "released"
 }
 func (s *productFundingSession) GetPreConsumedQuota() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.call.ReservedQuota
+}
+
+// MarkReconciliationPending leaves the central reservation open. Central
+// recovery owns uncertain calls; a local refund would release the wrong hold.
+func (s *productFundingSession) MarkReconciliationPending(reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.call.State == "settled" || s.call.State == "released" {
+		return
+	}
+	common.SysError("central product funding requires reconciliation: " + reason)
+	s.reconciliationPending = true
+}
+
+func (s *productFundingSession) IsSettled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.call.State == "settled" && !s.reconciliationPending
 }
 
 // Reconciliation is financial only. It never redispatches a provider request.
@@ -142,8 +164,9 @@ func StartProductFundingRecovery(ctx context.Context) func() {
 					model.RecoverProductSubscriptionPurchases,
 					func(run context.Context) error { return model.FlushProductCreditAwards(run, 0) },
 					model.RecoverProductFunding,
+					func(run context.Context) error { return model.RecoverWalletRefunds(run, 100) },
 				})
-				messages := []string{"central product refund pending", "central product purchase pending", "central product credit pending", "central product reconciliation pending"}
+				messages := []string{"central product refund pending", "central product purchase pending", "central product credit pending", "central product reconciliation pending", "local wallet refund receipt pending"}
 				for i, err := range results {
 					if err != nil && !(i == 3 && errors.Is(err, model.ErrProductFundingPending)) {
 						common.SysError(messages[i])

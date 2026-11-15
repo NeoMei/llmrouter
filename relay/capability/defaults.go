@@ -80,14 +80,61 @@ func defaultDeclarations() []Declaration {
 		constant.ChannelTypeAdvancedCustom,
 		constant.ChannelTypeGateway,
 	}
+	// Base chat wire operations are implemented by every OpenAI-compatible
+	// channel. Keep this slice intact: embeddingCompatible is derived from it,
+	// and removing a channel would also revoke its embedding declaration.
 	support(openAICompatible,
 		OperationChatCreate,
 		OperationCompletionCreate,
-		OperationResponseCreate,
-		OperationResponseCompact,
 		OperationRealtimeConnect,
 		OperationModerationCreate,
 	)
+	// Responses request conversion is not universal: these channels either
+	// return channel.ErrUnsupportedOperation from ConvertOpenAIResponsesRequest
+	// or have no GetAdaptor case for their API type. Do not declare an
+	// unsupported operation as supported; NewRegistry rejects explicit
+	// negative declarations and already fills the matrix with a reason.
+	responsesCreateExcluded := map[int]struct{}{
+		constant.ChannelTypeOllama:         {},
+		constant.ChannelTypeZhipu:          {},
+		constant.ChannelTypeAIProxyLibrary: {},
+		constant.ChannelTypeMiniMax:        {},
+		constant.ChannelTypeSiliconFlow:    {},
+		constant.ChannelTypeMistral:        {},
+		constant.ChannelTypeBaiduV2:        {},
+		constant.ChannelTypeSubmodel:       {},
+	}
+	responsesCreateSupported := make([]int, 0, len(openAICompatible)-len(responsesCreateExcluded))
+	for _, channelType := range openAICompatible {
+		if _, excluded := responsesCreateExcluded[channelType]; !excluded {
+			responsesCreateSupported = append(responsesCreateSupported, channelType)
+		}
+	}
+	support(responsesCreateSupported, OperationResponseCreate)
+	// Compact has a narrower dispatch path than plain responses.create: the
+	// handler only admits APITypeOpenAI/APITypeCodex or a ResponsesViaChat
+	// decision, and the probe only sets that flag for OpenAI, Moonshot,
+	// Zhipu_v4 and DeepSeek. Channels outside this set reach a 400
+	// unsupported endpoint on /v1/responses/compact.
+	responsesCompactSupported := []int{
+		constant.ChannelTypeOpenAI,
+		constant.ChannelTypeAzure,
+		constant.ChannelTypeOpenAIMax,
+		constant.ChannelTypeOhMyGPT,
+		constant.ChannelTypeCustom,
+		constant.ChannelTypeAILS,
+		constant.ChannelTypeAIProxy,
+		constant.ChannelTypeAPI2GPT,
+		constant.ChannelTypeAIGC2D,
+		constant.ChannelType360,
+		constant.ChannelTypeFastGPT,
+		constant.ChannelTypeLingYiWanWu,
+		constant.ChannelTypeCodex,
+		constant.ChannelTypeDeepSeek,
+		constant.ChannelTypeMoonshot,
+		constant.ChannelTypeZhipu_v4,
+	}
+	support(responsesCompactSupported, OperationResponseCompact)
 	support([]int{constant.ChannelTypeAnthropic}, OperationChatCreate)
 
 	claudeCompatible := []int{

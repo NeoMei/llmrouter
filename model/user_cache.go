@@ -71,6 +71,12 @@ func invalidateUserCache(userId int) error {
 	return common.RedisDelKey(getUserCacheKey(userId))
 }
 
+// InvalidateUserCache clears the cached user snapshot after a committed quota
+// mutation made outside the standard IncreaseUserQuota/DecreaseUserQuota paths.
+func InvalidateUserCache(userId int) error {
+	return invalidateUserCache(userId)
+}
+
 func populateUserCache(user User) error {
 	if !common.RedisEnabled {
 		return nil

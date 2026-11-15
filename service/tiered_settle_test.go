@@ -82,8 +82,10 @@ func (s *reserveSpy) Settle(actual int) error {
 	s.settled = append(s.settled, actual)
 	return nil
 }
-func (s *reserveSpy) Refund(*gin.Context) {}
-func (s *reserveSpy) NeedsRefund() bool   { return false }
+func (s *reserveSpy) Refund(*gin.Context)              {}
+func (s *reserveSpy) NeedsRefund() bool                { return false }
+func (s *reserveSpy) MarkReconciliationPending(string) {}
+func (s *reserveSpy) IsSettled() bool                  { return len(s.settled) > 0 }
 
 func newTieredGroupRefreshInfo(currentRatio, selectedRatio float64, reserved int) (*relaycommon.RelayInfo, *reserveSpy) {
 	spy := &reserveSpy{reserved: reserved}

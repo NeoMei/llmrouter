@@ -73,12 +73,20 @@ func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycom
 func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuota int) error {
 	if relayInfo.ManagedNativePricing() {
 		if relayInfo.Billing == nil {
-			return errors.New("managed native funding missing")
+			err := errors.New("managed native funding missing")
+			markBillingReconciliationPending(relayInfo, err)
+			return err
 		}
-		return relayInfo.Billing.Settle(actualQuota)
+		if err := relayInfo.Billing.Settle(actualQuota); err != nil {
+			markBillingReconciliationPending(relayInfo, err)
+			return err
+		}
+		return nil
 	}
 	if relayInfo != nil && relayInfo.PlatformMode {
-		return errors.New("platform calls cannot use local quota")
+		err := errors.New("platform calls cannot use local quota")
+		markBillingReconciliationPending(relayInfo, err)
+		return err
 	}
 	if relayInfo.Billing != nil {
 		preConsumed := relayInfo.Billing.GetPreConsumedQuota()
@@ -103,6 +111,7 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 		}
 
 		if err := relayInfo.Billing.Settle(actualQuota); err != nil {
+			markBillingReconciliationPending(relayInfo, err)
 			return err
 		}
 
@@ -120,7 +129,10 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 	// 回退：无 BillingSession 时使用旧路径
 	quotaDelta := actualQuota - relayInfo.FinalPreConsumedQuota
 	if quotaDelta != 0 {
-		return PostConsumeQuota(relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, true)
+		if err := PostConsumeQuota(relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, true); err != nil {
+			markBillingReconciliationPending(relayInfo, err)
+			return err
+		}
 	}
 	return nil
 }

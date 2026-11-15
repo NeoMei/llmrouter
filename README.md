@@ -226,7 +226,7 @@ docker run --name new-api -d --restart always \
 - 🔄 **OpenAI Compatible ⇄ Claude Messages**
 - 🔄 **OpenAI Compatible → Google Gemini**
 - 🔄 **Google Gemini → OpenAI Compatible** - Text only, function calling not supported yet
-- 🚧 **OpenAI Compatible ⇄ OpenAI Responses** - In development
+- ✅ **OpenAI Compatible → OpenAI Responses** - The gateway accepts OpenAI Responses requests on `/v1/responses` (and `/v1/responses/compact`) and relays them in the Responses wire format. For unified `uh_key_` API keys, Responses requests are stateless: stored continuations (`store=true`, `previous_response_id`, `conversation`, `cachedContent`, `container`), provider-owned file/vector-store references and background jobs are refused until separately scoped native history ownership exists. Automatic conversion between the OpenAI Chat Completions format and the Responses format is not implemented by the unified-key path.
 - 🔄 **Thinking-to-content functionality**
 
 **Reasoning Effort Support:**

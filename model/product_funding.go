@@ -895,7 +895,7 @@ func productFundingStoreForDB(ctx context.Context, db *gorm.DB, id int) (*Produc
 // Receipt creation is shared with native/OCR funding adapters and migrations.
 func RegisterProductFundingModels(db *gorm.DB) error {
 	return db.AutoMigrate(&NativeTokenQuotaProtocol{}, &NativeTokenQuotaState{}, &NativeTokenQuotaOperation{}, &NativeTokenQuotaSession{},
-		&NativeTokenFundingOperation{}, &ProductFundingAccount{}, &ProductRuntimeCall{}, &ProductLegacyFundingLease{}, &ProductFundingTopUp{})
+		&NativeTokenFundingOperation{}, &ProductFundingAccount{}, &ProductRuntimeCall{}, &ProductLegacyFundingLease{}, &ProductFundingTopUp{}, &WalletRefundReceipt{})
 }
 
 // Explicit table creation is kept separate from account activation. Starting the

@@ -146,6 +146,7 @@ func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 	}
 	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("failed to charge violation fee: %s", err.Error()))
+		markBillingReconciliationPending(relayInfo, err)
 		return false
 	}
 	if nativeSession != nil {

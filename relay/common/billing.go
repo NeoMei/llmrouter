@@ -21,4 +21,13 @@ type BillingSettler interface {
 
 	// Reserve 将预扣额度补到目标值；若目标值不高于当前预扣额度则不做任何事。
 	Reserve(targetQuota int) error
+
+	// MarkReconciliationPending 把预扣状态标记为「结果未确认，需要人工/自动对账」。
+	// 标记后既不按估算 usage 结算，也不允许 Refund 静默退还预扣费；资金保持预扣，
+	// 等待基于供应商真实用量与账本的对账结果处理。
+	MarkReconciliationPending(reason string)
+
+	// IsSettled 返回本次请求的预扣费是否已经成功结算。失败路径据此判断
+	// 供应商用量是否真的落到本地账本，避免把结算失败写成已扣费。
+	IsSettled() bool
 }

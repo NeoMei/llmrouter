@@ -423,6 +423,11 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	}
 	originUsage := usage
 	billingUsage := effectiveBillingUsage(usage)
+	if reason, unconfirmed := usageSettlementUnconfirmed(relayInfo, originUsage); unconfirmed &&
+		!hasValidatedSupplierUsage(relayInfo, originUsage, billingUsage) {
+		holdUnconfirmedUsage(ctx, relayInfo, reason)
+		return
+	}
 	if usage == nil {
 		extraContent = append(extraContent, "上游无计费信息")
 	}
@@ -482,6 +487,8 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	if err := SettleBilling(ctx, relayInfo, summary.Quota); err != nil {
 		logger.LogError(ctx, "error settling billing: "+err.Error())
+		markBillingReconciliationPending(relayInfo, err)
+		return
 	}
 
 	if relayInfo.ManagedNativePricing() {

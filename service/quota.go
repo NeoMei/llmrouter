@@ -220,6 +220,10 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	if relayInfo != nil && relayInfo.PlatformMode {
 		return
 	}
+	if usage == nil {
+		holdUnconfirmedUsage(ctx, relayInfo, "missing supplier usage")
+		return
+	}
 
 	var tieredResult *billingexpr.TieredResult
 	tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, billingexpr.TokenParams{
@@ -299,6 +303,8 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 
 	if err := SettleBilling(ctx, relayInfo, quota); err != nil {
 		logger.LogError(ctx, "error settling billing: "+err.Error())
+		markBillingReconciliationPending(relayInfo, err)
+		return
 	}
 
 	logModel := modelName
@@ -357,13 +363,17 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		recordPlatformRelayTelemetry(ctx, relayInfo)
 		return
 	}
-
 	if relayInfo.ManagedNativePricing() && relayInfo.NativeBilling != nil {
 		recordPlatformRelayTelemetry(ctx, relayInfo)
 		return
 	}
 	if relayInfo.ManagedNativePricing() && relayInfo.ManagedNativeSupplemental == nil {
 		logger.LogError(ctx, "managed native price snapshot missing")
+		return
+	}
+	if reason, unconfirmed := usageSettlementUnconfirmed(relayInfo, usage); unconfirmed &&
+		!hasValidatedSupplierUsage(relayInfo, usage, usage) {
+		holdUnconfirmedUsage(ctx, relayInfo, reason)
 		return
 	}
 
@@ -468,6 +478,8 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 
 	if err := SettleBilling(ctx, relayInfo, quota); err != nil {
 		logger.LogError(ctx, "error settling billing: "+err.Error())
+		markBillingReconciliationPending(relayInfo, err)
+		return
 	}
 
 	if relayInfo.ManagedNativePricing() {

@@ -105,6 +105,41 @@ Provide a published model and explicit positive `max_tokens` or `max_completion_
 
 The initial supported provider is standard OpenAI Chat (channel type 1), JSON or SSE, with text messages, text-only content arrays and function tools. Streaming requests force `stream_options.include_usage=true`. Multimodal/built-in tool surcharges, alternate protocols/resources, automatic Responses conversion, passthrough bodies, channel parameter/header overrides and injected system prompts are rejected until their billing semantics are explicitly implemented. Server-side channel model mapping and ordinary existing channel selection/retry remain available. Browser headers/body cannot choose the payer or routing principal/group.
 
+## 统一 Key 的操作边界
+
+本节描述的是**当前实现边界**，不是能力承诺。统一 `uh_key_` API Key 的 `/v1` 分发由 `router.SetManagedKeyDispatch` 完成：它通过显式的 method/path 分支把请求改写到对应的 `/platform` 处理器，只有能映射到已注册平台操作的路径才会继续。没有映射到的路径在 `target == ""` 时直接返回 HTTP 501，响应体为 `{"error":{"code":"unified_operation_unsupported","message":"this operation is not available for unified API keys"}}`（见 `router/managed_key.go`）。这里的「白名单」就是这些显式分支，不是可配置的通配集合；本节不把任何未验证能力写成已支持。
+
+### 白名单内允许的操作
+
+下表为 `router/managed_key.go` 中 POST `switch path` 显式列出的路径，以及同文件按前缀/别名规则映射的路径。GET `/v1/models`、`/v1/models/:model` 改写到 `/platform/v1/models` 用于发现；任务类 GET 读取（`/v1/videos/:id`、`/v1/images/edits/:id`、`/v1/ocr/:id`、`/api/v2/ocr/jobs/:id`、`/platform/v1/calls/:id`）在校验 `ManagedTask` 归属后改写，POST `/v1/videos/:id/cancel` 同理。
+
+| 类别 | 允许的 POST 路径（统一 Key） | 依据 |
+| --- | --- | --- |
+| Chat / Claude / Gemini | `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, `/v1/responses/compact`, `/v1beta/models/*` | `managed_key.go` POST `switch` 与 `HasPrefix(path, "/v1beta/models/")` 规则；`/v1/responses/compact` 对应 `managed_native.go` 的 `responses.compact` |
+| Embedding / Rerank | `/v1/embeddings`, `/v1/rerank`, `/v1/multimodal/embeddings`, `/api/v1/services/rerank/text-rerank/text-rerank`, `/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding` | `managed_key.go` POST `switch` |
+| Image / Audio / Video / OCR | `/v1/images/generations`, `/v1/images/edits`, `/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/videos`, `/v1/ocr`, `/api/v2/ocr/jobs`, `/v1/native/dashscope/images/generations`, `/v1/native/dashscope/ocr/recognitions`, `/v1/native/bailian/audio/speech`, `/v1/native/elevenlabs/audio/speech`, `/v1/native/gemini/images/models/*` | `managed_key.go` POST `switch`，以及 `HasPrefix(path, "/v1/native/gemini/images/models/")` 规则 |
+
+Responses 虽然已注册，仍受限：`router/managed_native.go` 在 `responses.create` 时强制把 `store` 置为 `false`，并拒绝 `previous_response_id`、`conversation`、`cachedContent`、`container` 及 provider-owned 文件/向量库引用；有状态的续接、后台任务与 Gemini 文件引用在独立作用域的历史所有者出现前不可用。这与上文「Stored Responses continuations … are refused until a separately scoped native history owner exists」一致。
+
+### 白名单外返回 501 的代表性操作
+
+以下路径不在 `managed_key.go` 的映射分支里，统一 `uh_key_` Key 访问时会命中 `target == ""` 的 501 分支；它们返回的是上面那个 `unified_operation_unsupported` 错误码，而不是进入原生鉴权、本地配额或 HTTP 转发回退。
+
+| 代表性路径 | 当前返回 | 被排除的原因（代码 / 文档依据） |
+| --- | --- | --- |
+| `/v1/completions`（旧版 Completions） | 501 `unified_operation_unsupported` | 不是已注册的平台操作；适配器只接受标准 OpenAI Chat（channel type 1）与已声明 wire 的操作，替代协议/自动格式转换的计费语义尚未实现。见 `docs/unihub-platform-adapter.md` 「alternate protocols/resources, automatic Responses conversion … are rejected until their billing semantics are explicitly implemented」。 |
+| `/v1/audio/translations`、`/v1/images/variations`（多模态变体） | 501 `unified_operation_unsupported` | 白名单只列了 `audio/transcriptions`/audio speech 与 `images/generations`/`images/edits`；多模态附加费与这些变体操作的计费语义未实现，文档明确拒绝「Multimodal/built-in tool surcharges」。 |
+| `/v1/moderations` | 501 `unified_operation_unsupported` | 无对应平台注册操作；属于未在白名单内的内建/辅助能力，没有可靠计费映射。见 `managed_key.go` 的显式 POST `switch`（无 default 兜底）。 |
+| `/v1/realtime`、`/v1/tools/search`、`/v1/tools/fetch`（替代协议 / 内置工具） | 501 `unified_operation_unsupported` | 属于「alternate protocols/resources」与「built-in tool surcharges」；文档明确拒绝 passthrough bodies、channel overrides、injected system prompts，且替代协议/内置工具计费语义尚未建立。 |
+
+### 明确仍属未验证 / 未实现
+
+- 有状态 Responses 续接（`store=true`、`previous_response_id`、`conversation`、`cachedContent`、`container`）、provider-owned 文件 / vector-store / container 引用、Gemini 文件引用、后台 Responses 任务：`managed_native.go` 明确拒绝，文档写明需独立作用域的历史所有者。
+- 多模态 / 内置工具附加费、替代协议与资源、自动 Responses 转换、passthrough bodies、channel 参数/头覆盖、注入 system prompt：文档写明「rejected until their billing semantics are explicitly implemented」。
+- 上表 501 路径及其它在 `managed_key.go` 中没有显式映射的路径：当前实现返回 501，不视为已支持、也不视为已验证计费。
+
+本节的表格与结论均以 `router/managed_key.go`、`router/managed_native.go` 和本文档现有措辞为准；`router/managed_key_whitelist_test.go` 以契约测试钉住「显式集合 + 代表性 501 错误码 + 代表性白名单路径不被该 501 分支拒绝」这三点。
+
 `GET /platform/v1/calls/{callID}` accepts a model credential and `X-UniHub-Task-ID`. It verifies the original model and exact actor/account/origin/task; a newly issued credential for that same scope may read the receipt. Response: `{call_id,status,charged?}`. It never returns prompts or credentials and never sends a provider request. `charged` is present only when supplied by the confirmed UniHub terminal response. Errors use ordinary OpenAI envelopes; duplicate logical calls return HTTP 409 and never replay upstream.
 
 ## Persistence and recovery

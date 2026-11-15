@@ -243,12 +243,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 
 	usage, newAPIError := adaptor.DoResponse(c, httpResp, info)
 	if newAPIError != nil {
-		// A provider may report a generated failure with the work it already
-		// performed. Preserve that charge once, and prevent a retry from
-		// duplicating it under a fresh reservation.
-		if consumeFailedResponsesUsage(c, info, usage) {
-			newAPIError = types.NewError(newAPIError, newAPIError.GetErrorCode(), types.ErrOptionWithSkipRetry())
-		}
+		newAPIError = finalizeFailedUsageError(newAPIError, consumeFailedUsage(c, info, usage))
 		// reset status code 重置状态码
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 		return newAPIError
@@ -282,39 +277,6 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		service.PostTextConsumeQuota(c, info, usageDto, nil)
 	}
 	return nil
-}
-
-func consumeFailedResponsesUsage(c *gin.Context, info *relaycommon.RelayInfo, usage any) bool {
-	usageDTO, ok := usage.(*dto.Usage)
-	if !ok || usageDTO == nil || info == nil {
-		return false
-	}
-	billable := usageDTO.PromptTokens != 0 || usageDTO.CompletionTokens != 0 || usageDTO.TotalTokens != 0
-	if info.ResponsesUsageInfo != nil {
-		for _, tool := range info.ResponsesUsageInfo.BuiltInTools {
-			if tool != nil && tool.CallCount > 0 {
-				billable = true
-				break
-			}
-		}
-	}
-	if !billable {
-		return false
-	}
-	// A failed upstream response may still have consumed part of the request,
-	// but its quota has not been fused through this settlement path yet. Record
-	// this request before settling so a second call in the same attempt cannot
-	// bill the same terminal usage again.
-	if info.FailedUsageConsumed || info.NativeBilling != nil || info.PlatformMode || info.ManagedNativePricing() {
-		return false
-	}
-	info.FailedUsageConsumed = true
-	if strings.HasPrefix(info.OriginModelName, "gpt-4o-audio") {
-		service.PostAudioConsumeQuota(c, info, usageDTO, "")
-	} else {
-		service.PostTextConsumeQuota(c, info, usageDTO, nil)
-	}
-	return true
 }
 
 func normalizeResponsesStore(request *dto.OpenAIResponsesRequest) {

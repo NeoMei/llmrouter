@@ -156,7 +156,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 
 		usage, newApiErr := chatCompletionsViaResponses(c, info, adaptor, openAIRequest)
 		if newApiErr != nil {
-			return newApiErr
+			return finalizeFailedUsageError(newApiErr, consumeFailedUsage(c, info, usage))
 		}
 
 		service.PostTextConsumeQuota(c, info, usage, nil)
@@ -227,9 +227,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 
 	usage, newAPIError := adaptor.DoResponse(c, httpResp, info)
 	if newAPIError != nil {
-		if consumeFailedResponsesUsage(c, info, usage) {
-			newAPIError = types.NewError(newAPIError, newAPIError.GetErrorCode(), types.ErrOptionWithSkipRetry())
-		}
+		newAPIError = finalizeFailedUsageError(newAPIError, consumeFailedUsage(c, info, usage))
 		// reset status code 重置状态码
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 		return newAPIError

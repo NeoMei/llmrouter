@@ -20,6 +20,7 @@ import (
 type managedNativeFunding struct {
 	info     *relaycommon.RelayInfo
 	reserved int
+	settled  bool
 }
 
 // ManagedNativeBillingError preserves reserve certainty and the bounded public
@@ -123,6 +124,12 @@ func (s *managedNativeFunding) Reserve(target int) error {
 func (s *managedNativeFunding) GetPreConsumedQuota() int { return s.reserved }
 func (s *managedNativeFunding) NeedsRefund() bool        { return false }
 func (s *managedNativeFunding) Refund(*gin.Context)      {}
+func (s *managedNativeFunding) MarkReconciliationPending(reason string) {
+	// Managed native funding is fenced by durable dispatch state. A failed
+	// settlement stays pending for the native recovery path.
+	common.SysError("managed native funding requires reconciliation: " + reason)
+}
+func (s *managedNativeFunding) IsSettled() bool { return s.settled }
 func (s *managedNativeFunding) Settle(actual int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -134,5 +141,9 @@ func (s *managedNativeFunding) Settle(actual int) error {
 		}
 		usage = &platformbilling.Usage{Metered: s.info.ManagedNativeEvidence}
 	}
-	return s.info.PlatformBilling.SettleNative(ctx, actual, usage)
+	if err := s.info.PlatformBilling.SettleNative(ctx, actual, usage); err != nil {
+		return err
+	}
+	s.settled = true
+	return nil
 }

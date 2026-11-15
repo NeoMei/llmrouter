@@ -835,7 +835,9 @@ func (s *relayRouteBillingSpy) Reserve(target int) error {
 	return nil
 }
 
-func (s *relayRouteBillingSpy) GetPreConsumedQuota() int { return s.reserved }
-func (s *relayRouteBillingSpy) Settle(int) error         { return nil }
-func (s *relayRouteBillingSpy) Refund(*gin.Context)      {}
-func (s *relayRouteBillingSpy) NeedsRefund() bool        { return false }
+func (s *relayRouteBillingSpy) GetPreConsumedQuota() int         { return s.reserved }
+func (s *relayRouteBillingSpy) Settle(int) error                 { return nil }
+func (s *relayRouteBillingSpy) Refund(*gin.Context)              {}
+func (s *relayRouteBillingSpy) NeedsRefund() bool                { return false }
+func (s *relayRouteBillingSpy) MarkReconciliationPending(string) {}
+func (s *relayRouteBillingSpy) IsSettled() bool                  { return false }

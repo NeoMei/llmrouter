@@ -86,13 +86,30 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 }
 
 func responsesUsage(source *dto.Usage) *dto.Usage {
-	usage := &dto.Usage{}
 	if source == nil {
-		return usage
+		return &dto.Usage{}
 	}
-	usage.PromptTokens = source.InputTokens
-	usage.CompletionTokens = source.OutputTokens
-	usage.TotalTokens = source.TotalTokens
+	// A generated failure can arrive on either wire. The Chat Completions wire
+	// reports prompt_tokens/completion_tokens while the Responses wire reports
+	// input_tokens/output_tokens. Keep every vendor-reported counter first,
+	// then normalise both spellings so the settlement path never drops the
+	// charge just because the provider used the other naming convention.
+	usage := *source
+	if usage.PromptTokens == 0 {
+		usage.PromptTokens = usage.InputTokens
+	}
+	if usage.CompletionTokens == 0 {
+		usage.CompletionTokens = usage.OutputTokens
+	}
+	if usage.TotalTokens == 0 {
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
+	if usage.InputTokens == 0 {
+		usage.InputTokens = usage.PromptTokens
+	}
+	if usage.OutputTokens == 0 {
+		usage.OutputTokens = usage.CompletionTokens
+	}
 	if source.InputTokensDetails != nil {
 		usage.PromptTokensDetails = *source.InputTokensDetails
 	}
@@ -100,7 +117,7 @@ func responsesUsage(source *dto.Usage) *dto.Usage {
 		usage.CompletionTokenDetails = *source.OutputTokensDetails
 		usage.OutputTokensDetails = source.OutputTokensDetails
 	}
-	return usage
+	return &usage
 }
 
 func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {

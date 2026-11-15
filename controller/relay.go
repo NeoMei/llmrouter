@@ -150,6 +150,14 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			common.SetContextKey(c, constant.ContextKeyRelayFailed, true)
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
 			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
+			// A non-streaming success body was already delivered before the
+			// settlement failed. Its reservation is held for reconciliation;
+			// appending a JSON error over a committed 200 would corrupt the
+			// response and misreport the status. Streaming responses still get
+			// a terminal SSE error event below.
+			if c.GetBool("billing_settlement_response_delivered") {
+				return
+			}
 			if c.Writer.Written() && c.GetString("binary_stream_content_type") != "" {
 				c.Abort()
 				return
@@ -374,6 +382,20 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if newAPIError == nil {
 			relayInfo.RouteDecisionTrace, _ = GetRouteDecisionTrace(GetRequestId(c))
 			relayInfo.LastError = nil
+			if relayInfo.BillingSettlementFailed {
+				if !relayInfo.IsStream && relayFormat != types.RelayFormatOpenAIRealtime {
+					// The client already has the generated output. The ledger
+					// stays pending reconciliation; do not rewrite the status
+					// of a delivered response.
+					c.Set("billing_settlement_response_delivered", true)
+					logger.LogError(c, "billing settlement requires reconciliation after response delivery")
+				}
+				newAPIError = types.NewErrorWithStatusCode(
+					errors.New("billing settlement requires reconciliation"),
+					types.ErrorCodeUpdateDataError, http.StatusServiceUnavailable,
+					types.ErrOptionWithSkipRetry(),
+				)
+			}
 			return
 		}
 
@@ -1048,10 +1070,26 @@ func RelayTask(c *gin.Context) {
 		return
 	}
 
+	// Task adaptors write their 200 JSON inside DoResponse, before RelayTask can
+	// settle the reservation or persist the pollable task. Gate that response
+	// until both have committed so a settlement/handoff failure is a real 503
+	// instead of a committed success for an untracked upstream job.
+	originalTaskWriter := c.Writer
+	taskResponse := newPendingResponseGate(originalTaskWriter)
+	c.Writer = taskResponse
+	defer func() { c.Writer = originalTaskWriter }()
+	// The task response is only delivered after settlement and durable task
+	// handoff. Any terminal failure leaves the reservation held for
+	// reconciliation when the upstream job may already have been accepted.
+	handoffFailed := false
+
 	var result *relay.TaskSubmitResult
 	var taskErr *dto.TaskError
 	defer func() {
-		if taskErr != nil && relayInfo.Billing != nil {
+		// A settlement failure keeps the pre-consume held for reconciliation.
+		// Refunding here would release money for a request whose upstream task
+		// was already accepted.
+		if taskErr != nil && !relayInfo.BillingSettlementFailed && !handoffFailed && relayInfo.Billing != nil {
 			relayInfo.Billing.Refund(c)
 		}
 	}()
@@ -1066,6 +1104,9 @@ func RelayTask(c *gin.Context) {
 
 	accountpool.State(c).MaxSends = common.RetryTimes + 1
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
+		// A failed attempt must not leave a partial success body buffered for
+		// the next retry.
+		taskResponse.reset()
 		var channel *model.Channel
 
 		if lockedCh, ok := relayInfo.LockedChannel.(*model.Channel); ok && lockedCh != nil {
@@ -1131,12 +1172,25 @@ func RelayTask(c *gin.Context) {
 	// ── 成功：结算 + 日志 + 插入任务 ──
 	if taskErr == nil {
 		if relayInfo.NativeBilling == nil && !relayInfo.PlatformMode {
-			if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
+			if settleErr := settleTaskBillingFn(c, relayInfo, result.Quota); settleErr != nil {
 				common.SysError("settle task billing error: " + settleErr.Error())
+				// Mark the hold explicitly so this invariant also holds with a
+				// settlement seam that does not run service.SettleBilling's
+				// internal side effects.
+				relayInfo.BillingSettlementFailed = true
+				if relayInfo.Billing != nil {
+					relayInfo.Billing.MarkReconciliationPending("settlement failed: " + settleErr.Error())
+				}
+				taskErr = &dto.TaskError{StatusCode: http.StatusServiceUnavailable, Message: "billing settlement requires reconciliation", Error: settleErr}
+			} else {
+				service.LogTaskConsumption(c, relayInfo)
 			}
-			service.LogTaskConsumption(c, relayInfo)
 		}
-
+	}
+	// A failed settlement leaves the reservation pending reconciliation. Do not
+	// persist a pollable task or a clean consumption log for it: the task worker
+	// would later refund or reprice an unconfirmed charge.
+	if taskErr == nil {
 		task := model.InitTask(result.Platform, relayInfo)
 		task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
 		if sent := accountpool.State(c).Sent; sent != nil {
@@ -1169,16 +1223,32 @@ func RelayTask(c *gin.Context) {
 			err := relayInfo.PlatformBilling.BindTaskTransaction(context.WithoutCancel(c.Request.Context()), result.UpstreamTaskID, func(tx *gorm.DB) error { return tx.Create(task).Error })
 			if err != nil {
 				common.SysError("platform task handoff pending: " + err.Error())
-				return
+				handoffFailed = true
+				relayInfo.BillingSettlementFailed = true
+				if relayInfo.Billing != nil {
+					relayInfo.Billing.MarkReconciliationPending("task handoff failed: " + err.Error())
+				}
+				taskErr = &dto.TaskError{StatusCode: http.StatusServiceUnavailable, Message: "task handoff requires reconciliation", Error: err}
 			}
 		} else if insertErr := task.Insert(); insertErr != nil {
 			common.SysError("insert task error: " + insertErr.Error())
+			handoffFailed = true
+			relayInfo.BillingSettlementFailed = true
+			if relayInfo.Billing != nil {
+				relayInfo.Billing.MarkReconciliationPending("task insert failed: " + insertErr.Error())
+			}
+			taskErr = &dto.TaskError{StatusCode: http.StatusServiceUnavailable, Message: "task handoff requires reconciliation", Error: insertErr}
 		}
 	}
 
+	// Error responses must go to the real writer; only a fully confirmed
+	// handoff commits the buffered success response.
+	c.Writer = originalTaskWriter
 	if taskErr != nil {
 		respondTaskError(c, taskErr)
+		return
 	}
+	taskResponse.commit()
 }
 
 // respondTaskError 统一输出 Task 错误响应（含 429 限流提示改写）

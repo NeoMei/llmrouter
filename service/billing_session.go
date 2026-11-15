@@ -19,6 +19,7 @@ import (
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // ---------------------------------------------------------------------------
@@ -41,6 +42,7 @@ type BillingSession struct {
 	trusted                 bool // 是否命中信任额度旁路
 	fundingSettled          bool // funding.Settle 已成功，资金来源已提交
 	settled                 bool // Settle 全部完成（资金 + 令牌）
+	settlementFailed        bool // 结算未能完整提交，预扣保持挂起
 	refunded                bool // Refund 已调用
 	mu                      sync.Mutex
 	violationMu             sync.Mutex
@@ -67,7 +69,7 @@ func (s *BillingSession) settleViolationFee(actualQuota int) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.settled || s.refunded || s.fundingSettled {
+	if s.settled || s.settlementFailed || s.refunded || s.fundingSettled || s.reconciliationPending {
 		return errors.New("violation fee reservation is no longer active")
 	}
 	return s.settleLocked(actualQuota)
@@ -107,9 +109,14 @@ func (s *BillingSession) settleLocked(actualQuota int) error {
 			tokenErr = model.IncreaseTokenQuota(s.relayInfo.TokenId, s.relayInfo.TokenKey, -delta)
 		}
 		if tokenErr != nil {
-			// 资金来源已提交，令牌调整失败只能记录日志；标记 settled 防止 Refund 误退资金
+			// Funding is committed but the token ledger is not. Keep the hold and
+			// the migration lease open; a refund here would credit the wallet for
+			// a call whose funding was already adjusted.
 			common.SysLog(fmt.Sprintf("error adjusting token quota after funding settled (userId=%d, tokenId=%d, delta=%d): %s",
 				s.relayInfo.UserId, s.relayInfo.TokenId, delta, tokenErr.Error()))
+			s.settlementFailed = true
+			s.reconciliationPending = true
+			return tokenErr
 		}
 	}
 	// 3) 更新 relayInfo 上的订阅 PostDelta（用于日志）
@@ -117,10 +124,7 @@ func (s *BillingSession) settleLocked(actualQuota int) error {
 		s.relayInfo.SubscriptionPostDelta += int64(delta)
 	}
 	s.settled = true
-	if tokenErr == nil {
-		return s.finishLegacyLease("settled")
-	}
-	return tokenErr
+	return s.finishLegacyLease("settled")
 }
 
 // Refund 退还所有预扣费，幂等安全，异步执行。
@@ -133,7 +137,7 @@ func (s *BillingSession) Refund(c *gin.Context) {
 		return
 	}
 	s.mu.Lock()
-	if s.settled || s.refunded || s.fundingSettled || s.reconciliationPending {
+	if s.settled || s.settlementFailed || s.refunded || s.fundingSettled || s.reconciliationPending {
 		s.mu.Unlock()
 		return
 	}
@@ -147,7 +151,25 @@ func (s *BillingSession) Refund(c *gin.Context) {
 		}
 		return
 	}
+	// Capture every refund leg before releasing the lock. Receipts make the
+	// subsequent asynchronous writes idempotent even if the process stops after
+	// a quota mutation but before the lease is closed.
+	ctx := context.Background()
+	if c != nil && c.Request != nil {
+		ctx = context.WithoutCancel(c.Request.Context())
+	}
+	requestID := s.refundRequestID()
+	refundCtx := legacyRefundContext{
+		ctx: ctx, requestID: requestID, leaseID: s.legacyLeaseID,
+		userID: s.relayInfo.UserId, tokenID: s.relayInfo.TokenId,
+		isPlayground: s.relayInfo.IsPlayground, tokenConsumed: s.tokenConsumed,
+		extraReserved: s.extraReserved, subscriptionID: s.relayInfo.SubscriptionId,
+	}
+	receipts, receiptErr := s.beginRefundReceipts(&refundCtx)
 	s.refunded = true
+	if receiptErr != nil {
+		s.reconciliationPending = true
+	}
 	s.mu.Unlock()
 
 	logger.LogInfo(c, fmt.Sprintf("用户 %d 请求失败, 返还预扣费（token_quota=%s, funding=%s）",
@@ -155,43 +177,193 @@ func (s *BillingSession) Refund(c *gin.Context) {
 		logger.FormatQuota(s.tokenConsumed),
 		s.funding.Source(),
 	))
+	if receiptErr != nil {
+		common.SysError("legacy funding refund receipt pending: " + receiptErr.Error())
+		return
+	}
 
-	// 复制需要的值到闭包中
-	tokenId := s.relayInfo.TokenId
-	tokenKey := s.relayInfo.TokenKey
-	isPlayground := s.relayInfo.IsPlayground
-	tokenConsumed := s.tokenConsumed
-	extraReserved := s.extraReserved
-	subscriptionId := s.relayInfo.SubscriptionId
-	funding := s.funding
-	leaseID := s.legacyLeaseID
+	gopool.Go(func() { s.applyRefundReceipts(refundCtx, receipts) })
+}
 
-	gopool.Go(func() {
-		// 1) 退还资金来源
-		if err := funding.Refund(); err != nil {
-			common.SysLog("error refunding billing source: " + err.Error())
-			return
+func (s *BillingSession) refundRequestID() string {
+	id := s.relayInfo.RequestId
+	if id != "" {
+		return id
+	}
+	// The lease is created before the refund and survives a process restart.
+	// Deriving its receipt identity from that durable lease keeps a retried
+	// refund idempotent even when the in-memory RequestId is still empty.
+	if s.legacyLeaseID != "" {
+		id = s.legacyLeaseID
+	} else {
+		id = fmt.Sprintf("refund:%d:%d:%s", s.relayInfo.UserId, s.relayInfo.TokenId, s.funding.Source())
+	}
+	s.relayInfo.RequestId = id
+	if sub, ok := s.funding.(*SubscriptionFunding); ok && sub.requestId == "" {
+		sub.requestId = id
+	}
+	return id
+}
+
+type legacyRefundContext struct {
+	ctx            context.Context
+	requestID      string
+	leaseID        string
+	userID         int
+	tokenID        int
+	isPlayground   bool
+	tokenConsumed  int
+	extraReserved  int
+	subscriptionID int
+}
+
+// beginRefundReceipts records each known refund leg synchronously. A fixture
+// subscription funding is left to its own Refund method: it owns no durable
+// SubscriptionPreConsumeRecord and would otherwise manufacture a receipt that
+// cannot be applied.
+func (s *BillingSession) beginRefundReceipts(r *legacyRefundContext) ([]string, error) {
+	var legs []struct {
+		leg    string
+		amount int
+		refID  int
+	}
+	switch funding := s.funding.(type) {
+	case *WalletFunding:
+		if funding.consumed > 0 {
+			legs = append(legs, struct {
+				leg    string
+				amount int
+				refID  int
+			}{"wallet", funding.consumed, 0})
 		}
-		extraRefundFailed := false
-		if extraReserved > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
-			if err := model.PostConsumeUserSubscriptionDelta(subscriptionId, -int64(extraReserved)); err != nil {
-				common.SysLog("error refunding subscription extra reserved quota: " + err.Error())
-				extraRefundFailed = true
+	case *SubscriptionFunding:
+		if funding.preConsumed > 0 {
+			legs = append(legs, struct {
+				leg    string
+				amount int
+				refID  int
+			}{"subscription", int(funding.preConsumed), 0})
+		}
+	default:
+		if s.funding.Source() == BillingSourceSubscription {
+			legs = append(legs, struct {
+				leg    string
+				amount int
+				refID  int
+			}{"subscription_fixture", 0, 0})
+		}
+	}
+	if r.extraReserved > 0 && s.funding.Source() == BillingSourceSubscription && r.subscriptionID > 0 {
+		if _, ok := s.funding.(*SubscriptionFunding); ok {
+			legs = append(legs, struct {
+				leg    string
+				amount int
+				refID  int
+			}{"subscription_extra", r.extraReserved, r.subscriptionID})
+		} else {
+			legs = append(legs, struct {
+				leg    string
+				amount int
+				refID  int
+			}{"subscription_extra_fixture", r.extraReserved, r.subscriptionID})
+		}
+	}
+	if r.tokenConsumed > 0 && !r.isPlayground {
+		legs = append(legs, struct {
+			leg    string
+			amount int
+			refID  int
+		}{"token", r.tokenConsumed, 0})
+	}
+	var ids []string
+	var firstErr error
+	for _, leg := range legs {
+		if leg.leg == "subscription_fixture" || leg.leg == "subscription_extra_fixture" {
+			continue
+		}
+		id, err := model.BeginWalletRefund(r.ctx, r.requestID, r.leaseID, r.userID, r.tokenID, leg.refID, leg.amount, leg.leg)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids, firstErr
+}
+
+func (s *BillingSession) applyRefundReceipts(r legacyRefundContext, ids []string) {
+	allApplied := true
+	for _, id := range ids {
+		var apply func(*gorm.DB, model.WalletRefundReceipt) error
+		var receipt model.WalletRefundReceipt
+		if err := model.DB.WithContext(r.ctx).First(&receipt, "id = ?", id).Error; err != nil {
+			common.SysError("legacy funding refund receipt pending: " + err.Error())
+			allApplied = false
+			continue
+		}
+		switch receipt.Leg {
+		case "subscription":
+			apply = func(tx *gorm.DB, rec model.WalletRefundReceipt) error {
+				return model.RefundSubscriptionPreConsumeWithTx(tx, rec.RequestID)
+			}
+		case "subscription_extra":
+			apply = func(tx *gorm.DB, rec model.WalletRefundReceipt) error {
+				return model.PostConsumeUserSubscriptionDeltaTx(tx, rec.RefID, -int64(rec.Amount))
+			}
+		default:
+			apply = func(tx *gorm.DB, rec model.WalletRefundReceipt) error {
+				return model.ApplyWalletRefundQuotaTx(tx, rec)
 			}
 		}
-		// 2) 退还令牌额度
-		if tokenConsumed > 0 && !isPlayground {
-			if err := model.IncreaseTokenQuota(tokenId, tokenKey, tokenConsumed); err != nil {
-				common.SysLog("error refunding token quota: " + err.Error())
-				return
+		if err := model.ApplyWalletRefund(r.ctx, id, apply); err != nil {
+			common.SysError("legacy funding refund receipt pending: " + err.Error())
+			allApplied = false
+			continue
+		}
+		// The receipt transaction writes quota columns directly. Clear the
+		// cached snapshot on the same immediate path used by recovery.
+		if err := model.InvalidateUserCache(receipt.UserID); err != nil {
+			common.SysLog(fmt.Sprintf("failed to invalidate user %d quota cache after refund: %s", receipt.UserID, err.Error()))
+		}
+	}
+	// Non-durable fixture legs keep their original refund behaviour. Their
+	// invoiceRefund is a no-op for the fixtures that own no real subscription.
+	if _, ok := s.funding.(*WalletFunding); !ok {
+		if _, real := s.funding.(*SubscriptionFunding); !real {
+			if err := s.funding.Refund(); err != nil {
+				common.SysLog("error refunding billing source: " + err.Error())
+				allApplied = false
 			}
 		}
-		if leaseID != "" && !extraRefundFailed {
-			if err := model.FinishProductLegacyFundingLease(context.Background(), leaseID, "refunded"); err != nil {
-				common.SysError("legacy funding refund receipt pending")
-			}
-		}
-	})
+	}
+	if r.leaseID == "" {
+		return
+	}
+	if !allApplied {
+		return
+	}
+	if err := s.leaseRefundComplete(r.ctx, r.requestID, r.leaseID); err != nil {
+		return
+	}
+	if err := model.FinishProductLegacyFundingLease(context.Background(), r.leaseID, "refunded"); err != nil {
+		common.SysError("legacy funding refund receipt pending")
+	}
+}
+
+func (s *BillingSession) leaseRefundComplete(ctx context.Context, requestID, leaseID string) error {
+	var pending int64
+	if err := model.DB.WithContext(ctx).Model(&model.WalletRefundReceipt{}).
+		Where("lease_id = ? AND state != ?", leaseID, "applied").Count(&pending).Error; err != nil {
+		return err
+	}
+	if pending != 0 {
+		return model.ErrProductFundingPending
+	}
+	return nil
 }
 
 // NeedsRefund 返回是否存在需要退还的预扣状态。
@@ -202,7 +374,7 @@ func (s *BillingSession) NeedsRefund() bool {
 }
 
 func (s *BillingSession) needsRefundLocked() bool {
-	if s.settled || s.refunded || s.fundingSettled {
+	if s.settled || s.settlementFailed || s.refunded || s.fundingSettled || s.reconciliationPending {
 		// fundingSettled 时资金来源已提交结算，不能再退预扣费
 		return false
 	}
@@ -219,6 +391,28 @@ func (s *BillingSession) needsRefundLocked() bool {
 // GetPreConsumedQuota 返回实际预扣的额度。
 func (s *BillingSession) GetPreConsumedQuota() int {
 	return s.preConsumedQuota
+}
+
+// MarkReconciliationPending keeps the reservation held when the request outcome
+// or a settlement step is uncertain. It refuses refund, further settlement and
+// further reserve so money cannot be silently returned or double-charged.
+func (s *BillingSession) MarkReconciliationPending(reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.settled || s.refunded {
+		return
+	}
+	s.reconciliationPending = true
+	if reason != "" {
+		common.SysLog(fmt.Sprintf("billing reservation requires reconciliation (userId=%d, tokenId=%d, requestId=%s): %s",
+			s.relayInfo.UserId, s.relayInfo.TokenId, s.relayInfo.RequestId, reason))
+	}
+}
+
+func (s *BillingSession) IsSettled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.settled && !s.settlementFailed
 }
 
 func (s *BillingSession) Reserve(targetQuota int) error {
@@ -817,7 +1011,7 @@ func (s *BillingSession) reserveNativeLocked(targetQuota int) error {
 func (s *BillingSession) refundNative(c *gin.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.settled || s.refunded || s.fundingSettled || s.reconciliationPending {
+	if s.settled || s.settlementFailed || s.refunded || s.fundingSettled || s.reconciliationPending {
 		return
 	}
 	if !s.nativeFundingRefunded {

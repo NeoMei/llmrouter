@@ -37,10 +37,12 @@ func (s *relayReserveFailureSpy) Reserve(target int) error {
 	return s.err
 }
 
-func (s *relayReserveFailureSpy) GetPreConsumedQuota() int { return s.reserved }
-func (s *relayReserveFailureSpy) Settle(int) error         { return nil }
-func (s *relayReserveFailureSpy) Refund(*gin.Context)      {}
-func (s *relayReserveFailureSpy) NeedsRefund() bool        { return false }
+func (s *relayReserveFailureSpy) GetPreConsumedQuota() int         { return s.reserved }
+func (s *relayReserveFailureSpy) Settle(int) error                 { return nil }
+func (s *relayReserveFailureSpy) Refund(*gin.Context)              {}
+func (s *relayReserveFailureSpy) NeedsRefund() bool                { return false }
+func (s *relayReserveFailureSpy) MarkReconciliationPending(string) {}
+func (s *relayReserveFailureSpy) IsSettled() bool                  { return false }
 
 func setupTieredRelayBillingDB(t *testing.T) *gorm.DB {
 	t.Helper()

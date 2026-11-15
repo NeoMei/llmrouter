@@ -135,9 +135,10 @@ func TestPaddleOCRManualProbeReturnsSuccessAndHealth(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Params = gin.Params{{Key: "id", Value: fmt.Sprint(channel.Id)}}
-	ctx.Request = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/channel/test/%d", channel.Id), nil)
+	ctx.Request = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/channel/test/%d/deep", channel.Id), strings.NewReader(`{"confirm":true}`))
+	ctx.Request.Header.Set(channelDeepTestHeader, "confirmed")
 	ctx.Set("id", user.Id)
-	TestChannel(ctx)
+	TestChannelDeep(ctx)
 
 	var response struct {
 		Success bool    `json:"success"`

@@ -953,16 +953,20 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 }
 
 func TestChannel(c *gin.Context) {
+	if strings.TrimSpace(c.Query("deep")) != "" {
+		channelTestError(c, "paid generation tests require the confirmed POST /deep endpoint", "unsupported", nil)
+		return
+	}
 	channelId, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		common.ApiError(c, err)
+		channelTestError(c, err.Error(), "unsupported", nil)
 		return
 	}
 	channel, err := model.CacheGetChannel(channelId)
 	if err != nil {
 		channel, err = model.GetChannelById(channelId, true)
 		if err != nil {
-			common.ApiError(c, err)
+			channelTestError(c, err.Error(), "unsupported", nil)
 			return
 		}
 	}
@@ -971,12 +975,107 @@ func TestChannel(c *gin.Context) {
 	//		go func() { _ = channel.SaveChannelInfo() }()
 	//	}
 	//}()
+	requestCtx := context.Background()
+	if c.Request != nil {
+		requestCtx = c.Request.Context()
+	}
+	tik := time.Now()
+	result := probeChannelReachability(requestCtx, channel)
+	milliseconds := time.Since(tik).Milliseconds()
+	consumedTime := float64(milliseconds) / 1000.0
+	switch {
+	case result.skipped:
+		c.JSON(http.StatusOK, gin.H{
+			"success":    false,
+			"message":    reachabilityErrorMessage(result.err),
+			"time":       consumedTime,
+			"probe_mode": "unsupported",
+		})
+		return
+	case result.err != nil:
+		c.JSON(http.StatusOK, gin.H{
+			"success":    false,
+			"message":    reachabilityErrorMessage(result.err),
+			"time":       consumedTime,
+			"error_code": types.ErrorCodeUpstream,
+			"probe_mode": "reachability",
+		})
+		return
+	}
+	if result.success {
+		channel.UpdateResponseTime(milliseconds)
+	}
+	probeMode := "inconclusive"
+	if result.success {
+		probeMode = "reachability"
+	}
+	response := gin.H{
+		"success":    true,
+		"time":       consumedTime,
+		"probe_mode": probeMode,
+	}
+	if !result.success {
+		response["success"] = false
+		response["message"] = "channel reachability is inconclusive"
+	}
+	c.JSON(http.StatusOK, response)
+}
+
+func reachabilityErrorMessage(err error) string {
+	if err == nil {
+		return "channel reachability check was skipped"
+	}
+	return err.Error()
+}
+
+// channelTestError keeps the legacy HTTP 200 business-error envelope while
+// returning the mode contract on every non-success endpoint response.
+func channelTestError(c *gin.Context, message, probeMode string, errorCode any) {
+	response := gin.H{
+		"success":    false,
+		"message":    message,
+		"probe_mode": probeMode,
+	}
+	if errorCode != nil {
+		response["error_code"] = errorCode
+	}
+	c.JSON(http.StatusOK, response)
+}
+
+// TestChannelDeep is the sole paid model-generation test. It requires an
+// explicit POST confirmation via both a dedicated header and a JSON body;
+// unattended GETs and prefetches cannot reach it.
+func TestChannelDeep(c *gin.Context) {
+	if !strings.EqualFold(strings.TrimSpace(c.GetHeader(channelDeepTestHeader)), "confirmed") {
+		channelTestError(c, "paid generation test confirmation header is required", "generation", nil)
+		return
+	}
+	var confirmation struct {
+		Confirm *bool `json:"confirm"`
+	}
+	if err := common.DecodeJson(c.Request.Body, &confirmation); err != nil || confirmation.Confirm == nil || !*confirmation.Confirm {
+		channelTestError(c, "paid generation test requires confirm: true in the request body", "generation", nil)
+		return
+	}
+	channelId, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		channelTestError(c, err.Error(), "generation", nil)
+		return
+	}
+	channel, err := model.CacheGetChannel(channelId)
+	if err != nil {
+		channel, err = model.GetChannelById(channelId, true)
+		if err != nil {
+			channelTestError(c, err.Error(), "generation", nil)
+			return
+		}
+	}
 	testModel := c.Query("model")
 	endpointType := c.Query("endpoint_type")
 	isStream, _ := strconv.ParseBool(c.Query("stream"))
 	testUserID, err := resolveChannelTestUserID(c)
 	if err != nil {
-		common.ApiError(c, err)
+		channelTestError(c, err.Error(), "generation", nil)
 		return
 	}
 	tik := time.Now()
@@ -987,9 +1086,10 @@ func TestChannel(c *gin.Context) {
 	result := testChannel(requestCtx, channel, testUserID, testModel, endpointType, isStream)
 	if result.localErr != nil {
 		resp := gin.H{
-			"success": false,
-			"message": result.localErr.Error(),
-			"time":    0.0,
+			"success":    false,
+			"message":    result.localErr.Error(),
+			"time":       0.0,
+			"probe_mode": "generation",
 		}
 		if result.newAPIError != nil {
 			resp["error_code"] = result.newAPIError.GetErrorCode()
@@ -999,7 +1099,7 @@ func TestChannel(c *gin.Context) {
 	}
 	tok := time.Now()
 	milliseconds := tok.Sub(tik).Milliseconds()
-	go channel.UpdateResponseTime(milliseconds)
+	channel.UpdateResponseTime(milliseconds)
 	consumedTime := float64(milliseconds) / 1000.0
 	if result.newAPIError != nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -1007,24 +1107,27 @@ func TestChannel(c *gin.Context) {
 			"message":    result.newAPIError.Error(),
 			"time":       consumedTime,
 			"error_code": result.newAPIError.GetErrorCode(),
+			"probe_mode": "generation",
 		})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"time":    consumedTime,
+		"success":    true,
+		"message":    "",
+		"time":       consumedTime,
+		"probe_mode": "generation",
 	})
 }
 
 // channelTestSummary records the outcome of one channel test cycle so the
 // system task can persist a per-run result for history.
 type channelTestSummary struct {
-	Tested    int `json:"tested"`
-	Succeeded int `json:"succeeded"`
-	Failed    int `json:"failed"`
-	Disabled  int `json:"disabled"`
-	Enabled   int `json:"enabled"`
+	Tested       int `json:"tested"`
+	Succeeded    int `json:"succeeded"`
+	Failed       int `json:"failed"`
+	Inconclusive int `json:"inconclusive"`
+	Disabled     int `json:"disabled"`
+	Enabled      int `json:"enabled"`
 }
 
 // performChannelTests runs the channel test loop synchronously, honoring ctx
@@ -1113,19 +1216,13 @@ func performChannelTests(ctx context.Context, channels []*model.Channel, testUse
 	return summary
 }
 
-// runChannelTestTask runs one synchronous channel test cycle for the system task
-// runner (both the scheduled job and the manual "test all channels" trigger go
-// through here). It honors ctx cancellation so a runner that loses its lease
-// stops promptly. mode selects the channel set: an empty mode falls back to the
-// configured monitor ChannelTestMode (scheduled behavior), while a manual
-// trigger passes ChannelTestModeScheduledAll to test every channel. When notify
-// is set the root user is notified on completion. Cross-instance execution is
-// guarded by the system task per-type lock, so no process-local guard is needed.
-func runChannelTestTask(ctx context.Context, mode string, notify bool, report func(processed, total int)) (channelTestSummary, error) {
-	testUserID, err := resolveChannelTestUserID(nil)
-	if err != nil {
-		return channelTestSummary{}, err
-	}
+// runChannelTestTask runs one synchronous read-only reachability cycle for the
+// system task runner (both the scheduled job and the manual "test all channels"
+// trigger go through here). The queued payload cannot request generation: the
+// only way to reach testChannel is the confirmed deep POST endpoint. mode
+// selects the channel set; notify is retained for payload compatibility and
+// intentionally has no side effects in a read-only reachability check.
+func runChannelTestTask(ctx context.Context, mode string, _ bool, report func(processed, total int)) (channelTestSummary, error) {
 	channels, err := model.GetAllChannels(0, 0, true, false)
 	if err != nil {
 		return channelTestSummary{}, err
@@ -1134,11 +1231,7 @@ func runChannelTestTask(ctx context.Context, mode string, notify bool, report fu
 		mode = operation_setting.GetMonitorSetting().ChannelTestMode
 	}
 	selected := selectChannelsForAutomaticTest(channels, mode)
-	allowDisable := mode != operation_setting.ChannelTestModePassiveRecovery
-	summary := performChannelTests(ctx, selected, testUserID, allowDisable, report)
-	if notify && (ctx == nil || ctx.Err() == nil) {
-		service.NotifyRootUser(dto.NotifyTypeChannelTest, "通道测试完成", "所有通道测试已完成")
-	}
+	summary := performChannelReachabilityChecks(ctx, selected, report)
 	return summary, nil
 }
 

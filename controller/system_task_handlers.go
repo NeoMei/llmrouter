@@ -87,11 +87,11 @@ func (channelTestHandler) Interval() time.Duration {
 
 func (channelTestHandler) NewPayload() any { return nil }
 
-// channelTestTaskPayload controls one channel_test run. A nil/empty payload is a
-// scheduled run, which uses the configured monitor ChannelTestMode and does not
-// notify. A manual "test all channels" trigger sets Mode=scheduled_all and
-// Notify=true to reproduce the legacy manual behavior (test every channel and
-// notify root on completion).
+// channelTestTaskPayload controls one read-only channel_test run. A nil/empty
+// payload is a scheduled run, which uses the configured monitor
+// ChannelTestMode. A manual "test all channels" trigger sets
+// Mode=scheduled_all. Notify is retained only for compatibility with existing
+// queued payloads and has no side effects; runChannelTestTask ignores it.
 type channelTestTaskPayload struct {
 	Mode   string `json:"mode,omitempty"`
 	Notify bool   `json:"notify,omitempty"`

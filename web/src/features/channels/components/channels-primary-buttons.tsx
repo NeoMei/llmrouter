@@ -212,7 +212,7 @@ export function ChannelsPrimaryButtons() {
                 handleTestAllChannels(queryClient)
               }}
             >
-              {t('Test All Channels')}
+              {t('Check all channel connectivity')}
               <DropdownMenuShortcut>
                 <TestTube className='h-4 w-4' />
               </DropdownMenuShortcut>

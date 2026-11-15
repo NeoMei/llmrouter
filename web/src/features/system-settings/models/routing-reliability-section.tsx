@@ -367,7 +367,7 @@ export function RoutingReliabilitySection({
                       <FormLabel>{t('Scheduled channel tests')}</FormLabel>
                       <FormDescription>
                         {t(
-                          'Automatically probe all channels in the background'
+                          'Scheduled checks use read-only requests, never generate model content, never verify generation capability, and do not enable or disable channels.'
                         )}
                       </FormDescription>
                     </SettingsSwitchContent>
@@ -391,7 +391,7 @@ export function RoutingReliabilitySection({
                       items={[
                         {
                           value: 'scheduled_all',
-                          label: t('Scheduled full test'),
+                          label: t('Scheduled connectivity checks'),
                         },
                         {
                           value: 'passive_recovery',
@@ -409,7 +409,7 @@ export function RoutingReliabilitySection({
                       <SelectContent alignItemWithTrigger={false}>
                         <SelectGroup>
                           <SelectItem value='scheduled_all'>
-                            {t('Scheduled full test')}
+                            {t('Scheduled connectivity checks')}
                           </SelectItem>
                           <SelectItem value='passive_recovery'>
                             {t('Passive recovery only')}
@@ -419,7 +419,7 @@ export function RoutingReliabilitySection({
                     </Select>
                     <FormDescription>
                       {t(
-                        'Scheduled full test probes non-manually-disabled channels; passive recovery only checks auto-disabled channels after real request failures.'
+                        'Scheduled checks only verify interface connectivity for non-manually-disabled channels; passive recovery only checks auto-disabled channels after real request failures. Neither generates model content, validates generation capability, or enables or disables channels.'
                       )}
                     </FormDescription>
                     <FormMessage />
@@ -446,7 +446,9 @@ export function RoutingReliabilitySection({
                         ? t(
                             'How frequently the system checks auto-disabled channels for recovery'
                           )
-                        : t('How frequently the system tests all channels')}
+                        : t(
+                            'How frequently the system checks all channel interfaces with read-only requests'
+                          )}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>

@@ -185,6 +185,7 @@ export interface ChannelTestResponse {
   message?: string
   error_code?: string
   time?: number
+  probe_mode?: 'reachability' | 'inconclusive' | 'unsupported' | 'generation'
   data?: {
     response_time?: number
     error?: string

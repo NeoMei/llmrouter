@@ -25,7 +25,8 @@ import { formatCurrencyFromUSD } from '@/lib/currency'
 import {
   copyChannel,
   deleteChannel,
-  testChannel,
+  testChannelConnectivity,
+  testChannelDeep,
   updateChannel,
   updateChannelStatus,
   batchUpdateChannelStatus,
@@ -266,44 +267,57 @@ export async function handleUpdateTagField(
 }
 
 /**
- * Test channel connectivity
+ * Check channel connectivity or run an explicitly confirmed capability test.
+ * Only `mode: 'generation'` can submit a paid generation request upstream.
  */
 export async function handleTestChannel(
   id: number,
-  options?: {
-    channelName?: string
-    testModel?: string
-    endpointType?: string
-    stream?: boolean
-    silent?: boolean
-  },
+  options?:
+    | {
+        mode?: 'connectivity'
+        channelName?: string
+        silent?: boolean
+      }
+    | {
+        mode: 'generation'
+        channelName?: string
+        testModel?: string
+        endpointType?: string
+        stream?: boolean
+        silent?: boolean
+      },
   onTestComplete?: (
     success: boolean,
     responseTime?: number,
     error?: string,
-    errorCode?: string
+    errorCode?: string,
+    probeMode?: ChannelTestResponse['probe_mode']
   ) => void
 ): Promise<void> {
-  const payload =
-    options && (options.testModel || options.endpointType || options.stream)
-      ? {
-          ...(options.testModel ? { model: options.testModel } : {}),
-          ...(options.endpointType
-            ? { endpoint_type: options.endpointType }
-            : {}),
-          ...(options.stream ? { stream: true } : {}),
-        }
-      : undefined
-
   try {
-    const response = await testChannel(id, payload)
+    const response =
+      options?.mode === 'generation'
+        ? await testChannelDeep(id, {
+            ...(options.testModel ? { model: options.testModel } : {}),
+            ...(options.endpointType
+              ? { endpoint_type: options.endpointType }
+              : {}),
+            ...(options.stream ? { stream: true } : {}),
+          })
+        : await testChannelConnectivity(id)
     const responseTime = getChannelTestResponseTime(response)
     const duration = formatChannelTestDuration(responseTime)
     const target = getChannelTestLabel(options)
+    const probeMode = response.probe_mode ?? 'inconclusive'
     if (response.success) {
       if (!options?.silent) {
         toast.success(
-          i18next.t('{{target}} test succeeded', { target }),
+          i18next.t(
+            probeMode === 'generation'
+              ? '{{target}} generation test succeeded'
+              : '{{target}} connectivity check succeeded',
+            { target }
+          ),
           duration
             ? {
                 description: i18next.t('Response time: {{duration}}', {
@@ -313,17 +327,31 @@ export async function handleTestChannel(
             : undefined
         )
       }
-      onTestComplete?.(true, responseTime)
+      onTestComplete?.(true, responseTime, undefined, undefined, probeMode)
     } else {
       const errorMsg = response.message || i18next.t(ERROR_MESSAGES.TEST_FAILED)
       if (!options?.silent) {
-        toast.error(i18next.t('{{target}} test failed', { target }), {
-          description: response.error_code
-            ? `${errorMsg} (${response.error_code})`
-            : errorMsg,
-        })
+        toast.error(
+          i18next.t(
+            probeMode === 'generation'
+              ? '{{target}} generation test failed'
+              : '{{target}} connectivity check failed',
+            { target }
+          ),
+          {
+            description: response.error_code
+              ? `${errorMsg} (${response.error_code})`
+              : errorMsg,
+          }
+        )
       }
-      onTestComplete?.(false, responseTime, errorMsg, response.error_code)
+      onTestComplete?.(
+        false,
+        responseTime,
+        errorMsg,
+        response.error_code,
+        probeMode
+      )
     }
   } catch (_error: unknown) {
     const err = _error as { response?: { data?: { message?: string } } }
@@ -331,11 +359,11 @@ export async function handleTestChannel(
       err?.response?.data?.message || i18next.t(ERROR_MESSAGES.TEST_FAILED)
     const target = getChannelTestLabel(options)
     if (!options?.silent) {
-      toast.error(i18next.t('{{target}} test failed', { target }), {
+      toast.error(i18next.t('{{target}} check failed', { target }), {
         description: errorMsg,
       })
     }
-    onTestComplete?.(false, undefined, errorMsg)
+    onTestComplete?.(false, undefined, errorMsg, undefined, undefined)
   }
 }
 
@@ -660,7 +688,7 @@ export async function handleFixAbilities(
 }
 
 /**
- * Test all enabled channels
+ * Start read-only connectivity checks for all enabled channels
  */
 export async function handleTestAllChannels(
   queryClient?: QueryClient,
@@ -671,7 +699,7 @@ export async function handleTestAllChannels(
     if (response.success) {
       toast.success(
         i18next.t(
-          'Testing all enabled channels started. Please refresh to see results.'
+          'Connectivity checks for all channels started. Please refresh to see results.'
         )
       )
       queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })

@@ -5638,6 +5638,15 @@
     "Generation test failed": "生成測試失敗",
     "Connectivity check failed": "連線檢查失敗",
     "{{target}} generation test failed": "{{target}} 生成測試失敗",
-    "{{target}} connectivity check failed": "{{target}} 連線檢查失敗"
+    "{{target}} connectivity check failed": "{{target}} 連線檢查失敗",
+    "Local account sign up": "本地帳戶註冊",
+    "Password does not meet the security requirements": "密碼不符合安全要求",
+    "Registration requires an additional verification step": "註冊需要額外的驗證步驟",
+    "This username or email is already in use": "該使用者名稱或電子郵件已被使用",
+    "Registration conflict. Please refresh and try again.": "註冊衝突，請重新整理後重試",
+    "Password must be at most 128 characters": "密碼最多 128 個字元",
+    "Password must be between 8 and 128 characters": "密碼須為 8 至 128 個字元",
+    "Enter password (8-128 characters)": "輸入密碼（8-128 個字元）",
+    "Username must start with a letter and use only lowercase letters, digits, hyphens or underscores (2-64 characters)": "使用者名稱須以字母開頭，僅使用小寫字母、數字、連字號或底線（2-64 個字元）"
   }
 }

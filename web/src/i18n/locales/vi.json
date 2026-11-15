@@ -5638,6 +5638,15 @@
     "Generation test failed": "Bài kiểm tra tạo nội dung thất bại",
     "Connectivity check failed": "Kiểm tra kết nối thất bại",
     "{{target}} generation test failed": "Bài kiểm tra tạo nội dung của {{target}} thất bại",
-    "{{target}} connectivity check failed": "Kiểm tra kết nối {{target}} thất bại"
+    "{{target}} connectivity check failed": "Kiểm tra kết nối {{target}} thất bại",
+    "Local account sign up": "Local account sign up",
+    "Password does not meet the security requirements": "Password does not meet the security requirements",
+    "Registration requires an additional verification step": "Registration requires an additional verification step",
+    "This username or email is already in use": "This username or email is already in use",
+    "Registration conflict. Please refresh and try again.": "Registration conflict. Please refresh and try again.",
+    "Password must be at most 128 characters": "Password must be at most 128 characters",
+    "Password must be between 8 and 128 characters": "Password must be between 8 and 128 characters",
+    "Enter password (8-128 characters)": "Enter password (8-128 characters)",
+    "Username must start with a letter and use only lowercase letters, digits, hyphens or underscores (2-64 characters)": "Username must start with a letter and use only lowercase letters, digits, hyphens or underscores (2-64 characters)"
   }
 }

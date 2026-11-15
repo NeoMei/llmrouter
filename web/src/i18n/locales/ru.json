@@ -5638,6 +5638,15 @@
     "Generation test failed": "Тест генерации не выполнен",
     "Connectivity check failed": "Проверка доступности не выполнена",
     "{{target}} generation test failed": "Тест генерации {{target}} не выполнен",
-    "{{target}} connectivity check failed": "Проверка доступности {{target}} не выполнена"
+    "{{target}} connectivity check failed": "Проверка доступности {{target}} не выполнена",
+    "Local account sign up": "Local account sign up",
+    "Password does not meet the security requirements": "Password does not meet the security requirements",
+    "Registration requires an additional verification step": "Registration requires an additional verification step",
+    "This username or email is already in use": "This username or email is already in use",
+    "Registration conflict. Please refresh and try again.": "Registration conflict. Please refresh and try again.",
+    "Password must be at most 128 characters": "Password must be at most 128 characters",
+    "Password must be between 8 and 128 characters": "Password must be between 8 and 128 characters",
+    "Enter password (8-128 characters)": "Enter password (8-128 characters)",
+    "Username must start with a letter and use only lowercase letters, digits, hyphens or underscores (2-64 characters)": "Username must start with a letter and use only lowercase letters, digits, hyphens or underscores (2-64 characters)"
   }
 }

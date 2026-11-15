@@ -47,6 +47,7 @@ import { loginFormSchema } from '@/features/auth/constants'
 import { useAuthRedirect } from '@/features/auth/hooks/use-auth-redirect'
 import { useTurnstile } from '@/features/auth/hooks/use-turnstile'
 import { beginPasskeyLogin, finishPasskeyLogin } from '@/features/auth/passkey'
+import { shouldFallbackToNativeLogin } from '@/features/auth/sign-in/sign-in-mode'
 import type { AuthFormProps } from '@/features/auth/types'
 import { authorizeProductSession } from '@/features/unihub/native-session'
 import {
@@ -177,6 +178,34 @@ export function UserAuthForm({
     )
   }, [status])
 
+  async function completeNativeLogin(
+    username: string,
+    password: string
+  ): Promise<void> {
+    const res = await login({
+      username,
+      password,
+      turnstile: turnstileToken,
+    })
+
+    if (!res.success) {
+      throw new Error(res.message || loginFailedMessage)
+    }
+    if (res.data && 'require_2fa' in res.data && res.data.require_2fa) {
+      if (!res.data.flow_token) {
+        throw new Error(t('Login flow expired. Please sign in again.'))
+      }
+      setPending2FAFlowToken(res.data.flow_token)
+      redirectTo2FA()
+      return
+    }
+    if (!isAuthBundle(res.data)) {
+      throw new Error(loginFailedMessage)
+    }
+    await handleLoginSuccess(res.data, redirectTo)
+    toast.success(t('Welcome back!'))
+  }
+
   async function onSubmit(data: z.infer<typeof loginFormSchema>) {
     if (requiresLegalConsent && !agreedToLegal) {
       toast.error(legalConsentErrorMessage)
@@ -224,6 +253,23 @@ export function UserAuthForm({
               error.code === 'interaction_required'
             ) {
               startProductLogin(redirectTo ?? '/dashboard')
+            } else if (shouldFallbackToNativeLogin(error)) {
+              // Accounts created through the old native sign-up have a local
+              // bcrypt password but no central password credential. Retry the
+              // same credentials against the local realm without a second
+              // user interaction. Do not convert a failed handshake after
+              // successful password authorization into a local-login attempt.
+              try {
+                if (!validateTurnstile()) return
+                await completeNativeLogin(data.username, data.password)
+              } catch (nativeError: unknown) {
+                if (axios.isAxiosError(nativeError)) return
+                toast.error(
+                  nativeError instanceof Error
+                    ? nativeError.message
+                    : loginFailedMessage
+                )
+              }
             } else {
               toast.error(loginFailedMessage)
             }
@@ -233,28 +279,7 @@ export function UserAuthForm({
         }
         return
       }
-      const res = await login({
-        username: data.username,
-        password: data.password,
-        turnstile: turnstileToken,
-      })
-
-      if (res.success) {
-        if (res.data && 'require_2fa' in res.data && res.data.require_2fa) {
-          if (!res.data.flow_token) {
-            throw new Error(t('Login flow expired. Please sign in again.'))
-          }
-          setPending2FAFlowToken(res.data.flow_token)
-          redirectTo2FA()
-          return
-        }
-
-        if (!isAuthBundle(res.data)) {
-          throw new Error(t('Login failed'))
-        }
-        await handleLoginSuccess(res.data, redirectTo)
-        toast.success(t('Welcome back!'))
-      }
+      await completeNativeLogin(data.username, data.password)
     } catch (error: unknown) {
       if (axios.isAxiosError(error)) return
       toast.error(error instanceof Error ? error.message : loginFailedMessage)
@@ -567,8 +592,9 @@ export function UserAuthForm({
               {t('Sign in')}
             </Button>
 
-            {/* Turnstile */}
-            {!productConfig && isTurnstileEnabled && (
+            {/* Turnstile: also shown for the central form so the local-realm
+                compatibility fallback can carry a valid human-check token. */}
+            {isTurnstileEnabled && (
               <div className='mt-2'>
                 <Turnstile
                   siteKey={turnstileSiteKey}

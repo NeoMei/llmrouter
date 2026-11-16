@@ -795,3 +795,59 @@ func TestStreamValidatorUsesUniqueJSONDecoder(t *testing.T) {
 	var value any
 	require.Error(t, common.UnmarshalUnique([]byte(`{"delta":{"x":1,"x":2}}`), &value))
 }
+
+func TestStreamValidatorAcceptsRepeatedCompleteChatToolCallFields(t *testing.T) {
+	validator := NewStreamValidator(streamTestPolicy(t))
+	// Some OpenAI-compatible upstreams resend the complete id, type and name
+	// on every arguments delta. Those fields must not be concatenated.
+	frames := []json.RawMessage{
+		json.RawMessage(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{"}}]},"finish_reason":null}]}`),
+		json.RawMessage(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"}"}}]},"finish_reason":null}]}`),
+		json.RawMessage(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":""}}]},"finish_reason":null}]}`),
+	}
+	for _, frame := range frames {
+		emitted, err := validator.Accept(frame)
+		require.NoError(t, err)
+		assert.Empty(t, emitted)
+	}
+	terminal := json.RawMessage(`{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`)
+	emitted, err := validator.Accept(terminal)
+	require.NoError(t, err)
+	assert.Empty(t, emitted)
+	emitted, err = validator.Finish()
+	require.NoError(t, err)
+	require.Len(t, emitted, 4)
+	for i, frame := range frames {
+		assert.JSONEq(t, string(frame), string(emitted[i]))
+	}
+	assert.JSONEq(t, string(terminal), string(emitted[3]))
+}
+
+func TestStreamValidatorAcceptsRepeatedTypeWithSplitChatNameAndID(t *testing.T) {
+	validator := NewStreamValidator(streamTestPolicy(t))
+	frames := []json.RawMessage{
+		json.RawMessage(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_","type":"function","function":{"name":"look","arguments":"{"}}]},"finish_reason":null}]}`),
+		json.RawMessage(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"9","type":"function","function":{"name":"up","arguments":"}"}}]},"finish_reason":null}]}`),
+	}
+	for _, frame := range frames {
+		emitted, err := validator.Accept(frame)
+		require.NoError(t, err)
+		assert.Empty(t, emitted)
+	}
+	terminal := json.RawMessage(`{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`)
+	emitted, err := validator.Accept(terminal)
+	require.NoError(t, err)
+	assert.Empty(t, emitted)
+	emitted, err = validator.Finish()
+	require.NoError(t, err)
+	require.Len(t, emitted, 3)
+}
+
+func TestStreamValidatorRejectsConflictingChatToolType(t *testing.T) {
+	validator := NewStreamValidator(streamTestPolicy(t))
+	_, err := validator.Accept(json.RawMessage(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":null}]}`))
+	require.NoError(t, err)
+	_, err = validator.Accept(json.RawMessage(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"custom","function":{"name":"lookup","arguments":""}}]},"finish_reason":null}]}`))
+	require.ErrorIs(t, err, ErrMalformedToolCall)
+	assert.Contains(t, err.Error(), "conflicting tool call type")
+}

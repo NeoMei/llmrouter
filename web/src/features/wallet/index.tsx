@@ -30,6 +30,7 @@ import { unifiedCashFundingSchema } from '@/lib/funding'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { AffiliateRewardsCard } from './components/affiliate-rewards-card'
+import { CashTopupCard } from './components/cash-topup-card'
 import { CentralCashCard } from './components/central-cash-card'
 import { CnyTopupCard } from './components/cny-topup-card'
 import { BillingHistoryDialog } from './components/dialogs/billing-history-dialog'
@@ -117,6 +118,17 @@ function WalletContent(props: WalletProps & { identity: string }) {
     ready: financialReady && unifiedCash,
     revision: wallet.dataUpdatedAt,
   })
+  const cashTopupAccount = user?.funding?.account_id ?? ''
+  const cashTopupIdentity = useCallback(() => {
+    const auth = useAuthStore.getState().auth
+    return (
+      auth.user?.identity_source === 'unihub' &&
+      (auth.session?.login_method === 'unihub' ||
+        auth.session?.login_method === 'product_broker') &&
+      auth.user?.funding?.mode === 'unified_cash' &&
+      auth.user?.funding?.account_id === cashTopupAccount
+    )
+  }, [cashTopupAccount])
   const refreshWallet = wallet.refetch
   const fetchUser = useCallback(async () => {
     await refreshWallet()
@@ -388,6 +400,12 @@ function WalletContent(props: WalletProps & { identity: string }) {
             </p>
 
             {unifiedCash ? <CentralCashCard context={centralCash} /> : null}
+
+            <CashTopupCard
+              account={cashTopupAccount}
+              eligible={centralCash.eligible}
+              assertIdentity={cashTopupIdentity}
+            />
 
             <fieldset
               disabled={!financialReady || topupLoading || !topupInfo}

@@ -190,6 +190,7 @@ export function useCentralCashWallet(props: {
       : undefined
   return {
     data,
+    eligible,
     loading: !props.ready || (eligible && query.isFetching),
     canRetry: eligible && props.ready,
     retry: query.refetch,

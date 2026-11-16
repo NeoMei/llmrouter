@@ -18,6 +18,8 @@ func TestRuntimeFinanceRoutesAreLimitedToDelegatedActions(t *testing.T) {
 		{http.MethodGet, "/v1/accounts/acct-1/resources", true}, {http.MethodGet, "/v1/accounts/acct-1/calls/call:1", true},
 		{http.MethodGet, "/v1/accounts/acct-1/recharges/order-1", true}, {http.MethodGet, "/v1/accounts/acct-1/recharges", false},
 		{http.MethodPost, "/v1/accounts/acct-1/recharges", true}, {http.MethodPost, "/v1/accounts/acct-1/recharges/order-1/sandbox-settle", true},
+		{http.MethodGet, "/v1/accounts/acct-1/cash-checkouts", true}, {http.MethodGet, "/v1/accounts/acct-1/cash-checkouts/ct_1", true},
+		{http.MethodPost, "/v1/accounts/acct-1/cash-checkouts", true},
 		{http.MethodPost, "/v1/accounts/acct-1/api-keys", true}, {http.MethodDelete, "/v1/accounts/acct-1/api-keys/key-1", true},
 		{http.MethodPut, "/v1/accounts/acct-1/usage-budget", true},
 		{http.MethodPost, "/v1/accounts/acct-1/transfers", false}, {http.MethodPost, "/v1/accounts/acct-1/model-credentials", false},

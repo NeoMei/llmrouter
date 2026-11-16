@@ -321,12 +321,17 @@ func (v *StreamValidator) acceptChatFrame(sequence uint64, envelope *streamEnvel
 				return false, err
 			}
 			owners[call] = struct{}{}
-			call.id += delta.ID
-			call.name += delta.Function.Name
+			// id and name are complete values. Some upstreams repeat them on
+			// every arguments delta, while others send them once and may split
+			// them across deltas. An identical repeat is idempotent; a differing
+			// value is a continuation fragment. The type enum is never split,
+			// so a conflicting value must be rejected instead of concatenated.
+			mergeChatStableField(&call.id, delta.ID)
+			mergeChatStableField(&call.name, delta.Function.Name)
 			if typeName, err := rawJSONString(delta.Type); err != nil {
 				return false, fmt.Errorf("%w: invalid chat tool type: %v", ErrMalformedToolCall, err)
-			} else if typeName != "" {
-				call.typeName += typeName
+			} else if err := mergeStableString(&call.typeName, strings.TrimSpace(typeName), "type"); err != nil {
+				return false, err
 			}
 			if delta.Function.Arguments != "" {
 				if err := appendStreamArgument(call, sequence, delta.Function.Arguments); err != nil {
@@ -806,6 +811,16 @@ func mergeStableString(target *string, value, field string) error {
 	}
 	*target = value
 	return nil
+}
+
+// mergeChatStableField accumulates a chat tool-call id or name. A repeated
+// complete value leaves the field unchanged; a differing value is appended as
+// a split continuation fragment.
+func mergeChatStableField(target *string, value string) {
+	if value == "" || *target == value {
+		return
+	}
+	*target += value
 }
 
 func (v *StreamValidator) applyResponsesItem(call *pendingStreamCall, item *dto.ResponsesOutput) error {

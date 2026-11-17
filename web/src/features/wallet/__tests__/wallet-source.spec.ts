@@ -2,19 +2,8 @@
 Copyright (C) 2023-2026 QuantumNous
 
 This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as
-published by the Free Software Foundation, either version 3 of the
-License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-GNU Affero General Public License for more details.
-
-You should have received a copy of the GNU Affero General Public License
-along with this program. If not, see <https://www.gnu.org/licenses/>.
-
-For commercial licensing, please contact support@quantumnous.com
+it under the terms of the GNU Affero AGPL License version 3 as published
+by the Free Software Foundation. See the GNU Affero AGPL for details.
 */
 import { test, expect, type Page } from '@playwright/test'
 
@@ -26,13 +15,58 @@ import {
   bundle,
 } from './settings-fixture'
 
+const NO_UNIHUB_LINKS = [
+  'Recharge unified cash in UniHub',
+  'Manage model wallet in UniHub',
+  '前往 UniHub 充值统一钱包',
+]
+const NEW_UNAVAILABLE =
+  'Central wallet details are unavailable. Refresh to verify the payer.'
+
+async function expectNoUniHubLinks(page: Page) {
+  for (const name of NO_UNIHUB_LINKS) {
+    await expect(page.getByRole('link', { name })).toHaveCount(0)
+  }
+}
+
+async function expectCashTopupCard(page: Page) {
+  await expect(
+    page.getByText('Recharge with WeChat Pay or Alipay', { exact: true })
+  ).toBeVisible()
+  await expect(
+    page.getByRole('textbox', { name: 'Amount (CNY)', exact: true })
+  ).toBeVisible()
+  for (const tier of [20, 50, 100, 300, 1000]) {
+    await expect(
+      page.getByRole('button', { name: `¥${tier}`, exact: true })
+    ).toBeVisible()
+  }
+  await expect(
+    page.getByRole('button', { name: 'WeChat Pay', exact: true })
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Alipay', exact: true })
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Pay WeChat Pay', exact: true })
+  ).toBeVisible()
+}
+
 async function cashFixture(
   page: Page,
-  account = 'payer',
-  role = 'owner',
-  language = 'en'
+  {
+    account = 'payer',
+    role = 'owner',
+    language = 'en',
+    cashTopupAvailable = true,
+  }: {
+    account?: string
+    role?: string
+    language?: string
+    cashTopupAvailable?: boolean
+  } = {}
 ) {
-  const tracked = await fixture(page, true, language)
+  const tracked = await fixture(page, true, language, 1, cashTopupAvailable)
   await walletResponse(page, (route) =>
     route.fulfill({
       json: {
@@ -87,7 +121,7 @@ async function cashFixture(
   return tracked
 }
 
-test('zero unified cash and product 300 remain separate with an account-bound central recharge link', async ({
+test('a password LEGACY payer sees the in-site cash topup card and distinct verified balances', async ({
   page,
 }) => {
   const tracked = await cashFixture(page)
@@ -97,23 +131,14 @@ test('zero unified cash and product 300 remain separate with an account-bound ce
   ).toBeVisible()
   await expect(page.getByText('0.000000 CNY', { exact: true })).toBeVisible()
   await expect(page.getByText('300.000000 CNY', { exact: true })).toBeVisible()
-  const recharge = page.getByRole('link', {
-    name: 'Recharge unified cash in UniHub',
-    exact: true,
-  })
-  await expect(recharge).toHaveAttribute(
-    'href',
-    'https://hub.invalid/?view=wallets&account=payer&wallet=unified'
-  )
+  await expectCashTopupCard(page)
+  await expectNoUniHubLinks(page)
   await expect(
-    page.getByRole('link', {
-      name: 'Manage model wallet in UniHub',
-      exact: true,
-    })
-  ).toHaveAttribute(
-    'href',
-    'https://hub.invalid/?view=wallets&account=payer&product=llmrouter'
-  )
+    page.getByText(
+      'Native API keys and subscriptions use unified cash. Use the recharge card below to add funds here.',
+      { exact: true }
+    )
+  ).toBeVisible()
   await expect(
     page.getByText(
       'For SuperWagie managed model calls. This balance does not fund native LLMRouter keys or subscriptions.',
@@ -130,44 +155,98 @@ test('zero unified cash and product 300 remain separate with an account-bound ce
     page.getByText('International payment', { exact: true })
   ).toHaveCount(0)
   expect(tracked.writes).toEqual([])
-  await page.screenshot({
-    path: `../.superpowers/sdd/2026-11-06-wallet-source/screenshots/wallet-${page.viewportSize()?.width}.png`,
-    fullPage: true,
-    animations: 'disabled',
-  })
+})
+
+test('cash topup without finance permission hides the card but keeps the verified central balance', async ({
+  page,
+}) => {
+  const tracked = await cashFixture(page, { cashTopupAvailable: false })
+  await page.goto('/wallet')
+  await expect(page.getByText('300.000000 CNY', { exact: true })).toBeVisible()
+  await expect(
+    page.getByText('Recharge with WeChat Pay or Alipay', { exact: true })
+  ).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '¥100', exact: true })).toHaveCount(
+    0
+  )
+  await expect(
+    page.getByRole('textbox', { name: 'Amount (CNY)', exact: true })
+  ).toHaveCount(0)
+  await expectNoUniHubLinks(page)
+  expect(tracked.requests).toContain(
+    '/api/unihub/bff/v1/accounts/payer/wallets'
+  )
+  expect(tracked.writes).toEqual([])
+})
+
+test('cash topup stays hidden when the finance grant uses another transport', async ({
+  page,
+}) => {
+  const tracked = await cashFixture(page)
+  await page.route('**/api/unihub/access', (route) =>
+    route.fulfill({
+      json: {
+        access: {
+          subject: 'fixture-central',
+          user: { id: 'fixture-central', name: 'Fixture', email: '' },
+          roles: ['member'],
+          permissions: ['product:use'],
+          expires_at: Math.floor(Date.now() / 1000) + 3600,
+        },
+        user: bundle(42, true).user,
+        permissions: { product: { use: true } },
+        csrf_token: 'fixture-csrf',
+        finance_access: {
+          available: true,
+          transport: 'unsupported',
+          cash_topup_available: true,
+          central_user_id: 'fixture-central',
+          expires_at: Math.floor(Date.now() / 1000) + 3600,
+          write_scopes: ['recharges:write'],
+        },
+      },
+    })
+  )
+  await page.goto('/wallet')
+  await expect(page.getByText('300.000000 CNY', { exact: true })).toBeVisible()
+  await expect(
+    page.getByText('Recharge with WeChat Pay or Alipay', { exact: true })
+  ).toHaveCount(0)
+  await expectNoUniHubLinks(page)
+  expect(tracked.writes).toEqual([])
 })
 
 for (const [label, account, role] of [
   ['missing payer', '', 'owner'],
   ['different payer', 'unknown', 'owner'],
   ['member role', 'payer', 'member'],
-]) {
-  test(`${label} cannot guess a central recharge destination`, async ({
+] as const) {
+  test(`${label} cannot guess a central wallet and leaves recharge safely hidden`, async ({
     page,
   }) => {
-    const tracked = await cashFixture(page, account, role)
+    const tracked = await cashFixture(page, { account, role })
     await page.goto('/wallet')
     await expect(page.getByText('0.000000 CNY', { exact: true })).toBeVisible()
-    await expect(
-      page.getByRole('link', {
-        name: 'Recharge unified cash in UniHub',
-        exact: true,
-      })
-    ).toHaveCount(0)
     await expect(page.getByText('300.000000 CNY', { exact: true })).toHaveCount(
       0
     )
-    await expect(
-      page.getByText(
-        'Central wallet details are unavailable. Refresh or sign in with UniHub to verify the payer.',
-        { exact: true }
-      )
-    ).toBeVisible()
+    await expect(page.getByText(NEW_UNAVAILABLE, { exact: true })).toBeVisible()
+    if (account === '') {
+      // Without a payer account id there is no funding target for a recharge.
+      await expect(
+        page.getByText('Recharge with WeChat Pay or Alipay', { exact: true })
+      ).toHaveCount(0)
+    } else {
+      // An eligible finance grant still shows the in-site card; the central
+      // balance stays locked behind payer/role verification.
+      await expectCashTopupCard(page)
+    }
+    await expectNoUniHubLinks(page)
     expect(tracked.writes).toEqual([])
   })
 }
 
-test('a forbidden central balance never becomes zero and removes the recharge destination until retry succeeds', async ({
+test('a forbidden central balance never becomes zero and removes the card until the payer verifies', async ({
   page,
 }) => {
   const tracked = await cashFixture(page)
@@ -184,23 +263,70 @@ test('a forbidden central balance never becomes zero and removes the recharge de
     )
   )
   await page.goto('/wallet')
-  await expect(
-    page.getByText(
-      'Central wallet details are unavailable. Refresh or sign in with UniHub to verify the payer.',
-      { exact: true }
-    )
-  ).toBeVisible()
-  await expect(
-    page.getByRole('link', {
-      name: 'Recharge unified cash in UniHub',
-      exact: true,
-    })
-  ).toHaveCount(0)
+  await expect(page.getByText(NEW_UNAVAILABLE, { exact: true })).toBeVisible()
+  await expectNoUniHubLinks(page)
   denied = false
   await page
     .getByRole('button', { name: 'Retry central wallet', exact: true })
     .click()
   await expect(page.getByText('300.000000 CNY', { exact: true })).toBeVisible()
+  await expectCashTopupCard(page)
+  expect(tracked.writes).toEqual([])
+})
+
+for (const [status, code] of [
+  [401, 'unauthorized'],
+  [503, 'unavailable'],
+] as const) {
+  const unavailableText =
+    status === 401
+      ? 'Wallet funding source is not confirmed yet.'
+      : 'Central wallet details are unavailable. Refresh to verify the payer.'
+  test(`central wallet ${status} stays unavailable and cannot authorize a zero balance`, async ({
+    page,
+  }) => {
+    const tracked = await cashFixture(page)
+    await page.route('**/api/unihub/bff/v1/accounts/payer/wallets', (route) =>
+      route.fulfill({ status, json: { error: code } })
+    )
+    await page.goto('/wallet')
+    await expect(
+      page.getByText(unavailableText, { exact: true })
+    ).toBeVisible()
+    await expect(page.getByText('300.000000 CNY', { exact: true })).toHaveCount(
+      0
+    )
+    // A 401 clears auth and removes the funding source; a transient 503 keeps
+    // the last known zero balance visible but never exposes a managed balance.
+    if (status === 401) {
+      await expect(page.getByText('0.000000 CNY', { exact: true })).toHaveCount(
+        0
+      )
+    }
+    await expectNoUniHubLinks(page)
+    expect(tracked.writes).toEqual([])
+  })
+}
+
+test('an unsafe public origin cannot become a central recharge destination', async ({
+  page,
+}) => {
+  const tracked = await cashFixture(page)
+  await page.route('**/api/unihub/config', (route) =>
+    route.fulfill({
+      json: {
+        enabled: true,
+        public_origin: 'https://hub.invalid/?token=secret',
+        product_id: 'llmrouter',
+        client_id: 'fixture-client',
+        redirect_uri: 'http://127.0.0.1:58026/unihub',
+        models: [],
+      },
+    })
+  )
+  await page.goto('/wallet')
+  await expect(page.getByText(NEW_UNAVAILABLE, { exact: true })).toBeVisible()
+  await expectNoUniHubLinks(page)
   expect(tracked.writes).toEqual([])
 })
 
@@ -249,16 +375,11 @@ test('a late product balance cannot appear after the authenticated identity chan
     () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
   )
   await expect(page.getByText('300.000000 CNY', { exact: true })).toHaveCount(0)
-  await expect(
-    page.getByRole('link', {
-      name: 'Recharge unified cash in UniHub',
-      exact: true,
-    })
-  ).toHaveCount(0)
+  await expectNoUniHubLinks(page)
   expect(tracked.writes).toEqual([])
 })
 
-test('insufficient native subscription balance uses the same unified recharge destination', async ({
+test('insufficient native subscription balance no longer links to UniHub', async ({
   page,
 }) => {
   const tracked = await cashFixture(page)
@@ -308,97 +429,37 @@ test('insufficient native subscription balance uses the same unified recharge de
   await expect(
     dialog.getByRole('button', { name: 'Pay with Balance', exact: true })
   ).toBeDisabled()
-  await expect(
-    dialog.getByRole('link', {
-      name: 'Recharge unified cash in UniHub',
-      exact: true,
-    })
-  ).toHaveAttribute(
-    'href',
-    'https://hub.invalid/?view=wallets&account=payer&wallet=unified'
-  )
+  for (const name of NO_UNIHUB_LINKS) {
+    await expect(dialog.getByRole('link', { name })).toHaveCount(0)
+  }
   expect(tracked.writes).toEqual([])
 })
 
-test('expired central authority clears its destination instead of presenting a usable zero', async ({
+test('Chinese cash wallet shows the in-site recharge card and keeps native actions readable', async ({
   page,
 }) => {
-  const tracked = await cashFixture(page)
-  await page.route('**/api/unihub/bff/v1/accounts/payer/wallets', (route) =>
-    route.fulfill({ status: 401, json: { error: 'unauthorized' } })
-  )
-  await page.goto('/wallet')
-  await expect(
-    page.getByText('Wallet funding source is not confirmed yet.', {
-      exact: true,
-    })
-  ).toBeVisible()
-  await expect(page.getByText('300.000000 CNY', { exact: true })).toHaveCount(0)
-  await expect(page.getByText('0.000000 CNY', { exact: true })).toHaveCount(0)
-  await expect(
-    page.getByRole('link', {
-      name: 'Recharge unified cash in UniHub',
-      exact: true,
-    })
-  ).toHaveCount(0)
-  expect(tracked.writes).toEqual([])
-})
-
-test('an unsafe public origin cannot become a central recharge link', async ({
-  page,
-}) => {
-  const tracked = await cashFixture(page)
-  await page.route('**/api/unihub/config', (route) =>
-    route.fulfill({
-      json: {
-        enabled: true,
-        public_origin: 'https://hub.invalid/?token=secret',
-        product_id: 'llmrouter',
-        client_id: 'fixture-client',
-        redirect_uri: 'http://127.0.0.1:58026/unihub',
-        models: [],
-      },
-    })
-  )
-  await page.goto('/wallet')
-  await expect(
-    page.getByText(
-      'Central wallet details are unavailable. Refresh or sign in with UniHub to verify the payer.',
-      { exact: true }
-    )
-  ).toBeVisible()
-  await expect(
-    page.getByRole('link', {
-      name: 'Recharge unified cash in UniHub',
-      exact: true,
-    })
-  ).toHaveCount(0)
-  expect(tracked.writes).toEqual([])
-})
-
-test('Chinese cash wallet keeps distinct balances and central actions readable without horizontal overflow', async ({
-  page,
-}) => {
-  const tracked = await cashFixture(page, 'payer', 'owner', 'zh')
+  const tracked = await cashFixture(page, { language: 'zh' })
   await page.goto('/wallet')
   await expect(page.getByText('统一钱包余额', { exact: true })).toBeVisible()
   await expect(page.getByText('300.000000 CNY', { exact: true })).toBeVisible()
   await expect(
-    page.getByRole('link', { name: '前往 UniHub 充值统一钱包', exact: true })
+    page.getByText('使用微信支付或支付宝充值', { exact: true })
   ).toBeVisible()
+  for (const tier of [20, 50, 100, 300, 1000]) {
+    await expect(
+      page.getByRole('button', { name: `¥${tier}`, exact: true })
+    ).toBeVisible()
+  }
+  await expectNoUniHubLinks(page)
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth
     )
   ).toBe(true)
-  await page.screenshot({
-    path: `../.superpowers/sdd/2026-11-06-wallet-source/screenshots/wallet-zh-${page.viewportSize()?.width}.png`,
-    fullPage: true,
-  })
   expect(tracked.writes).toEqual([])
 })
 
-test('near-expiry OIDC refresh preserves the same payer and restores central wallet actions', async ({
+test('near-expiry refresh preserves the payer, verified balance, and in-site card', async ({
   page,
 }) => {
   const tracked = await cashFixture(page)
@@ -420,20 +481,13 @@ test('near-expiry OIDC refresh preserves the same payer and restores central wal
     .click()
   await expect.poll(() => refreshes).toBe(1)
   await expect(page.getByText('300.000000 CNY', { exact: true })).toBeVisible()
-  await expect(
-    page.getByRole('link', {
-      name: 'Recharge unified cash in UniHub',
-      exact: true,
-    })
-  ).toHaveAttribute(
-    'href',
-    'https://hub.invalid/?view=wallets&account=payer&wallet=unified'
-  )
+  await expectCashTopupCard(page)
+  await expectNoUniHubLinks(page)
   expect(refreshes).toBe(1)
   expect(tracked.writes).toEqual([])
 })
 
-test('switching identity during OIDC refresh cannot authorize the previous payer', async ({
+test('switching identity during a refresh cannot authorize the previous payer', async ({
   page,
 }) => {
   const tracked = await cashFixture(page)
@@ -482,53 +536,41 @@ test('switching identity during OIDC refresh cannot authorize the previous payer
     () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
   )
   await expect(page.getByText('300.000000 CNY', { exact: true })).toHaveCount(0)
-  await expect(
-    page.getByRole('link', {
-      name: 'Recharge unified cash in UniHub',
-      exact: true,
-    })
-  ).toHaveCount(0)
+  await expectNoUniHubLinks(page)
   expect(
     tracked.requests.filter((path) => path.endsWith('/wallets')).length
   ).toBe(previousReads)
   expect(tracked.writes).toEqual([])
 })
 
-test('product broker login shows the verified payer unified recharge link', async ({
-  page,
-}) => {
-  const tracked = await cashFixture(page)
-  const broker = bundle(42, true)
-  broker.session.login_method = 'product_broker'
-  await page.route('**/api/user/auth/refresh', (route) =>
-    route.fulfill({ json: { success: true, data: broker } })
-  )
-  await page.goto('/wallet')
-  await expect(
-    page.getByRole('link', {
-      name: 'Recharge unified cash in UniHub',
-      exact: true,
-    })
-  ).toHaveAttribute(
-    'href',
-    'https://hub.invalid/?view=wallets&account=payer&wallet=unified'
-  )
-  await expect(page.getByText('300.000000 CNY', { exact: true })).toBeVisible()
-  expect(tracked.requests).toContain(
-    '/api/unihub/bff/v1/accounts/payer/wallets'
-  )
-  expect(tracked.writes).toEqual([])
-})
-
-for (const failure of ['member', 'forbidden', 'unavailable']) {
-  test(`product broker ${failure} wallet authority cannot expose a recharge link`, async ({
+for (const method of ['oidc', 'product_broker'] as const) {
+  test(`${method} sessions with identity_source=unihub also see the in-site card`, async ({
     page,
   }) => {
-    const tracked = await cashFixture(
-      page,
-      'payer',
-      failure === 'member' ? 'member' : 'owner'
+    const tracked = await cashFixture(page)
+    const session = bundle(42, true)
+    session.session.login_method = method
+    await page.route('**/api/user/auth/refresh', (route) =>
+      route.fulfill({ json: { success: true, data: session } })
     )
+    await page.goto('/wallet')
+    await expectCashTopupCard(page)
+    await expect(page.getByText('300.000000 CNY', { exact: true })).toBeVisible()
+    expect(tracked.requests).toContain(
+      '/api/unihub/bff/v1/accounts/payer/wallets'
+    )
+    await expectNoUniHubLinks(page)
+    expect(tracked.writes).toEqual([])
+  })
+}
+
+for (const failure of ['member', 'forbidden', 'unavailable'] as const) {
+  test(`${failure} wallet authority hides the central balance but not the in-site card`, async ({
+    page,
+  }) => {
+    const tracked = await cashFixture(page, {
+      role: failure === 'member' ? 'member' : 'owner',
+    })
     const broker = bundle(42, true)
     broker.session.login_method = 'product_broker'
     await page.route('**/api/user/auth/refresh', (route) =>
@@ -546,20 +588,19 @@ for (const failure of ['member', 'forbidden', 'unavailable']) {
     await expect(page.getByRole('alert')).toContainText(
       'Central wallet details are unavailable'
     )
-    await expect(
-      page.getByRole('link', { name: 'Recharge unified cash in UniHub' })
-    ).toHaveCount(0)
     await expect(page.getByText('300.000000 CNY', { exact: true })).toHaveCount(
       0
     )
     await expect(
       page.getByLabel('Managed model wallet unavailable', { exact: true })
     ).toHaveText('—')
+    await expectCashTopupCard(page)
+    await expectNoUniHubLinks(page)
     expect(tracked.writes).toEqual([])
   })
 }
 
-test('near-expiry product broker refresh retains the verified payer link', async ({
+test('a near-expiry product broker refresh retains the verified payer and in-site card', async ({
   page,
 }) => {
   const tracked = await cashFixture(page)
@@ -569,11 +610,8 @@ test('near-expiry product broker refresh retains the verified payer link', async
     route.fulfill({ json: { success: true, data: broker } })
   )
   await page.goto('/wallet')
-  const recharge = page.getByRole('link', {
-    name: 'Recharge unified cash in UniHub',
-    exact: true,
-  })
-  await expect(recharge).toBeVisible()
+  await expect(page.getByText('300.000000 CNY', { exact: true })).toBeVisible()
+  await expectCashTopupCard(page)
   let refreshes = 0
   await page.route('**/api/user/auth/refresh', (route) => {
     refreshes += 1
@@ -591,75 +629,69 @@ test('near-expiry product broker refresh retains the verified payer link', async
     .getByRole('button', { name: 'Refresh wallet', exact: true })
     .click()
   await expect.poll(() => refreshes).toBe(1)
-  await expect(recharge).toHaveAttribute(
-    'href',
-    'https://hub.invalid/?view=wallets&account=payer&wallet=unified'
-  )
+  await expect(page.getByText('300.000000 CNY', { exact: true })).toBeVisible()
+  await expectCashTopupCard(page)
+  await expectNoUniHubLinks(page)
   expect(tracked.writes).toEqual([])
 })
 
-for (const from of ['unihub', 'product_broker']) {
-  test(`switching login method from ${from} discards the previous wallet response`, async ({
-    page,
-  }) => {
-    const tracked = await cashFixture(page)
-    const current = bundle(42, true)
-    current.session.login_method = from
-    await page.route('**/api/user/auth/refresh', (route) =>
-      route.fulfill({ json: { success: true, data: current } })
-    )
-    let start!: () => void
-    const started = new Promise<void>((resolve) => {
-      start = resolve
-    })
-    let release!: () => void
-    const gate = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    await page.route(
-      '**/api/unihub/bff/v1/accounts/payer/wallets',
-      async (route) => {
-        start()
-        await gate
-        await route.fulfill({
-          json: [
-            { product_id: 'llmrouter', asset: 'CNY/6', amount: '300000000' },
-          ],
-        })
-      }
-    )
-    await page.goto('/wallet')
-    await started
-    await page.route('**/api/unihub/bff/v1/accounts', (route) =>
-      route.fulfill({ status: 403, json: { error: 'forbidden' } })
-    )
-    const cancelledRead = page.waitForEvent('requestfailed', {
-      predicate: (request) =>
-        new URL(request.url()).pathname ===
-        '/api/unihub/bff/v1/accounts/payer/wallets',
-    })
-    const changed = bundle(42, true)
-    changed.session.login_method =
-      from === 'unihub' ? 'product_broker' : 'unihub'
-    await page.evaluate(
-      (value) => window.settingsFixture.signIn(value),
-      changed
-    )
-    await expect(page.getByRole('alert')).toContainText(
-      'Central wallet details are unavailable'
-    )
-    release()
-    await cancelledRead
-    await page.evaluate(
-      () =>
-        new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
-    )
-    await expect(page.getByText('300.000000 CNY', { exact: true })).toHaveCount(
-      0
-    )
-    await expect(
-      page.getByRole('link', { name: 'Recharge unified cash in UniHub' })
-    ).toHaveCount(0)
-    expect(tracked.writes).toEqual([])
+test('switching login method discards the previous central wallet response', async ({
+  page,
+}) => {
+  const tracked = await cashFixture(page)
+  const current = bundle(42, true)
+  current.session.login_method = 'oidc'
+  await page.route('**/api/user/auth/refresh', (route) =>
+    route.fulfill({ json: { success: true, data: current } })
+  )
+  let start!: () => void
+  const started = new Promise<void>((resolve) => {
+    start = resolve
   })
-}
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  await page.route(
+    '**/api/unihub/bff/v1/accounts/payer/wallets',
+    async (route) => {
+      start()
+      await gate
+      await route.fulfill({
+        json: [
+          { product_id: 'llmrouter', asset: 'CNY/6', amount: '300000000' },
+        ],
+      })
+    }
+  )
+  await page.goto('/wallet')
+  await started
+  await page.route('**/api/unihub/bff/v1/accounts', (route) =>
+    route.fulfill({ status: 403, json: { error: 'forbidden' } })
+  )
+  const cancelledRead = page.waitForEvent('requestfailed', {
+    predicate: (request) =>
+      new URL(request.url()).pathname ===
+      '/api/unihub/bff/v1/accounts/payer/wallets',
+  })
+  const changed = bundle(42, true)
+  changed.session.login_method = 'product_broker'
+  await page.evaluate(
+    (value) => window.settingsFixture.signIn(value),
+    changed
+  )
+  await expect(page.getByRole('alert')).toContainText(
+    'Central wallet details are unavailable'
+  )
+  release()
+  await cancelledRead
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+  )
+  await expect(page.getByText('300.000000 CNY', { exact: true })).toHaveCount(
+    0
+  )
+  await expectNoUniHubLinks(page)
+  expect(tracked.writes).toEqual([])
+})

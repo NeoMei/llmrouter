@@ -60,6 +60,7 @@ export class ProductSession {
   csrfToken = ''
   financeWriteScopes: string[] = []
   financeExpiresAt = 0
+  cashTopupAvailable = false
   financeTransport: '' | 'oidc' | 'runtime_actor' = ''
   restorePromise: Promise<void> | null = null
   readonly client: UniHubClient
@@ -89,6 +90,7 @@ export class ProductSession {
     this.financeExpiresAt = 0
     this.financeTransport = ''
     this.financeWriteScopes = []
+    this.cashTopupAvailable = false
     this.restorePromise = null
     this.select('')
     this.onClear()
@@ -151,6 +153,7 @@ export class ProductSession {
       this.financeWriteScopes = []
       this.financeTransport = 'oidc'
       this.financeExpiresAt = 0
+      this.cashTopupAvailable = true
       return
     }
     const now = Date.now() / 1000
@@ -180,6 +183,7 @@ export class ProductSession {
           ].includes(scope)
         )
       : []
+    this.cashTopupAvailable = proof.cash_topup_available === true
     this.financeTransport = proof.transport
     this.financeExpiresAt = proof.expires_at
     clearTimeout(this.timer)
@@ -190,6 +194,7 @@ export class ProductSession {
         this.financeExpiresAt = 0
         this.financeTransport = ''
         this.financeWriteScopes = []
+        this.cashTopupAvailable = false
         this.accounts = []
         this.select('')
         this.onForbidden(
@@ -404,6 +409,7 @@ export interface ProductAccessSnapshot {
     central_user_id?: string
     expires_at?: number
     write_scopes?: string[]
+    cash_topup_available?: boolean
   }
 }
 export async function refreshProductAccess(): Promise<ProductAccessSnapshot> {

@@ -60,7 +60,9 @@ export function bundle(id = 42, cash = false, role = 1) {
     session: {
       sid: `fixture-${id}`,
       current: true,
-      login_method: cash ? 'unihub' : 'password',
+      // Native password/LEGACY registrations are valid payers; the legacy
+      // 'unihub' session name is only needed by explicit broker scenarios.
+      login_method: 'password',
       ip: '',
       user_agent: 'fixture',
       created_at: now,
@@ -73,7 +75,8 @@ export async function fixture(
   page: Page,
   cash = false,
   language = 'en',
-  role = 1
+  role = 1,
+  cashTopupAvailable = true
 ) {
   const requests: string[] = []
   const writes: { path: string; body: unknown }[] = []
@@ -105,6 +108,20 @@ export async function fixture(
       }
     } else if (path === '/api/unihub/access') {
       body = {
+        ...(cash
+          ? {
+              finance_access: {
+                available: true,
+                transport: 'runtime_actor',
+                ...(cashTopupAvailable
+                  ? { cash_topup_available: true as const }
+                  : {}),
+                central_user_id: 'fixture-central',
+                expires_at: Math.floor(Date.now() / 1000) + 3600,
+                write_scopes: ['recharges:write'],
+              },
+            }
+          : {}),
         access: {
           subject: 'fixture-central',
           user: { id: 'fixture-central', name: 'Fixture', email: '' },

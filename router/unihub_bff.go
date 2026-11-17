@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -75,7 +76,7 @@ func registerUniHubBFF(r *gin.Engine, config platformaccount.Config) {
 		if e == nil && current.LoginMethod == "unihub" && config.Enabled {
 			oidc, _, resolveErr := service.ResolveUniHubSession(c.Request.Context(), identity)
 			if resolveErr == nil && oidc.Access.ExpiresAt > time.Now().Unix() && oidc.Access.Subject == p.Access.Subject && oidc.Access.Issuer == p.Access.Issuer && oidc.Access.ProductID == p.Access.ProductID && oidc.Access.InstanceID == p.Access.InstanceID {
-				financeAccess = gin.H{"available": true, "transport": "oidc", "central_user_id": oidc.Access.Subject, "expires_at": min(oidc.Access.ExpiresAt, p.Access.ExpiresAt, current.ExpiresAt)}
+				financeAccess = gin.H{"available": true, "transport": "oidc", "central_user_id": oidc.Access.Subject, "expires_at": min(oidc.Access.ExpiresAt, p.Access.ExpiresAt, current.ExpiresAt), "cash_topup_available": true}
 			}
 		} else if e == nil && platformaccount.FinanceReadEnabled() {
 			proof, proofErr := runtimeFinanceActor(c.Request.Context(), identity, p, config)
@@ -118,6 +119,11 @@ func registerUniHubBFF(r *gin.Engine, config platformaccount.Config) {
 							}
 						}
 						financeAccess["write_scopes"] = writeScopes
+						// Cash checkout is a runtime-actor finance write. The product
+						// frontend must not infer this from the browser login method:
+						// a normal password/LEGACY session is a valid payer too.
+						cashTopupAvailable := platformaccount.FinanceEnabled() && runtimeFinanceRoute(http.MethodPost, "/v1/accounts/x/cash-checkouts") && slices.Contains(writeScopes, "recharges:write")
+						financeAccess["cash_topup_available"] = cashTopupAvailable
 					}
 				}
 			}

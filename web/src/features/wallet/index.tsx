@@ -53,6 +53,7 @@ import {
   useWeChatNativePayment,
 } from './hooks'
 import { useCentralCashWallet } from './hooks/use-central-cash-wallet'
+import { useCashTopupEligibility } from './hooks/use-cash-topup-eligibility'
 import {
   getDefaultPaymentType,
   getMinTopupAmount,
@@ -119,12 +120,16 @@ function WalletContent(props: WalletProps & { identity: string }) {
     revision: wallet.dataUpdatedAt,
   })
   const cashTopupAccount = user?.funding?.account_id ?? ''
+  const cashTopupEligible = useCashTopupEligibility({
+    identity: props.identity,
+    account: cashTopupAccount,
+    ready: financialReady && unifiedCash,
+    revision: wallet.dataUpdatedAt,
+  })
   const cashTopupIdentity = useCallback(() => {
     const auth = useAuthStore.getState().auth
     return (
       auth.user?.identity_source === 'unihub' &&
-      (auth.session?.login_method === 'unihub' ||
-        auth.session?.login_method === 'product_broker') &&
       auth.user?.funding?.mode === 'unified_cash' &&
       auth.user?.funding?.account_id === cashTopupAccount
     )
@@ -403,7 +408,7 @@ function WalletContent(props: WalletProps & { identity: string }) {
 
             <CashTopupCard
               account={cashTopupAccount}
-              eligible={centralCash.eligible}
+              eligible={cashTopupEligible}
               assertIdentity={cashTopupIdentity}
             />
 
@@ -469,7 +474,6 @@ function WalletContent(props: WalletProps & { identity: string }) {
                   onAvailabilityChange={handleSubscriptionAvailabilityChange}
                   userQuota={user?.quota}
                   onPurchaseSuccess={fetchUser}
-                  rechargeURL={centralCash.data?.rechargeURL}
                 />
               ) : null}
             </fieldset>

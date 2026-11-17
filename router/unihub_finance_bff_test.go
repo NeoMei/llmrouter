@@ -179,14 +179,16 @@ func TestBrokerFinanceBFFUsesFreshActorAndScopedRoutes(t *testing.T) {
 	require.Equal(t, 200, access.Code, access.Body.String())
 	var data struct {
 		Finance struct {
-			Available bool   `json:"available"`
-			CentralID string `json:"central_user_id"`
-			Expires   int64  `json:"expires_at"`
+			Available          bool   `json:"available"`
+			CashTopupAvailable bool   `json:"cash_topup_available"`
+			CentralID          string `json:"central_user_id"`
+			Expires            int64  `json:"expires_at"`
 		} `json:"finance_access"`
 		CSRF string `json:"csrf_token"`
 	}
 	require.NoError(t, common.Unmarshal(access.Body.Bytes(), &data))
 	require.True(t, data.Finance.Available)
+	assert.True(t, data.Finance.CashTopupAvailable, "a normal password session with a writable runtime actor must expose cash topup")
 	assert.Contains(t, access.Body.String(), `"write_scopes":["model-credentials:write","settings:write","recharges:write"]`)
 	assert.Equal(t, "member", data.Finance.CentralID)
 	assert.Greater(t, data.Finance.Expires, time.Now().Unix())
@@ -223,12 +225,14 @@ func TestBrokerFinanceBFFUsesFreshActorAndScopedRoutes(t *testing.T) {
 		closed := request("GET", "/api/unihub/access", "", "", "", nil)
 		require.Equal(t, http.StatusOK, closed.Code)
 		assert.Contains(t, closed.Body.String(), `"available":false`)
+		assert.NotContains(t, closed.Body.String(), `"cash_topup_available":true`)
 		assert.Equal(t, http.StatusForbidden, request("GET", "/api/unihub/bff/v1/accounts", "", "", "", nil).Code)
 		t.Setenv("UNIHUB_PRODUCT_FINANCE_READ_ONLY_ENABLED", "true")
 		readAccess := request("GET", "/api/unihub/access", "", "", "", nil)
 		require.Equal(t, http.StatusOK, readAccess.Code, readAccess.Body.String())
 		require.Contains(t, readAccess.Body.String(), `"available":true`)
 		assert.Contains(t, readAccess.Body.String(), `"write_scopes":[]`)
+		assert.NotContains(t, readAccess.Body.String(), `"cash_topup_available":true`)
 		assert.Equal(t, http.StatusOK, request("GET", "/api/unihub/bff/v1/accounts", "", "", "", nil).Code)
 		wallet := request("GET", "/api/unihub/bff/v1/accounts/payer/wallets", "", "", "", nil)
 		require.Equal(t, http.StatusOK, wallet.Code, wallet.Body.String())

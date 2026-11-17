@@ -38,22 +38,7 @@ export function CentralCashCard(props: {
           <h2 className='font-semibold'>{t('Native LLMRouter funding')}</h2>
           <p className='text-muted-foreground text-sm'>
             {t(
-              'Native API keys and subscriptions use unified cash. Recharge this wallet in UniHub, then return and refresh.'
-            )}
-          </p>
-          {data ? (
-            <a
-              className='text-primary inline-block break-words underline underline-offset-4'
-              href={data.rechargeURL}
-              target='_blank'
-              rel='noopener noreferrer'
-            >
-              {t('Recharge unified cash in UniHub')}
-            </a>
-          ) : null}
-          <p className='text-muted-foreground text-xs'>
-            {t(
-              'Sandbox recharge requires your confirmation in UniHub. Opening this page does not create an order.'
+              'Native API keys and subscriptions use unified cash. Use the recharge card below to add funds here.'
             )}
           </p>
         </div>
@@ -67,14 +52,6 @@ export function CentralCashCard(props: {
               <p className='text-muted-foreground text-xs break-all'>
                 {t('Payer')}: {data.account.name} · {data.account.id}
               </p>
-              <a
-                className='text-primary inline-block break-words underline underline-offset-4'
-                href={data.productURL}
-                target='_blank'
-                rel='noopener noreferrer'
-              >
-                {t('Manage model wallet in UniHub')}
-              </a>
             </>
           ) : (
             <p
@@ -100,7 +77,7 @@ export function CentralCashCard(props: {
         <div className='space-y-2'>
           <p role='alert' className='text-muted-foreground text-sm'>
             {t(
-              'Central wallet details are unavailable. Refresh or sign in with UniHub to verify the payer.'
+              'Central wallet details are unavailable. Refresh to verify the payer.'
             )}
           </p>
           {props.context.canRetry ? (

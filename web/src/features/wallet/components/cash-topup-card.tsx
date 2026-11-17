@@ -118,12 +118,12 @@ export function CashTopupCard(props: CashTopupCardProps) {
       iconTone='success'
       disableHoverEffect
       className='max-w-2xl'
-      contentClassName='space-y-5'
+      contentClassName='p-3 sm:p-4'
     >
-      <div className='space-y-5'>
-        <div className='space-y-2'>
+      <div className='grid gap-4 sm:grid-cols-2 sm:gap-5'>
+        <div className='min-w-0 space-y-2'>
           <Label htmlFor='cash-topup-amount'>{t('Amount (CNY)')}</Label>
-          <div className='relative max-w-sm'>
+          <div className='relative'>
             <span className='text-muted-foreground pointer-events-none absolute top-1/2 left-3 -translate-y-1/2'>
               ¥
             </span>
@@ -136,14 +136,14 @@ export function CashTopupCard(props: CashTopupCardProps) {
                 setAmount(event.target.value.trim())
                 setError('')
               }}
-              className='pl-7'
+              className='h-9 pl-7'
               aria-invalid={amountError !== null}
               aria-describedby='cash-topup-amount-hint'
               disabled={submitting}
             />
           </div>
           <div
-            className='grid grid-cols-2 gap-2 sm:grid-cols-5'
+            className='grid grid-cols-3 gap-1.5 sm:grid-cols-5'
             role='group'
             aria-label={t('Amount (CNY)')}
           >
@@ -154,6 +154,7 @@ export function CashTopupCard(props: CashTopupCardProps) {
                 variant={amount === String(tier) ? 'default' : 'outline'}
                 aria-pressed={amount === String(tier)}
                 disabled={submitting}
+                className='h-8 px-0 text-xs'
                 onClick={() => {
                   setAmount(String(tier))
                   setError('')
@@ -163,72 +164,77 @@ export function CashTopupCard(props: CashTopupCardProps) {
               </Button>
             ))}
           </div>
-        </div>
-        <div className='grid gap-5 sm:grid-cols-[minmax(0,1fr)_240px] sm:items-start'>
           <p
             id='cash-topup-amount-hint'
-            className='text-muted-foreground text-xs'
+            className='text-muted-foreground text-[11px]'
           >
             {t('Minimum ¥1, maximum ¥100000, up to 2 decimals')}
           </p>
-          <div className='space-y-2'>
-            <Label>{t('Payment method')}</Label>
-            <div
-              className='grid grid-cols-2 gap-2'
-              role='group'
-              aria-label={t('Payment method')}
-            >
-              {(['wechat', 'alipay'] as const).map((option) => (
-                <Button
-                  key={option}
-                  type='button'
-                  variant={provider === option ? 'secondary' : 'outline'}
-                  aria-pressed={provider === option}
-                  disabled={submitting}
-                  onClick={() => setProvider(option)}
-                >
-                  {option === 'wechat' ? t('WeChat Pay') : t('Alipay')}
-                </Button>
-              ))}
-            </div>
+        </div>
+
+        <div className='min-w-0 space-y-2'>
+          <Label>{t('Payment method')}</Label>
+          <div
+            className='grid grid-cols-2 gap-1.5'
+            role='group'
+            aria-label={t('Payment method')}
+          >
+            {(['wechat', 'alipay'] as const).map((option) => (
+              <Button
+                key={option}
+                type='button'
+                variant={provider === option ? 'default' : 'outline'}
+                aria-pressed={provider === option}
+                disabled={submitting}
+                className='h-9 text-sm'
+                onClick={() => setProvider(option)}
+              >
+                {option === 'wechat' ? t('WeChat Pay') : t('Alipay')}
+              </Button>
+            ))}
           </div>
         </div>
       </div>
 
       {amountError !== null ? (
-        <p role='alert' className='text-destructive text-xs'>
+        <p role='alert' className='text-destructive mt-3 text-xs'>
           {amountErrorMessage(amountError, t)}
         </p>
       ) : null}
       {error ? (
-        <p role='alert' className='text-destructive text-sm'>
+        <p role='alert' className='text-destructive mt-3 text-xs'>
           {error}
         </p>
       ) : null}
 
-      <Button
-        type='button'
-        className='max-w-sm'
-        disabled={!canSubmit}
-        onClick={() => void submit()}
-      >
-        {submitting ? <Loader2 className='mr-2 h-4 w-4 animate-spin' /> : null}
-        {submitting
-          ? t('Creating payment...')
-          : t('Pay {{provider}}', {
-              provider: provider === 'wechat' ? t('WeChat Pay') : t('Alipay'),
-            })}
-      </Button>
-      {checkout && isNavigablePaymentURL(checkout.session.url) ? (
-        <a
-          className='text-primary inline-block text-sm break-all underline underline-offset-4'
-          href={checkout.session.url}
-          target='_blank'
-          rel='noopener noreferrer'
+      <div className='mt-4 space-y-2 border-t pt-3'>
+        <Button
+          type='button'
+          className='w-full'
+          disabled={!canSubmit}
+          onClick={() => void submit()}
         >
-          {t('Open payment page')}
-        </a>
-      ) : null}
+          {submitting ? (
+            <Loader2 className='mr-2 h-4 w-4 animate-spin' />
+          ) : null}
+          {submitting
+            ? t('Creating payment...')
+            : t('Pay {{provider}}', {
+                provider:
+                  provider === 'wechat' ? t('WeChat Pay') : t('Alipay'),
+              })}
+        </Button>
+        {checkout && isNavigablePaymentURL(checkout.session.url) ? (
+          <a
+            className='text-primary block text-center text-xs break-all underline underline-offset-4'
+            href={checkout.session.url}
+            target='_blank'
+            rel='noopener noreferrer'
+          >
+            {t('Open payment page')}
+          </a>
+        ) : null}
+      </div>
     </TitledCard>
   )
 }

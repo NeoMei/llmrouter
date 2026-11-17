@@ -46,6 +46,7 @@ type StreamValidator struct {
 	responseSeen           bool
 	responseSuccess        bool
 	bufferedBytes          int
+	policyGateReleased     bool
 	rejectCustomConversion bool
 	chatSeen               map[int]struct{}
 	chatFinished           map[int]struct{}
@@ -198,11 +199,17 @@ func (v *StreamValidator) Accept(event json.RawMessage) ([]json.RawMessage, erro
 			return nil, v.fail(fmt.Errorf("%w: chat usage arrived before every choice completed", ErrIncompleteToolCall))
 		}
 	}
-	if v.policy.RequiresToolCall() {
-		gate := v.ensureTerminalGate("policy-terminal", sequence)
-		v.policyGate = gate
+	if v.policy.RequiresToolCall() && !v.policyGateReleased {
+		// A required/named choice withholds text frames so a text-only upstream
+		// cannot leak content for a tool call that never happens. Once the
+		// withheld-frame buffer reaches a resource bound, release the gate to
+		// pass-through (see releasePolicyGateForBuffering); ValidateTerminal
+		// in Finish still rejects a stream that ends without the required call.
+		if v.policyGate == nil {
+			v.policyGate = v.ensureTerminalGate("policy-terminal", sequence)
+		}
 		toolRelated = true
-		owners[gate] = struct{}{}
+		owners[v.policyGate] = struct{}{}
 	}
 
 	if len(envelope.Choices) > 0 {
@@ -229,6 +236,20 @@ func (v *StreamValidator) Accept(event json.RawMessage) ([]json.RawMessage, erro
 	}
 
 	if toolRelated {
+		// Reasoning models can emit very long text thought streams before a tool
+		// call. Fine-grained streams hit the frame-count bound before the byte
+		// bound. If these frames are withheld only by the policy gate, degrade to
+		// pass-through so an otherwise valid call is not broken by the buffer
+		// limit. Frames still owned by a real tool call remain withheld for atomic
+		// validation, so a genuinely oversized call still fails the checks below.
+		// ValidateTerminal in Finish still rejects a stream with no required call.
+		var flushed []json.RawMessage
+		if len(v.frames) >= streamMaxBufferedFrames || v.bufferedBytes+len(raw) > streamMaxBufferedBytes {
+			if v.releasePolicyGateForBuffering(owners) {
+				delete(owners, v.policyGate)
+				flushed = append(flushed, v.flushReady()...)
+			}
+		}
 		if len(v.frames) >= streamMaxBufferedFrames {
 			return nil, v.fail(fmt.Errorf("%w: too many buffered stream frames", ErrMalformedToolCall))
 		}
@@ -238,7 +259,8 @@ func (v *StreamValidator) Accept(event json.RawMessage) ([]json.RawMessage, erro
 		cloned := append(json.RawMessage(nil), raw...)
 		v.frames = append(v.frames, &pendingStreamFrame{sequence: sequence, raw: cloned, owners: owners})
 		v.bufferedBytes += len(cloned)
-		return v.flushReady(), nil
+		flushed = append(flushed, v.flushReady()...)
+		return flushed, nil
 	}
 	return []json.RawMessage{append(json.RawMessage(nil), raw...)}, nil
 }
@@ -725,6 +747,46 @@ func (v *StreamValidator) holdBufferedFramesUntil(gate *pendingStreamCall) {
 	for _, frame := range v.frames {
 		frame.owners[gate] = struct{}{}
 	}
+}
+
+// releasePolicyGateForBuffering degrades a required/named choice stream to
+// pass-through when the withheld-frame buffer reaches a resource bound. A
+// reasoning model can emit a very long text thought stream before the tool
+// call; withholding every such frame for the policy gate would otherwise hit
+// streamMaxBufferedBytes or streamMaxBufferedFrames and break an otherwise
+// valid call. The gate is released only when it is the sole owner of the
+// withheld frames, so frames belonging to a real, in-flight tool call stay
+// buffered for atomic validation and a genuinely oversized call still fails.
+// ValidateTerminal in Finish still rejects a stream that ends without the
+// required tool call, so correctness is preserved.
+func (v *StreamValidator) releasePolicyGateForBuffering(currentOwners map[*pendingStreamCall]struct{}) bool {
+	if v.policyGate == nil || v.policyGate.completed || v.policyGateReleased {
+		return false
+	}
+	if !v.policy.RequiresToolCall() {
+		return false
+	}
+	// Refuse to release if a real (non-gate) tool call is pending: those frames
+	// must stay withheld for atomic validation and a full buffer here is a
+	// genuine resource violation.
+	for owner := range currentOwners {
+		if owner != v.policyGate && !owner.completed {
+			return false
+		}
+	}
+	for _, frame := range v.frames {
+		for owner := range frame.owners {
+			if owner != v.policyGate && !owner.completed {
+				return false
+			}
+		}
+	}
+	v.policyGate.completed = true
+	v.policyGateReleased = true
+	for _, frame := range v.frames {
+		delete(frame.owners, v.policyGate)
+	}
+	return true
 }
 
 func (v *StreamValidator) mergeCalls(left, right *pendingStreamCall) (*pendingStreamCall, error) {

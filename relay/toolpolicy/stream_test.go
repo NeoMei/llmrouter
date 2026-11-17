@@ -851,3 +851,92 @@ func TestStreamValidatorRejectsConflictingChatToolType(t *testing.T) {
 	require.ErrorIs(t, err, ErrMalformedToolCall)
 	assert.Contains(t, err.Error(), "conflicting tool call type")
 }
+
+func requiredChatPolicy(t *testing.T) Policy {
+	t.Helper()
+	policy, err := BuildFromChat(
+		[]dto.ToolCallRequest{{Type: "function", Function: dto.FunctionRequest{Name: "lookup"}}},
+		"required",
+	)
+	require.NoError(t, err)
+	return policy
+}
+
+// Reasoning models can emit a very long text thought stream before a tool
+// call. A required/named choice must not fail such a stream only because the
+// policy gate withheld every text frame past streamMaxBufferedBytes.
+func TestStreamValidatorRequiredChoiceLongTextThenToolCallSucceeds(t *testing.T) {
+	validator := NewStreamValidator(requiredChatPolicy(t))
+
+	chunk := strings.Repeat("x", streamMaxFrameBytes/2)
+	frame := json.RawMessage(fmt.Sprintf(`{"choices":[{"index":0,"delta":{"reasoning_content":%q},"finish_reason":null}]}`, chunk))
+	textFrames := streamMaxBufferedBytes/len(frame) + 4
+	emittedTotal := 0
+	for i := 0; i < textFrames; i++ {
+		emitted, err := validator.Accept(frame)
+		require.NoError(t, err)
+		emittedTotal += len(emitted)
+	}
+	require.Greater(t, textFrames*len(frame), streamMaxBufferedBytes)
+	assert.Greater(t, emittedTotal, 0, "text frames must pass through after the gate is released")
+
+	call := json.RawMessage(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":null}]}`)
+	emitted, err := validator.Accept(call)
+	require.NoError(t, err)
+	assert.Empty(t, emitted)
+	terminal := json.RawMessage(`{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`)
+	emitted, err = validator.Accept(terminal)
+	require.NoError(t, err)
+	assert.Empty(t, emitted)
+
+	flushed, err := validator.Finish()
+	require.NoError(t, err)
+	require.Len(t, flushed, 2)
+}
+
+// Fine-grained reasoning streams hit the frame-count bound before the byte
+// bound. A required choice must also release the gate on that path.
+func TestStreamValidatorRequiredChoiceManySmallTextFramesThenToolCallSucceeds(t *testing.T) {
+	validator := NewStreamValidator(requiredChatPolicy(t))
+
+	frame := json.RawMessage(`{"choices":[{"index":0,"delta":{"reasoning_content":"x"},"finish_reason":null}]}`)
+	frameCount := streamMaxBufferedFrames + 10
+	emittedTotal := 0
+	for i := 0; i < frameCount; i++ {
+		emitted, err := validator.Accept(frame)
+		require.NoError(t, err)
+		emittedTotal += len(emitted)
+	}
+	assert.Greater(t, emittedTotal, 0, "text frames must pass through after the gate is released on frame-count bound")
+
+	call := json.RawMessage(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":null}]}`)
+	emitted, err := validator.Accept(call)
+	require.NoError(t, err)
+	assert.Empty(t, emitted)
+	terminal := json.RawMessage(`{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`)
+	emitted, err = validator.Accept(terminal)
+	require.NoError(t, err)
+	assert.Empty(t, emitted)
+
+	flushed, err := validator.Finish()
+	require.NoError(t, err)
+	require.Len(t, flushed, 2)
+}
+
+// A required choice that ends without any tool call must still fail after the
+// buffer gate was released on an oversized text stream.
+func TestStreamValidatorRequiredChoiceTextOnlyStillFails(t *testing.T) {
+	validator := NewStreamValidator(requiredChatPolicy(t))
+
+	chunk := strings.Repeat("x", streamMaxFrameBytes/2)
+	frame := json.RawMessage(fmt.Sprintf(`{"choices":[{"index":0,"delta":{"reasoning_content":%q},"finish_reason":null}]}`, chunk))
+	for i := 0; i < streamMaxBufferedBytes/len(frame)+4; i++ {
+		_, err := validator.Accept(frame)
+		require.NoError(t, err)
+	}
+	stop := json.RawMessage(`{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`)
+	_, err := validator.Accept(stop)
+	require.NoError(t, err)
+	_, err = validator.Finish()
+	require.ErrorIs(t, err, ErrDisallowedTool)
+}

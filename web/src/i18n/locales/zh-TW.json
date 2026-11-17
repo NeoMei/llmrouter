@@ -2149,7 +2149,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "相關項目",
     "footer.defaultCopyright": "版權所有。",
-    "footer.new\u0061pi.projectAttributionSuffix": "版權所有，由項目貢獻者設計與開發。",
+    "footer.newapi.projectAttributionSuffix": "版權所有，由項目貢獻者設計與開發。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "對於 2025 年 5 月 10 日之後新增的渠道，在部署時無需從模型名稱中移除 \".\"",
     "For private deployments, format: https://fastgpt.run/api/openapi": "對於私有部署，格式為：https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "強制返回語法合法的 JSON",
@@ -5664,6 +5664,14 @@
     "Password must be at most 128 characters": "密碼最多 128 個字元",
     "Password must be between 8 and 128 characters": "密碼須為 8 至 128 個字元",
     "Enter password (8-128 characters)": "輸入密碼（8-128 個字元）",
-    "Username must start with a letter and use only lowercase letters, digits, hyphens or underscores (2-64 characters)": "使用者名稱須以字母開頭，僅使用小寫字母、數字、連字號或底線（2-64 個字元）"
+    "Username must start with a letter and use only lowercase letters, digits, hyphens or underscores (2-64 characters)": "使用者名稱須以字母開頭，僅使用小寫字母、數字、連字號或底線（2-64 個字元）",
+    "Recharge complete. Your balance has been updated.": "Recharge complete. Your balance has been updated.",
+    "Payment received. Updating your balance.": "Payment received. Updating your balance.",
+    "This payment is closed. Please create a new recharge.": "This payment is closed. Please create a new recharge.",
+    "This QR code has expired. Check the payment status before trying again.": "This QR code has expired. Check the payment status before trying again.",
+    "Payment received and requires review. Please contact support.": "Payment received and requires review. Please contact support.",
+    "Check payment status": "Check payment status",
+    "Back to wallet": "Back to wallet",
+    "Unable to confirm payment. Please check again.": "Unable to confirm payment. Please check again."
   }
 }

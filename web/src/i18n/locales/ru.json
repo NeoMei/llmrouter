@@ -2149,7 +2149,7 @@
     "footer.columns.related.links.oneApi": "Один API",
     "footer.columns.related.title": "Связанные проекты",
     "footer.defaultCopyright": "Все права защищены.",
-    "footer.new\u0061pi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
+    "footer.newapi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Для каналов, добавленных после 10 мая 2025 г., не нужно удалять \".\" из имён моделей при развёртывании",
     "For private deployments, format: https://fastgpt.run/api/openapi": "Для частных развертываний, формат: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Принудительно возвращать синтаксически корректный JSON",
@@ -5664,6 +5664,14 @@
     "Password must be at most 128 characters": "Password must be at most 128 characters",
     "Password must be between 8 and 128 characters": "Password must be between 8 and 128 characters",
     "Enter password (8-128 characters)": "Enter password (8-128 characters)",
-    "Username must start with a letter and use only lowercase letters, digits, hyphens or underscores (2-64 characters)": "Username must start with a letter and use only lowercase letters, digits, hyphens or underscores (2-64 characters)"
+    "Username must start with a letter and use only lowercase letters, digits, hyphens or underscores (2-64 characters)": "Username must start with a letter and use only lowercase letters, digits, hyphens or underscores (2-64 characters)",
+    "Recharge complete. Your balance has been updated.": "Recharge complete. Your balance has been updated.",
+    "Payment received. Updating your balance.": "Payment received. Updating your balance.",
+    "This payment is closed. Please create a new recharge.": "This payment is closed. Please create a new recharge.",
+    "This QR code has expired. Check the payment status before trying again.": "This QR code has expired. Check the payment status before trying again.",
+    "Payment received and requires review. Please contact support.": "Payment received and requires review. Please contact support.",
+    "Check payment status": "Check payment status",
+    "Back to wallet": "Back to wallet",
+    "Unable to confirm payment. Please check again.": "Unable to confirm payment. Please check again."
   }
 }

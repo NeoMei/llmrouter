@@ -166,9 +166,9 @@ test('cash topup without finance permission hides the card but keeps the verifie
   await expect(
     page.getByText('Recharge with WeChat Pay or Alipay', { exact: true })
   ).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '¥100', exact: true })).toHaveCount(
-    0
-  )
+  await expect(
+    page.getByRole('button', { name: '¥100', exact: true })
+  ).toHaveCount(0)
   await expect(
     page.getByRole('textbox', { name: 'Amount (CNY)', exact: true })
   ).toHaveCount(0)
@@ -290,9 +290,7 @@ for (const [status, code] of [
       route.fulfill({ status, json: { error: code } })
     )
     await page.goto('/wallet')
-    await expect(
-      page.getByText(unavailableText, { exact: true })
-    ).toBeVisible()
+    await expect(page.getByText(unavailableText, { exact: true })).toBeVisible()
     await expect(page.getByText('300.000000 CNY', { exact: true })).toHaveCount(
       0
     )
@@ -555,7 +553,9 @@ for (const method of ['oidc', 'product_broker'] as const) {
     )
     await page.goto('/wallet')
     await expectCashTopupCard(page)
-    await expect(page.getByText('300.000000 CNY', { exact: true })).toBeVisible()
+    await expect(
+      page.getByText('300.000000 CNY', { exact: true })
+    ).toBeVisible()
     expect(tracked.requests).toContain(
       '/api/unihub/bff/v1/accounts/payer/wallets'
     )
@@ -676,22 +676,195 @@ test('switching login method discards the previous central wallet response', asy
   })
   const changed = bundle(42, true)
   changed.session.login_method = 'product_broker'
-  await page.evaluate(
-    (value) => window.settingsFixture.signIn(value),
-    changed
-  )
+  await page.evaluate((value) => window.settingsFixture.signIn(value), changed)
   await expect(page.getByRole('alert')).toContainText(
     'Central wallet details are unavailable'
   )
   release()
   await cancelledRead
   await page.evaluate(
-    () =>
-      new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
   )
-  await expect(page.getByText('300.000000 CNY', { exact: true })).toHaveCount(
-    0
-  )
+  await expect(page.getByText('300.000000 CNY', { exact: true })).toHaveCount(0)
   await expectNoUniHubLinks(page)
   expect(tracked.writes).toEqual([])
+})
+
+test('WeChat confirmation replaces QR with success and refreshes the credited balance', async ({
+  page,
+}) => {
+  await cashFixture(page)
+  await page.route('**/api/user/auth/refresh', (route) => {
+    const auth = bundle(42, true)
+    auth.user.funding = { ...funding, account_id: 'payer' } as typeof funding
+    return route.fulfill({ json: { success: true, data: auth } })
+  })
+  await page.route('**/api/unihub/access', (route) =>
+    route.fulfill({
+      json: {
+        csrf_token: 'csrf-fixture',
+        finance_access: {
+          transport: 'runtime_actor',
+          available: true,
+          cash_topup_available: true,
+          central_user_id: 'fixture-central',
+          write_scopes: ['recharges:write'],
+        },
+        access: {
+          subject: 'fixture-central',
+          user: { id: 'fixture-central', name: 'Fixture', email: '' },
+          roles: ['member'],
+          permissions: ['product:use'],
+          expires_at: Math.floor(Date.now() / 1000) + 3600,
+        },
+        user: {
+          ...bundle(42, true).user,
+          funding: { ...funding, account_id: 'payer' },
+        },
+        permissions: { product: { use: true } },
+      },
+    })
+  )
+  let paid = false
+  let credited = false
+  let walletReads = 0
+  await walletResponse(page, (route) => {
+    walletReads++
+    return route.fulfill({
+      json: {
+        success: true,
+        data: {
+          ...user,
+          identity_source: 'unihub',
+          unihub_user_id: 'fixture-central',
+          funding: {
+            ...funding,
+            account_id: 'payer',
+            available: credited ? '20000000' : '0',
+          },
+        },
+      },
+    })
+  })
+  await page.route('**/cash-checkouts', (route) =>
+    route.fulfill({
+      status: 202,
+      json: {
+        id: 'ct_confirm1',
+        account_id: 'payer',
+        provider: 'wechat',
+        amount: '20000000',
+        payment_status: 'CREATED',
+        expires_at: new Date(Date.now() + 900000).toISOString(),
+        session: { kind: 'qr', url: 'weixin://wxpay/bizpayurl?pr=test' },
+      },
+    })
+  )
+  await page.route('**/cash-checkouts/ct_confirm1', (route) =>
+    route.fulfill({
+      json: {
+        id: 'ct_confirm1',
+        account_id: 'payer',
+        amount: '20000000',
+        payment_status: paid ? 'PAID' : 'CREATED',
+        operation_id: paid ? 'op_confirm1' : undefined,
+      },
+    })
+  )
+  await page.route('**/operations/op_confirm1', (route) =>
+    route.fulfill({
+      json: { id: 'op_confirm1', status: credited ? 'APPLIED' : 'CREATED' },
+    })
+  )
+  await page.goto('/wallet')
+  await page.getByRole('button', { name: '¥20', exact: true }).click()
+  await page
+    .getByRole('button', { name: 'Pay WeChat Pay', exact: true })
+    .click()
+  const dialog = page.getByRole('dialog')
+  await expect(
+    dialog.locator('svg').filter({ has: page.locator('title') })
+  ).toBeVisible()
+  paid = true
+  await expect(
+    dialog.getByText('Payment received. Updating your balance.')
+  ).toBeVisible()
+  await expect(
+    dialog.locator('svg').filter({ has: page.locator('title') })
+  ).toHaveCount(0)
+  const readsBefore = walletReads
+  credited = true
+  await expect(
+    dialog.getByText('Recharge complete. Your balance has been updated.')
+  ).toBeVisible()
+  expect(walletReads).toBeGreaterThan(readsBefore)
+  await expect(page.getByText('20.000000 CNY', { exact: true })).toBeVisible()
+  await dialog
+    .getByRole('button', { name: 'Back to wallet', exact: true })
+    .click()
+  await expect(dialog).toHaveCount(0)
+})
+
+test('Alipay return verifies the checkout with the server before showing success', async ({
+  page,
+}) => {
+  await cashFixture(page)
+  await page.route('**/api/user/auth/refresh', (route) => {
+    const auth = bundle(42, true)
+    auth.user.funding = { ...funding, account_id: 'payer' } as typeof funding
+    return route.fulfill({ json: { success: true, data: auth } })
+  })
+  await page.route('**/api/unihub/access', (route) =>
+    route.fulfill({
+      json: {
+        csrf_token: 'csrf-fixture',
+        finance_access: {
+          transport: 'runtime_actor',
+          available: true,
+          cash_topup_available: true,
+          central_user_id: 'fixture-central',
+          write_scopes: ['recharges:write'],
+        },
+        access: {
+          subject: 'fixture-central',
+          user: { id: 'fixture-central', name: 'Fixture', email: '' },
+          roles: ['member'],
+          permissions: ['product:use'],
+          expires_at: Math.floor(Date.now() / 1000) + 3600,
+        },
+        user: {
+          ...bundle(42, true).user,
+          funding: { ...funding, account_id: 'payer' },
+        },
+        permissions: { product: { use: true } },
+      },
+    })
+  )
+  let paid = false
+  await page.route('**/cash-checkouts/ct_return1', (route) =>
+    route.fulfill({
+      json: {
+        id: 'ct_return1',
+        account_id: 'payer',
+        amount: '20000000',
+        payment_status: paid ? 'PAID' : 'CREATED',
+        operation_id: paid ? 'op_return1' : undefined,
+      },
+    })
+  )
+  await page.route('**/operations/op_return1', (route) =>
+    route.fulfill({ json: { id: 'op_return1', status: 'APPLIED' } })
+  )
+  await page.goto('/wallet?cash_checkout=ct_return1&trade_status=TRADE_SUCCESS')
+  await expect(
+    page.getByText('Waiting for payment', { exact: true })
+  ).toBeVisible()
+  await expect(
+    page.getByText('Recharge complete. Your balance has been updated.')
+  ).toHaveCount(0)
+  paid = true
+  await expect(
+    page.getByText('Recharge complete. Your balance has been updated.')
+  ).toBeVisible()
+  expect(new URL(page.url()).pathname).toBe('/wallet')
 })

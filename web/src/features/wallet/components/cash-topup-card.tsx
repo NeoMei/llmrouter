@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Loader2, Wallet } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
@@ -26,7 +26,8 @@ import { Label } from '@/components/ui/label'
 import { TitledCard } from '@/components/ui/titled-card'
 import { getFreshAuthHeaders, refreshAuthentication } from '@/lib/auth-session'
 
-import { CashTopupQrDialog } from './dialogs/cash-topup-qr-dialog'
+import { useCashCheckoutStatus } from '../hooks/use-cash-checkout-status'
+import { cashCheckoutID } from '../lib/cash-checkout-status'
 import {
   CASH_TOPUP_TIERS_CNY,
   CashCheckoutError,
@@ -38,6 +39,7 @@ import {
   type CashCheckout,
   type CashTopupProvider,
 } from '../lib/cash-topup'
+import { CashTopupQrDialog } from './dialogs/cash-topup-qr-dialog'
 
 function amountErrorMessage(
   code: ReturnType<typeof validateCashTopupAmount>,
@@ -73,6 +75,7 @@ interface CashTopupCardProps {
   account: string
   eligible: boolean
   assertIdentity: () => boolean
+  onPaid: () => Promise<void>
 }
 
 export function CashTopupCard(props: CashTopupCardProps) {
@@ -82,7 +85,48 @@ export function CashTopupCard(props: CashTopupCardProps) {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [checkout, setCheckout] = useState<CashCheckout | null>(null)
-  const [qrOpen, setQrOpen] = useState(false)
+  const [checkoutID, setCheckoutID] = useState(() => {
+    const returned =
+      new URL(window.location.href).searchParams.get('cash_checkout') ?? ''
+    if (cashCheckoutID.test(returned)) return returned
+    try {
+      return sessionStorage.getItem(`cash-checkout:${props.account}`) ?? ''
+    } catch {
+      return ''
+    }
+  })
+  const [qrOpen, setQrOpen] = useState(() => !!checkoutID)
+  const status = useCashCheckoutStatus({ ...props, id: checkoutID })
+  useEffect(() => {
+    if (status.phase !== 'success') return
+    try {
+      sessionStorage.removeItem(`cash-checkout:${props.account}`)
+    } catch {
+      /* storage may be disabled */
+    }
+    const url = new URL(window.location.href)
+    if (url.searchParams.get('cash_checkout') === checkoutID) {
+      for (const key of [
+        'cash_checkout',
+        'out_trade_no',
+        'trade_no',
+        'trade_status',
+        'total_amount',
+        'seller_id',
+        'app_id',
+        'sign',
+        'sign_type',
+        'charset',
+        'timestamp',
+        'method',
+        'version',
+        'auth_app_id',
+      ]) {
+        url.searchParams.delete(key)
+      }
+      window.history.replaceState(window.history.state, '', url)
+    }
+  }, [status.phase, props.account, checkoutID])
 
   if (!props.eligible || !props.account) return null
 
@@ -103,7 +147,8 @@ export function CashTopupCard(props: CashTopupCardProps) {
           // object when the library invokes `deps.fetch(...)`, which throws
           // "Illegal invocation" before any request is sent. Wrap it so the
           // call always goes through the global receiver.
-          fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args),
+          fetch: (...args: Parameters<typeof fetch>) =>
+            globalThis.fetch(...args),
           getAuthHeaders: getFreshAuthHeaders,
           assertIdentity: props.assertIdentity,
         },
@@ -116,6 +161,12 @@ export function CashTopupCard(props: CashTopupCardProps) {
         () => refreshAuthentication()
       )
       setCheckout(result)
+      setCheckoutID(result.id)
+      try {
+        sessionStorage.setItem(`cash-checkout:${props.account}`, result.id)
+      } catch {
+        /* storage may be disabled */
+      }
       // WeChat native checkout returns a weixin:// code_url. Navigating to it
       // opens the WeChat app; render it as a scannable QR on-page instead.
       // Alipay returns an HTTPS cashier page and keeps the normal redirect.
@@ -238,7 +289,9 @@ export function CashTopupCard(props: CashTopupCardProps) {
                       provider === 'wechat' ? t('WeChat Pay') : t('Alipay'),
                   })}
             </Button>
-            {checkout && isWeChatQrPaymentURL(checkout.session.url) ? (
+            {checkout &&
+            status.phase === 'waiting' &&
+            isWeChatQrPaymentURL(checkout.session.url) ? (
               <Button
                 type='button'
                 variant='link'
@@ -247,7 +300,9 @@ export function CashTopupCard(props: CashTopupCardProps) {
               >
                 {t('Scan with WeChat Pay')}
               </Button>
-            ) : checkout && isNavigablePaymentURL(checkout.session.url) ? (
+            ) : checkout &&
+              status.phase === 'waiting' &&
+              isNavigablePaymentURL(checkout.session.url) ? (
               <a
                 className='text-primary block text-center text-xs break-all underline underline-offset-4'
                 href={checkout.session.url}
@@ -274,8 +329,22 @@ export function CashTopupCard(props: CashTopupCardProps) {
       <CashTopupQrDialog
         open={qrOpen}
         onOpenChange={setQrOpen}
-        amount={amount}
-        codeUrl={checkout?.session.url ?? ''}
+        amount={
+          status.data
+            ? (Number(status.data.amount) / 1000000).toFixed(2)
+            : amount
+        }
+        phase={status.phase}
+        checking={status.isFetching}
+        checkError={status.isError}
+        onCheck={() => void status.refetch()}
+        codeUrl={
+          isWeChatQrPaymentURL(
+            status.data?.session?.url ?? checkout?.session.url ?? ''
+          )
+            ? (status.data?.session?.url ?? checkout?.session.url ?? '')
+            : ''
+        }
       />
     </TitledCard>
   )

@@ -2149,7 +2149,7 @@
     "footer.columns.related.links.oneApi": "1つのAPI",
     "footer.columns.related.title": "関連プロジェクト",
     "footer.defaultCopyright": "すべての権利を留保します。",
-    "footer.new\u0061pi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
+    "footer.newapi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "2025 年 5 月 10 日以降に追加されたチャネルの場合、デプロイ時にモデル名から「.」を削除する必要はありません",
     "For private deployments, format: https://fastgpt.run/api/openapi": "プライベートデプロイメントの場合、形式: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "構文的に有効な JSON 応答を強制",
@@ -5664,6 +5664,14 @@
     "Password must be at most 128 characters": "Password must be at most 128 characters",
     "Password must be between 8 and 128 characters": "Password must be between 8 and 128 characters",
     "Enter password (8-128 characters)": "Enter password (8-128 characters)",
-    "Username must start with a letter and use only lowercase letters, digits, hyphens or underscores (2-64 characters)": "Username must start with a letter and use only lowercase letters, digits, hyphens or underscores (2-64 characters)"
+    "Username must start with a letter and use only lowercase letters, digits, hyphens or underscores (2-64 characters)": "Username must start with a letter and use only lowercase letters, digits, hyphens or underscores (2-64 characters)",
+    "Recharge complete. Your balance has been updated.": "Recharge complete. Your balance has been updated.",
+    "Payment received. Updating your balance.": "Payment received. Updating your balance.",
+    "This payment is closed. Please create a new recharge.": "This payment is closed. Please create a new recharge.",
+    "This QR code has expired. Check the payment status before trying again.": "This QR code has expired. Check the payment status before trying again.",
+    "Payment received and requires review. Please contact support.": "Payment received and requires review. Please contact support.",
+    "Check payment status": "Check payment status",
+    "Back to wallet": "Back to wallet",
+    "Unable to confirm payment. Please check again.": "Unable to confirm payment. Please check again."
   }
 }

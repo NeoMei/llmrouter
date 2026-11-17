@@ -410,6 +410,7 @@ function WalletContent(props: WalletProps & { identity: string }) {
               account={cashTopupAccount}
               eligible={cashTopupEligible}
               assertIdentity={cashTopupIdentity}
+              onPaid={fetchUser}
             />
 
             <fieldset

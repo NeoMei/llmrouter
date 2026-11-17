@@ -23,6 +23,7 @@ import {
   CashCheckoutError,
   createCashCheckout,
   createCashCheckoutWithRetry,
+  isWeChatQrPaymentURL,
   redirectToPayment,
   type CashCheckoutDeps,
 } from '../cash-topup'
@@ -401,6 +402,19 @@ describe('cash checkout request', () => {
 })
 
 describe('payment redirect', () => {
+  test('recognises a WeChat native code_url that must be shown as a QR', () => {
+    assert.equal(
+      isWeChatQrPaymentURL('weixin://wxpay/bizpayurl?pr=abc123'),
+      true
+    )
+  })
+
+  test('does not classify other URLs as WeChat QR code URLs', () => {
+    assert.equal(isWeChatQrPaymentURL('https://pay.example/co_1'), false)
+    assert.equal(isWeChatQrPaymentURL('weixin://wxpay/other?pr=abc'), false)
+    assert.equal(isWeChatQrPaymentURL('not a url'), false)
+  })
+
   test('redirects to an https payment URL', () => {
     const urls: string[] = []
     redirectToPayment('https://pay.example/co_1', {

@@ -245,6 +245,26 @@ export function isNavigablePaymentURL(url: string): boolean {
   }
 }
 
+/**
+ * WeChat native checkout returns a `weixin://wxpay/bizpayurl?pr=...` string.
+ * That is the WeChat Pay "code_url": a QR-code payload, not a normal page
+ * URL. Navigating to it launches the WeChat app, which is wrong for desktop
+ * and browser users. Detect it here so the wallet can render it as a
+ * scannable QR code on-page instead.
+ */
+export function isWeChatQrPaymentURL(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return (
+      parsed.protocol === 'weixin:' &&
+      parsed.hostname === 'wxpay' &&
+      parsed.pathname === '/bizpayurl'
+    )
+  } catch {
+    return false
+  }
+}
+
 export function redirectToPayment(
   url: string,
   target: { assign: (url: string) => void }

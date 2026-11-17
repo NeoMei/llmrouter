@@ -26,11 +26,13 @@ import { Label } from '@/components/ui/label'
 import { TitledCard } from '@/components/ui/titled-card'
 import { getFreshAuthHeaders, refreshAuthentication } from '@/lib/auth-session'
 
+import { CashTopupQrDialog } from './dialogs/cash-topup-qr-dialog'
 import {
   CASH_TOPUP_TIERS_CNY,
   CashCheckoutError,
   createCashCheckoutWithRetry,
   isNavigablePaymentURL,
+  isWeChatQrPaymentURL,
   redirectToPayment,
   validateCashTopupAmount,
   type CashCheckout,
@@ -80,6 +82,7 @@ export function CashTopupCard(props: CashTopupCardProps) {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [checkout, setCheckout] = useState<CashCheckout | null>(null)
+  const [qrOpen, setQrOpen] = useState(false)
 
   if (!props.eligible || !props.account) return null
 
@@ -91,6 +94,7 @@ export function CashTopupCard(props: CashTopupCardProps) {
     setSubmitting(true)
     setError('')
     setCheckout(null)
+    setQrOpen(false)
     try {
       const result = await createCashCheckoutWithRetry(
         {
@@ -112,7 +116,14 @@ export function CashTopupCard(props: CashTopupCardProps) {
         () => refreshAuthentication()
       )
       setCheckout(result)
-      redirectToPayment(result.session.url, window.location)
+      // WeChat native checkout returns a weixin:// code_url. Navigating to it
+      // opens the WeChat app; render it as a scannable QR on-page instead.
+      // Alipay returns an HTTPS cashier page and keeps the normal redirect.
+      if (isWeChatQrPaymentURL(result.session.url)) {
+        setQrOpen(true)
+      } else {
+        redirectToPayment(result.session.url, window.location)
+      }
     } catch (cause) {
       // Surface the real client-side throw during diagnosis: a bare TypeError
       // (e.g. crypto.randomUUID in a non-secure context) previously collapsed
@@ -227,7 +238,16 @@ export function CashTopupCard(props: CashTopupCardProps) {
                       provider === 'wechat' ? t('WeChat Pay') : t('Alipay'),
                   })}
             </Button>
-            {checkout && isNavigablePaymentURL(checkout.session.url) ? (
+            {checkout && isWeChatQrPaymentURL(checkout.session.url) ? (
+              <Button
+                type='button'
+                variant='link'
+                className='text-primary block h-auto w-full p-0 text-xs underline underline-offset-4'
+                onClick={() => setQrOpen(true)}
+              >
+                {t('Scan with WeChat Pay')}
+              </Button>
+            ) : checkout && isNavigablePaymentURL(checkout.session.url) ? (
               <a
                 className='text-primary block text-center text-xs break-all underline underline-offset-4'
                 href={checkout.session.url}
@@ -251,6 +271,12 @@ export function CashTopupCard(props: CashTopupCardProps) {
           {error}
         </p>
       ) : null}
+      <CashTopupQrDialog
+        open={qrOpen}
+        onOpenChange={setQrOpen}
+        amount={amount}
+        codeUrl={checkout?.session.url ?? ''}
+      />
     </TitledCard>
   )
 }

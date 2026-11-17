@@ -34,6 +34,7 @@ export type CashCheckoutErrorCode =
   | 'forbidden'
   | 'payment_not_configured'
   | 'request_failed'
+  | 'auth_retry'
 
 export class CashCheckoutError extends Error {
   readonly code: CashCheckoutErrorCode | 'missing_url'
@@ -103,9 +104,17 @@ export async function createCashCheckout(
     throw new CashCheckoutError('invalid')
   }
 
-  const authHeaders = await deps.getAuthHeaders()
+  let authHeaders: Record<string, string>
+  try {
+    authHeaders = await deps.getAuthHeaders()
+  } catch {
+    // A fresh login or silent UniHub handoff can leave the auth snapshot
+    // unsettled for a moment. This happens before any request is sent, so it
+    // is safe to retry rather than surfacing it as a failed recharge.
+    throw new CashCheckoutError('auth_retry')
+  }
   if (deps.assertIdentity && !deps.assertIdentity()) {
-    throw new CashCheckoutError('request_failed')
+    throw new CashCheckoutError('auth_retry')
   }
 
   const access = await deps.fetch(deps.accessURL ?? '/api/unihub/access', {
@@ -150,6 +159,37 @@ export async function createCashCheckout(
   const parsed = checkoutSchema.safeParse(await response.json())
   if (!parsed.success) throw new CashCheckoutError('request_failed')
   return parsed.data
+}
+
+/**
+ * A freshly logged-in or silently handed-off session can be settled a beat
+ * after the wallet card first renders. In that window getAuthHeaders() or the
+ * identity assertion briefly disagree with the account captured from the
+ * wallet query, and createCashCheckout() reports 'auth_retry' before any
+ * network call. Refreshing auth rewrites the store snapshot from the backend
+ * (including funding/identity_source), so one refresh + retry turns that
+ * transient race into a normal checkout instead of a red error on first click.
+ * The retry is bounded to a single attempt: a second 'auth_retry' is surfaced
+ * to the caller as-is and never loops.
+ */
+export async function createCashCheckoutWithRetry(
+  deps: CashCheckoutDeps,
+  input: CashCheckoutInput,
+  refreshAuth?: () => Promise<unknown>
+): Promise<CashCheckout> {
+  try {
+    return await createCashCheckout(deps, input)
+  } catch (cause) {
+    if (
+      cause instanceof CashCheckoutError &&
+      cause.code === 'auth_retry' &&
+      refreshAuth
+    ) {
+      await refreshAuth()
+      return await createCashCheckout(deps, input)
+    }
+    throw cause
+  }
 }
 
 export function isNavigablePaymentURL(url: string): boolean {

@@ -24,12 +24,12 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { TitledCard } from '@/components/ui/titled-card'
-import { getFreshAuthHeaders } from '@/lib/auth-session'
+import { getFreshAuthHeaders, refreshAuthentication } from '@/lib/auth-session'
 
 import {
   CASH_TOPUP_TIERS_CNY,
   CashCheckoutError,
-  createCashCheckout,
+  createCashCheckoutWithRetry,
   isNavigablePaymentURL,
   redirectToPayment,
   validateCashTopupAmount,
@@ -56,6 +56,9 @@ function checkoutErrorMessage(
   }
   if (code === 'payment_not_configured') {
     return t('Online payment is not configured yet. Please try again later.')
+  }
+  if (code === 'auth_retry') {
+    return t('Session is refreshing. Please try again.')
   }
   if (code === 'missing_url') return t('Payment link unavailable')
   return t('Recharge request failed. Please try again.')
@@ -86,7 +89,7 @@ export function CashTopupCard(props: CashTopupCardProps) {
     setError('')
     setCheckout(null)
     try {
-      const result = await createCashCheckout(
+      const result = await createCashCheckoutWithRetry(
         {
           fetch: globalThis.fetch,
           getAuthHeaders: getFreshAuthHeaders,
@@ -97,7 +100,8 @@ export function CashTopupCard(props: CashTopupCardProps) {
           amount,
           provider,
           productId: 'llmrouter',
-        }
+        },
+        () => refreshAuthentication()
       )
       setCheckout(result)
       redirectToPayment(result.session.url, window.location)

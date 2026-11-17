@@ -14,6 +14,7 @@
     "Recharge amount is invalid": "充值金额无效",
     "You do not have permission to recharge this account": "您没有权限为该账户充值",
     "Online payment is not configured yet. Please try again later.": "在线支付尚未配置，请稍后重试。",
+    "Session is refreshing. Please try again.": "会话正在刷新，请重试。",
     "Payment link unavailable": "支付链接不可用",
     "Recharge request failed. Please try again.": "充值请求失败，请重试。",
     "Two-factor authentication is managed by UniHub.": "双重身份验证由 UniHub 管理。",

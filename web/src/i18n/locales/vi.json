@@ -14,6 +14,7 @@
     "Recharge amount is invalid": "Recharge amount is invalid",
     "You do not have permission to recharge this account": "You do not have permission to recharge this account",
     "Online payment is not configured yet. Please try again later.": "Online payment is not configured yet. Please try again later.",
+    "Session is refreshing. Please try again.": "Phiên đang được làm mới. Vui lòng thử lại.",
     "Payment link unavailable": "Payment link unavailable",
     "Recharge request failed. Please try again.": "Recharge request failed. Please try again.",
     "Two-factor authentication is managed by UniHub.": "Xác thực hai yếu tố được quản lý bởi UniHub.",

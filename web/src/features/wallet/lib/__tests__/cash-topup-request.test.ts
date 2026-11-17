@@ -22,6 +22,7 @@ import { describe, test } from 'node:test'
 import {
   CashCheckoutError,
   createCashCheckout,
+  createCashCheckoutWithRetry,
   redirectToPayment,
   type CashCheckoutDeps,
 } from '../cash-topup'
@@ -133,7 +134,7 @@ describe('cash checkout request', () => {
     }
   })
 
-  test('rejects the request before any network call when identity changed', async () => {
+  test('reports auth_retry before any network call when identity is not settled yet', async () => {
     const { deps, requests } = depsWith([])
     await assert.rejects(
       () =>
@@ -142,9 +143,123 @@ describe('cash checkout request', () => {
           { account: 'payer-1', amount: '1', provider: 'wechat' }
         ),
       (error: unknown) =>
-        error instanceof CashCheckoutError && error.code === 'request_failed'
+        error instanceof CashCheckoutError && error.code === 'auth_retry'
     )
     assert.equal(requests.length, 0)
+  })
+
+  test('reports auth_retry when fresh auth headers fail before any network call', async () => {
+    const { deps, requests } = depsWith([])
+    await assert.rejects(
+      () =>
+        createCashCheckout(
+          {
+            ...deps,
+            getAuthHeaders: async () => {
+              throw new Error('auth snapshot not ready')
+            },
+          },
+          { account: 'payer-1', amount: '1', provider: 'wechat' }
+        ),
+      (error: unknown) =>
+        error instanceof CashCheckoutError && error.code === 'auth_retry'
+    )
+    assert.equal(requests.length, 0)
+  })
+
+  test('refreshes auth and completes checkout after an initial unsettled-identity rejection', async () => {
+    const { deps, requests } = depsWith([
+      { status: 200, body: { csrf_token: 'csrf-token' } },
+      { status: 202, body: checkoutBody },
+    ])
+    let identitySettled = false
+    let refreshes = 0
+
+    const result = await createCashCheckoutWithRetry(
+      {
+        ...deps,
+        assertIdentity: () => identitySettled,
+      },
+      { account: 'payer-1', amount: '50', provider: 'wechat' },
+      async () => {
+        refreshes += 1
+        identitySettled = true
+      }
+    )
+
+    assert.equal(result.session.url, 'https://pay.example/checkout/co_1')
+    assert.equal(refreshes, 1)
+    assert.equal(requests.length, 2)
+  })
+
+  test('refreshes auth and completes checkout after an initial auth-header failure', async () => {
+    const { deps, requests } = depsWith([
+      { status: 200, body: { csrf_token: 'csrf-token' } },
+      { status: 202, body: checkoutBody },
+    ])
+    let headersReady = false
+    let refreshes = 0
+
+    const result = await createCashCheckoutWithRetry(
+      {
+        ...deps,
+        getAuthHeaders: async () => {
+          if (!headersReady) throw new Error('auth snapshot not ready')
+          return { Authorization: 'Bearer test-token' }
+        },
+      },
+      { account: 'payer-1', amount: '50', provider: 'wechat' },
+      async () => {
+        refreshes += 1
+        headersReady = true
+      }
+    )
+
+    assert.equal(result.session.url, 'https://pay.example/checkout/co_1')
+    assert.equal(refreshes, 1)
+    assert.equal(requests.length, 2)
+  })
+
+  test('does not loop when auth stays unsettled after a refresh', async () => {
+    const { deps, requests } = depsWith([])
+    let refreshes = 0
+
+    await assert.rejects(
+      () =>
+        createCashCheckoutWithRetry(
+          { ...deps, assertIdentity: () => false },
+          { account: 'payer-1', amount: '1', provider: 'wechat' },
+          async () => {
+            refreshes += 1
+          }
+        ),
+      (error: unknown) =>
+        error instanceof CashCheckoutError && error.code === 'auth_retry'
+    )
+    assert.equal(refreshes, 1)
+    assert.equal(requests.length, 0)
+  })
+
+  test('does not refresh auth for a genuine backend failure', async () => {
+    const { deps } = depsWith([
+      { status: 200, body: { csrf_token: 'csrf-token' } },
+      { status: 500, body: {} },
+    ])
+    let refreshes = 0
+
+    await assert.rejects(
+      () =>
+        createCashCheckoutWithRetry(
+          deps,
+          { account: 'payer-1', amount: '1', provider: 'wechat' },
+          async () => {
+            refreshes += 1
+          }
+        ),
+      (error: unknown) =>
+        error instanceof CashCheckoutError && error.code === 'request_failed'
+    )
+    assert.equal(refreshes, 0)
   })
 })
 

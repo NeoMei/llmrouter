@@ -340,6 +340,42 @@ describe('cash checkout request', () => {
     assert.equal(requests.filter((r) => r.url.includes('cash-checkouts')).length, 1)
   })
 
+  test('checkout calls fetch through a receiver-safe wrapper', async () => {
+    // The card wraps globalThis.fetch in an arrow function so the native
+    // receiver cannot be rebound to the deps object. A bare native fetch
+    // invoked as deps.fetch(...) throws "Illegal invocation" with zero network
+    // requests, which is the production failure this guards against.
+    const calls: string[] = []
+    const globalReceiver = globalThis as { fetch: typeof fetch }
+    const originalFetch = globalReceiver.fetch
+    let receiverOk = false
+    globalReceiver.fetch = function (this: unknown, ...args: Parameters<typeof fetch>) {
+      receiverOk = this === globalThis
+      calls.push(String(args[0]))
+      return Promise.resolve(new Response('{}', { status: 200 }))
+    } as typeof fetch
+    try {
+      const deps: CashCheckoutDeps = {
+        fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args),
+        getAuthHeaders: async () => ({ Authorization: 'Bearer test-token' }),
+      }
+      await assert.rejects(
+        () =>
+          createCashCheckout(deps, {
+            account: 'payer-1',
+            amount: '20',
+            provider: 'wechat',
+          }),
+        (error: unknown) => error instanceof Error && !String(error).includes('Illegal invocation'),
+        'unparsable csrf response is surfaced without Illegal invocation'
+      )
+      assert.ok(receiverOk, 'fetch must be invoked with the global receiver')
+      assert.deepEqual(calls, ['/api/unihub/access'])
+    } finally {
+      globalReceiver.fetch = originalFetch
+    }
+  })
+
   test('a second transient access failure surfaces access_retry without looping', async () => {
     const { deps, requests } = depsWith([
       { status: 503, body: {} },

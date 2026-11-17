@@ -94,7 +94,12 @@ export function CashTopupCard(props: CashTopupCardProps) {
     try {
       const result = await createCashCheckoutWithRetry(
         {
-          fetch: globalThis.fetch,
+          // Native fetch must be called with the window as its receiver.
+          // Passing the bare global as a callback rebinds `this` to the deps
+          // object when the library invokes `deps.fetch(...)`, which throws
+          // "Illegal invocation" before any request is sent. Wrap it so the
+          // call always goes through the global receiver.
+          fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args),
           getAuthHeaders: getFreshAuthHeaders,
           assertIdentity: props.assertIdentity,
         },

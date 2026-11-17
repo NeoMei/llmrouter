@@ -110,6 +110,38 @@ describe('cash checkout request', () => {
     assert.equal(body.provider, 'alipay')
   })
 
+  test('posts checkout even when crypto.randomUUID is unavailable', async () => {
+    const { deps, requests } = depsWith([
+      { status: 200, body: { csrf_token: 'csrf-token' } },
+      { status: 202, body: checkoutBody },
+    ])
+    const cryptoObj = globalThis.crypto
+    const original = cryptoObj ? Object.getOwnPropertyDescriptor(cryptoObj, 'randomUUID') : undefined
+    // Simulate a wallet rendered in a context that hides randomUUID.
+    try {
+      if (cryptoObj) {
+        Object.defineProperty(cryptoObj, 'randomUUID', { value: undefined, configurable: true })
+      }
+      const result = await createCashCheckout(deps, {
+        account: 'payer-1',
+        amount: '20',
+        provider: 'wechat',
+        productId: 'llmrouter',
+      })
+      assert.equal(result.session.url, 'https://pay.example/checkout/co_1')
+      assert.equal(requests.filter((r) => r.url.includes('cash-checkouts')).length, 1)
+      const headers = new Headers(requests[1].init?.headers)
+      assert.match(
+        headers.get('Idempotency-Key') ?? '',
+        /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+      )
+    } finally {
+      if (cryptoObj && original) {
+        Object.defineProperty(cryptoObj, 'randomUUID', original)
+      }
+    }
+  })
+
   test('maps backend error statuses to distinct error codes', async () => {
     for (const [status, code] of [
       [400, 'invalid'],

@@ -67,6 +67,29 @@ const checkoutSchema = z.object({
 
 export type CashCheckout = z.infer<typeof checkoutSchema>
 
+/**
+ * Idempotency keys must be unique per attempt, but crypto.randomUUID() is not
+ * available in every embedded/mobile webview that can render the wallet. When
+ * it is missing we still need a collision-resistant key: the checkout POST
+ * must go through instead of throwing a bare TypeError before any request.
+ */
+function createIdempotencyKey(): string {
+  const webcrypto = globalThis.crypto
+  if (webcrypto && typeof webcrypto.randomUUID === 'function') {
+    return webcrypto.randomUUID()
+  }
+  if (webcrypto && typeof webcrypto.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16)
+    webcrypto.getRandomValues(bytes)
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+  }
+  // Last-resort fallback keeps the key non-empty and shaped like a UUID so
+  // the backend accepts it. getRandomValues is present in every secure
+  // context; this only guards against a broken crypto implementation.
+  return `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`
+}
+
 export function validateCashTopupAmount(
   amount: string
 ): CashTopupAmountError | null {
@@ -153,7 +176,7 @@ export async function createCashCheckout(
     headers: {
       ...authHeaders,
       'X-UniHub-CSRF': csrf.data.csrf_token,
-      'Idempotency-Key': crypto.randomUUID(),
+      'Idempotency-Key': createIdempotencyKey(),
     },
     body: JSON.stringify({
       provider: input.provider,

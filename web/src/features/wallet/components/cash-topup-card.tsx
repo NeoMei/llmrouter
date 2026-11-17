@@ -109,6 +109,10 @@ export function CashTopupCard(props: CashTopupCardProps) {
       setCheckout(result)
       redirectToPayment(result.session.url, window.location)
     } catch (cause) {
+      // Surface the real client-side throw during diagnosis: a bare TypeError
+      // (e.g. crypto.randomUUID in a non-secure context) previously collapsed
+      // into the generic request_failed message with no observable cause.
+      console.error('[cash-topup] checkout failed', cause)
       const code =
         cause instanceof CashCheckoutError ? cause.code : 'request_failed'
       setError(checkoutErrorMessage(code, t))

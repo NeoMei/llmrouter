@@ -35,6 +35,7 @@ export type CashCheckoutErrorCode =
   | 'payment_not_configured'
   | 'request_failed'
   | 'auth_retry'
+  | 'access_retry'
 
 export class CashCheckoutError extends Error {
   readonly code: CashCheckoutErrorCode | 'missing_url'
@@ -43,6 +44,17 @@ export class CashCheckoutError extends Error {
     this.name = 'CashCheckoutError'
     this.code = code
   }
+}
+
+/**
+ * Access preflight failures that are frequently transient: an access token
+ * expiring between render and click, a briefly unsettled identity handoff,
+ * or a short upstream/proxy outage. These all happen before any order is
+ * created, so a single bounded retry is safe. Never apply this to the
+ * checkout POST, whose Idempotency-Key is regenerated on every attempt.
+ */
+function isRetryableAccessStatus(status: number): boolean {
+  return status === 401 || status === 408 || status === 429 || status >= 500
 }
 
 const checkoutSchema = z.object({
@@ -123,11 +135,16 @@ export async function createCashCheckout(
     cache: 'no-store',
     redirect: 'error',
   })
-  if (!access.ok) throw new CashCheckoutError('request_failed')
+  if (!access.ok) {
+    if (isRetryableAccessStatus(access.status)) {
+      throw new CashCheckoutError('access_retry')
+    }
+    throw new CashCheckoutError('request_failed')
+  }
   const csrf = z
     .object({ csrf_token: z.string().min(1) })
     .safeParse(await access.json())
-  if (!csrf.success) throw new CashCheckoutError('request_failed')
+  if (!csrf.success) throw new CashCheckoutError('access_retry')
 
   const base = deps.bffBase ?? '/api/unihub/bff'
   const path = `${base}/v1/accounts/${encodeURIComponent(input.account)}/cash-checkouts`
@@ -171,6 +188,9 @@ export async function createCashCheckout(
  * transient race into a normal checkout instead of a red error on first click.
  * The retry is bounded to a single attempt: a second 'auth_retry' is surfaced
  * to the caller as-is and never loops.
+ * A transient access preflight failure (401/503 or an unparsable grant) gets
+ * the same single retry after refreshing auth. The checkout POST is never
+ * retried: a fresh Idempotency-Key there could create a duplicate order.
  */
 export async function createCashCheckoutWithRetry(
   deps: CashCheckoutDeps,
@@ -182,7 +202,7 @@ export async function createCashCheckoutWithRetry(
   } catch (cause) {
     if (
       cause instanceof CashCheckoutError &&
-      cause.code === 'auth_retry' &&
+      (cause.code === 'auth_retry' || cause.code === 'access_retry') &&
       refreshAuth
     ) {
       await refreshAuth()

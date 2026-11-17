@@ -261,6 +261,75 @@ describe('cash checkout request', () => {
     )
     assert.equal(refreshes, 0)
   })
+
+  test('retries a transient access preflight failure before creating an order', async () => {
+    const { deps, requests } = depsWith([
+      { status: 503, body: {} },
+      { status: 200, body: { csrf_token: 'csrf-token' } },
+      { status: 202, body: checkoutBody },
+    ])
+    let refreshes = 0
+
+    const result = await createCashCheckoutWithRetry(
+      deps,
+      { account: 'payer-1', amount: '50', provider: 'alipay' },
+      async () => {
+        refreshes += 1
+      }
+    )
+
+    assert.equal(result.session.url, 'https://pay.example/checkout/co_1')
+    assert.equal(refreshes, 1)
+    assert.equal(requests.length, 3)
+    assert.equal(requests.filter((r) => r.url.includes('cash-checkouts')).length, 1)
+  })
+
+  test('does not retry the checkout POST after a transient access failure resolves', async () => {
+    const { deps, requests } = depsWith([
+      { status: 401, body: {} },
+      { status: 200, body: { csrf_token: 'csrf-token' } },
+      { status: 500, body: {} },
+    ])
+    let refreshes = 0
+
+    await assert.rejects(
+      () =>
+        createCashCheckoutWithRetry(
+          deps,
+          { account: 'payer-1', amount: '50', provider: 'wechat' },
+          async () => {
+            refreshes += 1
+          }
+        ),
+      (error: unknown) =>
+        error instanceof CashCheckoutError && error.code === 'request_failed'
+    )
+    assert.equal(refreshes, 1)
+    assert.equal(requests.filter((r) => r.url.includes('cash-checkouts')).length, 1)
+  })
+
+  test('a second transient access failure surfaces access_retry without looping', async () => {
+    const { deps, requests } = depsWith([
+      { status: 503, body: {} },
+      { status: 503, body: {} },
+    ])
+    let refreshes = 0
+
+    await assert.rejects(
+      () =>
+        createCashCheckoutWithRetry(
+          deps,
+          { account: 'payer-1', amount: '50', provider: 'wechat' },
+          async () => {
+            refreshes += 1
+          }
+        ),
+      (error: unknown) =>
+        error instanceof CashCheckoutError && error.code === 'access_retry'
+    )
+    assert.equal(refreshes, 1)
+    assert.equal(requests.length, 2)
+  })
 })
 
 describe('payment redirect', () => {

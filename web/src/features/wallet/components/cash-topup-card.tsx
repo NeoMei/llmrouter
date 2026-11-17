@@ -60,6 +60,9 @@ function checkoutErrorMessage(
   if (code === 'auth_retry') {
     return t('Session is refreshing. Please try again.')
   }
+  if (code === 'access_retry') {
+    return t('Session is refreshing. Please try again.')
+  }
   if (code === 'missing_url') return t('Payment link unavailable')
   return t('Recharge request failed. Please try again.')
 }
@@ -121,12 +124,13 @@ export function CashTopupCard(props: CashTopupCardProps) {
       icon={<Wallet className='h-4 w-4' />}
       iconTone='success'
       disableHoverEffect
-      className='max-w-2xl'
-      contentClassName='p-3 sm:p-4'
+      contentClassName='p-4 sm:p-5'
     >
-      <div className='grid gap-4 sm:grid-cols-2 sm:gap-5'>
-        <div className='min-w-0 space-y-2'>
-          <Label htmlFor='cash-topup-amount'>{t('Amount (CNY)')}</Label>
+      <div className='grid gap-6 md:grid-cols-2 md:gap-8'>
+        <div className='min-w-0 space-y-3'>
+          <Label htmlFor='cash-topup-amount' className='text-sm font-medium'>
+            {t('Amount (CNY)')}
+          </Label>
           <div className='relative'>
             <span className='text-muted-foreground pointer-events-none absolute top-1/2 left-3 -translate-y-1/2'>
               ¥
@@ -140,14 +144,14 @@ export function CashTopupCard(props: CashTopupCardProps) {
                 setAmount(event.target.value.trim())
                 setError('')
               }}
-              className='h-9 pl-7'
+              className='h-11 pl-8 text-lg font-semibold tabular-nums'
               aria-invalid={amountError !== null}
               aria-describedby='cash-topup-amount-hint'
               disabled={submitting}
             />
           </div>
           <div
-            className='grid grid-cols-3 gap-1.5 sm:grid-cols-5'
+            className='grid grid-cols-3 gap-2 sm:grid-cols-5'
             role='group'
             aria-label={t('Amount (CNY)')}
           >
@@ -158,7 +162,7 @@ export function CashTopupCard(props: CashTopupCardProps) {
                 variant={amount === String(tier) ? 'default' : 'outline'}
                 aria-pressed={amount === String(tier)}
                 disabled={submitting}
-                className='h-8 px-0 text-xs'
+                className='h-9 px-0 text-sm tabular-nums'
                 onClick={() => {
                   setAmount(String(tier))
                   setError('')
@@ -170,16 +174,16 @@ export function CashTopupCard(props: CashTopupCardProps) {
           </div>
           <p
             id='cash-topup-amount-hint'
-            className='text-muted-foreground text-[11px]'
+            className='text-muted-foreground text-xs'
           >
             {t('Minimum ¥1, maximum ¥100000, up to 2 decimals')}
           </p>
         </div>
 
-        <div className='min-w-0 space-y-2'>
-          <Label>{t('Payment method')}</Label>
+        <div className='min-w-0 space-y-3'>
+          <Label className='text-sm font-medium'>{t('Payment method')}</Label>
           <div
-            className='grid grid-cols-2 gap-1.5'
+            className='grid grid-cols-2 gap-3'
             role='group'
             aria-label={t('Payment method')}
           >
@@ -190,55 +194,54 @@ export function CashTopupCard(props: CashTopupCardProps) {
                 variant={provider === option ? 'default' : 'outline'}
                 aria-pressed={provider === option}
                 disabled={submitting}
-                className='h-9 text-sm'
+                className='h-11 text-sm font-medium'
                 onClick={() => setProvider(option)}
               >
                 {option === 'wechat' ? t('WeChat Pay') : t('Alipay')}
               </Button>
             ))}
           </div>
+          <div className='space-y-2 pt-1'>
+            <Button
+              type='button'
+              className='h-11 w-full'
+              disabled={!canSubmit}
+              onClick={() => void submit()}
+            >
+              {submitting ? (
+                <Loader2 className='mr-2 h-4 w-4 animate-spin' />
+              ) : null}
+              {submitting
+                ? t('Creating payment...')
+                : t('Pay {{provider}}', {
+                    provider:
+                      provider === 'wechat' ? t('WeChat Pay') : t('Alipay'),
+                  })}
+            </Button>
+            {checkout && isNavigablePaymentURL(checkout.session.url) ? (
+              <a
+                className='text-primary block text-center text-xs break-all underline underline-offset-4'
+                href={checkout.session.url}
+                target='_blank'
+                rel='noopener noreferrer'
+              >
+                {t('Open payment page')}
+              </a>
+            ) : null}
+          </div>
         </div>
       </div>
 
       {amountError !== null ? (
-        <p role='alert' className='text-destructive mt-3 text-xs'>
+        <p role='alert' className='text-destructive mt-4 text-xs'>
           {amountErrorMessage(amountError, t)}
         </p>
       ) : null}
       {error ? (
-        <p role='alert' className='text-destructive mt-3 text-xs'>
+        <p role='alert' className='text-destructive mt-4 text-xs'>
           {error}
         </p>
       ) : null}
-
-      <div className='mt-4 space-y-2 border-t pt-3'>
-        <Button
-          type='button'
-          className='w-full'
-          disabled={!canSubmit}
-          onClick={() => void submit()}
-        >
-          {submitting ? (
-            <Loader2 className='mr-2 h-4 w-4 animate-spin' />
-          ) : null}
-          {submitting
-            ? t('Creating payment...')
-            : t('Pay {{provider}}', {
-                provider:
-                  provider === 'wechat' ? t('WeChat Pay') : t('Alipay'),
-              })}
-        </Button>
-        {checkout && isNavigablePaymentURL(checkout.session.url) ? (
-          <a
-            className='text-primary block text-center text-xs break-all underline underline-offset-4'
-            href={checkout.session.url}
-            target='_blank'
-            rel='noopener noreferrer'
-          >
-            {t('Open payment page')}
-          </a>
-        ) : null}
-      </div>
     </TitledCard>
   )
 }

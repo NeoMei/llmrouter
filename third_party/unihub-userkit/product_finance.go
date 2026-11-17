@@ -39,7 +39,8 @@ var financePaths = []struct{ method, path string }{
 	{"GET", "/accounts/{account}/resources"}, {"GET", "/accounts/{account}/wallets"}, {"GET", "/accounts/{account}/subscriptions"}, {"GET", "/accounts/{account}/orders"},
 	{"GET", "/accounts/{account}/usage-budget"}, {"GET", "/accounts/{account}/api-keys"}, {"GET", "/accounts/{account}/calls"}, {"GET", "/accounts/{account}/calls/{call}"},
 	{"GET", "/accounts/{account}/usage/summary"}, {"GET", "/accounts/{account}/operations"}, {"GET", "/accounts/{account}/operations/{operation}"}, {"GET", "/accounts/{account}/recharges/{order}"},
-	{"POST", "/accounts/{account}/recharges"}, {"POST", "/accounts/{account}/recharges/{order}/sandbox-settle"}, {"POST", "/accounts/{account}/api-keys"},
+	{"GET", "/accounts/{account}/cash-checkouts"}, {"GET", "/accounts/{account}/cash-checkouts/{checkout}"},
+	{"POST", "/accounts/{account}/recharges"}, {"POST", "/accounts/{account}/recharges/{order}/sandbox-settle"}, {"POST", "/accounts/{account}/cash-checkouts"}, {"POST", "/accounts/{account}/api-keys"},
 	{"DELETE", "/accounts/{account}/api-keys/{key}"}, {"PUT", "/accounts/{account}/usage-budget"},
 }
 
@@ -65,7 +66,9 @@ func NewProductFinanceClient(c ProductFinanceConfig) (*ProductFinanceClient, err
 // the private actor header and the service token remains this client's secret.
 func (c *ProductFinanceClient) Do(ctx context.Context, method, path string, query url.Values, actor string, body []byte, idempotencyKey string) (*FinanceResult, error) {
 	rechargeCreate := method == http.MethodPost && strings.HasPrefix(path, "/accounts/") && strings.HasSuffix(path, "/recharges")
-	if len(body) > 1<<20 || (len(body) != 0 && !json.Valid(body)) || ((method == http.MethodGet || method == http.MethodDelete) && len(body) != 0) || !financeActor.MatchString(actor) || (idempotencyKey != "" && (len(idempotencyKey) > 256 || strings.ContainsAny(idempotencyKey, " \r\n\t"))) || (idempotencyKey != "" && !rechargeCreate) || (rechargeCreate && idempotencyKey == "") || !financeRouteAllowed(method, path) || !financeQueryAllowed(query) {
+	cashCheckoutCreate := method == http.MethodPost && strings.HasPrefix(path, "/accounts/") && strings.HasSuffix(path, "/cash-checkouts")
+	idempotentWrite := rechargeCreate || cashCheckoutCreate
+	if len(body) > 1<<20 || (len(body) != 0 && !json.Valid(body)) || ((method == http.MethodGet || method == http.MethodDelete) && len(body) != 0) || !financeActor.MatchString(actor) || (idempotencyKey != "" && (len(idempotencyKey) > 256 || strings.ContainsAny(idempotencyKey, " \r\n\t"))) || (idempotencyKey != "" && !idempotentWrite) || (idempotentWrite && idempotencyKey == "") || !financeRouteAllowed(method, path) || !financeQueryAllowed(query) {
 		return nil, ErrInvalid
 	}
 	target := c.config.BaseURL + "/internal/v1/product-finance" + path

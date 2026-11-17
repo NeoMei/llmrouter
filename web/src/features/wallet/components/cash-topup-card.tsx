@@ -117,12 +117,13 @@ export function CashTopupCard(props: CashTopupCardProps) {
       icon={<Wallet className='h-4 w-4' />}
       iconTone='success'
       disableHoverEffect
-      contentClassName='space-y-4'
+      className='max-w-2xl'
+      contentClassName='space-y-5'
     >
-      <div className='grid gap-3 sm:grid-cols-2'>
-        <div className='space-y-2 sm:col-span-2'>
+      <div className='space-y-5'>
+        <div className='space-y-2'>
           <Label htmlFor='cash-topup-amount'>{t('Amount (CNY)')}</Label>
-          <div className='relative'>
+          <div className='relative max-w-sm'>
             <span className='text-muted-foreground pointer-events-none absolute top-1/2 left-3 -translate-y-1/2'>
               ¥
             </span>
@@ -142,7 +143,7 @@ export function CashTopupCard(props: CashTopupCardProps) {
             />
           </div>
           <div
-            className='grid grid-cols-5 gap-2'
+            className='grid grid-cols-2 gap-2 sm:grid-cols-5'
             role='group'
             aria-label={t('Amount (CNY)')}
           >
@@ -162,32 +163,34 @@ export function CashTopupCard(props: CashTopupCardProps) {
               </Button>
             ))}
           </div>
+        </div>
+        <div className='grid gap-5 sm:grid-cols-[minmax(0,1fr)_240px] sm:items-start'>
           <p
             id='cash-topup-amount-hint'
             className='text-muted-foreground text-xs'
           >
             {t('Minimum ¥1, maximum ¥100000, up to 2 decimals')}
           </p>
-        </div>
-        <div className='space-y-2'>
-          <Label>{t('Payment method')}</Label>
-          <div
-            className='grid grid-cols-2 gap-2'
-            role='group'
-            aria-label={t('Payment method')}
-          >
-            {(['wechat', 'alipay'] as const).map((option) => (
-              <Button
-                key={option}
-                type='button'
-                variant={provider === option ? 'default' : 'outline'}
-                aria-pressed={provider === option}
-                disabled={submitting}
-                onClick={() => setProvider(option)}
-              >
-                {option === 'wechat' ? t('WeChat Pay') : t('Alipay')}
-              </Button>
-            ))}
+          <div className='space-y-2'>
+            <Label>{t('Payment method')}</Label>
+            <div
+              className='grid grid-cols-2 gap-2'
+              role='group'
+              aria-label={t('Payment method')}
+            >
+              {(['wechat', 'alipay'] as const).map((option) => (
+                <Button
+                  key={option}
+                  type='button'
+                  variant={provider === option ? 'secondary' : 'outline'}
+                  aria-pressed={provider === option}
+                  disabled={submitting}
+                  onClick={() => setProvider(option)}
+                >
+                  {option === 'wechat' ? t('WeChat Pay') : t('Alipay')}
+                </Button>
+              ))}
+            </div>
           </div>
         </div>
       </div>
@@ -205,7 +208,7 @@ export function CashTopupCard(props: CashTopupCardProps) {
 
       <Button
         type='button'
-        className='w-full'
+        className='max-w-sm'
         disabled={!canSubmit}
         onClick={() => void submit()}
       >

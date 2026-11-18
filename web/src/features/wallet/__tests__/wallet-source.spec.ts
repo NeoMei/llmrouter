@@ -893,3 +893,147 @@ test('Alipay return verifies the checkout with the server before showing success
   ).toBeVisible()
   expect(new URL(page.url()).pathname).toBe('/wallet')
 })
+
+test('checking an expired order reconciles explicitly and displays the credited result', async ({
+  page,
+}) => {
+  await cashFixture(page)
+  await page.route('**/api/user/auth/refresh', (route) => {
+    const auth = bundle(42, true)
+    auth.user.funding = { ...funding, account_id: 'payer' } as typeof funding
+    return route.fulfill({ json: { success: true, data: auth } })
+  })
+  const order = {
+    id: 'ct_expired1',
+    account_id: 'payer',
+    amount: '20000000',
+    payment_status: 'PENDING',
+    credit_status: 'CREATED',
+    expires_at: '2000-01-01T00:00:00Z',
+  }
+  let reads = 0
+  let reconciles = 0
+  await page.route('**/cash-checkouts/ct_expired1', (route) => {
+    expect(route.request().method()).toBe('GET')
+    reads++
+    return route.fulfill({ json: order })
+  })
+  let releaseCheck!: () => void
+  const checkResult = new Promise<void>((resolve) => (releaseCheck = resolve))
+  await page.route('**/cash-checkouts/ct_expired1/reconcile', async (route) => {
+    expect(route.request().method()).toBe('POST')
+    expect(route.request().headers()['x-unihub-csrf']).toBe('fixture-csrf')
+    reconciles++
+    if (reconciles === 1) {
+      await checkResult
+      return route.fulfill({ json: { ...order, payment_status: 'CREATED' } })
+    }
+    return route.fulfill({
+      json: { ...order, payment_status: 'PAID', credit_status: 'APPLIED' },
+    })
+  })
+
+  await page.goto('/wallet?cash_checkout=ct_expired1')
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('status')).toContainText('QR code has expired')
+  expect(reads).toBeGreaterThan(0)
+  expect(reconciles).toBe(0)
+
+  const check = dialog.getByRole('button', { name: 'Check payment status' })
+  await check.click()
+  try {
+    await expect.poll(() => reconciles, { timeout: 3000 }).toBe(1)
+    await expect(check).toBeDisabled()
+  } finally {
+    releaseCheck()
+  }
+  await expect(check).toBeEnabled()
+  await expect(dialog.getByRole('status')).toContainText('QR code has expired')
+  await check.click()
+  await expect(dialog.getByRole('status')).toHaveText(
+    'Recharge complete. Your balance has been updated.'
+  )
+})
+
+test('a manual retry after reload reuses the checkout intent and shows a replay without a payment link', async ({
+  page,
+}) => {
+  await cashFixture(page)
+  await page.route('**/api/user/auth/refresh', (route) => {
+    const auth = bundle(42, true)
+    auth.user.funding = { ...funding, account_id: 'payer' } as typeof funding
+    return route.fulfill({ json: { success: true, data: auth } })
+  })
+  const expired = {
+    id: 'ct_replay1',
+    account_id: 'payer',
+    amount: '20000000',
+    payment_status: 'CREATED',
+    credit_status: 'CREATED',
+    expires_at: '2000-01-01T00:00:00Z',
+  }
+  const attempts: { key: string; amount: string }[] = []
+  await page.route('**/cash-checkouts/ct_replay1', (route) =>
+    route.fulfill({ json: expired })
+  )
+  await page.route('**/cash-checkouts/ct_new1', (route) =>
+    route.fulfill({
+      json: { ...expired, id: 'ct_new1', expires_at: undefined },
+    })
+  )
+  await page.route('**/cash-checkouts', (route) => {
+    expect(route.request().method()).toBe('POST')
+    attempts.push({
+      key: route.request().headers()['idempotency-key'],
+      amount: route.request().postDataJSON().amount,
+    })
+    if (attempts.length === 1) {
+      return route.fulfill({ status: 502, json: { error: 'unavailable' } })
+    }
+    if (attempts.length === 2) {
+      return route.fulfill({ status: 200, json: expired })
+    }
+    return route.fulfill({
+      status: 202,
+      json: {
+        ...expired,
+        id: 'ct_new1',
+        expires_at: undefined,
+        session: { kind: 'qr', url: 'weixin://wxpay/bizpayurl?pr=new' },
+      },
+    })
+  })
+
+  await page.goto('/wallet')
+  const amount = page.getByRole('textbox', { name: 'Amount (CNY)' })
+  const pay = page.getByRole('button', { name: 'Pay WeChat Pay', exact: true })
+  await page.getByRole('button', { name: '¥20', exact: true }).click()
+  await pay.click()
+  await expect(
+    page.getByText('Recharge request failed. Please try again.')
+  ).toBeVisible()
+  expect(attempts).toHaveLength(1)
+  expect(attempts[0].key).toBeTruthy()
+
+  await page.reload()
+  await amount.fill('20.00')
+  expect(attempts).toHaveLength(1)
+  await pay.click()
+  await expect.poll(() => attempts.length).toBe(2)
+  expect(attempts[1]).toEqual(attempts[0])
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('status')).toContainText('QR code has expired')
+  await expect(
+    dialog.getByRole('button', { name: 'Check payment status' })
+  ).toBeEnabled()
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+
+  await pay.click()
+  await expect(
+    dialog.getByText('Scan with WeChat Pay', { exact: true })
+  ).toBeVisible()
+  expect(attempts).toHaveLength(3)
+  expect(attempts[2].key).not.toBe(attempts[1].key)
+  expect(attempts[2].amount).toBe('20000000')
+})

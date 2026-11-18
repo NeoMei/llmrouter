@@ -139,6 +139,10 @@ func TestBrokerFinanceBFFUsesFreshActorAndScopedRoutes(t *testing.T) {
 			_, _ = w.Write([]byte(`{"id":"order"}`))
 			return
 		}
+		if r.URL.Path == "/internal/v1/product-finance/accounts/payer/cash-checkouts/ct_recover1/reconcile" && r.Method == http.MethodPost {
+			_, _ = w.Write([]byte(`{"id":"ct_recover1","account_id":"payer","amount":"20000000","payment_status":"PAID","credit_status":"APPLIED"}`))
+			return
+		}
 		if r.URL.Path == "/internal/v1/product-finance/accounts/payer/api-keys" && r.Method == http.MethodPost || r.URL.Path == "/internal/v1/product-finance/accounts/payer/usage-budget" && r.Method == http.MethodPut || r.URL.Path == "/internal/v1/product-finance/accounts/payer/recharges/order/sandbox-settle" && r.Method == http.MethodPost {
 			_, _ = w.Write([]byte(`{"id":"fixture-result"}`))
 			return
@@ -240,7 +244,7 @@ func TestBrokerFinanceBFFUsesFreshActorAndScopedRoutes(t *testing.T) {
 		assert.Equal(t, http.StatusForbidden, request("GET", "/api/unihub/bff/v1/accounts/other/wallets", "", "", "", nil).Code)
 		beforeReadOnlyWrites, beforeReadOnlyFinance := writeCalls, financeCalls
 		for _, action := range []struct{ method, path string }{
-			{"POST", "recharges"}, {"POST", "recharges/order/sandbox-settle"}, {"POST", "api-keys"}, {"PUT", "usage-budget"}, {"DELETE", "api-keys/key"},
+			{"POST", "recharges"}, {"POST", "recharges/order/sandbox-settle"}, {"POST", "cash-checkouts/ct_recover1/reconcile"}, {"POST", "api-keys"}, {"PUT", "usage-budget"}, {"DELETE", "api-keys/key"},
 		} {
 			body := `{}`
 			if action.method == "DELETE" {
@@ -336,6 +340,30 @@ func TestBrokerFinanceBFFUsesFreshActorAndScopedRoutes(t *testing.T) {
 	revokeSourceDuringFinance = false
 	sourceRevoked = false
 	bundle = nativeBundle
+	t.Run("password payer can reconcile only the delegated checkout route", func(t *testing.T) {
+		const base = "/api/unihub/bff/v1/accounts/"
+		const checkout = "/cash-checkouts/ct_recover1/reconcile"
+		const origin = "https://dashboard.test"
+		before := financeCalls
+		for _, tc := range []struct{ path, csrf, origin string }{
+			{"payer" + checkout, "", origin},
+			{"payer" + checkout, data.CSRF, "https://other.test"},
+			{"payer/cash-checkouts/ct_recover1/close", data.CSRF, origin},
+			{"payer/cash-checkouts/co_recover1/reconcile", data.CSRF, origin},
+			{"payer/cash-checkouts/ct_/reconcile", data.CSRF, origin},
+			{"payer/cash-checkouts/ct_" + strings.Repeat("a", 33) + "/reconcile", data.CSRF, origin},
+		} {
+			assert.Equal(t, http.StatusForbidden, request(http.MethodPost, base+tc.path, "", tc.csrf, tc.origin, nil).Code, tc.path)
+		}
+		assert.Equal(t, before, financeCalls)
+		denied := request(http.MethodPost, base+"other"+checkout, "", data.CSRF, origin, nil)
+		assert.Equal(t, http.StatusForbidden, denied.Code)
+		assert.NotContains(t, denied.Body.String(), "credit_status")
+		result := request(http.MethodPost, base+"payer"+checkout, "", data.CSRF, origin, nil)
+		require.Equal(t, http.StatusOK, result.Code, result.Body.String())
+		assert.Equal(t, before+2, financeCalls, "each account-scoped request reaches the center once")
+		assert.JSONEq(t, `{"id":"ct_recover1","account_id":"payer","amount":"20000000","payment_status":"PAID","credit_status":"APPLIED"}`, result.Body.String())
+	})
 	before := financeCalls
 	assert.Equal(t, 403, request("POST", "/api/unihub/bff/v1/accounts/payer/recharges", `{}`, "wrong", "https://dashboard.test", nil).Code)
 	assert.Equal(t, 403, request("POST", "/api/unihub/bff/v1/accounts/payer/recharges", `{}`, data.CSRF, "https://evil.test", nil).Code)

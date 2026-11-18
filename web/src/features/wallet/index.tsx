@@ -82,6 +82,8 @@ function WalletContent(props: WalletProps & { identity: string }) {
     (state) => state.auth.user?.funding?.mode === 'unified_cash'
   )
   const userID = useAuthStore((state) => state.auth.user?.id)
+  const centralUserID = useAuthStore((state) => state.auth.user?.unihub_user_id)
+  const sessionID = useAuthStore((state) => state.auth.session?.sid)
   const wallet = useQuery({
     queryKey: ['wallet-self', props.identity],
     queryFn: async () => {
@@ -129,11 +131,15 @@ function WalletContent(props: WalletProps & { identity: string }) {
   const cashTopupIdentity = useCallback(() => {
     const auth = useAuthStore.getState().auth
     return (
-      auth.user?.identity_source === 'unihub' &&
+      userID !== undefined &&
+      auth.user?.id === userID &&
+      auth.user?.unihub_user_id === centralUserID &&
+      auth.session?.sid === sessionID &&
+      auth.user.identity_source === 'unihub' &&
       auth.user?.funding?.mode === 'unified_cash' &&
       auth.user?.funding?.account_id === cashTopupAccount
     )
-  }, [cashTopupAccount])
+  }, [cashTopupAccount, centralUserID, sessionID, userID])
   const refreshWallet = wallet.refetch
   const fetchUser = useCallback(async () => {
     await refreshWallet()
@@ -407,6 +413,8 @@ function WalletContent(props: WalletProps & { identity: string }) {
             {unifiedCash ? <CentralCashCard context={centralCash} /> : null}
 
             <CashTopupCard
+              key={cashTopupAccount}
+              payerIdentity={JSON.stringify([userID, centralUserID])}
               account={cashTopupAccount}
               eligible={cashTopupEligible}
               assertIdentity={cashTopupIdentity}

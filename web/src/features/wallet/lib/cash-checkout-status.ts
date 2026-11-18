@@ -18,30 +18,19 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
 
-import { CashCheckoutError, type CashCheckoutDeps } from './cash-topup'
+import {
+  cashCheckoutID,
+  cashCheckoutSchema,
+  CashCheckoutError,
+  type CashCheckout,
+  type CashCheckoutDeps,
+} from './cash-topup'
 
-export const cashCheckoutID = /^ct_[A-Za-z0-9]{1,32}$/
+export { cashCheckoutID } from './cash-topup'
+
 const identifier = /^[A-Za-z0-9_-]{1,128}$/
-const statusSchema = z.object({
-  id: z.string(),
-  account_id: z.string(),
-  amount: z.string().regex(/^\d+$/),
-  payment_status: z.enum([
-    'CREATED',
-    'PENDING',
-    'UNKNOWN',
-    'PAID',
-    'CLOSED',
-    'FAILED',
-    'REVIEW',
-  ]),
-  expires_at: z.string().optional(),
-  operation_id: z.string().optional(),
-  credit_status: z.string().optional(),
-  wallet_target: z.enum(['unified', 'product']).optional(),
-  session: z.object({ kind: z.string(), url: z.string() }).optional(),
-})
-export type CashCheckoutStatus = z.infer<typeof statusSchema> & {
+
+export type CashCheckoutStatus = CashCheckout & {
   credited: boolean
 }
 export type CashPaymentPhase =
@@ -60,8 +49,9 @@ export function cashPaymentPhase(
     if (
       status.credit_status === 'REJECTED' ||
       status.credit_status === 'CANCELED'
-    )
+    ) {
       return 'review'
+    }
     return status.credited ? 'success' : 'processing'
   }
   if (status.payment_status === 'REVIEW') return 'review'
@@ -113,7 +103,7 @@ export async function readCashCheckout(
       .parse(await read(deps.accessURL ?? '/api/unihub/access'))
     init = { method: 'POST', headers: { 'X-UniHub-CSRF': access.csrf_token } }
   }
-  const status = statusSchema.parse(
+  const status = cashCheckoutSchema.parse(
     await read(
       `${base}/cash-checkouts/${id}${reconcile ? '/reconcile' : ''}`,
       init
@@ -122,9 +112,9 @@ export async function readCashCheckout(
   if (status.id !== id || status.account_id !== account) {
     throw new CashCheckoutError('forbidden')
   }
-  // The checkout exposes the linked operation's state without expanding
-  // product access to shared-wallet operations. Keep legacy fallback.
-  if (status.wallet_target || status.credit_status !== undefined) {
+  // Reconciliation returns the canonical checkout. Passive reads keep the
+  // legacy operation lookup for orders that predate the credit status field.
+  if (reconcile || status.wallet_target || status.credit_status !== undefined) {
     return { ...status, credited: status.credit_status === 'APPLIED' }
   }
   let credited = false

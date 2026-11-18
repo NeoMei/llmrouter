@@ -16,65 +16,124 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQuery } from '@tanstack/react-query'
-import { useEffect, useRef } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useRef, useState } from 'react'
 
 import { getFreshAuthHeaders, refreshAuthentication } from '@/lib/auth-session'
 
 import { cashPaymentPhase, readCashCheckout } from '../lib/cash-checkout-status'
-import { CashCheckoutError } from '../lib/cash-topup'
+import { CashCheckoutError, type CashCheckout } from '../lib/cash-topup'
 
 export function useCashCheckoutStatus(props: {
+  payerIdentity: string
   account: string
   id: string
+  checkout: CashCheckout | null
   eligible: boolean
   assertIdentity: () => boolean
   onPaid: () => Promise<void>
 }) {
+  const queryClient = useQueryClient()
+  const queryKey = [
+    'cash-checkout',
+    props.payerIdentity,
+    props.account,
+    props.id,
+  ]
   const notified = useRef('')
+  const activeCheck = useRef<AbortController | null>(null)
+  const [checkState, setCheckState] = useState<{
+    id: string
+    status: 'checking' | 'failed'
+  }>()
+  const checking =
+    checkState?.id === props.id && checkState.status === 'checking'
+  const deps = {
+    fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args),
+    getAuthHeaders: getFreshAuthHeaders,
+    assertIdentity: props.assertIdentity,
+  }
   const query = useQuery({
-    queryKey: ['cash-checkout', props.account, props.id],
+    queryKey,
     enabled: props.eligible && !!props.id,
     gcTime: 0,
     staleTime: 0,
     retry: false,
     queryFn: ({ signal }) =>
-      readCashCheckout(
-        {
-          fetch: (...args) => globalThis.fetch(...args),
-          getAuthHeaders: getFreshAuthHeaders,
-          assertIdentity: props.assertIdentity,
-        },
-        props.account,
-        props.id,
-        signal
-      ).catch(async (cause: unknown) => {
-        if (
-          !signal.aborted &&
-          cause instanceof CashCheckoutError &&
-          cause.code === 'auth_retry'
-        ) {
-          await refreshAuthentication()
-          return readCashCheckout(
-            {
-              fetch: (...args) => globalThis.fetch(...args),
-              getAuthHeaders: getFreshAuthHeaders,
-              assertIdentity: props.assertIdentity,
-            },
-            props.account,
-            props.id,
-            signal
-          )
+      readCashCheckout(deps, props.account, props.id, signal).catch(
+        async (cause: unknown) => {
+          if (
+            !signal.aborted &&
+            cause instanceof CashCheckoutError &&
+            cause.code === 'auth_retry'
+          ) {
+            await refreshAuthentication()
+            return readCashCheckout(deps, props.account, props.id, signal)
+          }
+          throw cause
         }
-        throw cause
-      }),
+      ),
     refetchInterval: (q) =>
+      !checking &&
       ['waiting', 'processing'].includes(cashPaymentPhase(q.state.data))
         ? 2000
         : false,
-    refetchOnWindowFocus: true,
+    refetchOnWindowFocus: !checking,
+    refetchOnReconnect: !checking,
   })
-  const phase = cashPaymentPhase(query.data)
+  const data =
+    query.data ??
+    (props.checkout?.id === props.id
+      ? {
+          ...props.checkout,
+          credited: props.checkout.credit_status === 'APPLIED',
+        }
+      : undefined)
+  const phase = cashPaymentPhase(data)
+
+  useEffect(() => {
+    return () => {
+      activeCheck.current?.abort()
+      activeCheck.current = null
+    }
+  }, [props.payerIdentity, props.account, props.id])
+
+  const reconcile = async () => {
+    if (
+      activeCheck.current ||
+      !props.eligible ||
+      !props.id ||
+      !props.assertIdentity()
+    ) {
+      return
+    }
+    const check = new AbortController()
+    activeCheck.current = check
+    setCheckState({ id: props.id, status: 'checking' })
+    let failed = false
+    try {
+      // A GET started before reconciliation must not replace its result.
+      await queryClient.cancelQueries({ queryKey, exact: true })
+      const result = await readCashCheckout(
+        deps,
+        props.account,
+        props.id,
+        check.signal,
+        true
+      )
+      if (!check.signal.aborted && props.assertIdentity()) {
+        queryClient.setQueryData(queryKey, result)
+      }
+    } catch {
+      failed = true
+    } finally {
+      if (activeCheck.current === check) {
+        activeCheck.current = null
+        setCheckState(failed ? { id: props.id, status: 'failed' } : undefined)
+      }
+    }
+  }
+
   useEffect(() => {
     const key = `${props.account}:${props.id}:${phase}`
     if (
@@ -86,5 +145,14 @@ export function useCashCheckoutStatus(props: {
       void props.onPaid()
     }
   }, [phase, props])
-  return { ...query, phase }
+  return {
+    data,
+    phase,
+    checking,
+    checkError:
+      !checking &&
+      (query.isError ||
+        (checkState?.id === props.id && checkState.status === 'failed')),
+    reconcile,
+  }
 }

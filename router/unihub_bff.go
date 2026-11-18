@@ -38,6 +38,7 @@ var uniHubBFFRoutes = []struct {
 	{"DELETE", regexp.MustCompile(`^/v1/accounts/[A-Za-z0-9_-]+/api-keys/[A-Za-z0-9_-]+$`)},
 	{"PUT", regexp.MustCompile(`^/v1/accounts/[A-Za-z0-9_-]+/usage-budget$`)},
 	{"GET", regexp.MustCompile(`^/v1/accounts/[A-Za-z0-9_-]+/(recharges|cash-checkouts|operations|orders|calls|model-pool/calls)/[A-Za-z0-9_.:-]+$`)},
+	{http.MethodPost, cashCheckoutReconcileRoute},
 	{"POST", regexp.MustCompile(`^/v1/accounts/[A-Za-z0-9_-]+/(invitations|recharges|cash-checkouts|transfers|orders|quotes|model-credentials)$`)},
 	{"POST", regexp.MustCompile(`^/v1/accounts/[A-Za-z0-9_-]+/(quotes/[A-Za-z0-9_-]+/accept|orders/[A-Za-z0-9_-]+/refund|recharges/[A-Za-z0-9_-]+/sandbox-settle)$`)},
 	{"PATCH", regexp.MustCompile(`^/v1/accounts/[A-Za-z0-9_-]+/members/[A-Za-z0-9_-]+$`)},

@@ -81,8 +81,12 @@ export function CashTopupQrDialog(props: CashTopupQrDialogProps) {
             <Button
               variant='outline'
               disabled={props.checking}
+              aria-busy={props.checking}
               onClick={props.onCheck}
             >
+              {props.checking ? (
+                <Loader2 className='animate-spin' aria-hidden='true' />
+              ) : null}
               {t('Check payment status')}
             </Button>
           ) : null}

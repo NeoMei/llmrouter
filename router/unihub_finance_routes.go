@@ -5,6 +5,8 @@ import (
 	"regexp"
 )
 
+var cashCheckoutReconcileRoute = regexp.MustCompile(`^/v1/accounts/[A-Za-z0-9_-]+/cash-checkouts/ct_[A-Za-z0-9]{1,32}/reconcile$`)
+
 // runtimeFinanceRoutes is the central actor-finance contract, not a generic
 // product-runtime proxy. OIDC sessions retain the existing BFF route policy.
 var runtimeFinanceRoutes = []struct {
@@ -16,6 +18,7 @@ var runtimeFinanceRoutes = []struct {
 	{http.MethodGet, regexp.MustCompile(`^/v1/accounts/[A-Za-z0-9_-]+/(resources|wallets|subscriptions|orders|usage-budget|api-keys|calls|usage/summary|operations|cash-checkouts)$`)},
 	{http.MethodGet, regexp.MustCompile(`^/v1/accounts/[A-Za-z0-9_-]+/(calls|operations|recharges|cash-checkouts)/[A-Za-z0-9_.:-]+$`)},
 	{http.MethodPost, regexp.MustCompile(`^/v1/accounts/[A-Za-z0-9_-]+/(recharges|cash-checkouts|api-keys)$`)},
+	{http.MethodPost, cashCheckoutReconcileRoute},
 	{http.MethodPost, regexp.MustCompile(`^/v1/accounts/[A-Za-z0-9_-]+/recharges/[A-Za-z0-9_-]+/sandbox-settle$`)},
 	{http.MethodDelete, regexp.MustCompile(`^/v1/accounts/[A-Za-z0-9_-]+/api-keys/[A-Za-z0-9_-]+$`)},
 	{http.MethodPut, regexp.MustCompile(`^/v1/accounts/[A-Za-z0-9_-]+/usage-budget$`)},

@@ -50,6 +50,32 @@ test('payment confirmation waits for the ledger operation before reporting updat
   )
 })
 
+test('a manual check reports paid while the canonical credit status is unavailable', async () => {
+  const requests: string[] = []
+  const deps = {
+    getAuthHeaders: async () => ({}),
+    fetch: async (url: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(`${init?.method ?? 'GET'} ${url}`)
+      if (url === '/api/unihub/access') {
+        return Response.json({ csrf_token: 'csrf-token' })
+      }
+      return Response.json(paid)
+    },
+  }
+  const status = await readCashCheckout(
+    deps,
+    'payer',
+    'ct_paid1',
+    undefined,
+    true
+  )
+  assert.equal(cashPaymentPhase(status), 'processing')
+  assert.deepEqual(requests, [
+    'GET /api/unihub/access',
+    'POST /api/unihub/bff/v1/accounts/payer/cash-checkouts/ct_paid1/reconcile',
+  ])
+})
+
 test('a checkout from another payer or ID cannot be accepted as payment confirmation', async () => {
   for (const body of [
     { ...paid, account_id: 'other' },

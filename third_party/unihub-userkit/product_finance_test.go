@@ -185,7 +185,11 @@ func TestProductFinanceRejectsNonAllowlistedCashCheckoutPaths(t *testing.T) {
 	for _, tc := range []struct {
 		method, path string
 	}{
-		{"POST", "/accounts/acct-1/cash-checkouts/co_1/close"},
+		{"POST", "/accounts/acct-1/cash-checkouts/ct_1/close"},
+		{"POST", "/accounts/acct-1/cash-checkouts/ct_/reconcile"},
+		{"POST", "/accounts/acct-1/cash-checkouts/ct_bad-id/reconcile"},
+		{"POST", "/accounts/acct-1/cash-checkouts/ct_" + strings.Repeat("a", 33) + "/reconcile"},
+		{"GET", "/accounts/acct-1/cash-checkouts/ct_1/reconcile"},
 		{"POST", "/accounts/acct-1/cash-checkouts/co_1/reconcile"},
 		{"DELETE", "/accounts/acct-1/cash-checkouts/co_1"},
 	} {

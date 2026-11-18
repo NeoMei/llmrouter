@@ -29,7 +29,8 @@ import {
 } from '../cash-topup'
 
 const checkoutBody = {
-  id: 'co_1',
+  id: 'ct_order1',
+  payment_status: 'CREATED',
   session: { kind: 'redirect', url: 'https://pay.example/checkout/co_1' },
 }
 
@@ -43,7 +44,15 @@ function depsWith(responses: Array<{ status: number; body: unknown }>): {
     requests.push({ url: String(input), init })
     const next = responses[index++]
     assert.ok(next, 'unexpected extra fetch')
-    return new Response(JSON.stringify(next.body), { status: next.status })
+    const body =
+      next.body === checkoutBody
+        ? {
+            ...checkoutBody,
+            account_id: String(input).split('/').at(-2),
+            amount: JSON.parse(String(init?.body)).amount,
+          }
+        : next.body
+    return Response.json(body, { status: next.status })
   }
   return {
     requests,
@@ -62,13 +71,14 @@ describe('cash checkout request', () => {
     ])
 
     const result = await createCashCheckout(deps, {
+      payerIdentity: 'payer-1',
       account: 'payer-1',
       amount: '50',
       provider: 'wechat',
       productId: 'llmrouter',
     })
 
-    assert.equal(result.session.url, 'https://pay.example/checkout/co_1')
+    assert.equal(result.session?.url, 'https://pay.example/checkout/co_1')
     assert.equal(requests.length, 2)
     assert.equal(requests[0].url, '/api/unihub/access')
     assert.equal(
@@ -100,6 +110,7 @@ describe('cash checkout request', () => {
     ])
 
     await createCashCheckout(deps, {
+      payerIdentity: 'payer-1',
       account: 'payer-1',
       amount: '100',
       provider: 'alipay',
@@ -117,20 +128,29 @@ describe('cash checkout request', () => {
       { status: 202, body: checkoutBody },
     ])
     const cryptoObj = globalThis.crypto
-    const original = cryptoObj ? Object.getOwnPropertyDescriptor(cryptoObj, 'randomUUID') : undefined
+    const original = cryptoObj
+      ? Object.getOwnPropertyDescriptor(cryptoObj, 'randomUUID')
+      : undefined
     // Simulate a wallet rendered in a context that hides randomUUID.
     try {
       if (cryptoObj) {
-        Object.defineProperty(cryptoObj, 'randomUUID', { value: undefined, configurable: true })
+        Object.defineProperty(cryptoObj, 'randomUUID', {
+          value: undefined,
+          configurable: true,
+        })
       }
       const result = await createCashCheckout(deps, {
+        payerIdentity: 'payer-1',
         account: 'payer-1',
         amount: '20',
         provider: 'wechat',
         productId: 'llmrouter',
       })
-      assert.equal(result.session.url, 'https://pay.example/checkout/co_1')
-      assert.equal(requests.filter((r) => r.url.includes('cash-checkouts')).length, 1)
+      assert.equal(result.session?.url, 'https://pay.example/checkout/co_1')
+      assert.equal(
+        requests.filter((r) => r.url.includes('cash-checkouts')).length,
+        1
+      )
       const headers = new Headers(requests[1].init?.headers)
       assert.match(
         headers.get('Idempotency-Key') ?? '',
@@ -143,20 +163,140 @@ describe('cash checkout request', () => {
     }
   })
 
+  for (const outcome of ['lost response', 'malformed response'] as const) {
+    test(`keeps the canonical intent key after a ${outcome}`, async () => {
+      const keys: (string | null)[] = []
+      const input = {
+        payerIdentity: outcome,
+        account: 'payer-retry',
+        amount: '20',
+        provider: 'wechat' as const,
+      }
+      const deps: CashCheckoutDeps = {
+        getAuthHeaders: async () => ({}),
+        fetch: async (_url, init) => {
+          if (init?.method !== 'POST') {
+            return Response.json({ csrf_token: 'csrf-token' })
+          }
+          keys.push(new Headers(init.headers).get('Idempotency-Key'))
+          if (keys.length === 1) {
+            if (outcome === 'lost response') throw new TypeError('disconnected')
+            return new Response('{"id":')
+          }
+          return Response.json(
+            { ...checkoutBody, account_id: input.account, amount: '20000000' },
+            { status: 202 }
+          )
+        },
+      }
+      await assert.rejects(() => createCashCheckout(deps, input))
+      assert.equal(keys.length, 1)
+      await createCashCheckout(deps, { ...input, amount: '20.00' })
+      assert.ok(keys[0])
+      assert.equal(keys[1], keys[0])
+    })
+  }
+
+  test('does not share a pending key across authenticated payers on the same account', async () => {
+    const { deps, requests } = depsWith([
+      { status: 200, body: { csrf_token: 'csrf-token' } },
+      { status: 500, body: {} },
+      { status: 200, body: { csrf_token: 'csrf-token' } },
+      { status: 202, body: checkoutBody },
+      { status: 200, body: { csrf_token: 'csrf-token' } },
+      { status: 202, body: checkoutBody },
+    ])
+    const input = {
+      account: 'shared',
+      amount: '20',
+      provider: 'wechat',
+    } as const
+    await assert.rejects(() =>
+      createCashCheckout(deps, { ...input, payerIdentity: 'payer-A' })
+    )
+    await createCashCheckout(deps, { ...input, payerIdentity: 'payer-B' })
+    await createCashCheckout(deps, { ...input, payerIdentity: 'payer-A' })
+    const first = new Headers(requests[1].init?.headers).get('Idempotency-Key')
+    const other = new Headers(requests[3].init?.headers).get('Idempotency-Key')
+    const retry = new Headers(requests[5].init?.headers).get('Idempotency-Key')
+    assert.ok(first)
+    assert.ok(other)
+    assert.notEqual(other, first)
+    assert.equal(retry, first)
+  })
+
+  test('a checkout response after an identity change cannot complete the old intent', async () => {
+    let current = true
+    const keys: (string | null)[] = []
+    const input = {
+      payerIdentity: 'payer-stale',
+      account: 'payer-stale',
+      amount: '20',
+      provider: 'wechat',
+    } as const
+    const deps: CashCheckoutDeps = {
+      assertIdentity: () => current,
+      getAuthHeaders: async () => ({}),
+      fetch: async (_url, init) => {
+        if (init?.method !== 'POST') {
+          return Response.json({ csrf_token: 'csrf-token' })
+        }
+        keys.push(new Headers(init.headers).get('Idempotency-Key'))
+        if (keys.length === 1) current = false
+        return Response.json(
+          { ...checkoutBody, account_id: input.account, amount: '20000000' },
+          { status: 202 }
+        )
+      },
+    }
+    await assert.rejects(() => createCashCheckoutWithRetry(deps, input))
+    current = true
+    await createCashCheckout(deps, input)
+    assert.equal(keys.length, 2)
+    assert.equal(keys[1], keys[0])
+  })
+
+  test('does not send a checkout if the payer changes during the CSRF request', async () => {
+    let current = true
+    const methods: string[] = []
+    const deps: CashCheckoutDeps = {
+      assertIdentity: () => current,
+      getAuthHeaders: async () => ({}),
+      fetch: async (_url, init) => {
+        methods.push(init?.method ?? 'GET')
+        current = false
+        return Response.json({ csrf_token: 'csrf-token' })
+      },
+    }
+    await assert.rejects(
+      () =>
+        createCashCheckout(deps, {
+          payerIdentity: 'payer-preflight',
+          account: 'payer-preflight',
+          amount: '20',
+          provider: 'wechat',
+        }),
+      /auth_retry/
+    )
+    assert.deepEqual(methods, ['GET'])
+  })
+
   test('maps backend error statuses to distinct error codes', async () => {
-    for (const [status, code] of [
-      [400, 'invalid'],
-      [403, 'forbidden'],
-      [503, 'payment_not_configured'],
-      [500, 'request_failed'],
+    for (const [status, error, code] of [
+      [400, 'invalid', 'invalid'],
+      [403, 'forbidden', 'forbidden'],
+      [503, 'payment_not_configured', 'payment_not_configured'],
+      [503, 'finance_result_unavailable', 'request_failed'],
+      [500, 'internal', 'request_failed'],
     ] as const) {
       const { deps } = depsWith([
         { status: 200, body: { csrf_token: 'csrf-token' } },
-        { status, body: {} },
+        { status, body: { error } },
       ])
       await assert.rejects(
         () =>
           createCashCheckout(deps, {
+            payerIdentity: 'payer-1',
             account: 'payer-1',
             amount: '1',
             provider: 'wechat',
@@ -173,7 +313,12 @@ describe('cash checkout request', () => {
       () =>
         createCashCheckout(
           { ...deps, assertIdentity: () => false },
-          { account: 'payer-1', amount: '1', provider: 'wechat' }
+          {
+            payerIdentity: 'payer-1',
+            account: 'payer-1',
+            amount: '1',
+            provider: 'wechat',
+          }
         ),
       (error: unknown) =>
         error instanceof CashCheckoutError && error.code === 'auth_retry'
@@ -192,7 +337,12 @@ describe('cash checkout request', () => {
               throw new Error('auth snapshot not ready')
             },
           },
-          { account: 'payer-1', amount: '1', provider: 'wechat' }
+          {
+            payerIdentity: 'payer-1',
+            account: 'payer-1',
+            amount: '1',
+            provider: 'wechat',
+          }
         ),
       (error: unknown) =>
         error instanceof CashCheckoutError && error.code === 'auth_retry'
@@ -213,14 +363,19 @@ describe('cash checkout request', () => {
         ...deps,
         assertIdentity: () => identitySettled,
       },
-      { account: 'payer-1', amount: '50', provider: 'wechat' },
+      {
+        payerIdentity: 'payer-1',
+        account: 'payer-1',
+        amount: '50',
+        provider: 'wechat',
+      },
       async () => {
         refreshes += 1
         identitySettled = true
       }
     )
 
-    assert.equal(result.session.url, 'https://pay.example/checkout/co_1')
+    assert.equal(result.session?.url, 'https://pay.example/checkout/co_1')
     assert.equal(refreshes, 1)
     assert.equal(requests.length, 2)
   })
@@ -241,14 +396,19 @@ describe('cash checkout request', () => {
           return { Authorization: 'Bearer test-token' }
         },
       },
-      { account: 'payer-1', amount: '50', provider: 'wechat' },
+      {
+        payerIdentity: 'payer-1',
+        account: 'payer-1',
+        amount: '50',
+        provider: 'wechat',
+      },
       async () => {
         refreshes += 1
         headersReady = true
       }
     )
 
-    assert.equal(result.session.url, 'https://pay.example/checkout/co_1')
+    assert.equal(result.session?.url, 'https://pay.example/checkout/co_1')
     assert.equal(refreshes, 1)
     assert.equal(requests.length, 2)
   })
@@ -261,7 +421,12 @@ describe('cash checkout request', () => {
       () =>
         createCashCheckoutWithRetry(
           { ...deps, assertIdentity: () => false },
-          { account: 'payer-1', amount: '1', provider: 'wechat' },
+          {
+            payerIdentity: 'payer-1',
+            account: 'payer-1',
+            amount: '1',
+            provider: 'wechat',
+          },
           async () => {
             refreshes += 1
           }
@@ -284,7 +449,12 @@ describe('cash checkout request', () => {
       () =>
         createCashCheckoutWithRetry(
           deps,
-          { account: 'payer-1', amount: '1', provider: 'wechat' },
+          {
+            payerIdentity: 'payer-1',
+            account: 'payer-1',
+            amount: '1',
+            provider: 'wechat',
+          },
           async () => {
             refreshes += 1
           }
@@ -305,16 +475,24 @@ describe('cash checkout request', () => {
 
     const result = await createCashCheckoutWithRetry(
       deps,
-      { account: 'payer-1', amount: '50', provider: 'alipay' },
+      {
+        payerIdentity: 'payer-1',
+        account: 'payer-1',
+        amount: '50',
+        provider: 'alipay',
+      },
       async () => {
         refreshes += 1
       }
     )
 
-    assert.equal(result.session.url, 'https://pay.example/checkout/co_1')
+    assert.equal(result.session?.url, 'https://pay.example/checkout/co_1')
     assert.equal(refreshes, 1)
     assert.equal(requests.length, 3)
-    assert.equal(requests.filter((r) => r.url.includes('cash-checkouts')).length, 1)
+    assert.equal(
+      requests.filter((r) => r.url.includes('cash-checkouts')).length,
+      1
+    )
   })
 
   test('does not retry the checkout POST after a transient access failure resolves', async () => {
@@ -329,7 +507,12 @@ describe('cash checkout request', () => {
       () =>
         createCashCheckoutWithRetry(
           deps,
-          { account: 'payer-1', amount: '50', provider: 'wechat' },
+          {
+            payerIdentity: 'payer-1',
+            account: 'payer-1',
+            amount: '50',
+            provider: 'wechat',
+          },
           async () => {
             refreshes += 1
           }
@@ -338,7 +521,10 @@ describe('cash checkout request', () => {
         error instanceof CashCheckoutError && error.code === 'request_failed'
     )
     assert.equal(refreshes, 1)
-    assert.equal(requests.filter((r) => r.url.includes('cash-checkouts')).length, 1)
+    assert.equal(
+      requests.filter((r) => r.url.includes('cash-checkouts')).length,
+      1
+    )
   })
 
   test('checkout calls fetch through a receiver-safe wrapper', async () => {
@@ -350,7 +536,10 @@ describe('cash checkout request', () => {
     const globalReceiver = globalThis as { fetch: typeof fetch }
     const originalFetch = globalReceiver.fetch
     let receiverOk = false
-    globalReceiver.fetch = function (this: unknown, ...args: Parameters<typeof fetch>) {
+    globalReceiver.fetch = function (
+      this: unknown,
+      ...args: Parameters<typeof fetch>
+    ) {
       receiverOk = this === globalThis
       calls.push(String(args[0]))
       return Promise.resolve(new Response('{}', { status: 200 }))
@@ -363,11 +552,14 @@ describe('cash checkout request', () => {
       await assert.rejects(
         () =>
           createCashCheckout(deps, {
+            payerIdentity: 'payer-1',
             account: 'payer-1',
             amount: '20',
             provider: 'wechat',
           }),
-        (error: unknown) => error instanceof Error && !String(error).includes('Illegal invocation'),
+        (error: unknown) =>
+          error instanceof Error &&
+          !String(error).includes('Illegal invocation'),
         'unparsable csrf response is surfaced without Illegal invocation'
       )
       assert.ok(receiverOk, 'fetch must be invoked with the global receiver')
@@ -388,7 +580,12 @@ describe('cash checkout request', () => {
       () =>
         createCashCheckoutWithRetry(
           deps,
-          { account: 'payer-1', amount: '50', provider: 'wechat' },
+          {
+            payerIdentity: 'payer-1',
+            account: 'payer-1',
+            amount: '50',
+            provider: 'wechat',
+          },
           async () => {
             refreshes += 1
           }

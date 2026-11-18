@@ -30,6 +30,7 @@ type FinanceResult struct {
 }
 
 var financeID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
+var financeCashCheckoutID = regexp.MustCompile(`^ct_[A-Za-z0-9]{1,32}$`)
 var financeActor = regexp.MustCompile(`^upa_[0-9a-f]{64}$`)
 var financeServiceID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 
@@ -41,6 +42,7 @@ var financePaths = []struct{ method, path string }{
 	{"GET", "/accounts/{account}/usage/summary"}, {"GET", "/accounts/{account}/operations"}, {"GET", "/accounts/{account}/operations/{operation}"}, {"GET", "/accounts/{account}/recharges/{order}"},
 	{"GET", "/accounts/{account}/cash-checkouts"}, {"GET", "/accounts/{account}/cash-checkouts/{checkout}"},
 	{"POST", "/accounts/{account}/recharges"}, {"POST", "/accounts/{account}/recharges/{order}/sandbox-settle"}, {"POST", "/accounts/{account}/cash-checkouts"}, {"POST", "/accounts/{account}/api-keys"},
+	{"POST", "/accounts/{account}/cash-checkouts/{cashCheckout}/reconcile"},
 	{"DELETE", "/accounts/{account}/api-keys/{key}"}, {"PUT", "/accounts/{account}/usage-budget"},
 }
 
@@ -124,7 +126,9 @@ func financeRouteAllowed(method, path string) bool {
 		}
 		match := true
 		for i := range want {
-			if strings.HasPrefix(want[i], "{") && strings.HasSuffix(want[i], "}") {
+			if want[i] == "{cashCheckout}" {
+				match = match && financeCashCheckoutID.MatchString(got[i])
+			} else if strings.HasPrefix(want[i], "{") && strings.HasSuffix(want[i], "}") {
 				match = match && got[i] != "." && got[i] != ".." && financeID.MatchString(got[i])
 			} else {
 				match = match && want[i] == got[i]

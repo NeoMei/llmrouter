@@ -11,6 +11,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
@@ -36,7 +37,7 @@ func TestManagedModelCatalogProjectsVerifiedOperationAuthority(t *testing.T) {
 	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ClientModelRoute{}, &model.ClientModelTarget{}))
 	model.DB = db
 	for i, entry := range []struct{ id, metadata string }{
-		{"dual", `{"operations":["chat.completions.create","responses.create"],"supports_tools":true}`},
+		{"dual", `{"operations":["chat.completions.create","responses.create"],"supports_tools":true,"context_window":8192,"input_modalities":["text"]}`},
 		{"blocked", `{"operations":["chat.completions.create"]}`},
 		{"unknown", `{}`},
 		{"embedding", `{"operations":["embeddings.create"]}`},
@@ -106,6 +107,7 @@ func TestManagedModelCatalogProjectsVerifiedOperationAuthority(t *testing.T) {
 	engine := gin.New()
 	SetManagedKeyDispatch(engine, adapter)
 	type entry struct {
+		dto.PublicModelMetadata
 		ID             string                        `json:"id"`
 		Version        string                        `json:"catalog_version"`
 		Metadata       *platformbilling.CatalogModel `json:"capability_metadata"`
@@ -146,6 +148,12 @@ func TestManagedModelCatalogProjectsVerifiedOperationAuthority(t *testing.T) {
 			assert.True(t, operation.Available, "technical availability is independent of key authorization")
 			assert.Equal(t, tc.executable, operation.Executable)
 			assert.Equal(t, tc.reason, operation.DisabledReason)
+			assert.Equal(t, 1000, result.ContextLength)
+			if tc.executable {
+				assert.Contains(t, result.Operations, tc.wire)
+			} else {
+				assert.NotContains(t, result.Operations, tc.wire)
+			}
 		})
 	}
 	assert.NotEqual(t, versions["uh_key_chat"], versions["uh_key_responses"], "operation authority changes the credential-scoped catalog version")

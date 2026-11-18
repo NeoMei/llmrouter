@@ -173,7 +173,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			sr.Stop(streamErr)
 			return
 		}
-		emitted, err := streamValidator.Accept(common.StringToByteSlice(data))
+		emitted, err := streamValidator.Accept(normalizeChatToolDeltaPlaceholders(common.StringToByteSlice(data)))
 		if err != nil {
 			streamErr = toolpolicy.NewResponseValidationError(err)
 			sr.Stop(streamErr)

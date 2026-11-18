@@ -191,7 +191,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		if info.PlatformMode && info.PlatformBilling != nil {
 			info.PlatformBilling.ObserveRawEnvelope([]byte(data), true)
 		}
-		emitted, err := streamValidator.Accept(common.StringToByteSlice(data))
+		emitted, err := streamValidator.Accept(normalizeChatToolDeltaPlaceholders(common.StringToByteSlice(data)))
 		if err != nil {
 			streamErr = toolpolicy.NewResponseValidationError(err)
 			sr.Stop(streamErr)

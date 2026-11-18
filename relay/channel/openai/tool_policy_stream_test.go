@@ -74,6 +74,76 @@ func TestOaiStreamHandlerRejectsInvalidBufferedToolWithoutSuccessTerminal(t *tes
 	assert.NotContains(t, recorder.Body.String(), "[DONE]")
 }
 
+func TestOaiStreamHandlerAcceptsNullToolDeltaPlaceholders(t *testing.T) {
+	tests := []struct{ name, delta, absent string }{
+		{"qwen null id", `{"index":0,"id":null,"type":"function","function":{"arguments":"}"}}`, `"id":null`},
+		{"minimax null arguments", `{"index":0,"id":"call_1","type":"function","function":{"arguments":null}}`, `"arguments":null`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			firstArguments := `{`
+			if test.name == "minimax null arguments" {
+				firstArguments = `{}`
+			}
+			initial := `data: {"id":"chatcmpl_1","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"` + firstArguments + `"}}]},"finish_reason":null}]}`
+			body := strings.Join([]string{
+				initial,
+				`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[` + test.delta + `]},"finish_reason":null}]}`,
+				`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+				`data: [DONE]`, ``,
+			}, "\n")
+			c, recorder, resp, info := newToolPolicyStreamContext(t, "/v1/chat/completions", body, types.RelayFormatOpenAI)
+			_, apiErr := OaiStreamHandler(c, info, resp)
+			require.Nil(t, apiErr)
+			output := recorder.Body.String()
+			assert.Contains(t, output, `"id":"call_1"`)
+			assert.NotContains(t, output, test.absent)
+			assert.Contains(t, output, "[DONE]")
+		})
+	}
+}
+
+func TestOaiStreamHandlerRejectsInvalidCallsAfterNullPlaceholder(t *testing.T) {
+	tests := []struct{ name, delta string }{
+		{"missing id", `{"index":0,"id":null,"type":"function","function":{"name":"lookup","arguments":"{}"}}`},
+		{"object arguments", `{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":{}}}`},
+		{"duplicate id", `{"index":0,"id":"call_1","id":null,"type":"function","function":{"name":"lookup","arguments":"{}"}}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := strings.Join([]string{
+				`data: {"choices":[{"index":0,"delta":{"tool_calls":[` + test.delta + `]},"finish_reason":null}]}`,
+				`data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+				`data: [DONE]`, ``,
+			}, "\n")
+			c, recorder, resp, info := newToolPolicyStreamContext(t, "/v1/chat/completions", body, types.RelayFormatOpenAI)
+			_, apiErr := OaiStreamHandler(c, info, resp)
+			require.NotNil(t, apiErr)
+			assert.Equal(t, types.ErrorCodeUpstreamToolProtocolInvalid, apiErr.GetErrorCode())
+			assert.NotContains(t, recorder.Body.String(), "[DONE]")
+			assert.NotContains(t, recorder.Body.String(), `"tool_calls"`)
+		})
+	}
+}
+
+func TestChatToResponsesStreamAcceptsNullToolDeltaPlaceholders(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":null,"type":"function","function":{"arguments":null}}]},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"arguments":""}}]},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`, ``,
+	}, "\n")
+	c, recorder, resp, info := newToolPolicyStreamContext(t, "/v1/responses", body, types.RelayFormatOpenAIResponses)
+	_, apiErr := OaiChatToResponsesStreamHandler(c, info, resp)
+	require.Nil(t, apiErr)
+	assert.Contains(t, recorder.Body.String(), `"type":"function_call"`)
+	assert.Contains(t, recorder.Body.String(), `"name":"lookup"`)
+	assert.Contains(t, recorder.Body.String(), `"call_id":"call_1"`)
+	assert.NotContains(t, recorder.Body.String(), "call_1call_1")
+	assert.Contains(t, recorder.Body.String(), `response.completed`)
+}
+
 func TestOaiResponsesStreamHandlerRejectsIncompleteToolBeforeCompleted(t *testing.T) {
 	body := strings.Join([]string{
 		`data: {"type":"response.output_text.delta","delta":"safe text"}`,

@@ -499,6 +499,10 @@ func TestManagedNativeGenerationExactWire(t *testing.T) {
 				} else {
 					require.Equal(t, 200, w.Code, w.Body.String())
 				}
+				if tc.name == "chat" && (variant == "text" || variant == "stream") {
+					assert.Equal(t, "platform-test", w.Header().Get(common.RequestedModelHeader))
+					assert.Equal(t, "platform-test", w.Header().Get(common.RoutedModelHeader))
+				}
 				if variant == "history" || variant == "history_stream" {
 					if tc.name == "gemini" {
 						assert.Contains(t, w.Body.String(), "returned-signature")

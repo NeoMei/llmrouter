@@ -102,6 +102,17 @@ func TestManagedNativeChatUsesNativePriceAndOriginalKeyWithoutLocalDebit(t *test
 			_, _ = w.Write([]byte(`{"id":"answer","object":"chat.completion","model":"native-test","choices":[{"index":0,"message":{"role":"assistant","content":"unmetered reply"},"finish_reason":"stop"}]}`))
 			return
 		}
+		if responseMode == "tool_stream" {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte(strings.Join([]string{
+				`data: {"id":"answer","object":"chat.completion.chunk","model":"native-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":null}]}`,
+				`data: {"id":"answer","object":"chat.completion.chunk","model":"native-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":null,"type":"function","function":{"arguments":null}}]},"finish_reason":null}]}`,
+				`data: {"id":"answer","object":"chat.completion.chunk","model":"native-test","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+				`data: {"id":"answer","object":"chat.completion.chunk","model":"native-test","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`,
+				`data: [DONE]`, ``,
+			}, "\n")))
+			return
+		}
 		assert.Equal(t, "Bearer supplier-secret", r.Header.Get("Authorization"))
 		assert.Empty(t, r.Header.Get("X-Account-ID"))
 		w.Header().Set("Content-Type", "application/json")
@@ -342,6 +353,28 @@ func TestManagedNativeChatUsesNativePriceAndOriginalKeyWithoutLocalDebit(t *test
 	assert.Equal(t, "original-key-id", rejected.CredentialID)
 	assert.Equal(t, 11, providerCalls, "a native rejected request must never be retried")
 	assert.Equal(t, 8, settles)
+	assert.Zero(t, nativeWrites)
+
+	// A native-pricing managed key reaches the same Chat stream validator and
+	// must return complete, protocol-correct tool deltas after normalization.
+	service.GetHttpClient().Transport = transport
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"native-test":1}`))
+	responseMode = "tool_stream"
+	request = httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(`{"model":"native-test","messages":[{"role":"user","content":"hello"}],"stream":true,"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}]}`))
+	request.Header.Set("Authorization", "Bearer uh_key_original")
+	request.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, request)
+	require.Equal(t, 200, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), `"id":"call_1"`)
+	assert.NotContains(t, w.Body.String(), `"id":null`)
+	assert.NotContains(t, w.Body.String(), `"arguments":null`)
+	assert.NotContains(t, w.Body.String(), "upstream_tool_protocol_invalid")
+	assert.Contains(t, w.Body.String(), "[DONE]")
+	assert.Equal(t, 9, settles)
+	var toolCall platformbilling.Call
+	require.NoError(t, db.First(&toolCall, "call_id = ?", w.Header().Get("X-UniHub-Call-ID")).Error)
+	assert.Equal(t, "SETTLED", toolCall.Status)
 	assert.Zero(t, nativeWrites)
 }
 

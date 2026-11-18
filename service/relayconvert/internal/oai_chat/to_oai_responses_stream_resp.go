@@ -205,10 +205,10 @@ func (s *ChatToResponsesStreamState) appendToolCallDelta(toolCall dto.ToolCallRe
 		}
 		s.toolsByIndex[chatIndex] = tool
 	}
-	if fragment := strings.TrimSpace(toolCall.ID); fragment != "" {
+	if fragment := strings.TrimSpace(toolCall.ID); fragment != "" && fragment != tool.ID {
 		tool.ID += fragment
 	}
-	if fragment := strings.TrimSpace(toolCall.Function.Name); fragment != "" {
+	if fragment := strings.TrimSpace(toolCall.Function.Name); fragment != "" && fragment != tool.Name {
 		tool.Name += fragment
 	}
 	if toolCall.Type != nil {
@@ -216,7 +216,10 @@ func (s *ChatToResponsesStreamState) appendToolCallDelta(toolCall dto.ToolCallRe
 		if !ok {
 			return nil, fmt.Errorf("chat stream tool type must be a string")
 		}
-		tool.Kind += strings.TrimSpace(fragment)
+		fragment = strings.TrimSpace(fragment)
+		if fragment != tool.Kind {
+			tool.Kind += fragment
+		}
 		if tool.Kind != "" && tool.Kind != "function" && tool.Kind != "custom" &&
 			!strings.HasPrefix("function", tool.Kind) && !strings.HasPrefix("custom", tool.Kind) {
 			return nil, fmt.Errorf("unsupported chat stream tool type %q", tool.Kind)

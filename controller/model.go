@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -232,9 +233,9 @@ func ListModels(c *gin.Context, modelType int) {
 	}
 	ownerGroups := groups.ownerGroups
 	modelLimitEnable := common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled)
+	var tokenModelLimit map[string]bool
 	if modelLimitEnable {
 		s, ok := common.GetContextKey(c, constant.ContextKeyTokenModelLimit)
-		var tokenModelLimit map[string]bool
 		if ok {
 			tokenModelLimit = s.(map[string]bool)
 		} else {
@@ -266,13 +267,16 @@ func ListModels(c *gin.Context, modelType int) {
 	}
 	userOpenAiModels := make([]dto.OpenAIModels, 0, len(userModelNames))
 	for _, modelName := range userModelNames {
+		if strings.EqualFold(modelName, "qwen3-vl-embedding") {
+			continue // This model needs a validated multimodal route, not a legacy ability.
+		}
 		userOpenAiModels = append(userOpenAiModels, buildOpenAIModel(modelName, ownerByModel))
 	}
 	// Client model routes are a first-class public catalog. They are assembled
 	// from authorized channel/ability/pricing state and merged with the legacy
 	// ability list so existing clients remain compatible during migration.
 	for _, clientModel := range listRuntimeClientModels(c, groups.ownerGroups, modelType) {
-		appendPublicClientModel(&userOpenAiModels, clientModel)
+		appendPublicClientModel(&userOpenAiModels, clientModel, tokenModelLimit)
 	}
 
 	switch modelType {
@@ -308,29 +312,56 @@ func ListModels(c *gin.Context, modelType int) {
 	}
 }
 
-func appendPublicClientModel(models *[]dto.OpenAIModels, clientModel modelcatalog.ClientModel) {
+func appendPublicClientModel(models *[]dto.OpenAIModels, clientModel modelcatalog.ClientModel, allowed map[string]bool) {
 	if models == nil || strings.TrimSpace(clientModel.PublicID) == "" {
 		return
 	}
-	seen := make(map[string]struct{}, len(*models)+len(clientModel.Aliases))
-	for _, existing := range *models {
-		seen[strings.ToLower(existing.Id)] = struct{}{}
+	var declarations struct {
+		SupportsTools *bool `json:"supports_tools"`
 	}
-	add := func(id string) {
+	_ = common.UnmarshalJsonStr(clientModel.Metadata, &declarations)
+	metadata := dto.PublicModelMetadata{
+		ContextLength:            clientModel.ContextWindow,
+		MaxOutputTokens:          clientModel.MaxOutputTokens,
+		InputModalities:          clientModel.InputModalities,
+		OutputModalities:         clientModel.OutputModalities,
+		Operations:               clientModel.Operations,
+		Endpoints:                dto.PublicModelEndpoints(clientModel.Operations),
+		ConfiguredUpstreamModels: clientModel.ConfiguredUpstreamModels,
+	}
+	if declarations.SupportsTools != nil || len(clientModel.InputModalities) > 0 {
+		metadata.Capabilities = &dto.PublicCapabilities{Tools: declarations.SupportsTools}
+		if len(clientModel.InputModalities) > 0 {
+			vision := false
+			for _, modality := range clientModel.InputModalities {
+				if modality == "image" {
+					vision = true
+					break
+				}
+			}
+			metadata.Capabilities.Vision = &vision
+		}
+	}
+	add := func(id string, alias bool) {
 		id = strings.TrimSpace(id)
-		if id == "" {
+		if id == "" || (allowed != nil && !allowed[id]) {
 			return
 		}
-		key := strings.ToLower(id)
-		if _, ok := seen[key]; ok {
-			return
+		entryMetadata := metadata
+		if alias && (allowed == nil || allowed[clientModel.PublicID]) {
+			entryMetadata.AliasOf = clientModel.PublicID
 		}
-		seen[key] = struct{}{}
-		*models = append(*models, dto.OpenAIModels{Id: id, Object: "model", Created: 1626777600, OwnedBy: "client-catalog"})
+		for i := range *models {
+			if strings.EqualFold((*models)[i].Id, id) {
+				(*models)[i].PublicModelMetadata = entryMetadata
+				return
+			}
+		}
+		*models = append(*models, dto.OpenAIModels{Id: id, Object: "model", Created: 1626777600, OwnedBy: "client-catalog", PublicModelMetadata: entryMetadata})
 	}
-	add(clientModel.PublicID)
+	add(clientModel.PublicID, false)
 	for _, alias := range clientModel.Aliases {
-		add(alias)
+		add(alias, true)
 	}
 }
 
@@ -382,7 +413,32 @@ func listRuntimeClientModels(c *gin.Context, ownerGroups []string, modelType int
 		common.SysLog(fmt.Sprintf("list runtime client models error: %v", err))
 		return nil
 	}
-	return returnValue
+	visible := returnValue[:0]
+	for _, entry := range returnValue {
+		isQwenMultimodal := strings.EqualFold(entry.PublicID, "qwen3-vl-embedding") || slices.Contains(entry.ConfiguredUpstreamModels, "qwen3-vl-embedding")
+		if isQwenMultimodal {
+			if !slices.Contains(entry.Operations, "multimodal.embeddings.create") || helper.ValidateMultimodalEmbeddingSpace(&dto.MultimodalEmbeddingRequest{}, entry.EmbeddingSpace) != nil {
+				continue
+			}
+			candidates, err := catalog.ResolveCandidates(c.Request.Context(), c.GetInt("id"), ownerGroups, entry.PublicID, client)
+			if err != nil || len(candidates) == 0 {
+				continue
+			}
+			valid := true
+			for _, candidate := range candidates {
+				var ch model.Channel
+				if candidate.UpstreamModel != "qwen3-vl-embedding" || model.DB.Select("id", "type").First(&ch, candidate.ChannelID).Error != nil || ch.Type != constant.ChannelTypeAli {
+					valid = false
+					break
+				}
+			}
+			if !valid {
+				continue
+			}
+		}
+		visible = append(visible, entry)
+	}
+	return visible
 }
 
 func anthropicModelPage(models []dto.AnthropicModel) gin.H {

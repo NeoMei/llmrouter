@@ -55,6 +55,47 @@ func TestOCRRedisSynchronousAndReceiptLoss(t *testing.T) {
 		})
 	}
 }
+
+func TestOCRClaimUsesDurableCentralFundingReceiptsWithRedisEnabled(t *testing.T) {
+	for _, funding := range []string{"unihub", "subscription"} {
+		t.Run(funding, func(t *testing.T) {
+			s, a, _ := ocrRedisFixture(t)
+			ctx := context.Background()
+			job, err := s.CreateIntent(ctx, a)
+			require.NoError(t, err)
+			// Recreate the persisted state after a central wallet or subscription
+			// reservation. Both write SQL receipts regardless of cache mode.
+			fields := map[string]any{"funding": funding, "redis": false, "billing_state": "reserved"}
+			if funding == "subscription" {
+				fields["central_account_id"] = "central-owner"
+			}
+			require.NoError(t, s.db.Model(&OCRJob{}).Where("id = ?", job.ID).Updates(fields).Error)
+			for _, kind := range []string{funding, "token"} {
+				op, err := ocrOperation(s.db, job.ID, kind, "reserve")
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					op = &OCROperation{ID: job.ID + "-funding", JobID: job.ID, Kind: kind, Phase: "reserve", Amount: job.Quota, OwnerID: a.UserID}
+				} else {
+					require.NoError(t, err)
+				}
+				if kind == funding {
+					op.State, op.SQLAppliedAt = "applied", time.Now().Unix()
+				}
+				require.NoError(t, s.db.Save(op).Error)
+			}
+			_, err = s.ClaimSubmission(ctx, job.ID, ocrTestSelection(a.ChannelID))
+			require.ErrorIs(t, err, ErrOCRReconciliation, "missing token receipt must block dispatch")
+			result := s.db.Model(&OCROperation{}).Where("job_id = ? AND kind = ? AND phase = ?", job.ID, "token", "reserve").Updates(map[string]any{"state": "applied", "sql_applied_at": time.Now().Unix()})
+			require.NoError(t, result.Error)
+			require.EqualValues(t, 1, result.RowsAffected)
+			claim, err := s.ClaimSubmission(ctx, job.ID, ocrTestSelection(a.ChannelID))
+			require.NoError(t, err)
+			assert.NotEmpty(t, claim.ClaimID)
+			_, err = s.ClaimSubmission(ctx, job.ID, ocrTestSelection(a.ChannelID))
+			require.ErrorIs(t, err, ErrOCRConflict)
+		})
+	}
+}
+
 func TestOCRRedisKnownPartialRefund(t *testing.T) {
 	s, a, mr := ocrRedisFixture(t)
 	ctx := context.Background()

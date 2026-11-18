@@ -292,3 +292,26 @@ func TestNativeCreditProtocolNegotiationRequiresConfiguredService(t *testing.T) 
 	disabled.ServeHTTP(res, req)
 	require.Equal(t, 503, res.Code)
 }
+
+func TestProviderCatalogRequiresExplicitMultimodalEmbeddingRoute(t *testing.T) {
+	adapter, db := providerCatalogFixture(t)
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"qwen3-vl-embedding":0.01}`))
+	require.NoError(t, db.Create(&model.Channel{Id: 8, Type: constant.ChannelTypeAli, Key: "fixture", Status: common.ChannelStatusEnabled, Models: "qwen3-vl-embedding", Group: "native"}).Error)
+	require.NoError(t, db.Create(&model.Ability{Group: "native", Model: "qwen3-vl-embedding", ChannelId: 8, Enabled: true}).Error)
+	grant := platformbilling.Claims{OriginProductID: "superwagie", InstanceID: "fixture", ActorID: "actor", AccountID: "team"}
+	catalog, err := readProviderCatalog(context.Background(), adapter, grant)
+	require.NoError(t, err)
+	require.Empty(t, catalog.Models)
+	route := model.ClientModelRoute{Id: 1, PublicId: "qwen3-vl-embedding", Client: "all", Enabled: true, Metadata: `{}`}
+	require.NoError(t, db.Create(&route).Error)
+	require.NoError(t, db.Create(&model.ClientModelTarget{Id: 1, RouteId: 1, ChannelId: 8, UpstreamModel: "qwen3-vl-embedding", BillingModel: "qwen3-vl-embedding", PreferredWires: `["openai_chat"]`, Weight: 1, Enabled: true}).Error)
+	catalog, err = readProviderCatalog(context.Background(), adapter, grant)
+	require.NoError(t, err)
+	require.Empty(t, catalog.Models)
+	metadata := `{"operations":["multimodal.embeddings.create"],"input_modalities":["text","image"],"output_modalities":["embedding"],"embedding_space":{"provider":"aliyun","model":"qwen3-vl-embedding","version":"v1","dimensions":1024,"input_semantics":"independent/png-jpeg/mp4-h264-noaudio/v1/fps=1"}}`
+	require.NoError(t, db.Model(&route).Update("metadata", metadata).Error)
+	catalog, err = readProviderCatalog(context.Background(), adapter, grant)
+	require.NoError(t, err)
+	require.Len(t, catalog.Models, 1)
+	require.Equal(t, "qwen3-vl-embedding", catalog.Models[0].ID)
+}

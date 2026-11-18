@@ -44,10 +44,16 @@ func TestRelayAccountPoolHTTP(t *testing.T) {
 			t.Run(mode+"/"+scenario, func(t *testing.T) { testRelayAccountPoolHTTP(t, mode, scenario) })
 		}
 	}
+	t.Run("native/stream", func(t *testing.T) { testRelayAccountPoolHTTP(t, "native", "stream") })
+	t.Run("native/route-retry", func(t *testing.T) { testRelayAccountPoolHTTP(t, "native", "route-retry") })
+	t.Run("native/bad-response", func(t *testing.T) { testRelayAccountPoolHTTP(t, "native", "bad-response") })
 }
 
 func testRelayAccountPoolHTTP(t *testing.T, mode, scenario string) {
 	gin.SetMode(gin.TestMode)
+	previousStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 60
+	t.Cleanup(func() { constant.StreamingTimeout = previousStreamingTimeout })
 	db := setupTieredRelayBillingDB(t)
 	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ClientModelRoute{}, &model.ClientModelTarget{}, &model.UpstreamAccountPool{}, &model.UpstreamAccountMember{}, &model.UpstreamAccountState{}, &model.Log{}, &model.ProviderProfile{}, &model.ProviderModel{}, &model.ProviderKeyPool{}, &model.UserProviderKey{}))
 	previousLogDB, previousLog, previousCache, previousRetry := model.LOG_DB, common.LogConsumeEnabled, common.MemoryCacheEnabled, common.RetryTimes
@@ -83,6 +89,18 @@ func testRelayAccountPoolHTTP(t *testing.T, mode, scenario string) {
 		mu.Lock()
 		sends = append(sends, key)
 		mu.Unlock()
+		w.Header().Set("X-LLMRouter-Requested-Model", "forged-request")
+		w.Header().Set("X-LLMRouter-Routed-Model", "forged-route")
+		if scenario == "stream" {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"id\":\"chatcmpl-pool\",\"object\":\"chat.completion.chunk\",\"model\":\"provider-reported\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-pool\",\"object\":\"chat.completion.chunk\",\"model\":\"provider-reported\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\n\ndata: [DONE]\n\n"))
+			return
+		}
+		if scenario == "bad-response" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{`))
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		if key == "Bearer account-A" || scenario == "all-cooled" {
 			if scenario == "invalid" {
@@ -102,6 +120,9 @@ func testRelayAccountPoolHTTP(t *testing.T, mode, scenario string) {
 	}))
 	defer upstream.Close()
 	channelType, credential, multi := constant.ChannelTypeOpenAI, "account-A\naccount-B", true
+	if scenario == "route-retry" {
+		credential, multi = "account-A", false
+	}
 	if strings.HasPrefix(mode, "gateway") {
 		channelType, credential, multi = constant.ChannelTypeGateway, "unused", false
 		cipher, err := crypto.NewAESGCM(make([]byte, 32))
@@ -128,8 +149,10 @@ func testRelayAccountPoolHTTP(t *testing.T, mode, scenario string) {
 		require.NoError(t, db.Create(&model.ClientModelRoute{Id: 931, PublicId: "gpt-pool", Client: "codex", Enabled: true}).Error)
 		require.NoError(t, db.Create(&model.ClientModelTarget{Id: 932, RouteId: 931, ChannelId: 921, UpstreamModel: "gpt-pool", BillingModel: "gpt-pool", PreferredWires: `["openai_chat"]`, Enabled: true}).Error)
 	}
-	if scenario == "cooled-backup" {
-		common.RetryTimes = 0
+	if scenario == "cooled-backup" || scenario == "route-retry" {
+		if scenario == "cooled-backup" {
+			common.RetryTimes = 0
+		}
 		require.NoError(t, db.Model(&model.Ability{}).Where("channel_id = ?", 921).Update("priority", 10).Error)
 		var refs []model.UpstreamAccountRef
 		if strings.HasPrefix(mode, "gateway") {
@@ -143,15 +166,26 @@ func testRelayAccountPoolHTTP(t *testing.T, mode, scenario string) {
 			require.NoError(t, err)
 		}
 		scope := model.UpstreamAccountScope{Operation: "chat.completions.create", Model: "gpt-pool"}
-		for _, ref := range refs {
-			selected, err := model.SelectUpstreamAccount(context.Background(), db, []model.UpstreamAccountRef{ref}, scope, nil, time.Now())
-			require.NoError(t, err)
-			require.NoError(t, model.RecordUpstreamAccountFailure(context.Background(), db, selected, scope, model.UpstreamAccountFailure{Kind: model.UpstreamAccountCooldown, Reason: "rate_limit", RetryAt: time.Now().Add(120 * time.Second)}, time.Now()))
+		if scenario == "cooled-backup" {
+			for _, ref := range refs {
+				selected, err := model.SelectUpstreamAccount(context.Background(), db, []model.UpstreamAccountRef{ref}, scope, nil, time.Now())
+				require.NoError(t, err)
+				require.NoError(t, model.RecordUpstreamAccountFailure(context.Background(), db, selected, scope, model.UpstreamAccountFailure{Kind: model.UpstreamAccountCooldown, Reason: "rate_limit", RetryAt: time.Now().Add(120 * time.Second)}, time.Now()))
+			}
 		}
-		require.NoError(t, db.Create(&model.Channel{Id: 941, Type: constant.ChannelTypeOpenAI, Name: "backup", Key: "account-C", BaseURL: &upstream.URL, Models: "gpt-pool", Group: "default", Status: common.ChannelStatusEnabled}).Error)
-		require.NoError(t, db.Create(&model.Ability{ChannelId: 941, Group: "default", Model: "gpt-pool", Enabled: true, Priority: common.GetPointer(int64(-1))}).Error)
+		backupModel := "gpt-pool"
+		if mode == "native" {
+			backupModel = "gpt-pool-backup"
+		}
+		require.NoError(t, db.Create(&model.Channel{Id: 941, Type: constant.ChannelTypeOpenAI, Name: "backup", Key: "account-C", BaseURL: &upstream.URL, Models: backupModel, Group: "default", Status: common.ChannelStatusEnabled}).Error)
+		require.NoError(t, db.Create(&model.Ability{ChannelId: 941, Group: "default", Model: backupModel, Enabled: true, Priority: common.GetPointer(int64(-1))}).Error)
 		if !strings.HasSuffix(mode, "legacy") {
-			require.NoError(t, db.Create(&model.ClientModelTarget{Id: 942, RouteId: 931, ChannelId: 941, UpstreamModel: "gpt-pool", BillingModel: "gpt-pool", PreferredWires: `["openai_chat"]`, Enabled: true, Priority: 10}).Error)
+			backupPriority := 10
+			if scenario == "route-retry" {
+				backupPriority = 0
+				require.NoError(t, db.Model(&model.ClientModelTarget{}).Where("id = ?", 932).Update("priority", 10).Error)
+			}
+			require.NoError(t, db.Create(&model.ClientModelTarget{Id: 942, RouteId: 931, ChannelId: 941, UpstreamModel: backupModel, BillingModel: "gpt-pool", PreferredWires: `["openai_chat"]`, Enabled: true, Priority: backupPriority}).Error)
 		}
 	}
 	if mode == "cache-legacy" {
@@ -191,21 +225,41 @@ func testRelayAccountPoolHTTP(t *testing.T, mode, scenario string) {
 		}
 		recorder := httptest.NewRecorder()
 		body := `{"model":"gpt-pool","messages":[{"role":"user","content":"hi"}],"max_tokens":10}`
+		if scenario == "stream" {
+			body = `{"model":"gpt-pool","messages":[{"role":"user","content":"hi"}],"max_tokens":10,"stream":true}`
+		}
 		if scenario == "resources" {
 			body = `{"model":"gpt-pool","messages":[{"role":"user","content":"hi"}],"file_id":"owned-by-A","max_tokens":10}`
 		}
 		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		engine.ServeHTTP(recorder, req)
-		if scenario == "failover" || scenario == "invalid" || scenario == "cooled-backup" {
+		if scenario == "failover" || scenario == "invalid" || scenario == "cooled-backup" || scenario == "stream" || scenario == "route-retry" {
 			require.Equal(t, 200, recorder.Code, recorder.Body.String())
-			assert.Equal(t, 1, strings.Count(recorder.Body.String(), `"chatcmpl-pool"`))
+			if scenario == "stream" {
+				assert.Contains(t, recorder.Body.String(), `"chatcmpl-pool"`)
+			} else {
+				assert.Equal(t, 1, strings.Count(recorder.Body.String(), `"chatcmpl-pool"`))
+			}
+			assert.Equal(t, "gpt-pool", recorder.Header().Get("X-LLMRouter-Requested-Model"))
+			expectedRouted := "gpt-pool"
+			if mode == "native" && (scenario == "cooled-backup" || scenario == "route-retry") {
+				expectedRouted = "gpt-pool-backup"
+			}
+			assert.Equal(t, expectedRouted, recorder.Header().Get("X-LLMRouter-Routed-Model"))
 		} else {
 			assert.GreaterOrEqual(t, recorder.Code, 400, recorder.Body.String())
+			assert.Empty(t, recorder.Header().Get("X-LLMRouter-Routed-Model"))
 			if scenario == "all-cooled" && request == 1 {
 				assert.Equal(t, "120", recorder.Header().Get("Retry-After"))
 			}
 		}
+	}
+	if scenario == "stream" || scenario == "route-retry" || scenario == "bad-response" {
+		if scenario == "route-retry" {
+			assert.Equal(t, []string{"Bearer account-A", "Bearer account-C"}, sends)
+		}
+		return
 	}
 	if scenario != "failover" && scenario != "invalid" && scenario != "cooled-backup" {
 		expected := []string{}

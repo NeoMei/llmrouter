@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/metering"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -291,4 +292,47 @@ func TestNativeCreditProtocolNegotiationRequiresConfiguredService(t *testing.T) 
 	res := httptest.NewRecorder()
 	disabled.ServeHTTP(res, req)
 	require.Equal(t, 503, res.Code)
+}
+
+func TestProviderCatalogDelegatesScopedOriginAndPublishesOnlyPublicTariff(t *testing.T) {
+	adapter, db := providerCatalogFixture(t)
+	originalFX := operation_setting.USDExchangeRate
+	operation_setting.USDExchangeRate = 7
+	t.Cleanup(func() { operation_setting.USDExchangeRate = originalFX })
+	before := billing_setting.GetModelNativePricingCopy()
+	t.Cleanup(func() { require.NoError(t, billing_setting.SetModelNativePricing(before)) })
+	contract := metering.Price{Version: "metered_v2", Operation: "ocr", Policy: "success_request", Terms: []metering.Term{{Key: "requests", Unit: "request", Price: metering.Rational{Numerator: "1", Denominator: "5"}}}}
+	require.NoError(t, billing_setting.SetModelNativePricing(map[string]map[string]metering.Price{"product-ocr": {"ocr": contract}}))
+	require.NoError(t, db.Create(&model.Channel{Id: 4, Type: constant.ChannelTypePaddleOCR, Key: "private-product-ocr-key", Status: common.ChannelStatusEnabled, Group: "native"}).Error)
+	require.NoError(t, db.Create(&model.Ability{Group: "native", Model: "product-ocr", ChannelId: 4, Enabled: true}).Error)
+	require.NoError(t, db.Create(&model.ClientModelRoute{Id: 4, PublicId: "product-ocr", DisplayName: "Scoped OCR", Client: "agentwiki", Enabled: true, Metadata: `{"operations":["ocr.jobs.create"],"input_modalities":["document"],"output_modalities":["text"]}`}).Error)
+	require.NoError(t, db.Create(&model.ClientModelTarget{Id: 4, RouteId: 4, ChannelId: 4, UpstreamModel: "product-ocr", BillingModel: "product-ocr", PreferredWires: `["paddleocr_jobs"]`, Enabled: true, Weight: 1}).Error)
+	engine := gin.New()
+	config := platformbilling.CatalogConfig{Token: strings.Repeat("c", 32), ProductID: "llmrouter", InstanceID: "fixture"}
+	SetProviderCatalogRouter(engine, adapter, config)
+	call := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/internal/v1/provider-catalog", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+config.Token)
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, req)
+		return response
+	}
+	readiness := call(`{"origin_product_id":"agentwiki","credit_scope":"product_v1","purpose":"native_credit_readiness"}`)
+	require.Equal(t, http.StatusOK, readiness.Code, readiness.Body.String())
+	require.Contains(t, readiness.Body.String(), `"credit_scope":"product_v1"`)
+	catalog := call(`{"origin_product_id":"agentwiki","credit_scope":"product_v1","instance_id":"fixture","actor_id":"actor","account_id":"team"}`)
+	require.Equal(t, http.StatusOK, catalog.Code, catalog.Body.String())
+	require.Contains(t, catalog.Body.String(), `"id":"product-ocr"`)
+	require.Contains(t, catalog.Body.String(), `"public_tariff"`)
+	var decoded ProviderCatalog
+	require.NoError(t, common.Unmarshal(catalog.Body.Bytes(), &decoded))
+	require.Len(t, decoded.Models, 1)
+	pricing := decoded.Models[0].CapabilityMetadata.Operations[0].PublicTariff
+	require.NotNil(t, pricing)
+	require.Len(t, pricing.Revision, 64)
+	require.Equal(t, "CREDIT/6", pricing.Asset)
+	require.Equal(t, metering.Rational{Numerator: "14000000", Denominator: "1"}, pricing.Tariff.Terms[0].Price)
+	require.NotContains(t, catalog.Body.String(), "private-product-ocr-key")
+	require.NotContains(t, catalog.Body.String(), "supplier_tariffs")
+	require.NotContains(t, catalog.Body.String(), "source_verified")
 }

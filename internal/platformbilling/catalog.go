@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/mediafacts"
+	"github.com/QuantumNous/new-api/pkg/metering"
 )
 
 // CatalogConfig is inbound read-only authority, separate from outbound billing
@@ -63,19 +64,26 @@ type CatalogModel struct {
 	Operations               []CatalogOperation    `json:"operations"`
 }
 type CatalogOperation struct {
-	ParameterVariants []ParameterVariant `json:"parameter_variants,omitempty"`
-	ID                string             `json:"id"`
-	Protocol          string             `json:"protocol"`
-	Endpoint          string             `json:"endpoint,omitempty"`
-	Method            string             `json:"method,omitempty"`
-	Transports        []string           `json:"transports"`
-	BillingOperation  string             `json:"billing_operation,omitempty"`
-	Available         bool               `json:"available"`
-	Executable        bool               `json:"executable"`
-	DisabledReason    string             `json:"disabled_reason,omitempty"`
-	Policy            string             `json:"policy,omitempty"`
-	Limits            OperationLimits    `json:"limits"`
-	RateIDs           map[string]string  `json:"rate_ids,omitempty"`
+	PublicTariff      *CatalogPublicTariff `json:"public_tariff,omitempty"`
+	ParameterVariants []ParameterVariant   `json:"parameter_variants,omitempty"`
+	ID                string               `json:"id"`
+	Protocol          string               `json:"protocol"`
+	Endpoint          string               `json:"endpoint,omitempty"`
+	Method            string               `json:"method,omitempty"`
+	Transports        []string             `json:"transports"`
+	BillingOperation  string               `json:"billing_operation,omitempty"`
+	Available         bool                 `json:"available"`
+	Executable        bool                 `json:"executable"`
+	DisabledReason    string               `json:"disabled_reason,omitempty"`
+	Policy            string               `json:"policy,omitempty"`
+	Limits            OperationLimits      `json:"limits"`
+	RateIDs           map[string]string    `json:"rate_ids,omitempty"`
+}
+
+type CatalogPublicTariff struct {
+	Asset    string         `json:"asset"`
+	Revision string         `json:"revision"`
+	Tariff   metering.Price `json:"tariff"`
 }
 
 // CatalogDisplayName attributes the legacy embedding route from its declared

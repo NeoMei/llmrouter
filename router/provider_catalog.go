@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"math/big"
 	"net/http"
 	"regexp"
 	"slices"
@@ -17,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/metering"
 	"github.com/QuantumNous/new-api/relay/capability"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service/modelcatalog"
@@ -30,6 +32,7 @@ import (
 // response to the authenticated caller; neither groups nor prices are supplied
 // by that caller. Inference separately verifies the original credential.
 type ProviderCatalog struct {
+	CreditScope          string                 `json:"credit_scope,omitempty"`
 	CreditScopes         []string               `json:"credit_scopes,omitempty"`
 	Purpose              string                 `json:"purpose,omitempty"`
 	NativeCreditProtocol string                 `json:"native_credit_protocol,omitempty"`
@@ -58,6 +61,7 @@ type ProviderCatalogModel struct {
 }
 
 type providerCatalogRequest struct {
+	CreditScope     string `json:"credit_scope,omitempty"`
 	Purpose         string `json:"purpose,omitempty"`
 	OriginProductID string `json:"origin_product_id"`
 	InstanceID      string `json:"instance_id"`
@@ -65,6 +69,7 @@ type providerCatalogRequest struct {
 	AccountID       string `json:"account_id"`
 }
 
+var providerCatalogProductID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 var providerCatalogIdentity = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,191}$`)
 
 func SetProviderCatalogRouter(engine *gin.Engine, adapter *platformbilling.Adapter, config platformbilling.CatalogConfig) {
@@ -91,7 +96,13 @@ func SetProviderCatalogRouter(engine *gin.Engine, adapter *platformbilling.Adapt
 		var req providerCatalogRequest
 		decoder := common.NewJsonDecoder(strings.NewReader(string(data)))
 		decoder.DisallowUnknownFields()
-		if common.UnmarshalUnique(data, &req) != nil || decoder.Decode(&req) != nil || req.OriginProductID != "superwagie" {
+		if common.UnmarshalUnique(data, &req) != nil || decoder.Decode(&req) != nil {
+			c.Status(http.StatusForbidden)
+			return
+		}
+		scoped := req.CreditScope == platformbilling.ProductCreditScope
+		if (!scoped && (req.CreditScope != "" || req.OriginProductID != "superwagie")) ||
+			(scoped && !providerCatalogProductID.MatchString(req.OriginProductID)) {
 			c.Status(http.StatusForbidden)
 			return
 		}
@@ -105,7 +116,11 @@ func SetProviderCatalogRouter(engine *gin.Engine, adapter *platformbilling.Adapt
 				c.Status(http.StatusServiceUnavailable)
 				return
 			}
-			c.JSON(http.StatusOK, ProviderCatalog{Purpose: req.Purpose, CreditScopes: []string{platformbilling.ProductCreditScope}, NativeCreditProtocol: platformbilling.NativeCreditPricingVersion, SchemaVersion: 1, CatalogVersion: platformbilling.NativeCreditPricingVersion, ModelScope: "llmrouter_available", PricingSource: "llmrouter_native", OriginProductID: req.OriginProductID, Models: []ProviderCatalogModel{}})
+			pricing := "llmrouter_native"
+			if scoped {
+				pricing = platformbilling.NativeCreditPricingSource
+			}
+			c.JSON(http.StatusOK, ProviderCatalog{CreditScope: req.CreditScope, Purpose: req.Purpose, CreditScopes: []string{platformbilling.ProductCreditScope}, NativeCreditProtocol: platformbilling.NativeCreditPricingVersion, SchemaVersion: 1, CatalogVersion: platformbilling.NativeCreditPricingVersion, ModelScope: "llmrouter_available", PricingSource: pricing, OriginProductID: req.OriginProductID, Models: []ProviderCatalogModel{}})
 			return
 		}
 		if req.Purpose != "" || req.InstanceID != config.InstanceID || !providerCatalogIdentity.MatchString(req.ActorID) || !providerCatalogIdentity.MatchString(req.AccountID) {
@@ -113,7 +128,7 @@ func SetProviderCatalogRouter(engine *gin.Engine, adapter *platformbilling.Adapt
 			return
 		}
 		grant := platformbilling.Claims{OriginProductID: req.OriginProductID, InstanceID: req.InstanceID, ActorID: req.ActorID, AccountID: req.AccountID}
-		result, err := readProviderCatalog(c.Request.Context(), adapter, grant)
+		result, err := buildProviderCatalog(c.Request.Context(), adapter, grant, scoped)
 		if err != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "provider_catalog_unavailable"})
 			return
@@ -123,8 +138,14 @@ func SetProviderCatalogRouter(engine *gin.Engine, adapter *platformbilling.Adapt
 }
 
 func readProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter, grant platformbilling.Claims) (ProviderCatalog, error) {
+	return buildProviderCatalog(ctx, adapter, grant, grant.ProductCredit())
+}
+
+// The scoped flag is either a verified Key claim or an explicit read-only
+// delegation made by the authenticated UniHub catalog service.
+func buildProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter, grant platformbilling.Claims, scoped bool) (ProviderCatalog, error) {
 	out := ProviderCatalog{CreditScopes: []string{platformbilling.ProductCreditScope}, NativeCreditProtocol: platformbilling.NativeCreditPricingVersion, SchemaVersion: 1, ModelScope: "llmrouter_available", PricingSource: "llmrouter_native", OriginProductID: grant.OriginProductID, InstanceID: grant.InstanceID, ActorID: grant.ActorID, AccountID: grant.AccountID, Models: []ProviderCatalogModel{}}
-	if adapter == nil || !adapter.Enabled() || model.DB == nil || grant.OriginProductID != "superwagie" && !grant.ProductCredit() {
+	if adapter == nil || !adapter.Enabled() || model.DB == nil || grant.OriginProductID != "superwagie" && !scoped {
 		return out, errors.New("provider catalog unavailable")
 	}
 	user, group := adapter.NativePrincipal()
@@ -141,8 +162,9 @@ func readProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter, 
 	}
 	runtime := modelcatalog.RuntimeContext{UserID: user, Groups: []string{group}, Client: grant.OriginProductID}
 	assemble := modelcatalog.AssembleRuntimeCatalog
-	if grant.ProductCredit() {
+	if scoped {
 		assemble = modelcatalog.AssembleManagedRuntimeCatalog
+		out.CreditScope = platformbilling.ProductCreditScope
 		out.PricingSource = platformbilling.NativeCreditPricingSource
 	}
 	catalog, err := assemble(ctx, runtime, routes, targets, modelcatalog.NewGormRuntimeSources(model.DB), deploymentCatalogAuthorizer{user, group, grant.OriginProductID})
@@ -213,7 +235,7 @@ func readProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter, 
 				projected.CapabilityMetadata.Operations[i] = op
 			}
 		}
-		if grant.ProductCredit() {
+		if scoped {
 			byID[m.PublicID] = productCreditPriceAvailability(projected, candidates, channelByID)
 		} else {
 			byID[m.PublicID] = providerPriceAvailability(projected, billingModels)
@@ -228,7 +250,7 @@ func readProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter, 
 	// Existing endpoint metadata augments the adapter's native defaults.
 	model.GetPricing()
 	for _, ability := range abilities {
-		if reserved[strings.ToLower(ability.Model)] || (!grant.ProductCredit() && !helper.HasModelBillingConfig(ability.Model) && !billing_setting.HasModelNativePricing(ability.Model)) {
+		if reserved[strings.ToLower(ability.Model)] || (!scoped && !helper.HasModelBillingConfig(ability.Model) && !billing_setting.HasModelNativePricing(ability.Model)) {
 			continue
 		}
 		ch, ok := channelByID[ability.ChannelId]
@@ -259,7 +281,7 @@ func readProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter, 
 			if wire == "ocr.jobs.create" && !providerOCRChannelSupported(ch) {
 				continue
 			}
-			if grant.ProductCredit() && !platformbilling.ProductCreditChannelSupported(wire, ch.Type) {
+			if scoped && !platformbilling.ProductCreditChannelSupported(wire, ch.Type) {
 				continue
 			}
 			if wire == "" || !capability.DefaultRegistry().Supports(ch.Type, capability.ProtocolForOperation(capability.Operation(wire)), capability.Operation(wire)) {
@@ -269,14 +291,14 @@ func readProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter, 
 				m.Capabilities.Operations = append(m.Capabilities.Operations, wire)
 			}
 		}
-		if grant.ProductCredit() {
+		if scoped {
 			byID[ability.Model] = projectProviderModel(m)
 		} else {
 			byID[ability.Model] = providerPriceAvailability(projectProviderModel(m), []string{ability.Model})
 		}
 	}
 	for _, m := range byID {
-		if grant.ProductCredit() {
+		if scoped {
 			m = productCreditPriceAvailability(m, nil, nil)
 		}
 		out.Models = append(out.Models, m)
@@ -488,11 +510,28 @@ func productCreditPriceAvailability(m ProviderCatalogModel, candidates []modelca
 			return slices.Contains(candidate.Capabilities.Operations, op.ID) && platformbilling.ProductCreditChannelSupported(op.ID, channel.Type)
 		}) {
 			op.Available, op.Executable, op.DisabledReason = false, false, "product_credit_operation_unavailable"
-		} else if _, ok := billing_setting.ResolveProductCreditPrice(m.ID, op.BillingOperation, fx); !ok {
+		} else if price, ok := billing_setting.ResolveProductCreditPrice(m.ID, op.BillingOperation, fx); !ok {
 			op.Available, op.Executable, op.DisabledReason = false, false, "product_credit_price_unavailable"
+		} else {
+			op.PublicTariff = publicProductCreditTariff(price)
 		}
 		m.CapabilityMetadata.Operations[i] = op
 	}
 	m.Probe = slices.ContainsFunc(m.CapabilityMetadata.Operations, func(op platformbilling.CatalogOperation) bool { return op.Executable })
 	return m
+}
+
+// Publish only the customer tariff and immutable revision. Supplier quotes,
+// route identifiers and provider evidence stay in the frozen private price.
+func publicProductCreditTariff(price billing_setting.ProductCreditPrice) *platformbilling.CatalogPublicTariff {
+	microcreditsPerUSD, _ := new(big.Rat).SetString(price.MicrocreditsPerUSD())
+	tariff := price.Tariff
+	tariff.Terms = slices.Clone(price.Tariff.Terms)
+	for i := range tariff.Terms {
+		term := &tariff.Terms[i]
+		rate, _ := new(big.Rat).SetString(term.Price.Numerator + "/" + term.Price.Denominator)
+		rate.Mul(rate, microcreditsPerUSD)
+		term.Price = metering.Rational{Numerator: rate.Num().String(), Denominator: rate.Denom().String()}
+	}
+	return &platformbilling.CatalogPublicTariff{Asset: "CREDIT/6", Revision: price.Revision, Tariff: tariff}
 }

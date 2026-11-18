@@ -19,15 +19,17 @@ For commercial licensing, please contact support@quantumnous.com
 import { useQuery } from '@tanstack/react-query'
 import { useMemo } from 'react'
 
+import { useAuthIdentity } from '@/hooks/use-auth-identity'
 import { useStatus } from '@/hooks/use-status'
 
 import { getPricing } from '../api'
 
 export function usePricingData() {
   const { status } = useStatus()
+  const identity = useAuthIdentity()
 
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['pricing'],
+    queryKey: ['pricing', identity],
     queryFn: getPricing,
     staleTime: 5 * 60 * 1000,
   })
@@ -64,6 +66,7 @@ export function usePricingData() {
 
   return {
     models,
+    clientModelRoutes: data?.client_model_routes ?? [],
     vendors: data?.vendors ?? [],
     groupRatio: data?.group_ratio ?? {},
     usableGroup: data?.usable_group ?? {},

@@ -38,7 +38,24 @@ export function useStatusData<T = unknown>(
  * Get API info list
  */
 export function useApiInfo() {
-  return useStatusData<ApiInfoItem>('api_info_enabled', 'api_info')
+  const configured = useStatusData<ApiInfoItem>('api_info_enabled', 'api_info')
+  if (
+    configured.loading ||
+    configured.items.length > 0 ||
+    typeof window === 'undefined'
+  )
+    return configured
+  return {
+    ...configured,
+    items: [
+      {
+        url: `${window.location.origin}/v1`,
+        route: 'LLMRouter API',
+        description: '',
+        color: 'blue',
+      },
+    ],
+  }
 }
 
 /**

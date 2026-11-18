@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next'
 
 import { PublicLayout } from '@/components/layout'
 import { PageTransition } from '@/components/page-transition'
+import { Button } from '@/components/ui/button'
 
 import {
   LoadingSkeleton,
@@ -44,6 +45,7 @@ export function Pricing() {
 
   const {
     models,
+    clientModelRoutes,
     vendors,
     groupRatio,
     usableGroup,
@@ -104,6 +106,17 @@ export function Pricing() {
       ),
     [usableGroup]
   )
+
+  const routeSearch = searchInput.trim().toLowerCase()
+  const visibleRoutes = clientModelRoutes.filter((route) =>
+    [
+      route.id,
+      route.display_name ?? '',
+      ...(route.aliases ?? []),
+      ...(route.billing_models ?? []),
+    ].some((value) => value.toLowerCase().includes(routeSearch))
+  )
+  const pricedIds = new Set(models.map((model) => model.model_name))
 
   const handleClearAll = useCallback(() => {
     clearFilters()
@@ -256,6 +269,66 @@ export function Pricing() {
                 onClearFilters={clearFilters}
               />
 
+              {visibleRoutes.length > 0 ? (
+                <details
+                  open={routeSearch.length > 0 || undefined}
+                  className='bg-card rounded-lg border p-4'
+                >
+                  <summary className='cursor-pointer text-sm font-semibold'>
+                    {t('API model identifiers')} ({visibleRoutes.length})
+                  </summary>
+                  <p className='text-muted-foreground mt-2 text-sm'>
+                    {t(
+                      'Choose an API identifier and check the corresponding model prices. Actual pricing follows the selected route.'
+                    )}
+                  </p>
+                  <ul className='mt-3 max-h-80 divide-y overflow-auto'>
+                    {visibleRoutes.map((route) => (
+                      <li
+                        key={route.id}
+                        className='flex flex-wrap items-center justify-between gap-2 py-2'
+                      >
+                        <div className='min-w-0'>
+                          <code className='text-sm wrap-anywhere'>
+                            {route.id}
+                          </code>
+                          {route.aliases?.length ? (
+                            <p className='text-muted-foreground text-xs wrap-anywhere'>
+                              {route.aliases.join(' · ')}
+                            </p>
+                          ) : null}
+                          {route.preferred_wires?.length ? (
+                            <p className='text-muted-foreground text-xs'>
+                              {route.preferred_wires.join(' · ')}
+                            </p>
+                          ) : null}
+                        </div>
+                        <div className='flex flex-wrap gap-1'>
+                          {route.billing_models
+                            ?.filter((id) => pricedIds.has(id))
+                            .map((id) => (
+                              <Button
+                                key={id}
+                                size='sm'
+                                variant='outline'
+                                onClick={() => handleModelClick(id)}
+                              >
+                                {id}
+                              </Button>
+                            ))}
+                          {!route.billing_models?.some((id) =>
+                            pricedIds.has(id)
+                          ) ? (
+                            <span className='text-muted-foreground text-xs'>
+                              {t('Pricing unavailable')}
+                            </span>
+                          ) : null}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              ) : null}
               {renderPricingContent()}
             </main>
           </div>

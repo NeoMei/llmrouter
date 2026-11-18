@@ -869,10 +869,26 @@ func GetUserModels(c *gin.Context) {
 			groupsToQuery = []string{group}
 		}
 	}
+	models := service.GetGroupsEnabledModels(groupsToQuery)
+	if group == "" && id == c.GetInt("id") && user.Group != "" {
+		seen := make(map[string]bool, len(models))
+		for _, name := range models {
+			seen[strings.ToLower(name)] = true
+		}
+		for _, route := range listRuntimeClientModels(c, []string{user.Group}, constant.ChannelTypeOpenAI) {
+			for _, name := range append([]string{route.PublicID}, route.Aliases...) {
+				key := strings.ToLower(name)
+				if !seen[key] {
+					models = append(models, name)
+					seen[key] = true
+				}
+			}
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    service.GetGroupsEnabledModels(groupsToQuery),
+		"data":    models,
 	})
 }
 

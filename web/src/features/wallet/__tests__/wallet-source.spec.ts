@@ -768,12 +768,9 @@ test('WeChat confirmation replaces QR with success and refreshes the credited ba
         amount: '20000000',
         payment_status: paid ? 'PAID' : 'CREATED',
         operation_id: paid ? 'op_confirm1' : undefined,
+        wallet_target: 'unified',
+        credit_status: credited ? 'APPLIED' : 'CREATED',
       },
-    })
-  )
-  await page.route('**/operations/op_confirm1', (route) =>
-    route.fulfill({
-      json: { id: 'op_confirm1', status: credited ? 'APPLIED' : 'CREATED' },
     })
   )
   await page.goto('/wallet')
@@ -803,6 +800,34 @@ test('WeChat confirmation replaces QR with success and refreshes the credited ba
     .getByRole('button', { name: 'Back to wallet', exact: true })
     .click()
   await expect(dialog).toHaveCount(0)
+
+  await page.route(
+    '**/api/unihub/bff/v1/accounts/payer/cash-checkouts',
+    (route) =>
+      route.fulfill({
+        json: [
+          {
+            id: 'ct_confirm1',
+            account_id: 'payer',
+            product_id: 'llmrouter',
+            provider: 'wechat',
+            amount: '20000000',
+            currency: 'CNY',
+            payment_status: 'PAID',
+            wallet_target: 'unified',
+            credit_status: 'APPLIED',
+            created_at: '2026-11-18T03:00:00.123456789Z',
+            expires_at: '2026-11-18T03:15:00Z',
+          },
+        ],
+      })
+  )
+  await page.getByRole('button', { name: 'Order History', exact: true }).click()
+  await expect(dialog.getByText('ct_confirm1', { exact: true })).toBeVisible()
+  await expect(
+    dialog.getByText('Unified wallet', { exact: true })
+  ).toBeVisible()
+  await expect(dialog.getByText('WeChat Pay', { exact: true })).toBeVisible()
 })
 
 test('Alipay return verifies the checkout with the server before showing success', async ({

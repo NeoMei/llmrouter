@@ -227,6 +227,23 @@ func TestListModelsIncludesPublicIDAndCodexAlias(t *testing.T) {
 	ids := decodeListModelsResponse(t, recorder)
 	require.Contains(t, ids, "deepseek/deepseek-v4-flash")
 	require.Contains(t, ids, "gpt-5.6-sol")
+
+	site := httptest.NewRecorder()
+	siteContext, _ := gin.CreateTestContext(site)
+	siteContext.Request = httptest.NewRequest(http.MethodGet, "/api/user/models", nil)
+	siteContext.Set("id", 1001)
+	GetUserModels(siteContext)
+	models := decodeUserModelsResponse(t, site)
+	require.Contains(t, models, "deepseek/deepseek-v4-flash")
+	require.Contains(t, models, "gpt-5.6-sol")
+
+	prices := httptest.NewRecorder()
+	priceContext, _ := gin.CreateTestContext(prices)
+	priceContext.Request = httptest.NewRequest(http.MethodGet, "/api/pricing", nil)
+	priceContext.Set("id", 1001)
+	GetPricing(priceContext)
+	require.Contains(t, prices.Body.String(), `"billing_models":["gpt-4o-mini"]`)
+	require.Contains(t, prices.Body.String(), `"aliases":["gpt-5.6-sol"]`)
 }
 
 func TestGetUserModelsFiltersByRequestedGroup(t *testing.T) {

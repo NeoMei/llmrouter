@@ -59,6 +59,7 @@ import {
 interface BillingHistoryDialogProps {
   unifiedCash?: boolean
   fundingResolved?: boolean
+  cashAccount?: string
   open: boolean
   onOpenChange: (open: boolean) => void
 }
@@ -68,10 +69,13 @@ export function BillingHistoryDialog({
   onOpenChange,
   unifiedCash,
   fundingResolved,
+  cashAccount,
 }: BillingHistoryDialogProps) {
   const { t } = useTranslation()
   const {
     records,
+    cash,
+    switchHistory,
     total,
     page,
     pageSize,
@@ -86,7 +90,12 @@ export function BillingHistoryDialog({
     handlePageSizeChange,
     handleSearch,
     handleCompleteOrder,
-  } = useBillingHistory({ enabled: open, unifiedCash, fundingResolved })
+  } = useBillingHistory({
+    enabled: open,
+    unifiedCash,
+    fundingResolved,
+    cashAccount,
+  })
 
   const [confirmTradeNo, setConfirmTradeNo] = useState<string | null>(null)
   const { copyToClipboard, copiedText } = useCopyToClipboard({ notify: false })
@@ -116,6 +125,28 @@ export function BillingHistoryDialog({
         bodyClassName='space-y-3'
       >
         <div className='min-h-0 space-y-3'>
+          {cashAccount ? (
+            <div className='flex flex-wrap gap-2'>
+              <Button
+                type='button'
+                size='sm'
+                variant={cash ? 'default' : 'outline'}
+                aria-pressed={cash}
+                onClick={() => switchHistory(false)}
+              >
+                {t('Cash recharges')}
+              </Button>
+              <Button
+                type='button'
+                size='sm'
+                variant={!cash ? 'default' : 'outline'}
+                aria-pressed={!cash}
+                onClick={() => switchHistory(true)}
+              >
+                {t('Previous recharges')}
+              </Button>
+            </div>
+          ) : null}
           {/* Search and Filter Bar */}
           <div className='flex items-center gap-2'>
             <div className='relative flex-1'>
@@ -263,6 +294,26 @@ export function BillingHistoryDialog({
                           )}
                         </p>
                       )}
+
+                      {record.wallet_target ? (
+                        <p className='text-muted-foreground mt-2 text-xs'>
+                          {t(
+                            record.wallet_target === 'unified'
+                              ? 'Unified wallet'
+                              : 'Managed model product wallet'
+                          )}
+                        </p>
+                      ) : null}
+                      {record.credit_status === 'failed' ? (
+                        <p
+                          role='alert'
+                          className='text-destructive mt-2 text-xs'
+                        >
+                          {t(
+                            'Payment received and requires review. Please contact support.'
+                          )}
+                        </p>
+                      ) : null}
 
                       {/* Details Grid */}
                       <div className='mt-3 grid grid-cols-2 gap-3 sm:mt-4 sm:grid-cols-3 sm:gap-4'>

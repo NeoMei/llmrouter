@@ -191,7 +191,9 @@ export function CashTopupCard(props: CashTopupCardProps) {
   return (
     <TitledCard
       title={t('Recharge with WeChat Pay or Alipay')}
-      description={t('Pay in CNY to add cash to your LLMRouter product wallet')}
+      description={t(
+        'Pay in CNY to fund your unified wallet for native API calls and subscriptions'
+      )}
       icon={<Wallet className='h-4 w-4' />}
       iconTone='success'
       disableHoverEffect

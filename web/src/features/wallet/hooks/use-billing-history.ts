@@ -31,6 +31,7 @@ import {
   completeOrder,
   isApiSuccess,
 } from '../api'
+import { readCashCheckoutHistory } from '../lib/cash-checkout-history'
 
 // ============================================================================
 // Billing History Hook
@@ -40,6 +41,7 @@ interface UseBillingHistoryOptions {
   enabled?: boolean
   unifiedCash?: boolean
   fundingResolved?: boolean
+  cashAccount?: string
   /** Initial page number */
   initialPage?: number
   /** Initial page size */
@@ -62,6 +64,20 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
   const [pageSize, setPageSize] = useState(initialPageSize)
   const [keyword, setKeyword] = useState('')
   const [completing, setCompleting] = useState(false)
+  const [legacy, setLegacy] = useState(false)
+  const cash = Boolean(options.cashAccount && !legacy)
+  const cashHistory = useQuery({
+    queryKey: ['cash-order-history', identity, options.cashAccount],
+    enabled: options.enabled !== false && cash,
+    queryFn: ({ signal }) =>
+      readCashCheckoutHistory(options.cashAccount ?? '', signal),
+    retry: false,
+    gcTime: 0,
+    staleTime: 0,
+  })
+  const filteredCash = cashHistory.data?.filter((order) =>
+    order.trade_no.toLowerCase().includes(keyword.trim().toLowerCase())
+  )
 
   const history = useQuery({
     queryKey: ['billing-history', identity, isAdmin, page, pageSize, keyword],
@@ -80,15 +96,18 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
       }
       return response.data
     },
-    enabled: options.enabled !== false,
+    enabled: options.enabled !== false && !cash,
     retry: false,
     gcTime: 0,
     staleTime: 0,
   })
   const fetchBillingHistory = history.refetch
-  const records = history.data ? history.data.items : []
-  const total = history.data ? history.data.total : 0
-  const loading = history.isPending || history.isFetching
+  const activeHistory = cash ? cashHistory : history
+  const records = cash
+    ? (filteredCash ?? []).slice((page - 1) * pageSize, page * pageSize)
+    : (history.data?.items ?? [])
+  const total = cash ? (filteredCash?.length ?? 0) : (history.data?.total ?? 0)
+  const loading = activeHistory.isPending || activeHistory.isFetching
 
   /**
    * Complete a pending order (admin only)
@@ -155,13 +174,19 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
     keyword,
     loading,
     completing,
-    error: history.isError,
-    hasData: history.data !== undefined,
+    error: activeHistory.isError,
+    hasData: activeHistory.data !== undefined,
+    cash,
+    switchHistory: (showLegacy: boolean) => {
+      setLegacy(showLegacy)
+      setPage(1)
+      setKeyword('')
+    },
     isAdmin,
     handlePageChange,
     handlePageSizeChange,
     handleSearch,
     handleCompleteOrder,
-    refresh: fetchBillingHistory,
+    refresh: activeHistory.refetch,
   }
 }

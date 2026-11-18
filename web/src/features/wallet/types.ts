@@ -242,7 +242,7 @@ export interface WeChatNativeOrder {
   funding_unit_version?: string
   /** Exact micro-CNY quantity for shared cash orders. */
   credit_amount?: string
-  credit_status?: 'pending' | 'applied' | ''
+  credit_status?: 'pending' | 'applied' | 'failed' | ''
 }
 
 /**
@@ -290,16 +290,22 @@ export interface UserWalletData {
 /**
  * Topup record status
  */
-export type TopupStatus = 'success' | 'pending' | 'failed' | 'expired'
+export type TopupStatus =
+  | 'success'
+  | 'pending'
+  | 'failed'
+  | 'expired'
+  | 'review'
 
 /**
  * Topup billing record
  */
 export interface TopupRecord {
+  wallet_target?: 'unified' | 'product'
   funding_asset?: 'CNY/6' | 'LR_QUOTA/0'
   credit_amount?: string
   /** Record ID */
-  id: number
+  id: number | string
   /** User ID */
   user_id: number
   /** Topup amount (quota) */
@@ -316,7 +322,7 @@ export interface TopupRecord {
   complete_time?: number
   /** Payment status */
   status: TopupStatus
-  credit_status?: 'pending' | 'applied'
+  credit_status?: 'pending' | 'applied' | 'failed'
   /** Payment provider identifier for provider-native orders */
   payment_provider?: string
   /** Settlement currency for provider-native orders */

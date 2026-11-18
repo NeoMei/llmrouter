@@ -5721,6 +5721,15 @@
     "Payment received and requires review. Please contact support.": "已收到付款，需要人工核实，请联系客服。",
     "Check payment status": "查询支付结果",
     "Back to wallet": "返回钱包",
-    "Unable to confirm payment. Please check again.": "暂时无法确认支付结果，请再次查询。"
+    "Unable to confirm payment. Please check again.": "暂时无法确认支付结果，请再次查询。",
+    "Cash recharges": "现金充值",
+    "Previous recharges": "历史充值",
+    "Managed model product wallet": "托管模型产品钱包",
+    "Under review": "待核实",
+    "Pay in CNY to fund your unified wallet for native API calls and subscriptions": "充值人民币到统一钱包，用于原生 API 调用和订阅",
+    "API model identifiers": "API 模型 ID",
+    "Choose an API identifier and check the corresponding model prices. Actual pricing follows the selected route.": "选择 API 模型 ID 并查看对应价格。实际计费以选中的路由为准。",
+    "Pricing unavailable": "暂无价格",
+    "Follow the guide to verify your API key": "按文档验证 API 密钥"
   }
 }

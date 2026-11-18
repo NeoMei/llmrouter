@@ -52,8 +52,8 @@ import {
   useWaffoPancakePayment,
   useWeChatNativePayment,
 } from './hooks'
-import { useCentralCashWallet } from './hooks/use-central-cash-wallet'
 import { useCashTopupEligibility } from './hooks/use-cash-topup-eligibility'
+import { useCentralCashWallet } from './hooks/use-central-cash-wallet'
 import {
   getDefaultPaymentType,
   getMinTopupAmount,
@@ -520,6 +520,7 @@ function WalletContent(props: WalletProps & { identity: string }) {
         onOpenChange={setBillingDialogOpen}
         unifiedCash={unifiedCash}
         fundingResolved={financialReady}
+        cashAccount={unifiedCash ? cashTopupAccount : undefined}
       />
 
       <CreemConfirmDialog

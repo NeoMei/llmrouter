@@ -5687,6 +5687,15 @@
     "Payment received and requires review. Please contact support.": "Payment received and requires review. Please contact support.",
     "Check payment status": "Check payment status",
     "Back to wallet": "Back to wallet",
-    "Unable to confirm payment. Please check again.": "Unable to confirm payment. Please check again."
+    "Unable to confirm payment. Please check again.": "Unable to confirm payment. Please check again.",
+    "Cash recharges": "Cash recharges",
+    "Previous recharges": "Previous recharges",
+    "Managed model product wallet": "Managed model product wallet",
+    "Under review": "Under review",
+    "Pay in CNY to fund your unified wallet for native API calls and subscriptions": "Pay in CNY to fund your unified wallet for native API calls and subscriptions",
+    "API model identifiers": "API model identifiers",
+    "Choose an API identifier and check the corresponding model prices. Actual pricing follows the selected route.": "Choose an API identifier and check the corresponding model prices. Actual pricing follows the selected route.",
+    "Pricing unavailable": "Pricing unavailable",
+    "Follow the guide to verify your API key": "Follow the guide to verify your API key"
   }
 }

@@ -23,9 +23,8 @@ import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { UniHubClient } from '@/features/unihub/sdk'
 import type { ProductConfig } from '@/features/unihub/session'
-import { silentProductLoginURL, startProductLogin } from '@/features/unihub/sso'
+import { startProductLogin } from '@/features/unihub/sso'
 import { useStatus } from '@/hooks/use-status'
-import { isSessionSelectionCleared } from '@/lib/auth-selection'
 
 import { AuthLayout } from '../auth-layout'
 import { AccountSwitchCard } from '../components/account-switch-card'
@@ -92,26 +91,12 @@ export function SignIn() {
               : null
           )
         }
-        if (
-          controller.signal.aborted ||
-          isSessionSelectionCleared() ||
-          document.activeElement?.matches('input')
-        ) {
-          return
-        }
-        const target = silentProductLoginURL(
-          config.enabled === true || config.browser_sso_enabled === true,
-          window.location.search,
-          redirect ?? '/dashboard',
-          window.sessionStorage
-        )
-        if (target) window.location.replace(target)
       })
       .catch(() => {
         if (!controller.signal.aborted) setConfigFailed(true)
       })
     return () => controller.abort()
-  }, [redirect, configAttempt])
+  }, [configAttempt])
 
   return (
     <AuthLayout>

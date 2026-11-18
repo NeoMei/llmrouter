@@ -84,7 +84,7 @@ const SETUP_GUIDE_CODE_PATTERN = [
 type DashboardActionPath =
   | '/keys'
   | '/wallet'
-  | '/playground'
+  | '/docs'
   | '/channels'
   | '/usage-logs'
   | '/pricing'
@@ -511,17 +511,20 @@ export function OverviewDashboard() {
         description: t('Keep enough balance before production traffic'),
         to: '/wallet',
         icon: CreditCard,
-        completed: remainQuota > 0 || usedQuota > 0,
+        completed:
+          user?.funding?.mode === 'unified_cash'
+            ? Number(user.funding.available) > 0
+            : remainQuota > 0 || usedQuota > 0,
       },
       {
         title: t('Send a request'),
-        description: t('Verify routing with Playground or your client'),
-        to: '/playground',
+        description: t('Follow the guide to verify your API key'),
+        to: '/docs',
         icon: TerminalSquare,
         completed: requestCount > 0,
       },
     ],
-    [preferredKey, remainQuota, requestCount, t, usedQuota]
+    [preferredKey, remainQuota, requestCount, t, usedQuota, user?.funding]
   )
 
   const quickActions = useMemo<QuickAction[]>(

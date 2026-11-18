@@ -37,6 +37,8 @@ const statusSchema = z.object({
   ]),
   expires_at: z.string().optional(),
   operation_id: z.string().optional(),
+  credit_status: z.string().optional(),
+  wallet_target: z.enum(['unified', 'product']).optional(),
   session: z.object({ kind: z.string(), url: z.string() }).optional(),
 })
 export type CashCheckoutStatus = z.infer<typeof statusSchema> & {
@@ -55,6 +57,11 @@ export function cashPaymentPhase(
 ): CashPaymentPhase {
   if (!status) return 'waiting'
   if (status.payment_status === 'PAID') {
+    if (
+      status.credit_status === 'REJECTED' ||
+      status.credit_status === 'CANCELED'
+    )
+      return 'review'
     return status.credited ? 'success' : 'processing'
   }
   if (status.payment_status === 'REVIEW') return 'review'
@@ -114,6 +121,11 @@ export async function readCashCheckout(
   )
   if (status.id !== id || status.account_id !== account) {
     throw new CashCheckoutError('forbidden')
+  }
+  // The checkout exposes the linked operation's state without expanding
+  // product access to shared-wallet operations. Keep legacy fallback.
+  if (status.wallet_target || status.credit_status !== undefined) {
+    return { ...status, credited: status.credit_status === 'APPLIED' }
   }
   let credited = false
   if (

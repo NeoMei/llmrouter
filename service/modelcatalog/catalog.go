@@ -43,6 +43,7 @@ type ClientModel struct {
 	DisplayName              string         `json:"display_name"`
 	Client                   string         `json:"client,omitempty"`
 	Aliases                  []string       `json:"aliases,omitempty"`
+	BillingModels            []string       `json:"billing_models,omitempty"`
 	PreferredWires           []WireProtocol `json:"preferred_wires"`
 	ContextWindow            int            `json:"context_window,omitempty"`
 	ReasoningEfforts         []string       `json:"reasoning_efforts,omitempty"`
@@ -291,9 +292,14 @@ func (c *Catalog) listAuthorized(snapshot AuthorizedRuntimeSnapshot) []ClientMod
 		}
 		clientModel := cloneClientModel(entry.model)
 		seenWires := make(map[WireProtocol]struct{}, 3)
+		seenBilling := make(map[string]struct{})
 		for _, target := range entry.targets {
 			if !entryTargetVisible(target, visibleGroups) {
 				continue
+			}
+			if _, known := seenBilling[target.BillingModel]; !known {
+				seenBilling[target.BillingModel] = struct{}{}
+				clientModel.BillingModels = append(clientModel.BillingModels, target.BillingModel)
 			}
 			wires, _ := decodeWires(target.PreferredWires, entry.model.Operations...)
 			for _, wire := range wires {

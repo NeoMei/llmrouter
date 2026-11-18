@@ -96,6 +96,13 @@ export type PricingData = {
   group_ratio: Record<string, number>
   usable_group: Record<string, { desc: string; ratio: number }>
   supported_endpoint: Record<string, string>
+  client_model_routes?: Array<{
+    id: string
+    display_name?: string
+    aliases?: string[]
+    billing_models?: string[]
+    preferred_wires?: string[]
+  }> | null
   auto_groups: string[]
 }
 

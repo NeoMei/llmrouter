@@ -2,6 +2,8 @@ package toolpolicy
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -127,6 +129,61 @@ func TestNativeStreamValidatorsFlushValidToolsOnlyAfterSuccessTerminal(t *testin
 			emitted, err := validator.Finish()
 			require.NoError(t, err)
 			require.Len(t, emitted, len(test.frames))
+		})
+	}
+}
+
+func TestNativeRequiredToolStreamsReleaseLongTextAndKeepToolsOrdered(t *testing.T) {
+	for _, tc := range []struct {
+		kind NativeStreamKind
+		text string
+		tool []json.RawMessage
+		stop json.RawMessage
+	}{
+		{NativeStreamClaude, `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":%q}}`, []json.RawMessage{
+			json.RawMessage(`{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"lookup","input":{}}}`),
+			json.RawMessage(`{"type":"content_block_stop","index":1}`),
+		}, json.RawMessage(`{"type":"message_stop"}`)},
+		{NativeStreamGemini, `{"candidates":[{"content":{"role":"model","parts":[{"text":%q}]}}]}`, []json.RawMessage{
+			json.RawMessage(`{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"lookup","args":{}}}]}}]}`),
+		}, json.RawMessage(`{"candidates":[{"finishReason":"STOP","content":{"role":"model","parts":[]}}]}`)},
+		{NativeStreamOllama, `{"message":{"role":"assistant","content":%q},"done":false}`, []json.RawMessage{
+			json.RawMessage(`{"message":{"role":"assistant","tool_calls":[{"function":{"name":"lookup","arguments":{}}}]},"done":false}`),
+		}, json.RawMessage(`{"done":true}`)},
+	} {
+		t.Run(string(tc.kind), func(t *testing.T) {
+			chunk := json.RawMessage(fmt.Sprintf(tc.text, strings.Repeat("a", 4096)))
+			follow := json.RawMessage(fmt.Sprintf(tc.text, "following the tool"))
+			textFrames := streamMaxBufferedBytes/len(chunk) + 3
+			for _, toolCalled := range []bool{true, false} {
+				v := NewNativeStreamValidator(tc.kind, requiredChatPolicy(t), true)
+				got := make([]json.RawMessage, 0, textFrames+len(tc.tool)+2)
+				for i := 0; i < textFrames; i++ {
+					emitted, err := v.Accept(chunk)
+					require.NoError(t, err)
+					got = append(got, emitted...)
+				}
+				require.Len(t, got, textFrames)
+				if !toolCalled {
+					emitted, err := v.Accept(tc.stop)
+					require.ErrorIs(t, err, ErrDisallowedTool)
+					assert.Empty(t, emitted)
+					continue
+				}
+				for _, frame := range tc.tool {
+					emitted, err := v.Accept(frame)
+					require.NoError(t, err)
+					assert.Empty(t, emitted)
+				}
+				for _, frame := range []json.RawMessage{follow, tc.stop} {
+					emitted, err := v.Accept(frame)
+					require.NoError(t, err)
+					assert.Empty(t, emitted)
+				}
+				emitted, err := v.Finish()
+				require.NoError(t, err)
+				assert.Equal(t, append(append([]json.RawMessage{}, tc.tool...), follow, tc.stop), emitted)
+			}
 		})
 	}
 }

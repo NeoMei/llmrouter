@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/internal/platformaccount"
@@ -24,6 +25,10 @@ func TestCrossProductUnifiedCashAcceptance(t *testing.T) {
 	t.Setenv("UNIHUB_PRODUCT_RUNTIME_ENABLED", "true")
 	t.Setenv("UNIHUB_PRODUCT_FUNDING_MODE", "unified_cash")
 	t.Setenv("UNIHUB_ORIGIN", origin)
+	t.Setenv("UNIHUB_PRODUCT_API_ORIGIN", origin)
+	t.Setenv("UNIHUB_PRODUCT_PUBLIC_ORIGIN", "https://cross-cash.test")
+	t.Setenv("UNIHUB_PRODUCT_CLIENT_ID", "cross-cash")
+	t.Setenv("UNIHUB_PRODUCT_REDIRECT_URI", "https://llmrouter.cross-cash.test/api/unihub/callback")
 	t.Setenv("UNIHUB_PRODUCT_ID", "llmrouter")
 	t.Setenv("UNIHUB_PRODUCT_INSTANCE_ID", "default")
 	t.Setenv("UNIHUB_PRODUCT_RUNTIME_TOKEN", strings.Repeat("c", 32))
@@ -32,7 +37,7 @@ func TestCrossProductUnifiedCashAcceptance(t *testing.T) {
 	t.Cleanup(func() { operation_setting.USDExchangeRate, common.QuotaPerUnit = oldRate, oldUnit })
 	db, err := gorm.Open(sqlite.Open(t.TempDir()+"/product.db"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&User{}, &Token{}, &ProductCreditAward{}))
+	require.NoError(t, db.AutoMigrate(&User{}, &Token{}, &ProductCreditAward{}, &UniHubIdentityMapping{}, &Log{}))
 	require.NoError(t, RegisterProductFundingModels(db))
 	require.NoError(t, RegisterProductRefundModels(db))
 	require.NoError(t, db.Create(&User{Id: 42, Username: "cash-user", Role: common.RoleCommonUser, Status: common.UserStatusEnabled}).Error)
@@ -57,6 +62,23 @@ func TestCrossProductUnifiedCashAcceptance(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "9459", balance.Available)
 	require.Equal(t, "541", balance.Consumed)
+
+	oldDB, oldLogs := DB, LOG_DB
+	DB, LOG_DB = db, db
+	t.Cleanup(func() { DB, LOG_DB = oldDB, oldLogs })
+	actor := access.Binding.Subject
+	require.NotEmpty(t, actor)
+	require.NoError(t, db.Create(&UniHubIdentityMapping{UserID: 42, Issuer: "https://cross-cash.test", Subject: actor, IdentityKey: "cross-cash-test-owner"}).Error)
+	now := time.Now().Unix()
+	require.NoError(t, db.Create(&Log{UserId: 42, TokenId: 7, RequestId: "cross-shared-cash", Type: LogTypeConsume, Quota: 37, CreatedAt: now}).Error)
+	require.NoError(t, db.Create(&Log{UserId: 42, TokenId: 7, RequestId: "cross-shared-cash", Type: LogTypeError, CreatedAt: now - 1}).Error)
+	entries, err := ReadProductRuntimeTelemetryLogs(ctx, actor, 42, false, now-1, now)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	require.Equal(t, "541", entries[0].CashAmount)
+	require.Equal(t, 37, entries[0].Log.Quota)
+	require.Empty(t, entries[1].CashAmount, "a diagnostic row must not duplicate the charge")
+
 	for range 2 {
 		require.NoError(t, store.Refund(ctx, "cross-shared-cash", "partial", 7, "product adjustment"))
 	}

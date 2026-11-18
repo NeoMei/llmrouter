@@ -3,6 +3,8 @@ package model
 import (
 	"context"
 	"errors"
+	"math"
+	"strconv"
 
 	userkit "github.com/NeoMei/UniHub/packages/userkit-go"
 	"github.com/QuantumNous/new-api/common"
@@ -38,6 +40,7 @@ func readProductAdjustmentTelemetryLog(ctx context.Context, log *Log, op Product
 	if err != nil {
 		return empty, false, nil
 	}
+	var cashAmount int64
 	if op.Delta > 0 {
 		if op.ChildCallID != "adj_"+op.ID {
 			return empty, false, nil
@@ -59,6 +62,12 @@ func readProductAdjustmentTelemetryLog(ctx context.Context, log *Log, op Product
 		}
 		if count != 1 {
 			return empty, false, nil
+		}
+		if contract.Asset == userkit.RuntimeCashAsset {
+			cashAmount, err = productCallAmount(child, child.FinalQuota)
+			if err != nil {
+				return empty, false, nil
+			}
 		}
 	} else {
 		var refunds []ProductCallRefund
@@ -100,6 +109,12 @@ func readProductAdjustmentTelemetryLog(ctx context.Context, log *Log, op Product
 					return empty, false, nil
 				}
 			}
+			if contract.Asset == userkit.RuntimeCashAsset {
+				if refund.LedgerAmount < 0 || refund.LedgerAmount > math.MaxInt64-cashAmount {
+					return empty, false, nil
+				}
+				cashAmount += refund.LedgerAmount
+			}
 			refunded += int64(refund.Amount)
 			if refunded > int64(-op.Delta) {
 				return empty, false, nil
@@ -109,7 +124,11 @@ func readProductAdjustmentTelemetryLog(ctx context.Context, log *Log, op Product
 			return empty, false, nil
 		}
 	}
-	return ProductRuntimeTelemetryLog{Log: log, AccountID: parent.AccountID, State: op.State, Asset: contract.Asset, UnitVersion: contract.UnitVersion, Adjustment: true, ParentCallID: parent.ID, BillingSource: "unihub"}, true, nil
+	entry := ProductRuntimeTelemetryLog{Log: log, AccountID: parent.AccountID, State: op.State, Asset: contract.Asset, UnitVersion: contract.UnitVersion, Adjustment: true, ParentCallID: parent.ID, BillingSource: "unihub"}
+	if contract.Asset == userkit.RuntimeCashAsset {
+		entry.CashAmount = strconv.FormatInt(cashAmount, 10)
+	}
+	return entry, true, nil
 }
 
 // A supplemental segment inherits the accepted obligation's price. Its own

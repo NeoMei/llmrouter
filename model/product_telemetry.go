@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"strconv"
 
 	userkit "github.com/NeoMei/UniHub/packages/userkit-go"
 	"github.com/QuantumNous/new-api/internal/platformaccount"
@@ -11,6 +12,7 @@ type ProductRuntimeTelemetryLog struct {
 	Log                       *Log
 	ActorID, AccountID, State string
 	Asset, UnitVersion        string
+	CashAmount                string
 	Adjustment                bool
 	ParentCallID              string
 	SubscriptionID            int
@@ -154,7 +156,15 @@ func ReadProductRuntimeTelemetryLogs(ctx context.Context, actorID string, userID
 		if err != nil || reserve.Operation == "subscription_purchase" {
 			continue
 		}
-		result = append(result, ProductRuntimeTelemetryLog{Log: log, ActorID: actors[call.UserID], AccountID: call.AccountID, State: call.State, Asset: reserve.Asset, UnitVersion: reserve.UnitVersion, BillingSource: "unihub"})
+		entry := ProductRuntimeTelemetryLog{Log: log, ActorID: actors[call.UserID], AccountID: call.AccountID, State: call.State, Asset: reserve.Asset, UnitVersion: reserve.UnitVersion, BillingSource: "unihub"}
+		// Reconciliation marks the call settled only after checking this exact
+		// charge against the central ledger. Error rows can share a request ID.
+		if reserve.Asset == userkit.RuntimeCashAsset && call.State == "settled" && log.Type == LogTypeConsume {
+			if amount, err := productCallAmount(call, call.FinalQuota); err == nil {
+				entry.CashAmount = strconv.FormatInt(amount, 10)
+			}
+		}
+		result = append(result, entry)
 	}
 	return result, nil
 }

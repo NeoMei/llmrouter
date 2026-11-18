@@ -79,6 +79,7 @@ import {
 import {
   hasFinancialDetails,
   isCentralTechnical,
+  productCashCost,
 } from '../../lib/technical-usage'
 import {
   getLogTypeConfig,
@@ -494,7 +495,9 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const isTopup = props.log.type === 1
   const isManage = props.log.type === 3
   const isSubscription = other?.billing_source === 'subscription'
+  const cashCost = productCashCost(other, t('Pending'))
   const isTieredBilling =
+    cashCost === null &&
     hasFinancialDetails(other) &&
     isConsume &&
     !isViolation &&
@@ -1121,14 +1124,26 @@ export function DetailsDialog(props: DetailsDialogProps) {
             <TokenBreakdown log={props.log} other={other} />
           )}
 
-        {/* Billing breakdown (consume type) */}
-        {isConsume && other && hasFinancialDetails(other) && !isViolation && (
-          <BillingBreakdown
-            log={props.log}
-            other={other}
-            isAdmin={props.isAdmin}
-          />
+        {cashCost !== null && (isConsume || isRefund) && (
+          <DetailSection label={t('Billing Details')}>
+            <DetailRow
+              label={t(isRefund ? 'Refund' : 'Total Cost')}
+              value={cashCost}
+              mono
+            />
+          </DetailSection>
         )}
+        {cashCost === null &&
+          isConsume &&
+          other &&
+          hasFinancialDetails(other) &&
+          !isViolation && (
+            <BillingBreakdown
+              log={props.log}
+              other={other}
+              isAdmin={props.isAdmin}
+            />
+          )}
 
         {/* Tiered pricing breakdown (when billing_mode is tiered_expr) */}
         {isTieredBilling && other?.expr_b64 && (

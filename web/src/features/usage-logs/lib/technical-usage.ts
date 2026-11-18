@@ -18,6 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
 
+import { exactAmount } from '@/lib/funding'
+
 import { quantitySchema, formatQuantity } from '../../native-metering/contract'
 import type { LogOtherData } from '../types'
 
@@ -27,6 +29,27 @@ export function isCentralTechnical(other: LogOtherData | null): boolean {
 export function hasFinancialDetails(other: LogOtherData | null): boolean {
   return !isCentralTechnical(other) && other?.financial_details !== false
 }
+export function productCashCost(
+  other: LogOtherData | null,
+  pendingLabel: string
+): string | null {
+  if (
+    other?.product_runtime !== true ||
+    other.central_asset !== 'CNY/6' ||
+    !hasFinancialDetails(other)
+  ) {
+    return null
+  }
+  const state = other.central_status
+  const amount = other.central_cash_amount
+  if (state === 'settled' || state === 'applied') {
+    return typeof amount === 'string' && /^(0|[1-9][0-9]*)$/.test(amount)
+      ? exactAmount(amount, other.central_asset)
+      : '—'
+  }
+  return state === 'reserved' || state === 'settle_pending' ? pendingLabel : '—'
+}
+
 // Match Go strings.TrimSpace (Unicode White Space), which differs from JS trim for BOM/NEL.
 const goWhitespaceOnly = /^\p{White_Space}*$/u
 const utf8Length = (value: string): number =>

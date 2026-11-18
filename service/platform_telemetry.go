@@ -216,6 +216,9 @@ func ReadPlatformTelemetry(ctx context.Context, scope platformbilling.TechnicalS
 		other["actor_id"], other["account_id"] = entry.ActorID, entry.AccountID
 		other["call_id"], other["central_status"] = log.RequestId, entry.State
 		other["central_asset"], other["central_unit_version"] = entry.Asset, entry.UnitVersion
+		if !scope.AllActors && entry.CashAmount != "" {
+			other["central_cash_amount"] = entry.CashAmount
+		}
 		other["instance_id"], other["product_runtime"] = scope.InstanceID, true
 		if entry.Adjustment {
 			other["product_call_id"], other["adjustment_id"] = entry.ParentCallID, log.RequestId

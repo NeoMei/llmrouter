@@ -282,3 +282,40 @@ for (const width of [1440, 390]) {
     })
   })
 }
+
+for (const width of [1440, 390]) {
+  test(`original paid request shows confirmed CNY in the list and details at width ${width}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 1000 })
+    await logFixture(page, {
+      funding_owner: 'unihub',
+      product_runtime: true,
+      central_asset: 'CNY/6',
+      central_status: 'settled',
+      central_cash_amount: '541',
+    })
+    await expect(page.getByText('0.000541 CNY', { exact: true })).toBeVisible()
+    await page
+      .getByTitle('Click to view full details')
+      .filter({ visible: true })
+      .click()
+    await expect(
+      page.getByRole('dialog').getByText('0.000541 CNY', { exact: true })
+    ).toBeVisible()
+  })
+}
+
+test('unconfirmed cash settlement shows pending without a fee', async ({
+  page,
+}) => {
+  await logFixture(page, {
+    funding_owner: 'unihub',
+    product_runtime: true,
+    central_asset: 'CNY/6',
+    central_status: 'settle_pending',
+    central_cash_amount: '541',
+  })
+  await expect(page.getByText('Pending', { exact: true })).toBeVisible()
+  await expect(page.getByText('0.000541 CNY', { exact: true })).toHaveCount(0)
+})

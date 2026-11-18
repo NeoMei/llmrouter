@@ -53,6 +53,7 @@ import {
 import {
   hasFinancialDetails,
   isCentralTechnical,
+  productCashCost,
 } from '../../lib/technical-usage'
 import {
   isDisplayableLogType,
@@ -116,7 +117,10 @@ function buildDetailSegments(
   if (!hasFinancialDetails(other)) {
     return [{ text: t('Finance access required'), muted: true }]
   }
-  const segments = buildTypeDetailSegments(log, other, t)
+  const segments =
+    productCashCost(other, t('Pending')) === null
+      ? buildTypeDetailSegments(log, other, t)
+      : [{ text: t('View details'), muted: true }]
   // Quota saturation is a rare, admin-only anomaly marker; surface it first
   // and in danger styling so it stands out on the related billing log. The
   // backend already strips admin_info for non-admins; gate on isAdmin too as
@@ -758,6 +762,13 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
+          )
+        }
+
+        const cashCost = productCashCost(other, t('Pending'))
+        if (cashCost !== null) {
+          return (
+            <span className='font-mono text-xs tabular-nums'>{cashCost}</span>
           )
         }
 

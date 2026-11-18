@@ -116,6 +116,7 @@ export interface LogOtherData {
   funding_owner?: string
   central_status?: string
   central_asset?: string
+  central_cash_amount?: string
   billing_unit?: string
   request_count?: number
   native_usage_unit?: string

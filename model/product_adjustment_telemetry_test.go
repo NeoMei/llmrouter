@@ -50,6 +50,8 @@ func TestProductCashAdjustmentTelemetryRequiresInheritedFrozenContract(t *testin
 		assert.True(t, entry.Adjustment)
 		assert.Equal(t, userkit.RuntimeCashAsset, entry.Asset)
 		assert.Equal(t, parent.ID, entry.ParentCallID)
+		wantAmount := map[string]string{"up": "44", "down": "30"}
+		assert.Equal(t, wantAmount[op.RequestKey], entry.CashAmount)
 	}
 
 	for _, mutation := range []string{"rate", "base"} {

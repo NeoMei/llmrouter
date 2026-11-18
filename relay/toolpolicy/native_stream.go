@@ -35,18 +35,19 @@ const (
 )
 
 type NativeStreamValidator struct {
-	kind          NativeStreamKind
-	policy        Policy
-	hasPolicy     bool
-	failed        error
-	success       bool
-	toolSeen      bool
-	callCount     int
-	frames        []json.RawMessage
-	bufferedBytes int
-	claudeCalls   map[int]*nativeClaudeCall
-	geminiCalls   map[string]string
-	ollamaCalls   int
+	kind                 NativeStreamKind
+	policy               Policy
+	hasPolicy            bool
+	failed               error
+	success              bool
+	toolSeen             bool
+	callCount            int
+	frames               []json.RawMessage
+	bufferedBytes        int
+	releasedRequiredText bool
+	claudeCalls          map[int]*nativeClaudeCall
+	geminiCalls          map[string]string
+	ollamaCalls          int
 }
 
 type nativeClaudeCall struct {
@@ -91,6 +92,7 @@ func (v *NativeStreamValidator) Accept(event json.RawMessage) ([]json.RawMessage
 		return nil, v.fail(fmt.Errorf("%w: native frame arrived after success terminal", ErrMalformedToolCall))
 	}
 
+	hadTool := v.toolSeen
 	var toolRelated, terminal bool
 	var err error
 	switch v.kind {
@@ -114,17 +116,30 @@ func (v *NativeStreamValidator) Accept(event json.RawMessage) ([]json.RawMessage
 	}
 	// Provider success terminals stay withheld until transport completion so a
 	// late malformed frame can never follow a success byte already sent.
-	buffered := toolRelated || terminal || v.policy.RequiresToolCall()
-	if !buffered {
-		return []json.RawMessage{append(json.RawMessage(nil), raw...)}, nil
+	withholdRequiredText := v.policy.RequiresToolCall() && !v.releasedRequiredText
+	cloned := append(json.RawMessage(nil), raw...)
+	if !toolRelated && !terminal && !withholdRequiredText && len(v.frames) == 0 {
+		return []json.RawMessage{cloned}, nil
+	}
+	var emitted []json.RawMessage
+	// Before the first tool frame, the required choice is the only reason the
+	// text is buffered. Release it at the limit and still validate the choice
+	// at the terminal. Once a tool starts, retain the complete ordered suffix.
+	if withholdRequiredText && !hadTool && (len(v.frames) >= streamMaxBufferedFrames || v.bufferedBytes+len(raw) > streamMaxBufferedBytes) {
+		emitted = v.frames
+		v.frames = nil
+		v.bufferedBytes = 0
+		v.releasedRequiredText = true
+		if !toolRelated && !terminal {
+			return append(emitted, cloned), nil
+		}
 	}
 	if len(v.frames) >= streamMaxBufferedFrames || v.bufferedBytes+len(raw) > streamMaxBufferedBytes {
 		return nil, v.fail(fmt.Errorf("%w: native stream buffer limit exceeded", ErrMalformedToolCall))
 	}
-	cloned := append(json.RawMessage(nil), raw...)
 	v.frames = append(v.frames, cloned)
 	v.bufferedBytes += len(cloned)
-	return nil, nil
+	return emitted, nil
 }
 
 func (v *NativeStreamValidator) Finish() ([]json.RawMessage, error) {

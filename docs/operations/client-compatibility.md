@@ -35,6 +35,14 @@ selection. The selected wire is determined by:
 The resolved billing model, upstream model, route ID, and selected wire are stored
 in the relay audit metadata.
 
+Successful `/v1/chat/completions` responses include
+`X-LLMRouter-Requested-Model` and `X-LLMRouter-Routed-Model` when the gateway
+can set headers before the response starts. The latter is the selected gateway
+target, not a claim about the model reported by the provider. A streaming
+keepalive may commit the response before an upstream is selected; in that case
+these headers are omitted. Do not treat their absence as evidence of a model
+match or mismatch.
+
 Use `deepseek-flash` and `deepseek-v4-pro` as the current primary DeepSeek model
 names. DeepSeek still accepts the legacy `deepseek-v4-flash` name and serves it as
 Flash. The internal `deepseek-search` and `deepseek-fetch` request routes are not

@@ -13,6 +13,27 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// MarkOCRProductFundingDispatched fences central-funding recovery before an
+// OCR supplier submission. Local and managed-platform funding have separate
+// dispatch authorities and do not use the product funding journal.
+func (s *OCRBillingStore) MarkOCRProductFundingDispatched(ctx context.Context, id string) error {
+	journal, err := s.Inspect(ctx, id)
+	if err != nil {
+		return err
+	}
+	if journal.Job.Funding != "unihub" {
+		return nil
+	}
+	store, managed, err := productFundingStoreForDB(ctx, s.db, journal.Job.UserID)
+	if err != nil {
+		return err
+	}
+	if !managed || store == nil {
+		return ErrProductFundingConflict
+	}
+	return store.MarkDispatched(ctx, id)
+}
+
 func (s *OCRBillingStore) reserveManagedProductFunding(ctx context.Context, j OCRJob) (OCRJob, error) {
 	if j.Funding == "subscription" && j.BillingState == "reserved" {
 		return j, nil

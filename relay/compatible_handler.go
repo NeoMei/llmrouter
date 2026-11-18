@@ -275,6 +275,9 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		}
 	}
 
+	if httpResp != nil {
+		setChatRouteHeaders(c, info)
+	}
 	usage, newApiErr := adaptor.DoResponse(c, httpResp, info)
 	if newApiErr != nil {
 		outcome := consumeFailedUsage(c, info, usage)

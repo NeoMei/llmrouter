@@ -183,6 +183,11 @@ func (s *OCRBillingStore) validateCacheReceipts(ctx context.Context, id string) 
 	if snap.Job.Funding == "platform" {
 		return nil
 	}
+	// Central cash and centrally owned subscriptions reserve durably in SQL,
+	// even when local OCR uses Redis. ClaimSubmission still checks both receipts.
+	if !snap.Job.Redis && (snap.Job.Funding == "unihub" || (snap.Job.Funding == "subscription" && snap.Job.CentralAccountID != "")) {
+		return nil
+	}
 	if snap.Job.Redis != (s.cache != nil) {
 		return ErrOCRReconciliation
 	}

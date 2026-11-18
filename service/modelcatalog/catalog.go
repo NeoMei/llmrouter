@@ -44,6 +44,7 @@ type ClientModel struct {
 	Client                   string         `json:"client,omitempty"`
 	Aliases                  []string       `json:"aliases,omitempty"`
 	BillingModels            []string       `json:"billing_models,omitempty"`
+	ConfiguredUpstreamModels []string       `json:"-"`
 	PreferredWires           []WireProtocol `json:"preferred_wires"`
 	ContextWindow            int            `json:"context_window,omitempty"`
 	ReasoningEfforts         []string       `json:"reasoning_efforts,omitempty"`
@@ -294,9 +295,14 @@ func (c *Catalog) listAuthorized(snapshot AuthorizedRuntimeSnapshot) []ClientMod
 		clientModel := cloneClientModel(entry.model)
 		seenWires := make(map[WireProtocol]struct{}, 3)
 		seenBilling := make(map[string]struct{})
+		seenUpstream := make(map[string]struct{})
 		for _, target := range entry.targets {
 			if !entryTargetVisible(target, visibleGroups) {
 				continue
+			}
+			if _, known := seenUpstream[target.UpstreamModel]; !known && dto.IsPublicConfiguredModelID(target.UpstreamModel) {
+				seenUpstream[target.UpstreamModel] = struct{}{}
+				clientModel.ConfiguredUpstreamModels = append(clientModel.ConfiguredUpstreamModels, target.UpstreamModel)
 			}
 			if _, known := seenBilling[target.BillingModel]; !known {
 				seenBilling[target.BillingModel] = struct{}{}
@@ -480,6 +486,7 @@ func entryTargetVisible(target model.ClientModelTarget, groups []string) bool {
 func cloneClientModel(m ClientModel) ClientModel {
 	m.ModelCapabilities = cloneCapabilities(m.ModelCapabilities)
 	m.Aliases = append([]string(nil), m.Aliases...)
+	m.ConfiguredUpstreamModels = append([]string(nil), m.ConfiguredUpstreamModels...)
 	m.PreferredWires = append([]WireProtocol(nil), m.PreferredWires...)
 	m.ReasoningEfforts = append([]string(nil), m.ReasoningEfforts...)
 	return m

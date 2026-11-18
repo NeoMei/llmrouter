@@ -12,12 +12,53 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/internal/unihubaccess"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
+
+// addManagedPublicMetadata publishes the same fields as the native model
+// list, limited to operations executable with this verified credential.
+func addManagedPublicMetadata(entry gin.H, model platformbilling.CatalogModel, upstream []string) {
+	metadata := dto.PublicModelMetadata{
+		ContextLength:            model.ContextWindow,
+		MaxOutputTokens:          model.Capabilities.MaxOutputTokens,
+		InputModalities:          model.Capabilities.InputModalities,
+		OutputModalities:         model.Capabilities.OutputModalities,
+		ConfiguredUpstreamModels: upstream,
+	}
+	for _, op := range model.Operations {
+		if op.Executable {
+			metadata.Operations = append(metadata.Operations, op.ID)
+		}
+	}
+	metadata.Endpoints = dto.PublicModelEndpoints(metadata.Operations)
+	if model.SupportsTools || slices.Contains(model.Capabilities.InputModalities, "image") {
+		metadata.Capabilities = &dto.PublicCapabilities{}
+		if model.SupportsTools {
+			value := true
+			metadata.Capabilities.Tools = &value
+		}
+		if slices.Contains(model.Capabilities.InputModalities, "image") {
+			value := true
+			metadata.Capabilities.Vision = &value
+		}
+	}
+	encoded, err := common.Marshal(metadata)
+	if err != nil {
+		return
+	}
+	var values map[string]any
+	if common.Unmarshal(encoded, &values) != nil {
+		return
+	}
+	for key, value := range values {
+		entry[key] = value
+	}
+}
 
 var managedIdempotencyKey = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
 
@@ -98,6 +139,7 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 			data := make([]gin.H, 0, len(catalog.Models))
 			for _, m := range catalog.Models {
 				entry := gin.H{"id": m.ID, "object": "model", "created": 0, "owned_by": grant.OriginProductID, "catalog_version": catalog.CatalogVersion, "capability_metadata": m.CapabilityMetadata}
+				addManagedPublicMetadata(entry, m.CapabilityMetadata, m.ConfiguredUpstreamModels)
 				if c.Param("model") == m.ID {
 					c.JSON(200, entry)
 					return
@@ -159,6 +201,7 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 			value := gin.H{"id": id, "object": "model", "created": 0, "owned_by": "unihub", "catalog_version": hex.EncodeToString(version[:])}
 			if m, ok := metadata[id]; ok {
 				value["capability_metadata"] = m
+				addManagedPublicMetadata(value, m, nil)
 			} else {
 				value["disabled_reason"] = "capability_metadata_unavailable"
 			}

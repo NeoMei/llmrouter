@@ -269,6 +269,13 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (JobStatus, err
 				return JobStatus{}, errors.New("certified OCR target changed")
 			}
 		}
+		// A central-funding recovery worker may release an undispatched hold.
+		// Fence it before claiming, so a failed marker cannot send to the supplier.
+		if j.Funding == "unihub" {
+			if err := s.billing.MarkOCRProductFundingDispatched(ctx, j.ID); err != nil {
+				return JobStatus{}, err
+			}
+		}
 		claim, err := s.billing.ClaimSubmission(ctx, j.ID, selection, owner)
 		if err != nil {
 			if errors.Is(err, model.ErrOCRConflict) {

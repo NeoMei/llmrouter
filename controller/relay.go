@@ -368,6 +368,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		var relayStarted bool
 		newAPIError, relayStarted = relaySelectedChannel(c, relayInfo, channel, relayFormat, ws)
+		if newAPIError != nil && !c.Writer.Written() {
+			c.Writer.Header().Del(common.RequestedModelHeader)
+			c.Writer.Header().Del(common.RoutedModelHeader)
+		}
 		attempt := modelcatalog.NewAttempt(channel.Id, relayInfo.SelectedWire, 0, "", attemptStart)
 		attempt.RouteID = relayInfo.ModelRouteId
 		attempt.TargetID = relayInfo.ModelTargetId

@@ -88,6 +88,36 @@ func TestOCRSubmittedJobIsNotReleasedByStaleSweep(t *testing.T) {
 	assert.Equal(t, "reserved", released.BillingState)
 }
 
+func TestOCRStaleReservationIsReleasedBeforeAnySubmission(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("stale reservation must never contact the provider")
+	}))
+	defer server.Close()
+	svc, req := serviceFixture(t, server)
+	ctx := context.Background()
+	job, err := svc.billing.CreateIntent(ctx, req.Admission)
+	require.NoError(t, err)
+	job, err = svc.billing.Reserve(ctx, job.ID)
+	require.NoError(t, err)
+	require.Equal(t, "reserved", job.BillingState)
+	require.Equal(t, "unclaimed", job.SubmissionState)
+	_, ok, err := svc.ReleaseStaleSubmission(ctx, job.ID)
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	svc.now = func() time.Time { return time.Now().Add(staleSubmissionGrace + time.Minute) }
+	released, ok, err := svc.ReleaseStaleSubmission(ctx, job.ID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "cancel", released.Decision)
+	assert.Equal(t, "refunded", released.BillingState)
+	assert.Zero(t, released.SubmitAttempts)
+	checkMoney(t, svc, req, 1000, 0, 0)
+	_, ok, err = svc.ReleaseStaleSubmission(ctx, job.ID)
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
 // The owner can abandon a job the supplier never accepted, without waiting for
 // the sweep; a job the supplier took must not be cancellable this way.
 func TestOCROwnerCancelReleasesOnlyUnacceptedJobs(t *testing.T) {

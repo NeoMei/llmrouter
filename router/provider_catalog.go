@@ -14,6 +14,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/capability"
@@ -42,16 +43,17 @@ type ProviderCatalog struct {
 }
 
 type ProviderCatalogModel struct {
-	ID                 string                       `json:"id"`
-	Name               string                       `json:"name"`
-	Operations         []string                     `json:"operations"`
-	InputModalities    []string                     `json:"input_modalities"`
-	OutputModalities   []string                     `json:"output_modalities"`
-	Context            int64                        `json:"context"`
-	MaxOutput          int64                        `json:"max_output"`
-	Probe              bool                         `json:"probe"`
-	RateID             string                       `json:"rate_id"`
-	CapabilityMetadata platformbilling.CatalogModel `json:"capability_metadata"`
+	ConfiguredUpstreamModels []string                     `json:"configured_upstream_models,omitempty"`
+	ID                       string                       `json:"id"`
+	Name                     string                       `json:"name"`
+	Operations               []string                     `json:"operations"`
+	InputModalities          []string                     `json:"input_modalities"`
+	OutputModalities         []string                     `json:"output_modalities"`
+	Context                  int64                        `json:"context"`
+	MaxOutput                int64                        `json:"max_output"`
+	Probe                    bool                         `json:"probe"`
+	RateID                   string                       `json:"rate_id"`
+	CapabilityMetadata       platformbilling.CatalogModel `json:"capability_metadata"`
 }
 
 type providerCatalogRequest struct {
@@ -175,9 +177,27 @@ func readProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter, 
 		if err != nil {
 			return out, err
 		}
+		if strings.EqualFold(m.PublicID, "qwen3-vl-embedding") || slices.Contains(m.ConfiguredUpstreamModels, "qwen3-vl-embedding") {
+			if !slices.Contains(m.Operations, "multimodal.embeddings.create") || helper.ValidateMultimodalEmbeddingSpace(&dto.MultimodalEmbeddingRequest{}, m.EmbeddingSpace) != nil || len(candidates) == 0 {
+				continue
+			}
+			valid := true
+			for _, candidate := range candidates {
+				if candidate.UpstreamModel != "qwen3-vl-embedding" || channelByID[candidate.ChannelID].Type != constant.ChannelTypeAli {
+					valid = false
+					break
+				}
+			}
+			if !valid {
+				continue
+			}
+		}
 		billingModels := make([]string, 0, len(candidates))
 		for _, candidate := range candidates {
 			billingModels = append(billingModels, candidate.BillingModel)
+			if dto.IsPublicConfiguredModelID(candidate.UpstreamModel) && !slices.Contains(projected.ConfiguredUpstreamModels, candidate.UpstreamModel) {
+				projected.ConfiguredUpstreamModels = append(projected.ConfiguredUpstreamModels, candidate.UpstreamModel)
+			}
 		}
 		for i, op := range projected.CapabilityMetadata.Operations {
 			if op.ID == "bailian.audio.speech.create" && !slices.ContainsFunc(candidates, func(candidate modelcatalog.ResolvedModel) bool {
@@ -216,7 +236,7 @@ func readProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter, 
 	// Existing endpoint metadata augments the adapter's native defaults.
 	model.GetPricing()
 	for _, ability := range abilities {
-		if reserved[strings.ToLower(ability.Model)] || (!helper.HasModelBillingConfig(ability.Model) && !billing_setting.HasModelNativePricing(ability.Model)) {
+		if strings.EqualFold(ability.Model, "qwen3-vl-embedding") || reserved[strings.ToLower(ability.Model)] || (!helper.HasModelBillingConfig(ability.Model) && !billing_setting.HasModelNativePricing(ability.Model)) {
 			continue
 		}
 		ch, ok := channelByID[ability.ChannelId]

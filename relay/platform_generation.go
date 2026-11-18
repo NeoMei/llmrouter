@@ -77,6 +77,7 @@ func platformGeneration(c *gin.Context, info *relaycommon.RelayInfo) *types.NewA
 	if httpResp.StatusCode != http.StatusOK {
 		return service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 	}
+	setChatRouteHeaders(c, info)
 	// The adapter's NativeTokenObserver owns evidence; dto.Usage is never funding.
 	_, apiErr := adaptor.DoResponse(c, httpResp, info)
 	return apiErr

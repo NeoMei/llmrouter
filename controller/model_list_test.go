@@ -565,3 +565,87 @@ func TestSetupLoginDoesNotTouchPasswordWhenPasswordFieldOmitted(t *testing.T) {
 	require.NoError(t, db.First(&stored, user.Id).Error)
 	assert.Equal(t, hashedPassword, stored.Password)
 }
+
+func TestListModelsPublishesAuthorizedRouteMetadata(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	withSelfUseModeEnabled(t)
+	require.NoError(t, db.AutoMigrate(&model.ClientModelRoute{}, &model.ClientModelTarget{}))
+	ratio_setting.InitRatioSettings()
+	require.NoError(t, db.Create(&model.User{Id: 1001, Username: "catalog-metadata-user", Password: "password", Group: "default", Status: common.UserStatusEnabled}).Error)
+	require.NoError(t, db.Create(&model.Channel{Id: 7, Type: constant.ChannelTypeOpenAI, Name: "fixture", Models: "example-model,actual-model", Status: common.ChannelStatusEnabled}).Error)
+	require.NoError(t, db.Create(&model.Ability{Group: "default", Model: "example-model", ChannelId: 7, Enabled: true, Weight: 1}).Error)
+	require.NoError(t, db.Create(&model.Ability{Group: "default", Model: "actual-model", ChannelId: 7, Enabled: true, Weight: 1}).Error)
+	require.NoError(t, db.Create(&model.ClientModelRoute{Id: 1, PublicId: "example-model", Client: "all", Aliases: `["example-alias"]`, Enabled: true,
+		Metadata: `{"context_window":8192,"max_output_tokens":1024,"supports_tools":true,"operations":["chat.completions.create"],"input_modalities":["text","image"],"output_modalities":["text"]}`}).Error)
+	require.NoError(t, db.Create(&model.ClientModelTarget{Id: 1, RouteId: 1, ChannelId: 7, UpstreamModel: "actual-model", BillingModel: "private-price", PreferredWires: `["openai_chat"]`, Weight: 1, Enabled: true}).Error)
+	require.NoError(t, db.Create(&model.Channel{Id: 8, Type: constant.ChannelTypeOpenAI, Name: "hidden", Models: "private-model", Status: common.ChannelStatusEnabled}).Error)
+	require.NoError(t, db.Create(&model.Ability{Group: "other", Model: "private-model", ChannelId: 8, Enabled: true, Weight: 1}).Error)
+	require.NoError(t, db.Create(&model.ClientModelTarget{Id: 2, RouteId: 1, ChannelId: 8, UpstreamModel: "private-model", BillingModel: "private-price-2", PreferredWires: `["openai_chat"]`, Weight: 1, Enabled: true}).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	ctx.Set("id", 1001)
+	ListModels(ctx, constant.ChannelTypeOpenAI)
+	var response struct {
+		Data []map[string]any `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	byID := map[string]map[string]any{}
+	for _, entry := range response.Data {
+		byID[entry["id"].(string)] = entry
+	}
+	modelEntry := byID["example-model"]
+	require.NotNil(t, modelEntry)
+	assert.EqualValues(t, 8192, modelEntry["context_length"])
+	assert.EqualValues(t, 1024, modelEntry["max_output_tokens"])
+	assert.Equal(t, []any{"chat.completions.create"}, modelEntry["operations"])
+	assert.Equal(t, []any{"text", "image"}, modelEntry["input_modalities"])
+	assert.Equal(t, []any{"actual-model"}, modelEntry["configured_upstream_models"])
+	assert.NotContains(t, recorder.Body.String(), "private-price")
+	alias := byID["example-alias"]
+	require.NotNil(t, alias)
+	assert.Equal(t, "example-model", alias["alias_of"])
+	assert.EqualValues(t, 8192, alias["context_length"])
+	assert.NotContains(t, recorder.Body.String(), "private-model")
+
+	limited := httptest.NewRecorder()
+	limitedCtx, _ := gin.CreateTestContext(limited)
+	limitedCtx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	limitedCtx.Set("id", 1001)
+	common.SetContextKey(limitedCtx, constant.ContextKeyTokenModelLimitEnabled, true)
+	common.SetContextKey(limitedCtx, constant.ContextKeyTokenModelLimit, map[string]bool{"example-alias": true})
+	ListModels(limitedCtx, constant.ChannelTypeOpenAI)
+	var limitedResponse struct {
+		Data []map[string]any `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(limited.Body.Bytes(), &limitedResponse))
+	require.Len(t, limitedResponse.Data, 1)
+	assert.Equal(t, "example-alias", limitedResponse.Data[0]["id"])
+	assert.NotContains(t, limitedResponse.Data[0], "alias_of")
+}
+
+func TestListModelsOnlyAdvertisesMultimodalEmbeddingWithValidRoute(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	withSelfUseModeEnabled(t)
+	require.NoError(t, db.AutoMigrate(&model.ClientModelRoute{}, &model.ClientModelTarget{}))
+	require.NoError(t, db.Create(&model.User{Id: 1002, Username: "multimodal-catalog-user", Password: "password", Group: "default", Status: common.UserStatusEnabled}).Error)
+	require.NoError(t, db.Create(&model.Channel{Id: 7, Type: constant.ChannelTypeAli, Name: "ali", Models: "qwen3-vl-embedding", Status: common.ChannelStatusEnabled}).Error)
+	require.NoError(t, db.Create(&model.Ability{Group: "default", Model: "qwen3-vl-embedding", ChannelId: 7, Enabled: true, Weight: 1}).Error)
+	list := func() map[string]struct{} {
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+		ctx.Set("id", 1002)
+		ListModels(ctx, constant.ChannelTypeOpenAI)
+		return decodeListModelsResponse(t, recorder)
+	}
+	assert.NotContains(t, list(), "qwen3-vl-embedding")
+	route := model.ClientModelRoute{Id: 1, PublicId: "qwen3-vl-embedding", Client: "all", Enabled: true, Metadata: `{}`}
+	require.NoError(t, db.Create(&route).Error)
+	require.NoError(t, db.Create(&model.ClientModelTarget{Id: 1, RouteId: 1, ChannelId: 7, UpstreamModel: "qwen3-vl-embedding", BillingModel: "qwen3-vl-embedding", PreferredWires: `["openai_chat"]`, Weight: 1, Enabled: true}).Error)
+	assert.NotContains(t, list(), "qwen3-vl-embedding")
+	metadata := `{"operations":["multimodal.embeddings.create"],"input_modalities":["text","image"],"output_modalities":["embedding"],"embedding_space":{"provider":"aliyun","model":"qwen3-vl-embedding","version":"v1","dimensions":1024,"input_semantics":"independent/png-jpeg/mp4-h264-noaudio/v1/fps=1"}}`
+	require.NoError(t, db.Model(&route).Update("metadata", metadata).Error)
+	assert.Contains(t, list(), "qwen3-vl-embedding")
+}

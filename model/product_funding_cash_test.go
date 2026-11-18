@@ -3,7 +3,9 @@ package model
 import (
 	"context"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	userkit "github.com/NeoMei/UniHub/packages/userkit-go"
 	"github.com/QuantumNous/new-api/common"
@@ -22,6 +24,94 @@ func cashFundingFixture(t *testing.T, rate float64) (*ProductFundingStore, *runt
 	t.Cleanup(func() { operation_setting.USDExchangeRate, common.QuotaPerUnit = oldRate, oldUnit })
 	t.Setenv("UNIHUB_PRODUCT_FUNDING_MODE", "unified_cash")
 	return s, ledger
+}
+
+func reserveOCRCashFixture(t *testing.T) (*ProductFundingStore, *runtimeLedgerFixture, *OCRBillingStore, OCRJob) {
+	t.Helper()
+	store, ledger := cashFundingFixture(t, 7.3)
+	ctx := context.Background()
+	require.NoError(t, store.db.AutoMigrate(&OCRJob{}, &OCROperation{}, &OCRAuditEvent{}, &Channel{}, &UserSubscription{}))
+	channel := Channel{Name: "ocr cash fixture"}
+	require.NoError(t, store.db.Create(&channel).Error)
+	t.Setenv("UNIHUB_PRODUCT_RUNTIME_ENABLED", "true")
+	t.Setenv("UNIHUB_PRODUCT_RUNTIME_TOKEN", strings.Repeat("t", 32))
+	t.Setenv("UNIHUB_ORIGIN", ledger.origin)
+	t.Setenv("UNIHUB_PRODUCT_ID", "llmrouter")
+	t.Setenv("UNIHUB_PRODUCT_INSTANCE_ID", "default")
+	ocr := NewOCRBillingStore(store.db, nil)
+	job, err := ocr.CreateIntent(ctx, OCRAdmission{IdempotencyKey: "cash-ocr", UserID: 42, TokenID: 7, ChannelID: channel.Id, Model: "ocr-native", Group: "default", Preference: "wallet_only", Price: 0.0002, GroupRatio: 1, QuotaPerUnit: 500000})
+	require.NoError(t, err)
+	job, err = ocr.Reserve(ctx, job.ID)
+	require.NoError(t, err)
+	require.Equal(t, "unihub", job.Funding)
+	require.Equal(t, "reserved", job.BillingState)
+	require.Equal(t, 1460, ledger.cashHeld)
+	return store, ledger, ocr, job
+}
+
+func TestOCRStaleUnsubmittedCentralReservationReturnsCashAndToken(t *testing.T) {
+	store, ledger, ocr, job := reserveOCRCashFixture(t)
+	ctx := context.Background()
+	var token Token
+	require.NoError(t, store.db.First(&token, 7).Error)
+	require.Equal(t, 100, token.RemainQuota)
+
+	// The service checks the elapsed grace period before calling the store.
+	finished, released, err := ocr.ReleaseStaleSubmission(ctx, job.ID)
+	require.NoError(t, err)
+	require.True(t, released)
+	assert.Equal(t, "refunded", finished.BillingState)
+	assert.Equal(t, "cancel", finished.Decision)
+	_, err = ocr.ClaimSubmission(ctx, job.ID, ocrTestSelection(job.ChannelID))
+	require.ErrorIs(t, err, ErrOCRConflict)
+	_, released, err = ocr.ReleaseStaleSubmission(ctx, job.ID)
+	require.NoError(t, err)
+	assert.False(t, released)
+	assert.Zero(t, ledger.cashHeld)
+	assert.Zero(t, ledger.cashConsumed)
+	assert.Equal(t, 1000000, ledger.cashBalance)
+	require.NoError(t, store.db.First(&token, 7).Error)
+	assert.Equal(t, 200, token.RemainQuota)
+	assert.Zero(t, token.UsedQuota)
+}
+
+func TestOCRCentralDispatchProtectsOnlyLiveReservations(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		name := "dispatch before lease expiry"
+		if expired {
+			name = "reject expired lease"
+		}
+		t.Run(name, func(t *testing.T) {
+			store, ledger, ocr, job := reserveOCRCashFixture(t)
+			ctx := context.Background()
+			expire := func() {
+				t.Helper()
+				require.NoError(t, store.db.Model(&ProductRuntimeCall{}).Where("id = ?", job.ID).Update("dispatch_lease_until", time.Now().Add(-time.Minute).Unix()).Error)
+			}
+			if expired {
+				expire()
+				require.ErrorIs(t, ocr.MarkOCRProductFundingDispatched(ctx, job.ID), ErrProductFundingPending)
+				require.NoError(t, store.recoverProductReserve(ctx, job.ID))
+				require.Zero(t, ledger.cashHeld)
+				finished, released, err := ocr.ReleaseStaleSubmission(ctx, job.ID)
+				require.NoError(t, err)
+				assert.True(t, released)
+				assert.Equal(t, "refunded", finished.BillingState)
+				assert.Zero(t, ledger.cashHeld)
+				assert.Equal(t, 1000000, ledger.cashBalance)
+				return
+			}
+			require.NoError(t, ocr.MarkOCRProductFundingDispatched(ctx, job.ID))
+			_, err := ocr.ClaimSubmission(ctx, job.ID, ocrTestSelection(job.ChannelID))
+			require.NoError(t, err)
+			expire()
+			require.NoError(t, store.recoverProductReserve(ctx, job.ID))
+			_, released, err := ocr.ReleaseStaleSubmission(ctx, job.ID)
+			require.NoError(t, err)
+			assert.False(t, released)
+			assert.Equal(t, 1460, ledger.cashHeld, "recovery cannot release a dispatched hold")
+		})
+	}
 }
 
 func TestProductCashChargeFreezesRateAndPreservesQuotaCounters(t *testing.T) {

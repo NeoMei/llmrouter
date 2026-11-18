@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/metering"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
@@ -13,6 +14,21 @@ import (
 	"testing"
 	"time"
 )
+
+func TestProductMicrocreditsUseOneRoundingBoundary(t *testing.T) {
+	price := metering.Price{
+		Version: "metered_v2", Operation: "speech", Policy: "provider_reported_v1",
+		Terms: []metering.Term{{Key: "characters", Unit: "character", Price: metering.Rational{Numerator: "3", Denominator: "10000000"}}},
+	}
+	public := billing_setting.ProductCreditPrice{CNYPerUSD: "7", Tariff: price}
+	admission := NativeAdmission{Price: price, GroupRatio: "1", QuotaPerUnit: public.MicrocreditsPerUSD()}
+	for _, reserve := range []bool{true, false} {
+		charge, clamp, err := NativeQuota(admission, nativeUsage("1"), reserve)
+		require.NoError(t, err)
+		require.Nil(t, clamp)
+		assert.Equal(t, 21, charge)
+	}
+}
 
 func nativeFixture(t *testing.T) (*NativeBillingStore, *OCRBillingStore, NativeAdmission, OCRAdmission) {
 	t.Helper()

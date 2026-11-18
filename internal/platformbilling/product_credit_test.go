@@ -68,6 +68,11 @@ func TestProductCreditRetryAndReceiptUseVerifiedIdentityAndOriginalCallerKey(t *
 	id, err := grant.ProductCreditCallID(ctx)
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(id, "pc_"))
+	provisionedAgain := grant
+	provisionedAgain.ID = "different-durable-key"
+	replayID, err := provisionedAgain.ProductCreditCallID(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, id, replayID, "a replacement Key cannot re-dispatch the same logical request")
 	wire := WireOperation{ID: "chat.completions.create"}
 	body := []byte(`{"model":"public-model"}`)
 	_, err = a.AdmitNative(ctx, "uh_key_first", "task_"+id, id, wire, "public-model", body)

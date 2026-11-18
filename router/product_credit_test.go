@@ -83,6 +83,8 @@ func TestProductCreditRelayFreezesPublicPriceAndDoesNotReplayUnknownProvider(t *
 	require.NoError(t, db.Create(&model.User{Id: 1, Username: "routing", Status: common.UserStatusEnabled, Group: "default", Quota: 777}).Error)
 	providerCalls, reserves, settlements := 0, 0, 0
 	withUsage := true
+	expireBeforeHold := false
+	membershipEndedAfterHold := false
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		providerCalls++
 		assert.Empty(t, r.Header.Get(platformbilling.ProductAuthorizationHeader))
@@ -110,7 +112,7 @@ func TestProductCreditRelayFreezesPublicPriceAndDoesNotReplayUnknownProvider(t *
 	model.InitChannelCache()
 	service.InitHttpClient()
 	service.InitTokenEncoders()
-	conversion := platformbilling.NativeConversion{Version: "product-fixture-1", Numerator: "10", Denominator: "1", Rounding: "lr-cumulative-ceil-v1"}
+	conversion := platformbilling.NativeConversion{Version: "product-fixture-1", Numerator: "1", Denominator: "1", Rounding: "lr-cumulative-ceil-v1"}
 	grant := platformbilling.Claims{CreditScope: platformbilling.ProductCreditScope, SourceVerified: true, FundingProductID: "agentwiki",
 		ID: "stable-key", CredentialKind: "api_key", InstanceID: "default", Audience: "llmrouter", ActorID: "actor", AccountID: "team", OriginProductID: "agentwiki",
 		ModelScope: "llmrouter_available", PricingSource: platformbilling.NativeCreditPricingSource, CredentialVersion: 2, Asset: "CREDIT/6", FundingMode: "credits", NativeCreditConversion: &conversion}
@@ -125,9 +127,23 @@ func TestProductCreditRelayFreezesPublicPriceAndDoesNotReplayUnknownProvider(t *
 				w.WriteHeader(http.StatusForbidden)
 				return
 			}
-			output = grant
+			if membershipEndedAfterHold && in["purpose"] != "receipt" {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"error":"product_membership_expired"}`))
+				return
+			}
+			checked := grant
+			if in["purpose"] == "receipt" {
+				checked.NativeCreditConversion = nil
+			}
+			output = checked
 		case r.URL.Path == "/internal/v1/calls/native-reserve":
 			reserves++
+			if expireBeforeHold {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"error":"product_membership_expired_no_hold"}`))
+				return
+			}
 			var in platformbilling.NativeReserveRequest
 			require.NoError(t, common.DecodeJson(r.Body, &in))
 			assert.Equal(t, platformbilling.ProductCreditScope, in.CreditScope)
@@ -137,12 +153,15 @@ func TestProductCreditRelayFreezesPublicPriceAndDoesNotReplayUnknownProvider(t *
 				ActorID: grant.ActorID, AccountID: grant.AccountID, OriginProductID: grant.OriginProductID, RequestDigest: in.RequestDigest, WireOperation: in.WireOperation, NativePricing: &in.Quote,
 				Rate: platformbilling.Rate{Model: in.Model, Asset: "CREDIT/6", Semantics: "llmrouter_native"}, Held: in.Quote.MaxAmount, ChargeAsset: "CREDIT/6", FundingMode: "credits", FundingProductID: "agentwiki", Status: "RESERVED"}
 			remote[in.CallID], output = row, row
+			if reserves == 1 {
+				membershipEndedAfterHold = true
+			}
 		case strings.HasSuffix(r.URL.Path, "/native-settle"):
 			settlements++
 			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/internal/v1/calls/"), "/native-settle")
 			var in platformbilling.NativeSettleRequest
 			require.NoError(t, common.DecodeJson(r.Body, &in))
-			assert.Equal(t, "105", in.NativeQuota)
+			assert.Equal(t, "1050", in.NativeQuota)
 			assert.Equal(t, "1050", in.Amount)
 			assert.Empty(t, in.ProviderCost)
 			require.NotNil(t, in.Usage)
@@ -183,6 +202,7 @@ func TestProductCreditRelayFreezesPublicPriceAndDoesNotReplayUnknownProvider(t *
 	}
 	w := send(callerKey, proof)
 	require.Equal(t, 200, w.Code, w.Body.String())
+	membershipEndedAfterHold = false
 	id := w.Header().Get("X-UniHub-Call-ID")
 	require.True(t, strings.HasPrefix(id, "pc_"))
 	var row platformbilling.Call
@@ -217,6 +237,18 @@ func TestProductCreditRelayFreezesPublicPriceAndDoesNotReplayUnknownProvider(t *
 	assert.Equal(t, 2, providerCalls)
 	assert.Equal(t, 2, reserves)
 	assert.Equal(t, 1, settlements)
+	expireBeforeHold = true
+	w = send("caller-expired", "product-proof")
+	require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "product_membership_expired")
+	ctx, err := platformbilling.WithProductAuthorization(t.Context(), "product-proof", "caller-expired")
+	require.NoError(t, err)
+	callID, err := grant.ProductCreditCallID(ctx)
+	require.NoError(t, err)
+	var expired platformbilling.Call
+	require.NoError(t, db.First(&expired, "call_id = ?", callID).Error)
+	assert.Equal(t, "REJECTED", expired.Status)
+	assert.Equal(t, 2, providerCalls)
 	var user model.User
 	require.NoError(t, db.First(&user, 1).Error)
 	assert.Equal(t, 777, user.Quota)

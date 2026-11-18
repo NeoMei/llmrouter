@@ -30,6 +30,9 @@ func ManagedNativeBillingError(err error) *types.NewAPIError {
 	if errors.Is(err, platformbilling.ErrNativeCreditsRequired) {
 		code = types.ErrorCodePlatformModelCreditsRequired
 	}
+	if errors.Is(err, platformbilling.ErrProductMembershipExpired) {
+		code = types.ErrorCode("product_membership_expired")
+	}
 	return types.NewErrorWithStatusCode(err, code, platformbilling.HTTPStatus(err), types.ErrOptionWithSkipRetry())
 }
 

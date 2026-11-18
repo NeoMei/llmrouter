@@ -359,7 +359,7 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 			grant, err = adapter.ManagedModelGrant(ctx, credential)
 			if err != nil {
 				if errors.Is(err, platformbilling.ErrProductMembershipExpired) {
-					c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": gin.H{"code": "product_membership_expired", "stage": "pre_admission"}})
+					c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": gin.H{"code": "product_membership_expired"}})
 				} else {
 					c.AbortWithStatus(platformbilling.HTTPStatus(err))
 				}

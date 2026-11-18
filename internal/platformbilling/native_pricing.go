@@ -340,6 +340,9 @@ func (s *Session) ReserveNative(ctx context.Context, q NativeQuote, snapshot str
 		if status == "REJECTED" && rejected.reserveCode == "insufficient_credits" && s.call.PricingSource == NativeCreditPricingSource && s.call.Asset == "CREDIT/6" && s.call.FundingMode == "credits" {
 			return ErrNativeCreditsRequired
 		}
+		if status == "REJECTED" && rejected.reserveCode == "product_membership_expired" && s.ProductCredit() {
+			return ErrProductMembershipExpired
+		}
 		if err != nil {
 			return err
 		}
@@ -383,11 +386,19 @@ func (s *Session) dispatchNative(ctx context.Context, channel int) error {
 	if err != nil || q.ChannelID != strconv.Itoa(channel) || s.err != nil || s.uncertain || s.ProductCredit() && s.nativeSend == "" {
 		return ErrPending
 	}
-	grant, err := s.adapter.ManagedModelGrant(ctx, s.nativeCredential)
+	var grant Claims
+	if s.ProductCredit() {
+		grant, err = s.adapter.managedGrant(ctx, s.nativeCredential, "", "", "receipt")
+		if err == nil {
+			err = s.adapter.validateManagedCredential(ctx, s.nativeCredential, "", "", grant, true)
+		}
+	} else {
+		grant, err = s.adapter.ManagedModelGrant(ctx, s.nativeCredential)
+	}
 	if err != nil {
 		return err
 	}
-	if !grant.NativePricing() || !s.call.matchesCreditScope(grant) || grant.ID != s.call.CredentialID || grant.CredentialVersion != s.call.CredentialVersion || grant.ActorID != s.call.ActorID || grant.AccountID != s.call.AccountID || grant.OriginProductID != s.call.OriginProductID || grant.InstanceID != s.call.InstanceID || grant.Asset != s.call.Asset || grant.FundingMode != s.call.FundingMode || grant.PricingSource != s.call.PricingSource {
+	if (!s.ProductCredit() && !grant.NativePricing()) || !s.call.matchesCreditScope(grant) || grant.ID != s.call.CredentialID || grant.CredentialVersion != s.call.CredentialVersion || grant.ActorID != s.call.ActorID || grant.AccountID != s.call.AccountID || grant.OriginProductID != s.call.OriginProductID || grant.InstanceID != s.call.InstanceID || grant.Asset != s.call.Asset || grant.FundingMode != s.call.FundingMode || grant.PricingSource != s.call.PricingSource {
 		return ErrConflict
 	}
 	if s.adapter.nativeDispatch == nil {

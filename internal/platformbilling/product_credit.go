@@ -74,9 +74,9 @@ func (grant Claims) ProductCredit() bool {
 		stableID.MatchString(grant.ID) && stableID.MatchString(grant.AccountID) && stableID.MatchString(grant.ActorID)
 }
 
-// ProductCreditCallID binds retries to the verified product, payer, caller and
-// permanent Key identity. Key rotation can never change this ID; a changed
-// version is rejected against the original call before a second dispatch.
+// ProductCreditCallID binds retries to the verified product, payer and caller.
+// Reprovisioned Keys cannot create another call with the same idempotency key.
+// Admission and receipt reads still require the original Key.
 func (grant Claims) ProductCreditCallID(ctx context.Context) (string, error) {
 	p := productAuthorizationFrom(ctx)
 	if p.proof == "" || !grant.ProductCredit() || !grant.NativePricing() || !stableID.MatchString(p.idempotencyKey) {
@@ -89,7 +89,7 @@ func (grant Claims) productCreditCallID(key string) (string, error) {
 	if !stableID.MatchString(key) {
 		return "", ErrInvalid
 	}
-	scope, err := common.Marshal([]string{ProductCreditScope, grant.InstanceID, grant.OriginProductID, grant.AccountID, grant.ActorID, grant.ID, key})
+	scope, err := common.Marshal([]string{ProductCreditScope, grant.InstanceID, grant.OriginProductID, grant.AccountID, grant.ActorID, key})
 	if err != nil {
 		return "", ErrInvalid
 	}
@@ -154,15 +154,13 @@ func (s *Session) BindProductUpstream(model string) error {
 func productCreditConversionMatches(c NativeConversion, cnyPerUSD, quotaPerUSD string) bool {
 	fx, fxOK := new(big.Rat).SetString(cnyPerUSD)
 	units, unitsOK := new(big.Rat).SetString(quotaPerUSD)
-	if !c.validCredit() || !fxOK || !unitsOK || fx.Sign() <= 0 || units.Sign() <= 0 {
+	if !c.validCredit() || c.Numerator != "1" || c.Denominator != "1" || !fxOK || !unitsOK || fx.Sign() <= 0 || units.Sign() <= 0 {
 		return false
 	}
-	configured, _ := new(big.Rat).SetString(c.Numerator + "/" + c.Denominator)
 	// The source tariff is denominated in USD. A major CNY unit buys 10
 	// credits; each credit comprises 10^6 microcredit units.
 	expected := new(big.Rat).Mul(fx, big.NewRat(10000000, 1))
-	expected.Quo(expected, units)
-	return configured.Cmp(expected) == 0
+	return units.Cmp(expected) == 0
 }
 
 // WithProductCreditReceiptAlias keeps a caller's lookup ID in request memory

@@ -745,10 +745,12 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 		}
 		ratio := helper.HandleGroupRatio(c, info)
 		groupRatio := ratio.GroupRatio
+		quotaPerUnit := strconv.FormatFloat(common.QuotaPerUnit, 'f', -1, 64)
 		if productPrice != nil {
 			groupRatio = 1
+			quotaPerUnit = productPrice.MicrocreditsPerUSD()
 		}
-		a := model.NativeAdmission{ProductPrice: productPrice, CallID: info.RequestId, UserID: info.UserId, TokenID: info.TokenId, ChannelID: info.ChannelId, Model: priceModel, Group: info.UsingGroup, Preference: info.UserSetting.BillingPreference, Price: price, GroupRatio: strconv.FormatFloat(groupRatio, 'f', -1, 64), QuotaPerUnit: strconv.FormatFloat(common.QuotaPerUnit, 'f', -1, 64), Reservation: reservation}
+		a := model.NativeAdmission{ProductPrice: productPrice, CallID: info.RequestId, UserID: info.UserId, TokenID: info.TokenId, ChannelID: info.ChannelId, Model: priceModel, Group: info.UsingGroup, Preference: info.UserSetting.BillingPreference, Price: price, GroupRatio: strconv.FormatFloat(groupRatio, 'f', -1, 64), QuotaPerUnit: quotaPerUnit, Reservation: reservation}
 		if err := service.BeginNativeBillingForRelay(c.Request.Context(), info, a); err != nil {
 			if info.ManagedNativePricing() {
 				return service.ManagedNativeBillingError(err)

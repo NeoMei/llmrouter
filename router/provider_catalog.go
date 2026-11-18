@@ -502,7 +502,9 @@ func providerPriceAvailability(m ProviderCatalogModel, billingModels []string) P
 func productCreditPriceAvailability(m ProviderCatalogModel, candidates []modelcatalog.ResolvedModel, channels map[int]model.Channel) ProviderCatalogModel {
 	fx := strconv.FormatFloat(operation_setting.USDExchangeRate, 'g', -1, 64)
 	for i, op := range m.CapabilityMetadata.Operations {
+		op.PublicTariff = nil
 		if !op.Executable {
+			m.CapabilityMetadata.Operations[i] = op
 			continue
 		}
 		if !platformbilling.ProductCreditOperation(op.ID) || len(candidates) > 0 && !slices.ContainsFunc(candidates, func(candidate modelcatalog.ResolvedModel) bool {

@@ -219,11 +219,22 @@ func (c *client) do(ctx context.Context, method, path, key string, body, out any
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		remote := &remoteError{status: resp.StatusCode}
-		if resp.StatusCode == http.StatusForbidden && method == http.MethodPost &&
-			path == "/internal/v1/model-credentials/verify" && productAuthorizationFrom(ctx).proof != "" {
+		if resp.StatusCode == http.StatusForbidden && method == http.MethodPost && productAuthorizationFrom(ctx).proof != "" {
 			var problem map[string]string
-			if common.UnmarshalUnique(data, &problem) == nil && problem["error"] == "product_membership_expired" {
-				return ErrProductMembershipExpired
+			if common.UnmarshalUnique(data, &problem) == nil && len(problem) == 1 {
+				switch input := body.(type) {
+				case map[string]string:
+					if path == "/internal/v1/model-credentials/verify" && problem["error"] == "product_membership_expired" {
+						return ErrProductMembershipExpired
+					}
+				case NativeReserveRequest:
+					if path == "/internal/v1/calls/native-reserve" && input.CreditScope == ProductCreditScope &&
+						problem["error"] == "product_membership_expired_no_hold" {
+						// UniHub emits this after checking the original call
+						// under its account lock and before creating a hold.
+						remote.reserveRejected, remote.reserveCode = true, "product_membership_expired"
+					}
+				}
 			}
 		}
 		if resp.StatusCode == http.StatusPaymentRequired && method == http.MethodPost && (path == "/internal/v1/calls/reserve" || path == "/internal/v1/calls/native-reserve") {

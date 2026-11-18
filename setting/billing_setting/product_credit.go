@@ -41,6 +41,16 @@ type ProductCreditPrice struct {
 	EvidenceDigest  string                                 `json:"evidence_digest,omitempty"`
 }
 
+// MicrocreditsPerUSD is the fixed ¥1 = 10 credits conversion in CREDIT/6.
+// It keeps customer metering out of the legacy integer quota denomination.
+func (p ProductCreditPrice) MicrocreditsPerUSD() string {
+	fx, ok := new(big.Rat).SetString(p.CNYPerUSD)
+	if !ok || fx.Sign() <= 0 {
+		return ""
+	}
+	return fx.Mul(fx, big.NewRat(10_000_000, 1)).RatString()
+}
+
 var (
 	productCreditPricingMu      sync.RWMutex
 	productCreditPricingConfig  = productCreditPricing{Version: "product-credit-pricing-v1"}

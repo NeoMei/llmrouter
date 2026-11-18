@@ -239,7 +239,7 @@ func (h *OCRHandler) Create(c *gin.Context) {
 					return
 				}
 				native = model.NativeAdmission{ProductPrice: &price, Model: publicModel, ChannelID: selected.ChannelID, Group: selected.SelectedGroup,
-					GroupRatio: "1", QuotaPerUnit: strconv.FormatFloat(common.QuotaPerUnit, 'f', -1, 64), Price: price.Tariff,
+					GroupRatio: "1", QuotaPerUnit: price.MicrocreditsPerUSD(), Price: price.Tariff,
 					Reservation: metering.Usage{Version: "metered_v2", Operation: "ocr", State: "confirmed", Source: "success_request",
 						Measurements: []metering.Measurement{{Key: "requests", Unit: "request", Quantity: metering.Quantity{Value: "1"}}}}}
 			} else {

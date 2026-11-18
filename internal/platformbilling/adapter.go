@@ -25,6 +25,7 @@ import (
 // Call stores immutable verified payer scope and terminal command intent. Model
 // credentials are never persisted: recovery cannot authorize another dispatch.
 type Call struct {
+	CreditScope         string `gorm:"size:32"`
 	PricingSource       string `gorm:"size:32"`
 	CredentialVersion   int64
 	NativePriceSnapshot string `gorm:"type:text"`
@@ -444,7 +445,7 @@ func compareCall(old, row Call) error {
 	if oldInstance == "" {
 		oldInstance = "default"
 	}
-	if oldInstance != row.InstanceID {
+	if oldInstance != row.InstanceID || old.CreditScope != row.CreditScope || row.CreditScope != "" && old.CredentialVersion != row.CredentialVersion {
 		return ErrConflict
 	}
 	oldAsset, oldMode, err := normalizeFunding(old.Asset, old.FundingMode)
@@ -753,10 +754,13 @@ func (a *Adapter) String() string { return fmt.Sprintf("platformbilling(enabled=
 // Receipt authenticates a newly issued capability against the original payer
 // and task. It intentionally contains no prompt, credential, or provider body.
 type Receipt struct {
-	CallID  string `json:"call_id"`
-	Status  string `json:"status"`
-	Charged string `json:"charged,omitempty"`
-	Asset   string `json:"asset"`
+	IdempotencyKey   string `json:"idempotency_key,omitempty"`
+	CreditScope      string `json:"credit_scope,omitempty"`
+	FundingProductID string `json:"funding_product_id,omitempty"`
+	CallID           string `json:"call_id"`
+	Status           string `json:"status"`
+	Charged          string `json:"charged,omitempty"`
+	Asset            string `json:"asset"`
 }
 
 func (a *Adapter) Receipt(ctx context.Context, credential, task, id string) (Receipt, error) {
@@ -767,18 +771,18 @@ func (a *Adapter) Receipt(ctx context.Context, credential, task, id string) (Rec
 	if err := a.db.WithContext(ctx).First(&row, "call_id = ?", id).Error; err != nil {
 		return Receipt{}, ErrInvalid
 	}
-	var grant Claims
-	if err := a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": row.Model, "wire_operation": row.WireOperation, "purpose": "receipt", "instance_id": a.config.InstanceID}, &grant); err != nil {
+	grant, err := a.managedGrant(ctx, credential, row.Model, row.WireOperation, "receipt")
+	if err != nil {
 		return Receipt{}, err
 	}
 	instance := row.InstanceID
 	if instance == "" {
 		instance = "default"
 	}
-	if a.validateModelCredential(credential, task, row.Model, grant) != nil || instance != a.config.InstanceID || row.CallID != id || grant.ActorID != row.ActorID || grant.AccountID != row.AccountID || grant.OriginProductID != row.OriginProductID || row.TaskID != task {
+	if a.validateManagedCredential(ctx, credential, task, row.Model, grant, true) != nil || !row.matchesCreditReceiptScope(grant) || instance != a.config.InstanceID || row.CallID != id || grant.ActorID != row.ActorID || grant.AccountID != row.AccountID || grant.OriginProductID != row.OriginProductID || row.TaskID != task {
 		return Receipt{}, ErrInvalid
 	}
-	if row.WireOperation != "" && !allowsWire(grant, row.Model, row.WireOperation) {
+	if row.CreditScope == "" && row.WireOperation != "" && !allowsWire(grant, row.Model, row.WireOperation) {
 		return Receipt{}, ErrInvalid
 	}
 	if strings.HasPrefix(credential, "uh_key_") && grant.ID != row.CredentialID {
@@ -788,7 +792,15 @@ func (a *Adapter) Receipt(ctx context.Context, credential, task, id string) (Rec
 	if err != nil {
 		return Receipt{}, ErrInvalid
 	}
-	return Receipt{CallID: row.CallID, Status: row.Status, Charged: row.Charged, Asset: asset}, nil
+	receipt := Receipt{CallID: row.CallID, Status: row.Status, Charged: row.Charged, Asset: asset}
+	if row.CreditScope != "" {
+		receipt.CreditScope, receipt.FundingProductID = row.CreditScope, row.FundingProductID
+		alias := productAuthorizationFrom(ctx).receiptAlias
+		if derived, err := grant.productCreditCallID(alias); err == nil && derived == row.CallID {
+			receipt.IdempotencyKey = alias
+		}
+	}
+	return receipt, nil
 }
 
 // ChatAdmissionPolicy describes the billing branch used by Admit and its

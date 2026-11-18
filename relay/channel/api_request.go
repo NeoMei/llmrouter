@@ -543,6 +543,14 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	if info.PlatformMode && info.PlatformBilling != nil && (info.PlatformBilling.AliEmbeddingV4() || info.PlatformBilling.AliRerank()) {
 		sendContext, cancelSend = context.WithTimeout(context.WithoutCancel(sendContext), 2*time.Minute)
 	}
+	if info.PlatformBilling.ProductCredit() {
+		if err := info.PlatformBilling.BindProductUpstream(info.UpstreamModelName); err != nil {
+			return nil, err
+		}
+		productClient := *client
+		productClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		client = &productClient
+	}
 	if info.ManagedNativePricing() {
 		if err := info.PlatformBilling.Dispatch(sendContext, info.ChannelId); err != nil {
 			if cancelSend != nil {

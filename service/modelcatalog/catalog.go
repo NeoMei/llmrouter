@@ -75,6 +75,7 @@ type ResolvedModel struct {
 	TargetID             int
 	Priority             int
 	Weight               int
+	RouteWeight          int
 	Client               string
 	PreferredWires       []WireProtocol
 	ContextWindow        int
@@ -378,7 +379,7 @@ func (c *Catalog) resolveCandidatesAuthorized(snapshot AuthorizedRuntimeSnapshot
 			Capabilities:   cloneCapabilities(entry.model.ModelCapabilities),
 			RequestedModel: requestedModel, PublicID: entry.model.PublicID,
 			UpstreamModel: target.UpstreamModel, BillingModel: target.BillingModel,
-			ChannelID: target.ChannelId, RouteID: entry.model.Id, TargetID: target.Id, Priority: priority, Weight: weight,
+			ChannelID: target.ChannelId, RouteID: entry.model.Id, TargetID: target.Id, Priority: priority, Weight: weight, RouteWeight: target.Weight,
 			Client:               entry.model.Client,
 			PreferredWires:       append([]WireProtocol(nil), wires...),
 			ContextWindow:        contextWindow,

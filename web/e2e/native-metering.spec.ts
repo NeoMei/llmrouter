@@ -59,6 +59,11 @@ async function fixture(page: Page) {
           data: [
             { key: 'ModelNativePricing', value: '{}' },
             { key: 'ModelNativeReservationLimits', value: '{}' },
+            {
+              key: 'ProductCreditPricing',
+              value:
+                '{"version":"product-credit-pricing-v1","suppliers":{"public-model":{}}}',
+            },
           ],
         },
       })
@@ -152,4 +157,30 @@ test('user native receipts distinguish pending from confirmed zero', async ({
   await expect(pending).toContainText('Final product measurement: Pending')
   const zero = page.getByRole('listitem').filter({ hasText: 'zero-fixture' })
   await expect(zero).toContainText('Final product measurement: 0 LR_QUOTA')
+})
+
+test('product credit pricing can update an exact multiplier without replacing supplier tariffs', async ({
+  page,
+}) => {
+  const writes = await fixture(page)
+  await page.goto('/system-settings/models/native-pricing')
+  await expect(page.getByLabel('Multiplier numerator')).toHaveValue('3')
+  await expect(page.getByLabel('Multiplier denominator')).toHaveValue('2')
+  await page.getByLabel('Pricing revision').fill('pricing-rev2')
+  await page.getByLabel('Multiplier numerator').fill('0')
+  await expect(
+    page.getByRole('button', { name: 'Save product credit pricing' })
+  ).toBeDisabled()
+  await page.getByLabel('Multiplier numerator').fill('11')
+  await page.getByLabel('Multiplier denominator').fill('5')
+  await page
+    .getByRole('button', { name: 'Save product credit pricing' })
+    .click()
+  await expect.poll(() => writes.length).toBe(1)
+  expect(writes[0].key).toBe('ProductCreditPricing')
+  expect(JSON.parse(writes[0].value)).toEqual({
+    version: 'pricing-rev2',
+    multiplier: { numerator: '11', denominator: '5' },
+    suppliers: { 'public-model': {} },
+  })
 })

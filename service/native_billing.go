@@ -101,6 +101,9 @@ func BeginNativeBillingForRelay(ctx context.Context, info *relaycommon.RelayInfo
 			return err
 		}
 		info.NativeBilling = &relaycommon.NativeBillingContext{CallID: info.PlatformBilling.CallID(), Platform: true, Price: a.Price, Policy: a.Price.Policy, Observe: func(ctx context.Context, usage metering.Usage) error {
+			if info.PlatformBilling.ProductCredit() && usage.State != "confirmed" {
+				return nil
+			}
 			actual, clamp, err := model.NativeQuota(a, usage, false)
 			if err != nil {
 				return err

@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/metering"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -19,6 +20,7 @@ import (
 // NativeAdmission is trusted service input, never a client-selected funding owner.
 // Reservation is a bounded estimate and is stored separately from final evidence.
 type NativeAdmission struct {
+	ProductPrice               *billing_setting.ProductCreditPrice `json:"product_price,omitempty"`
 	CallID                     string
 	UserID, TokenID, ChannelID int
 	Model, Group, Preference   string

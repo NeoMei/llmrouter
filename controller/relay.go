@@ -403,6 +403,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		relayInfo.LastError = newAPIError
 
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+		if relayInfo.PlatformBilling.ProductDispatchStarted() {
+			break
+		}
 
 		// Gateway resolves credentials at header construction. Exhaustion there
 		// has sent nothing, so an authorized route fallback still has its budget.
@@ -699,7 +702,32 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 		}
 		return nil
 	}
-	if price, configured := billing_setting.ResolveModelNativePrice(info.BillingModelNameOrOrigin(), operation); configured {
+	priceModel := info.BillingModelNameOrOrigin()
+	var productPrice *billing_setting.ProductCreditPrice
+	var price metering.Price
+	var configured bool
+	if info.PlatformBilling.ProductCredit() {
+		operation = info.PlatformBilling.ProductBillingOperation()
+		if info.PublicModelName != "" {
+			priceModel = info.PublicModelName
+		} else {
+			priceModel = info.OriginModelName
+		}
+		published, ok := billing_setting.ResolveProductCreditPrice(priceModel, operation, strconv.FormatFloat(operation_setting.USDExchangeRate, 'g', -1, 64))
+		if !ok {
+			return types.NewErrorWithStatusCode(errors.New("product credit tariff unavailable"), types.ErrorCodeModelPriceError, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		if !platformbilling.ProductCreditChannelSupported(info.PlatformBilling.WireOperation().ID, c.GetInt("channel_type")) {
+			return types.NewError(errors.New("product credit usage evidence unavailable for this target"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		if len(info.ParamOverride) > 0 || len(info.HeadersOverride) > 0 || info.ChannelSetting.SystemPrompt != "" || info.ChannelSetting.PassThroughBodyEnabled || model_setting.GetGlobalSettings().PassThroughRequestEnabled {
+			return types.NewError(errors.New("product credit metering requires an unchanged validated request"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		productPrice, price, configured = &published, published.Tariff, true
+	} else {
+		price, configured = billing_setting.ResolveModelNativePrice(priceModel, operation)
+	}
+	if configured {
 		if info.NativeLocalLegacy {
 			return types.NewError(errors.New("local native metered billing is not available during product runtime"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		}
@@ -716,7 +744,11 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 			return types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		}
 		ratio := helper.HandleGroupRatio(c, info)
-		a := model.NativeAdmission{CallID: info.RequestId, UserID: info.UserId, TokenID: info.TokenId, ChannelID: info.ChannelId, Model: info.BillingModelNameOrOrigin(), Group: info.UsingGroup, Preference: info.UserSetting.BillingPreference, Price: price, GroupRatio: strconv.FormatFloat(ratio.GroupRatio, 'f', -1, 64), QuotaPerUnit: strconv.FormatFloat(common.QuotaPerUnit, 'f', -1, 64), Reservation: reservation}
+		groupRatio := ratio.GroupRatio
+		if productPrice != nil {
+			groupRatio = 1
+		}
+		a := model.NativeAdmission{ProductPrice: productPrice, CallID: info.RequestId, UserID: info.UserId, TokenID: info.TokenId, ChannelID: info.ChannelId, Model: priceModel, Group: info.UsingGroup, Preference: info.UserSetting.BillingPreference, Price: price, GroupRatio: strconv.FormatFloat(groupRatio, 'f', -1, 64), QuotaPerUnit: strconv.FormatFloat(common.QuotaPerUnit, 'f', -1, 64), Reservation: reservation}
 		if err := service.BeginNativeBillingForRelay(c.Request.Context(), info, a); err != nil {
 			if info.ManagedNativePricing() {
 				return service.ManagedNativeBillingError(err)
@@ -1347,7 +1379,7 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 	}
 
 	assemble := modelcatalog.AssembleRuntimeCatalog
-	if relayInfo.RemoteTariff() && relayInfo.PlatformBilling != nil {
+	if relayInfo.RemoteTariff() && relayInfo.PlatformBilling != nil || relayInfo.PlatformBilling.ProductCredit() {
 		assemble = modelcatalog.AssembleManagedRuntimeCatalog
 	}
 	catalog, err := assemble(c.Request.Context(), modelcatalog.RuntimeContext{
@@ -1438,6 +1470,13 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 	relayInfo.PublicModelName = eligible[0].PublicID
 	relayInfo.RouteCandidates = make([]relaycommon.RouteCandidate, 0, len(eligible))
 	for i := range eligible {
+		if relayInfo.PlatformBilling.ProductCredit() {
+			channel, err := model.GetChannelById(eligible[i].ChannelID, true)
+			if err != nil || channel == nil || channel.Status != common.ChannelStatusEnabled || !platformbilling.ProductCreditChannelSupported(relayInfo.PlatformBilling.WireOperation().ID, channel.Type) {
+				relayInfo.RejectedRouteCandidates = append(relayInfo.RejectedRouteCandidates, rejectedRouteCandidate(&eligible[i], "usage_evidence_unavailable"))
+				continue
+			}
+		}
 		candidate, wireErr := routeCandidateFromResolved(relayInfo, &eligible[i])
 		if wireErr != nil {
 			relayInfo.RejectedRouteCandidates = append(relayInfo.RejectedRouteCandidates, rejectedRouteCandidate(&eligible[i], "unsupported_wire"))
@@ -1452,6 +1491,19 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 			http.StatusBadRequest,
 			types.ErrOptionWithSkipRetry(),
 		)
+	}
+	if relayInfo.PlatformBilling.ProductCredit() {
+		candidates := relayInfo.RouteCandidates
+		weights := make([]int, len(candidates))
+		for i, candidate := range candidates {
+			if candidate.Priority == candidates[0].Priority {
+				weights[i] = candidate.Weight
+			}
+		}
+		i := modelcatalog.WeightedTargetIndex(weights, relayInfo.PlatformBilling.CallID())
+		selected := candidates[i]
+		copy(candidates[1:i+1], candidates[:i])
+		candidates[0] = selected
 	}
 	if err := selectRouteCandidateForAttempt(c, relayInfo, 0); err != nil {
 		return types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
@@ -1510,7 +1562,8 @@ func filterRouteCandidatesByContext(candidates []modelcatalog.ResolvedModel, est
 func routeCandidateFromResolved(relayInfo *relaycommon.RelayInfo, resolved *modelcatalog.ResolvedModel) (relaycommon.RouteCandidate, error) {
 	candidate := relaycommon.RouteCandidate{
 		Capabilities: resolved.Capabilities,
-		RouteID:      resolved.RouteID, TargetID: resolved.TargetID, ChannelID: resolved.ChannelID,
+		Priority:     resolved.Priority, Weight: resolved.RouteWeight,
+		RouteID: resolved.RouteID, TargetID: resolved.TargetID, ChannelID: resolved.ChannelID,
 		UpstreamModel: resolved.UpstreamModel, BillingModel: resolved.BillingModel,
 		SelectedGroup: resolved.SelectedGroup, ContextWindow: resolved.ContextWindow, RequiresKnownContext: resolved.RequiresKnownContext,
 	}

@@ -39,14 +39,17 @@ type NativeQuote struct {
 }
 
 type NativeReserveRequest struct {
-	Credential    string      `json:"credential"`
-	InstanceID    string      `json:"instance_id"`
-	TaskID        string      `json:"task_id"`
-	CallID        string      `json:"call_id"`
-	RequestDigest string      `json:"request_digest"`
-	Model         string      `json:"model"`
-	WireOperation string      `json:"wire_operation"`
-	Quote         NativeQuote `json:"quote"`
+	MinimumCreditAmount  string      `json:"minimum_credit_amount,omitempty"`
+	CreditScope          string      `json:"credit_scope,omitempty"`
+	ProductAuthorization string      `json:"product_authorization,omitempty"`
+	Credential           string      `json:"credential"`
+	InstanceID           string      `json:"instance_id"`
+	TaskID               string      `json:"task_id"`
+	CallID               string      `json:"call_id"`
+	RequestDigest        string      `json:"request_digest"`
+	Model                string      `json:"model"`
+	WireOperation        string      `json:"wire_operation"`
+	Quote                NativeQuote `json:"quote"`
 }
 
 type NativeSettleRequest struct {
@@ -102,6 +105,14 @@ func (a *Adapter) AdmitNative(ctx context.Context, credential, task, id string, 
 		}
 		return nil, ErrInvalid
 	}
+	fundingProduct := "llmrouter"
+	if grant.ProductCredit() {
+		callID, err := grant.ProductCreditCallID(ctx)
+		if err != nil || id != callID || task != "task_"+callID || !ProductCreditOperation(wire.ID) {
+			return nil, ErrInvalid
+		}
+		fundingProduct = grant.FundingProductID
+	}
 	digestInput, err := common.Marshal(struct {
 		Task, Model string
 		Wire        WireOperation
@@ -111,7 +122,7 @@ func (a *Adapter) AdmitNative(ctx context.Context, credential, task, id string, 
 		return nil, err
 	}
 	digest := sha256.Sum256(digestInput)
-	row := Call{CallID: id, ActorID: grant.ActorID, AccountID: grant.AccountID, OriginProductID: grant.OriginProductID, CredentialID: grant.ID, CredentialKind: grant.CredentialKind, InstanceID: grant.InstanceID, TaskID: task, Model: model, Digest: hex.EncodeToString(digest[:]), DigestVersion: "native-pricing-v1", Operation: wireBillingOperation(wire.ID), WireOperation: wire.ID, WirePathModel: wire.PathModel, WireMode: wire.Mode, Asset: grant.Asset, FundingMode: grant.FundingMode, FundingProductID: "llmrouter", BillingProfileVersion: grant.BillingProfileVersion, PricingSource: grant.PricingSource, CredentialVersion: grant.CredentialVersion, Status: "ADMITTED"}
+	row := Call{CreditScope: grant.CreditScope, CallID: id, ActorID: grant.ActorID, AccountID: grant.AccountID, OriginProductID: grant.OriginProductID, CredentialID: grant.ID, CredentialKind: grant.CredentialKind, InstanceID: grant.InstanceID, TaskID: task, Model: model, Digest: hex.EncodeToString(digest[:]), DigestVersion: "native-pricing-v1", Operation: wireBillingOperation(wire.ID), WireOperation: wire.ID, WirePathModel: wire.PathModel, WireMode: wire.Mode, Asset: grant.Asset, FundingMode: grant.FundingMode, FundingProductID: fundingProduct, BillingProfileVersion: grant.BillingProfileVersion, PricingSource: grant.PricingSource, CredentialVersion: grant.CredentialVersion, Status: "ADMITTED"}
 	created := a.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
 	if created.Error != nil {
 		return nil, created.Error
@@ -142,10 +153,36 @@ func (s *Session) NativeQuote() (NativeQuote, error) {
 	}
 	if q.Asset == "CREDIT/6" {
 		var frozen struct {
-			Conversion NativeConversion `json:"conversion"`
+			Conversion    NativeConversion `json:"conversion"`
+			PriceSnapshot string           `json:"price_snapshot"`
 		}
 		if common.UnmarshalUnique([]byte(s.call.NativePriceSnapshot), &frozen) != nil || frozen.Conversion != q.Conversion {
 			return q, ErrInvalid
+		}
+		if s.ProductCredit() {
+			var snapshot struct {
+				Native struct {
+					GroupRatio   string
+					QuotaPerUnit string
+					Model        string
+					Price        metering.Price
+					ProductPrice *struct {
+						Model     string         `json:"model"`
+						CNYPerUSD string         `json:"cny_per_usd"`
+						Revision  string         `json:"revision"`
+						Tariff    metering.Price `json:"tariff"`
+					} `json:"product_price"`
+				} `json:"native"`
+			}
+			if common.UnmarshalUnique([]byte(frozen.PriceSnapshot), &snapshot) != nil {
+				return q, ErrInvalid
+			}
+			price := snapshot.Native.ProductPrice
+			if price == nil || price.Model == "" || price.Model != snapshot.Native.Model || len(price.Revision) != 64 ||
+				snapshot.Native.GroupRatio != "1" || !reflect.DeepEqual(snapshot.Native.Price, price.Tariff) ||
+				price.Tariff.Operation != s.call.Operation || !productCreditConversionMatches(q.Conversion, price.CNYPerUSD, snapshot.Native.QuotaPerUnit) {
+				return q, ErrInvalid
+			}
 		}
 	}
 	return q, nil
@@ -248,7 +285,7 @@ func (a *Adapter) verifyNativeTaskSettlement(ctx context.Context, row Call) erro
 	return nil
 }
 
-func (s *Session) ReserveNative(ctx context.Context, q NativeQuote, snapshot string) error {
+func (s *Session) ReserveNative(ctx context.Context, q NativeQuote, snapshot string, minimumQuota ...int) error {
 	if !s.NativePricing() || s.nativeCredential == "" || s.call.Status != "ADMITTED" || q.Group != s.adapter.config.NativeGroup || q.BillingModel == "" || len(snapshot) > 1<<20 {
 		return ErrInvalid
 	}
@@ -268,6 +305,17 @@ func (s *Session) ReserveNative(ctx context.Context, q NativeQuote, snapshot str
 	if _, err := s.NativeQuote(); err != nil {
 		return err
 	}
+	var minimumCreditAmount string
+	if len(minimumQuota) != 0 {
+		maximum, _ := strconv.Atoi(q.NativeQuotaMax)
+		if !s.ProductCredit() || len(minimumQuota) != 1 || minimumQuota[0] <= 0 || minimumQuota[0] > maximum {
+			return ErrInvalid
+		}
+		minimumCreditAmount, err = q.Amount(minimumQuota[0])
+		if err != nil {
+			return err
+		}
+	}
 	s.call.Amount = q.MaxAmount
 	saved := s.adapter.db.WithContext(ctx).Model(&Call{}).Where("call_id = ? AND status = ?", s.call.CallID, "ADMITTED").Updates(map[string]any{"status": "RESERVING", "native_quote_json": s.call.NativeQuoteJSON, "native_price_snapshot": snapshot, "amount": q.MaxAmount})
 	if saved.Error != nil {
@@ -278,7 +326,7 @@ func (s *Session) ReserveNative(ctx context.Context, q NativeQuote, snapshot str
 	}
 	s.call.Status = "RESERVING"
 	var remote RemoteCall
-	err = s.adapter.client.do(ctx, http.MethodPost, "/internal/v1/calls/native-reserve", s.call.CallID, NativeReserveRequest{Credential: s.nativeCredential, InstanceID: s.call.InstanceID, TaskID: s.call.TaskID, CallID: s.call.CallID, RequestDigest: s.call.Digest, Model: s.call.Model, WireOperation: s.call.WireOperation, Quote: q}, &remote)
+	err = s.adapter.client.do(ctx, http.MethodPost, "/internal/v1/calls/native-reserve", s.call.CallID, NativeReserveRequest{MinimumCreditAmount: minimumCreditAmount, CreditScope: s.call.CreditScope, ProductAuthorization: productAuthorizationFrom(ctx).proof, Credential: s.nativeCredential, InstanceID: s.call.InstanceID, TaskID: s.call.TaskID, CallID: s.call.CallID, RequestDigest: s.call.Digest, Model: s.call.Model, WireOperation: s.call.WireOperation, Quote: q}, &remote)
 	if err != nil || !remote.matches(s.call) || remote.Status != "RESERVED" || remote.Held != q.MaxAmount {
 		status := "RESERVE_UNKNOWN"
 		var rejected *remoteError
@@ -323,19 +371,23 @@ func (remote RemoteCall) matchesNative(row Call) bool {
 	if remote.Rate.ID != "" || remote.Rate.Asset != row.Asset || remote.Rate.Semantics != "llmrouter_native" {
 		return false
 	}
-	return remote.InstanceID == row.InstanceID && remote.CallID == row.CallID && remote.CredentialID == row.CredentialID && remote.ActorID == row.ActorID && remote.AccountID == row.AccountID && remote.OriginProductID == row.OriginProductID && remote.RequestDigest == row.Digest && remote.WireOperation == row.WireOperation && remote.Rate.Model == row.Model && remote.ChargeAsset == row.Asset && remote.FundingMode == row.FundingMode && remote.FundingProductID == "llmrouter" && remote.BillingProfileVersion == row.BillingProfileVersion
+	fundingProduct := row.FundingProductID
+	if row.CreditScope == "" && fundingProduct == "" {
+		fundingProduct = "llmrouter"
+	}
+	return remote.CreditScope == row.CreditScope && remote.InstanceID == row.InstanceID && remote.CallID == row.CallID && remote.CredentialID == row.CredentialID && remote.ActorID == row.ActorID && remote.AccountID == row.AccountID && remote.OriginProductID == row.OriginProductID && remote.RequestDigest == row.Digest && remote.WireOperation == row.WireOperation && remote.Rate.Model == row.Model && remote.ChargeAsset == row.Asset && remote.FundingMode == row.FundingMode && remote.FundingProductID == fundingProduct && remote.BillingProfileVersion == row.BillingProfileVersion
 }
 
 func (s *Session) dispatchNative(ctx context.Context, channel int) error {
 	q, err := s.NativeQuote()
-	if err != nil || q.ChannelID != strconv.Itoa(channel) || s.err != nil || s.uncertain {
+	if err != nil || q.ChannelID != strconv.Itoa(channel) || s.err != nil || s.uncertain || s.ProductCredit() && s.nativeSend == "" {
 		return ErrPending
 	}
 	grant, err := s.adapter.ManagedModelGrant(ctx, s.nativeCredential)
 	if err != nil {
 		return err
 	}
-	if !grant.NativePricing() || grant.ID != s.call.CredentialID || grant.CredentialVersion != s.call.CredentialVersion || grant.ActorID != s.call.ActorID || grant.AccountID != s.call.AccountID || grant.OriginProductID != s.call.OriginProductID || grant.InstanceID != s.call.InstanceID || grant.Asset != s.call.Asset || grant.FundingMode != s.call.FundingMode || grant.PricingSource != s.call.PricingSource {
+	if !grant.NativePricing() || !s.call.matchesCreditScope(grant) || grant.ID != s.call.CredentialID || grant.CredentialVersion != s.call.CredentialVersion || grant.ActorID != s.call.ActorID || grant.AccountID != s.call.AccountID || grant.OriginProductID != s.call.OriginProductID || grant.InstanceID != s.call.InstanceID || grant.Asset != s.call.Asset || grant.FundingMode != s.call.FundingMode || grant.PricingSource != s.call.PricingSource {
 		return ErrConflict
 	}
 	if s.adapter.nativeDispatch == nil {
@@ -353,6 +405,9 @@ func (s *Session) dispatchNative(ctx context.Context, channel int) error {
 		}
 	}
 	attempt := Attempt{CallID: s.call.CallID, ChannelID: channel, Status: "DISPATCHED"}
+	if s.ProductCredit() {
+		attempt.UpstreamIdentity = s.nativeSend
+	}
 	err = s.adapter.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&Call{}).Where("call_id = ? AND status = ?", s.call.CallID, "RESERVED").Update("status", "UNKNOWN")
 		if result.Error != nil {
@@ -380,11 +435,34 @@ func (s *Session) SettleNative(ctx context.Context, actual int, usage *Usage) er
 	if err != nil {
 		return err
 	}
+	updates := map[string]any{"status": "SETTLE_PENDING"}
+	if s.ProductCredit() {
+		if usage == nil || usage.Metered == nil || usage.Metered.State != "confirmed" || s.adapter.nativeMetering == nil {
+			return ErrPending
+		}
+		confirmed, err := s.adapter.nativeMetering(s.call.NativePriceSnapshot, *usage.Metered)
+		if err != nil || confirmed != actual {
+			return ErrInvalid
+		}
+		raw, err := common.Marshal(usage.Metered)
+		if err != nil {
+			return err
+		}
+		if s.call.Evidence != "" && s.call.Evidence != string(raw) {
+			return ErrConflict
+		}
+		updates["evidence"] = string(raw)
+	}
 	intent, err := common.Marshal(NativeSettleRequest{PricingDigest: q.PricingDigest, NativeQuota: strconv.Itoa(actual), Amount: amount, Usage: usage})
 	if err != nil {
 		return err
 	}
-	saved := s.adapter.db.WithContext(ctx).Model(&Call{}).Where("call_id = ? AND status = ? AND evidence_conflict = ?", s.call.CallID, "UNKNOWN", false).Updates(map[string]any{"status": "SETTLE_PENDING", "intent": string(intent)})
+	updates["intent"] = string(intent)
+	query := s.adapter.db.WithContext(ctx).Model(&Call{}).Where("call_id = ? AND status = ? AND evidence_conflict = ?", s.call.CallID, "UNKNOWN", false)
+	if evidence, ok := updates["evidence"]; ok {
+		query = query.Where("(evidence = ? OR evidence = '' OR evidence IS NULL)", evidence)
+	}
+	saved := query.Updates(updates)
 	if saved.Error != nil {
 		return saved.Error
 	}
@@ -448,6 +526,17 @@ func (a *Adapter) deliverNative(ctx context.Context, row Call) error {
 			return ErrInvalid
 		}
 		quota, err := strconv.Atoi(settle.NativeQuota)
+		if current.CreditScope == ProductCreditScope {
+			var evidence metering.Usage
+			if settle.Usage == nil || settle.Usage.Metered == nil || common.UnmarshalUnique([]byte(current.Evidence), &evidence) != nil ||
+				!reflect.DeepEqual(evidence, *settle.Usage.Metered) || a.nativeMetering == nil {
+				return ErrInvalid
+			}
+			actual, err := a.nativeMetering(current.NativePriceSnapshot, evidence)
+			if err != nil || actual != quota {
+				return ErrInvalid
+			}
+		}
 		amount, amountErr := q.Amount(quota)
 		if err != nil || amountErr != nil || amount != settle.Amount || strconv.Itoa(quota) != settle.NativeQuota {
 			return ErrInvalid

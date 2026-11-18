@@ -21,14 +21,18 @@ import (
 )
 
 var (
-	ErrInvalid               = errors.New("invalid platform request or configuration")
-	ErrConflict              = errors.New("platform logical call scope or body conflict")
-	ErrDuplicate             = errors.New("platform logical call already exists; never resend upstream")
-	ErrPending               = errors.New("platform billing pending reconciliation")
-	ErrNativeCreditsRequired = errors.New("platform_model_credits_required")
+	ErrInvalid                  = errors.New("invalid platform request or configuration")
+	ErrConflict                 = errors.New("platform logical call scope or body conflict")
+	ErrDuplicate                = errors.New("platform logical call already exists; never resend upstream")
+	ErrPending                  = errors.New("platform billing pending reconciliation")
+	ErrProductMembershipExpired = errors.New("product_membership_expired")
+	ErrNativeCreditsRequired    = errors.New("platform_model_credits_required")
 )
 
 type Claims struct {
+	CreditScope            string              `json:"credit_scope,omitempty"`
+	SourceVerified         bool                `json:"source_verified,omitempty"`
+	FundingProductID       string              `json:"funding_product_id,omitempty"`
 	NativeCreditConversion *NativeConversion   `json:"native_credit_conversion,omitempty"`
 	ModelScope             string              `json:"model_scope,omitempty"`
 	PricingSource          string              `json:"pricing_source,omitempty"`
@@ -85,6 +89,7 @@ type Allocation struct {
 	Amount  string `json:"amount"`
 }
 type RemoteCall struct {
+	CreditScope           string       `json:"credit_scope,omitempty"`
 	CredentialVersion     int64        `json:"credential_version,omitempty"`
 	TaskID                string       `json:"task_id,omitempty"`
 	NativePricing         *NativeQuote `json:"native_pricing,omitempty"`
@@ -214,6 +219,13 @@ func (c *client) do(ctx context.Context, method, path, key string, body, out any
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		remote := &remoteError{status: resp.StatusCode}
+		if resp.StatusCode == http.StatusForbidden && method == http.MethodPost &&
+			path == "/internal/v1/model-credentials/verify" && productAuthorizationFrom(ctx).proof != "" {
+			var problem map[string]string
+			if common.UnmarshalUnique(data, &problem) == nil && problem["error"] == "product_membership_expired" {
+				return ErrProductMembershipExpired
+			}
+		}
 		if resp.StatusCode == http.StatusPaymentRequired && method == http.MethodPost && (path == "/internal/v1/calls/reserve" || path == "/internal/v1/calls/native-reserve") {
 			// Only the center's persisted reserve rejection contract proves there
 			// is no hold. Proxy errors and malformed or ambiguous replies remain unknown.
@@ -302,6 +314,9 @@ func reserveBound(rate Rate, input, output int) (string, error) {
 
 // HTTPStatus exposes only bounded classifications, never service bodies/secrets.
 func HTTPStatus(err error) int {
+	if errors.Is(err, ErrProductMembershipExpired) {
+		return http.StatusForbidden
+	}
 	if errors.Is(err, ErrNativeCreditsRequired) {
 		return http.StatusPaymentRequired
 	}

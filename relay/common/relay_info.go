@@ -171,6 +171,8 @@ type TokenCountMeta struct {
 // RouteCandidate is the controller-owned, package-neutral state for one
 // authoritative public-model target attempt.
 type RouteCandidate struct {
+	Priority             int
+	Weight               int
 	Capabilities         dto.ModelCapabilities
 	RouteID              int
 	TargetID             int

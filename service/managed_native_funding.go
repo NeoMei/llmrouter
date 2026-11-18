@@ -57,7 +57,11 @@ func beginManagedNativeFunding(ctx context.Context, info *relaycommon.RelayInfo,
 	if !info.ManagedNativePricing() || info.QuotaClamp != nil || quota < 0 || quota > common.MaxQuota || info.Billing != nil {
 		return errors.New("managed native funding admission unavailable")
 	}
-	if err := FreezeManagedSupplementalPrices(info); err != nil {
+	if info.PlatformBilling.ProductCredit() {
+		if native == nil || native.ProductPrice == nil || native.GroupRatio != "1" || info.ManagedNativeSupplemental != nil {
+			return platformbilling.ErrInvalid
+		}
+	} else if err := FreezeManagedSupplementalPrices(info); err != nil {
 		return err
 	}
 	snapshot, err := common.Marshal(struct {
@@ -111,6 +115,24 @@ func ReserveManagedNativePrice(ctx context.Context, session *platformbilling.Ses
 	quote.MaxAmount, err = quote.Amount(quota)
 	if err != nil {
 		return err
+	}
+	if session.ProductCredit() {
+		var frozen struct {
+			Native *model.NativeAdmission `json:"native"`
+		}
+		if common.UnmarshalUnique(priceSnapshot, &frozen) != nil || frozen.Native == nil {
+			return platformbilling.ErrInvalid
+		}
+		native := frozen.Native
+		if native.Price.Policy == "success_request" && native.Price.Operation == "ocr" ||
+			native.Price.Policy == "unicode_scalar_v1" && native.Price.Operation == "speech" {
+			// Only exact request-derived dimensions prove a minimum. Token
+			// estimates and maximum output bounds never trigger auto-rebuy.
+			minimum, clamp, e := model.NativeQuota(*native, native.Reservation, false)
+			if e == nil && clamp == nil && minimum > 0 {
+				return session.ReserveNative(ctx, quote, string(snapshot), minimum)
+			}
+		}
 	}
 	return session.ReserveNative(ctx, quote, string(snapshot))
 }

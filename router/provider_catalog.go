@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -21,6 +22,7 @@ import (
 	"github.com/QuantumNous/new-api/service/modelcatalog"
 	"github.com/QuantumNous/new-api/service/ocr"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -28,6 +30,7 @@ import (
 // response to the authenticated caller; neither groups nor prices are supplied
 // by that caller. Inference separately verifies the original credential.
 type ProviderCatalog struct {
+	CreditScopes         []string               `json:"credit_scopes,omitempty"`
 	Purpose              string                 `json:"purpose,omitempty"`
 	NativeCreditProtocol string                 `json:"native_credit_protocol,omitempty"`
 	SchemaVersion        int                    `json:"schema_version"`
@@ -102,7 +105,7 @@ func SetProviderCatalogRouter(engine *gin.Engine, adapter *platformbilling.Adapt
 				c.Status(http.StatusServiceUnavailable)
 				return
 			}
-			c.JSON(http.StatusOK, ProviderCatalog{Purpose: req.Purpose, NativeCreditProtocol: platformbilling.NativeCreditPricingVersion, SchemaVersion: 1, CatalogVersion: platformbilling.NativeCreditPricingVersion, ModelScope: "llmrouter_available", PricingSource: "llmrouter_native", OriginProductID: req.OriginProductID, Models: []ProviderCatalogModel{}})
+			c.JSON(http.StatusOK, ProviderCatalog{Purpose: req.Purpose, CreditScopes: []string{platformbilling.ProductCreditScope}, NativeCreditProtocol: platformbilling.NativeCreditPricingVersion, SchemaVersion: 1, CatalogVersion: platformbilling.NativeCreditPricingVersion, ModelScope: "llmrouter_available", PricingSource: "llmrouter_native", OriginProductID: req.OriginProductID, Models: []ProviderCatalogModel{}})
 			return
 		}
 		if req.Purpose != "" || req.InstanceID != config.InstanceID || !providerCatalogIdentity.MatchString(req.ActorID) || !providerCatalogIdentity.MatchString(req.AccountID) {
@@ -120,8 +123,8 @@ func SetProviderCatalogRouter(engine *gin.Engine, adapter *platformbilling.Adapt
 }
 
 func readProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter, grant platformbilling.Claims) (ProviderCatalog, error) {
-	out := ProviderCatalog{NativeCreditProtocol: platformbilling.NativeCreditPricingVersion, SchemaVersion: 1, ModelScope: "llmrouter_available", PricingSource: "llmrouter_native", OriginProductID: grant.OriginProductID, InstanceID: grant.InstanceID, ActorID: grant.ActorID, AccountID: grant.AccountID, Models: []ProviderCatalogModel{}}
-	if adapter == nil || !adapter.Enabled() || model.DB == nil || grant.OriginProductID != "superwagie" {
+	out := ProviderCatalog{CreditScopes: []string{platformbilling.ProductCreditScope}, NativeCreditProtocol: platformbilling.NativeCreditPricingVersion, SchemaVersion: 1, ModelScope: "llmrouter_available", PricingSource: "llmrouter_native", OriginProductID: grant.OriginProductID, InstanceID: grant.InstanceID, ActorID: grant.ActorID, AccountID: grant.AccountID, Models: []ProviderCatalogModel{}}
+	if adapter == nil || !adapter.Enabled() || model.DB == nil || grant.OriginProductID != "superwagie" && !grant.ProductCredit() {
 		return out, errors.New("provider catalog unavailable")
 	}
 	user, group := adapter.NativePrincipal()
@@ -137,7 +140,12 @@ func readProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter, 
 		return out, err
 	}
 	runtime := modelcatalog.RuntimeContext{UserID: user, Groups: []string{group}, Client: grant.OriginProductID}
-	catalog, err := modelcatalog.AssembleRuntimeCatalog(ctx, runtime, routes, targets, modelcatalog.NewGormRuntimeSources(model.DB), deploymentCatalogAuthorizer{user, group, grant.OriginProductID})
+	assemble := modelcatalog.AssembleRuntimeCatalog
+	if grant.ProductCredit() {
+		assemble = modelcatalog.AssembleManagedRuntimeCatalog
+		out.PricingSource = platformbilling.NativeCreditPricingSource
+	}
+	catalog, err := assemble(ctx, runtime, routes, targets, modelcatalog.NewGormRuntimeSources(model.DB), deploymentCatalogAuthorizer{user, group, grant.OriginProductID})
 	if err != nil {
 		return out, err
 	}
@@ -205,7 +213,11 @@ func readProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter, 
 				projected.CapabilityMetadata.Operations[i] = op
 			}
 		}
-		byID[m.PublicID] = providerPriceAvailability(projected, billingModels)
+		if grant.ProductCredit() {
+			byID[m.PublicID] = productCreditPriceAvailability(projected, candidates, channelByID)
+		} else {
+			byID[m.PublicID] = providerPriceAvailability(projected, billingModels)
+		}
 	}
 	// Read enabled abilities directly, without the legacy model-count limit or
 	// the price page's refresh cache. Channel credentials never enter this view.
@@ -216,7 +228,7 @@ func readProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter, 
 	// Existing endpoint metadata augments the adapter's native defaults.
 	model.GetPricing()
 	for _, ability := range abilities {
-		if reserved[strings.ToLower(ability.Model)] || (!helper.HasModelBillingConfig(ability.Model) && !billing_setting.HasModelNativePricing(ability.Model)) {
+		if reserved[strings.ToLower(ability.Model)] || (!grant.ProductCredit() && !helper.HasModelBillingConfig(ability.Model) && !billing_setting.HasModelNativePricing(ability.Model)) {
 			continue
 		}
 		ch, ok := channelByID[ability.ChannelId]
@@ -247,6 +259,9 @@ func readProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter, 
 			if wire == "ocr.jobs.create" && !providerOCRChannelSupported(ch) {
 				continue
 			}
+			if grant.ProductCredit() && !platformbilling.ProductCreditChannelSupported(wire, ch.Type) {
+				continue
+			}
 			if wire == "" || !capability.DefaultRegistry().Supports(ch.Type, capability.ProtocolForOperation(capability.Operation(wire)), capability.Operation(wire)) {
 				continue
 			}
@@ -254,9 +269,16 @@ func readProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter, 
 				m.Capabilities.Operations = append(m.Capabilities.Operations, wire)
 			}
 		}
-		byID[ability.Model] = providerPriceAvailability(projectProviderModel(m), []string{ability.Model})
+		if grant.ProductCredit() {
+			byID[ability.Model] = projectProviderModel(m)
+		} else {
+			byID[ability.Model] = providerPriceAvailability(projectProviderModel(m), []string{ability.Model})
+		}
 	}
 	for _, m := range byID {
+		if grant.ProductCredit() {
+			m = productCreditPriceAvailability(m, nil, nil)
+		}
 		out.Models = append(out.Models, m)
 	}
 	slices.SortFunc(out.Models, func(a, b ProviderCatalogModel) int { return strings.Compare(a.ID, b.ID) })
@@ -450,6 +472,26 @@ func providerPriceAvailability(m ProviderCatalogModel, billingModels []string) P
 			op.DisabledReason = "native_price_unavailable"
 			m.CapabilityMetadata.Operations[i] = op
 		}
+	}
+	m.Probe = slices.ContainsFunc(m.CapabilityMetadata.Operations, func(op platformbilling.CatalogOperation) bool { return op.Executable })
+	return m
+}
+
+func productCreditPriceAvailability(m ProviderCatalogModel, candidates []modelcatalog.ResolvedModel, channels map[int]model.Channel) ProviderCatalogModel {
+	fx := strconv.FormatFloat(operation_setting.USDExchangeRate, 'g', -1, 64)
+	for i, op := range m.CapabilityMetadata.Operations {
+		if !op.Executable {
+			continue
+		}
+		if !platformbilling.ProductCreditOperation(op.ID) || len(candidates) > 0 && !slices.ContainsFunc(candidates, func(candidate modelcatalog.ResolvedModel) bool {
+			channel := channels[candidate.ChannelID]
+			return slices.Contains(candidate.Capabilities.Operations, op.ID) && platformbilling.ProductCreditChannelSupported(op.ID, channel.Type)
+		}) {
+			op.Available, op.Executable, op.DisabledReason = false, false, "product_credit_operation_unavailable"
+		} else if _, ok := billing_setting.ResolveProductCreditPrice(m.ID, op.BillingOperation, fx); !ok {
+			op.Available, op.Executable, op.DisabledReason = false, false, "product_credit_price_unavailable"
+		}
+		m.CapabilityMetadata.Operations[i] = op
 	}
 	m.Probe = slices.ContainsFunc(m.CapabilityMetadata.Operations, func(op platformbilling.CatalogOperation) bool { return op.Executable })
 	return m

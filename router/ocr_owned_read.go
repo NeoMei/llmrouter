@@ -35,13 +35,17 @@ func registerNativeOCRRead(engine gin.IRoutes, a *platformbilling.Adapter) {
 			return
 		}
 		// Native status can contain signed URLs to OCR content.
-		if superwagiePrivateResultBlocked(row) {
+		productOwned := row.CreditScope == platformbilling.ProductCreditScope && platformbilling.HasProductAuthorization(c.Request.Context())
+		if !productOwned && (superwagiePrivateResultBlocked(row) || row.CreditScope == platformbilling.ProductCreditScope) {
 			c.AbortWithStatus(http.StatusNotFound)
 			return
 		}
 		if platformbilling.IsOwnedReadCredential(token) && recoverOwnedOCRRead(c.Request.Context(), a, row) != nil {
 			c.AbortWithStatusJSON(409, gin.H{"error": gin.H{"code": "ocr_ownership_proof_required"}})
 			return
+		}
+		if productOwned {
+			setProductTaskReadHeaders(c, row)
 		}
 		c.Set("platform_task_call", row)
 		c.Set("platform_ocr_native", true)

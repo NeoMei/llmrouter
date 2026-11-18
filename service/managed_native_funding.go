@@ -31,7 +31,7 @@ func ManagedNativeBillingError(err error) *types.NewAPIError {
 		code = types.ErrorCodePlatformModelCreditsRequired
 	}
 	if errors.Is(err, platformbilling.ErrProductMembershipExpired) {
-		code = types.ErrorCode("product_membership_expired")
+		code = types.ErrorCodeProductMembershipExpired
 	}
 	return types.NewErrorWithStatusCode(err, code, platformbilling.HTTPStatus(err), types.ErrOptionWithSkipRetry())
 }
@@ -56,8 +56,36 @@ func CalculateManagedNativeQuota(snapshotJSON string, usage metering.Usage) (int
 	return quota, nil
 }
 
-func beginManagedNativeFunding(ctx context.Context, info *relaycommon.RelayInfo, quota int, native *model.NativeAdmission) error {
-	if !info.ManagedNativePricing() || info.QuotaClamp != nil || quota < 0 || quota > common.MaxQuota || info.Billing != nil {
+func CalculateProductCreditAmount(snapshotJSON string, usage metering.Usage) (int64, error) {
+	var wrapper struct {
+		PriceSnapshot string `json:"price_snapshot"`
+	}
+	var snapshot struct {
+		Native *model.NativeAdmission `json:"native"`
+	}
+	if common.UnmarshalUnique([]byte(snapshotJSON), &wrapper) != nil ||
+		common.UnmarshalUnique([]byte(wrapper.PriceSnapshot), &snapshot) != nil || snapshot.Native == nil {
+		return 0, platformbilling.ErrInvalid
+	}
+	return model.NativeProductCreditAmount(*snapshot.Native, usage, false)
+}
+
+func ManagedNativeAmount(native model.NativeAdmission, usage metering.Usage, reserve bool) (int64, error) {
+	if native.ProductPrice != nil {
+		return model.NativeProductCreditAmount(native, usage, reserve)
+	}
+	quota, clamp, err := model.NativeQuota(native, usage, reserve)
+	if err != nil {
+		return 0, err
+	}
+	if clamp != nil {
+		return 0, clamp
+	}
+	return int64(quota), nil
+}
+
+func beginManagedNativeFunding(ctx context.Context, info *relaycommon.RelayInfo, quota int64, native *model.NativeAdmission) error {
+	if !info.ManagedNativePricing() || info.QuotaClamp != nil || quota < 0 || quota > int64(common.MaxQuota) && !info.PlatformBilling.ProductCredit() || info.Billing != nil {
 		return errors.New("managed native funding admission unavailable")
 	}
 	if info.PlatformBilling.ProductCredit() {
@@ -82,14 +110,19 @@ func beginManagedNativeFunding(ctx context.Context, info *relaycommon.RelayInfo,
 	if err := ReserveManagedNativePrice(ctx, info.PlatformBilling, info.BillingModelNameOrOrigin(), info.UsingGroup, info.ModelRouteId, info.ChannelId, quota, snapshot); err != nil {
 		return err
 	}
-	info.BillingSource, info.FinalPreConsumedQuota = "unihub", quota
-	info.Billing = &managedNativeFunding{info: info, reserved: quota}
+	info.BillingSource = "unihub"
+	// Product amounts are ledger units and never local quota. The journal
+	// owns their signed 64-bit reservation and settlement.
+	if !info.PlatformBilling.ProductCredit() {
+		info.FinalPreConsumedQuota = int(quota)
+	}
+	info.Billing = &managedNativeFunding{info: info, reserved: info.FinalPreConsumedQuota}
 	return nil
 }
 
 // ReserveManagedNativePrice binds native calculations to the original managed
 // credential and product wallet. Native OCR and synchronous relay share it.
-func ReserveManagedNativePrice(ctx context.Context, session *platformbilling.Session, billingModel, group string, routeID, channelID, quota int, priceSnapshot []byte) error {
+func ReserveManagedNativePrice(ctx context.Context, session *platformbilling.Session, billingModel, group string, routeID, channelID int, quota int64, priceSnapshot []byte) error {
 	credit, err := session.NativeCreditConversion()
 	if err != nil {
 		return err
@@ -114,8 +147,12 @@ func ReserveManagedNativePrice(ctx context.Context, session *platformbilling.Ses
 		return err
 	}
 	digest := sha256.Sum256(snapshot)
-	quote := platformbilling.NativeQuote{PricingVersion: pricingVersion, PricingDigest: hex.EncodeToString(digest[:]), BillingModel: billingModel, WireOperation: session.WireOperation().ID, RouteID: strconv.Itoa(routeID), ChannelID: strconv.Itoa(channelID), Group: group, NativeQuotaMax: strconv.Itoa(quota), Conversion: conversion, Asset: asset}
-	quote.MaxAmount, err = quote.Amount(quota)
+	quote := platformbilling.NativeQuote{PricingVersion: pricingVersion, PricingDigest: hex.EncodeToString(digest[:]), BillingModel: billingModel, WireOperation: session.WireOperation().ID, RouteID: strconv.Itoa(routeID), ChannelID: strconv.Itoa(channelID), Group: group, NativeQuotaMax: strconv.FormatInt(quota, 10), Conversion: conversion, Asset: asset}
+	scope := ""
+	if session.ProductCredit() {
+		scope = platformbilling.ProductCreditScope
+	}
+	quote.MaxAmount, err = quote.AmountForScope(quota, scope)
 	if err != nil {
 		return err
 	}
@@ -128,11 +165,12 @@ func ReserveManagedNativePrice(ctx context.Context, session *platformbilling.Ses
 		}
 		native := frozen.Native
 		if native.Price.Policy == "success_request" && native.Price.Operation == "ocr" ||
-			native.Price.Policy == "unicode_scalar_v1" && native.Price.Operation == "speech" {
+			native.Price.Policy == "unicode_scalar_v1" && native.Price.Operation == "speech" ||
+			session.WireOperation().ID == "videos.create" && native.Price.Operation == "video" {
 			// Only exact request-derived dimensions prove a minimum. Token
 			// estimates and maximum output bounds never trigger auto-rebuy.
-			minimum, clamp, e := model.NativeQuota(*native, native.Reservation, false)
-			if e == nil && clamp == nil && minimum > 0 {
+			minimum, e := model.NativeProductCreditAmount(*native, native.Reservation, false)
+			if e == nil && minimum > 0 {
 				return session.ReserveNative(ctx, quote, string(snapshot), minimum)
 			}
 		}

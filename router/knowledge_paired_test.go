@@ -54,6 +54,9 @@ type pairedFixture struct {
 	finalDigest                                                                                                     string
 	callID, taskID                                                                                                  string
 	managed                                                                                                         *managedKnowledgeFixture
+	productCredit                                                                                                   bool
+	productFinal                                                                                                    platformbilling.NativeSettleRequest
+	wantProductReserve, wantProductCharge                                                                           string
 }
 
 func newPairedFixture(t *testing.T, embedding bool) *pairedFixture {
@@ -162,6 +165,15 @@ func newPairedFixture(t *testing.T, embedding bool) *pairedFixture {
 				f.verifies++
 				var in map[string]string
 				require.NoError(t, common.DecodeJson(r.Body, &in))
+				if f.productCredit && (in["token"] == f.managed.credential || in["product_authorization"] != "") {
+					if in["token"] != f.managed.credential || in["product_authorization"] != "product-proof" || f.revoked {
+						w.WriteHeader(http.StatusForbidden)
+						return
+					}
+					f.claimChecks++
+					out = f.productGrant()
+					break
+				}
 				if f.managed != nil && in["purpose"] == "" {
 					out = f.managed.verify(f, w, r, in)
 					if out == nil {
@@ -191,6 +203,36 @@ func newPairedFixture(t *testing.T, embedding bool) *pairedFixture {
 				}{platformbilling.Claims{CredentialKind: "task", InstanceID: "default", ID: id, Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: f.product, TaskID: "task", Models: []string{f.name}, Operations: map[string][]string{f.name: {f.wire}}, ExpiresAt: time.Now().Add(time.Hour).Truncate(time.Second), Asset: "CREDIT/6", FundingMode: "credits"}, time.Now().Add(time.Hour).Unix()}
 			case "/internal/v1/rates":
 				out = []platformbilling.Rate{rate}
+			case "/internal/v1/calls/native-reserve":
+				require.True(t, f.productCredit)
+				f.reserves++
+				var in platformbilling.NativeReserveRequest
+				require.NoError(t, common.DecodeJson(r.Body, &in))
+				require.Equal(t, "product-proof", in.ProductAuthorization)
+				require.Equal(t, f.managed.credential, in.Credential)
+				require.Equal(t, f.callID, in.CallID)
+				require.Equal(t, f.taskID, in.TaskID)
+				assert.Equal(t, platformbilling.ProductCreditScope, in.CreditScope)
+				assert.Equal(t, f.wire, in.WireOperation)
+				assert.Equal(t, f.wantProductReserve, in.Quote.MaxAmount)
+				grant := f.productGrant()
+				f.remote = platformbilling.RemoteCall{CreditScope: grant.CreditScope, CredentialVersion: grant.CredentialVersion, TaskID: in.TaskID,
+					InstanceID: "default", WireOperation: f.wire, CallID: in.CallID, ActorID: grant.ActorID, AccountID: grant.AccountID,
+					OriginProductID: grant.OriginProductID, CredentialID: grant.ID, RequestDigest: in.RequestDigest, NativePricing: &in.Quote,
+					Rate: platformbilling.Rate{Model: f.name, Asset: grant.Asset, Semantics: "llmrouter_native"}, ChargeAsset: grant.Asset,
+					FundingMode: grant.FundingMode, FundingProductID: grant.FundingProductID, Held: in.Quote.MaxAmount, Status: "RESERVED"}
+				if f.beforeReserve != nil {
+					f.beforeReserve()
+				}
+				out = f.remote
+			case "/internal/v1/calls/" + f.callID + "/native-settle":
+				f.settles++
+				require.NoError(t, common.DecodeJson(r.Body, &f.productFinal))
+				require.Equal(t, f.wantProductCharge, f.productFinal.Amount)
+				require.Equal(t, f.wantProductCharge, f.productFinal.NativeQuota)
+				require.NotNil(t, f.productFinal.Usage)
+				f.remote.Status, f.remote.Charged = "SETTLED", f.productFinal.Amount
+				out = f.remote
 			case "/internal/v1/calls/reserve":
 				f.reserves++
 				if f.beforeReserve != nil {
@@ -240,6 +282,14 @@ func newPairedFixture(t *testing.T, embedding bool) *pairedFixture {
 				f.finalDigest = hex.EncodeToString(sum[:])
 				out = f.remote
 			case "/internal/v1/calls/" + f.callID:
+				if f.productCredit {
+					out = struct {
+						platformbilling.RemoteCall
+						NativeQuota string                 `json:"native_quota"`
+						Usage       *platformbilling.Usage `json:"usage"`
+					}{f.remote, f.productFinal.NativeQuota, f.productFinal.Usage}
+					break
+				}
 				out = struct {
 					platformbilling.RemoteCall
 					ServiceID    string                 `json:"service_id"`

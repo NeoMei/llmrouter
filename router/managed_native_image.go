@@ -316,7 +316,7 @@ func registerManagedNativeImage(r *gin.Engine, adapter *platformbilling.Adapter)
 		}
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Authorization", "Bearer "+channel.Key)
-		if err = service.ReserveManagedNativePrice(c.Request.Context(), session, selected.BillingModel, selected.SelectedGroup, selected.RouteID, selected.ChannelID, quota, snapshot); err != nil {
+		if err = service.ReserveManagedNativePrice(c.Request.Context(), session, selected.BillingModel, selected.SelectedGroup, selected.RouteID, selected.ChannelID, int64(quota), snapshot); err != nil {
 			c.AbortWithStatus(platformbilling.HTTPStatus(err))
 			return
 		}

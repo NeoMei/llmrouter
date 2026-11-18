@@ -78,3 +78,24 @@ func TestProductCreditRejectsIncomparableSupplierMeasurements(t *testing.T) {
 	  }}}
 	}`))
 }
+
+func TestProductCreditVideoSupplierRatesKeepResolutionDimensions(t *testing.T) {
+	previous := ProductCreditPricingJSONString()
+	t.Cleanup(func() { require.NoError(t, SetProductCreditPricing(previous)) })
+	require.NoError(t, SetProductCreditPricing(`{
+	  "version":"video-revision",
+	  "suppliers":{"priced-video":{"video":{
+	    "a":{"version":"a-1","currency":"CNY","tariff":{"version":"metered_v2","operation":"video","policy":"ali_wan26_t2v_billable_duration_v1","terms":[
+	      {"key":"video_720p","unit":"video_second","price":{"numerator":"4","denominator":"5"}},
+	      {"key":"video_1080p","unit":"video_second","price":{"numerator":"3","denominator":"2"}}]}}
+	  }}}
+	}`))
+	price, ok := ResolveProductCreditPrice("priced-video", "video", "8")
+	require.True(t, ok)
+	rates := map[string]metering.Rational{}
+	for _, term := range price.Tariff.Terms {
+		rates[term.Key] = term.Price
+	}
+	assert.Equal(t, metering.Rational{Numerator: "3", Denominator: "20"}, rates["video_720p"])
+	assert.Equal(t, metering.Rational{Numerator: "9", Denominator: "32"}, rates["video_1080p"])
+}

@@ -42,7 +42,18 @@ func registerKnowledgeResultRead(routes gin.IRoutes, adapter *platformbilling.Ad
 				return
 			}
 		}
-		result, err := adapter.KnowledgeResultWithEvidence(c.Request.Context(), strings.TrimPrefix(actor, "Bearer "), strings.TrimPrefix(auth, "Bearer "), task, c.Param("callID"))
+		actorToken, credential := strings.TrimPrefix(actor, "Bearer "), strings.TrimPrefix(auth, "Bearer ")
+		var result platformbilling.KnowledgeResultEvidence
+		var err error
+		if platformbilling.HasProductAuthorization(c.Request.Context()) {
+			if len(c.Request.Header.Values("Cookie")) > 0 || len(c.Request.Header.Values("Idempotency-Key")) > 0 {
+				c.AbortWithStatus(http.StatusNotFound)
+				return
+			}
+			result, err = adapter.ProductKnowledgeResultWithEvidence(c.Request.Context(), actorToken, credential, task, c.Param("callID"))
+		} else {
+			result, err = adapter.KnowledgeResultWithEvidence(c.Request.Context(), actorToken, credential, task, c.Param("callID"))
+		}
 		if err != nil {
 			c.AbortWithStatus(http.StatusNotFound)
 			return

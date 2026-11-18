@@ -41,14 +41,14 @@ type ProductCreditPrice struct {
 	EvidenceDigest  string                                 `json:"evidence_digest,omitempty"`
 }
 
-// MicrocreditsPerUSD is the fixed ¥1 = 10 credits conversion in CREDIT/6.
+// MicrocreditsPerUSD is the fixed ¥1 = 100 credits conversion in CREDIT/6.
 // It keeps customer metering out of the legacy integer quota denomination.
 func (p ProductCreditPrice) MicrocreditsPerUSD() string {
 	fx, ok := new(big.Rat).SetString(p.CNYPerUSD)
 	if !ok || fx.Sign() <= 0 {
 		return ""
 	}
-	return fx.Mul(fx, big.NewRat(10_000_000, 1)).RatString()
+	return fx.Mul(fx, big.NewRat(100_000_000, 1)).RatString()
 }
 
 var (
@@ -86,7 +86,7 @@ func parseProductCreditPricing(raw string) (productCreditPricing, error) {
 			var comparable *metering.Price
 			for supplier, evidence := range suppliers {
 				if !productCreditPricingVersion.MatchString(supplier) || !productCreditPricingVersion.MatchString(evidence.Version) || evidence.Currency != "USD" && evidence.Currency != "CNY" ||
-					ValidateModelNativePricing(map[string]map[string]metering.Price{model: {operation: evidence.Tariff}}) != nil {
+					!validProductCreditSupplierPrice(model, operation, evidence.Tariff) {
 					return config, errProductCreditPricing
 				}
 				price := evidence.Tariff
@@ -109,6 +109,21 @@ func parseProductCreditPricing(raw string) (productCreditPricing, error) {
 		}
 	}
 	return config, nil
+}
+
+func validProductCreditSupplierPrice(model, operation string, tariff metering.Price) bool {
+	if operation == "multimodal_embedding" {
+		return tariff.Operation == operation && tariff.Policy == "provider_reported_v1" && len(tariff.Terms) == 2 &&
+			metering.ValidatePrice(tariff) == nil
+	}
+	if operation == "rerank" {
+		return tariff.Operation == operation && tariff.Policy == "provider_reported_v1" && len(tariff.Terms) == 1 &&
+			tariff.Terms[0].Key == "input" && tariff.Terms[0].Unit == "token" && metering.ValidatePrice(tariff) == nil
+	}
+	if operation == "video" && tariff.Operation == operation && tariff.Policy == "ali_wan26_t2v_billable_duration_v1" {
+		return metering.ValidatePrice(tariff) == nil
+	}
+	return ValidateModelNativePricing(map[string]map[string]metering.Price{model: {operation: tariff}}) == nil
 }
 
 func ValidateProductCreditPricing(raw string) error {

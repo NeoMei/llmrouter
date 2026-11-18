@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/QuantumNous/new-api/pkg/metering"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -180,8 +182,9 @@ func MultimodalEmbeddingHelper(c *gin.Context, info *relaycommon.RelayInfo) *typ
 		return invalidMultimodalResponse()
 	}
 	defer resp.Body.Close()
+	productCredit := info.PlatformBilling.ProductCredit()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMultimodalVectorResponse+1))
-	if err != nil || len(body) > maxMultimodalVectorResponse || c.Request.Context().Err() != nil {
+	if err != nil || len(body) > maxMultimodalVectorResponse || !productCredit && c.Request.Context().Err() != nil {
 		return invalidMultimodalResponse()
 	}
 	failure, code := accountpool.AliFailure(resp.StatusCode, resp.Header.Get("Retry-After"), body)
@@ -205,13 +208,19 @@ func MultimodalEmbeddingHelper(c *gin.Context, info *relaycommon.RelayInfo) *typ
 	if accountpool.CompleteNativeOutcome(c, nil) != nil {
 		return invalidMultimodalResponse()
 	}
-	if info.RemoteTariff() {
+	if info.RemoteTariff() || productCredit {
 		textCap, visualCap := info.PlatformBilling.ReservationBounds()
 		if int64(usage.PromptTokensDetails.TextTokens) > textCap || int64(usage.PromptTokensDetails.ImageTokens) > visualCap {
 			return invalidMultimodalResponse()
 		}
 		actual := metering.Usage{Version: "metered_v2", Operation: "multimodal_embedding", State: "confirmed", Source: "ali_multimodal_actual_v1", Measurements: []metering.Measurement{{Key: "text", Unit: "token", Quantity: metering.Quantity{Value: strconv.Itoa(usage.PromptTokensDetails.TextTokens)}}, {Key: "visual", Unit: "token", Quantity: metering.Quantity{Value: strconv.Itoa(usage.PromptTokensDetails.ImageTokens)}}}}
-		if err := service.RecordNativeUsageForRelay(c.Request.Context(), info, actual); err != nil {
+		if productCredit {
+			work, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 15*time.Second)
+			defer cancel()
+			if err := info.PlatformBilling.CaptureProductMediaResult(work, actual, "application/json", encoded); err != nil || c.Request.Context().Err() != nil {
+				return invalidMultimodalResponse()
+			}
+		} else if err := service.RecordNativeUsageForRelay(c.Request.Context(), info, actual); err != nil {
 			return invalidMultimodalResponse()
 		}
 	}

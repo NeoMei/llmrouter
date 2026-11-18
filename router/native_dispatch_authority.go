@@ -88,6 +88,9 @@ func authorizeNativeDispatch(ctx context.Context, a *platformbilling.Adapter, gr
 	}
 	for _, candidate := range candidates {
 		if strconv.Itoa(candidate.RouteID) == q.RouteID && candidate.ChannelID == channelID && candidate.BillingModel == q.BillingModel && slices.Contains(candidate.Capabilities.Operations, q.WireOperation) {
+			if grant.ProductCredit() && q.WireOperation == "multimodal.embeddings.create" && !productMultimodalTarget(a, advertisedName, candidate, channel) {
+				return platformbilling.ErrConflict
+			}
 			return nil
 		}
 	}

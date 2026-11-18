@@ -95,16 +95,17 @@ type Attempt struct {
 func (Attempt) TableName() string { return "platform_model_attempts" }
 
 type Adapter struct {
-	nativeDispatch   func(context.Context, Claims, string, NativeQuote) error
-	nativeMetering   func(string, metering.Usage) (int, error)
-	bindingResolver  func(*gorm.DB, string, string, string) (ManagedBinding, string, error)
-	bindingRotator   func(*gorm.DB, string) error
-	knowledgeResults *knowledgeResultVault
-	history          *ci.Index
-	historyResolver  NativeHistoryResolver
-	db               *gorm.DB
-	config           Config
-	client           *client
+	nativeDispatch        func(context.Context, Claims, string, NativeQuote) error
+	nativeMetering        func(string, metering.Usage) (int, error)
+	productCreditMetering func(string, metering.Usage) (int64, error)
+	bindingResolver       func(*gorm.DB, string, string, string) (ManagedBinding, string, error)
+	bindingRotator        func(*gorm.DB, string) error
+	knowledgeResults      *knowledgeResultVault
+	history               *ci.Index
+	historyResolver       NativeHistoryResolver
+	db                    *gorm.DB
+	config                Config
+	client                *client
 }
 type Session struct {
 	nativeCreditConversion *NativeConversion
@@ -211,7 +212,7 @@ func New(db *gorm.DB, c Config) (*Adapter, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = db.AutoMigrate(&Call{}, &Attempt{}, &knowledgebinding.KnowledgeActiveBinding{}, &knowledgebinding.KnowledgeRoutePin{}); err != nil {
+	if err = db.AutoMigrate(&Call{}, &Attempt{}, &productMediaResult{}, &knowledgebinding.KnowledgeActiveBinding{}, &knowledgebinding.KnowledgeRoutePin{}); err != nil {
 		return nil, err
 	}
 	if c.AllowAliEmbeddingV4 || c.AllowAliRerank {
@@ -455,14 +456,14 @@ func compareCall(old, row Call) error {
 	return ErrDuplicate
 }
 func (s *Session) Dispatch(ctx context.Context, channel int) error {
-	if s.NativePricing() {
-		return s.dispatchNative(ctx, channel)
-	}
 	if s.PinnedKnowledge() {
 		if channel != s.knowledgeAdmission.binding.ChannelID {
 			return ErrConflict
 		}
 		return nil
+	}
+	if s.NativePricing() {
+		return s.dispatchNative(ctx, channel)
 	}
 	if IsImageWire(s.WireOperation().ID) {
 		p, e := s.ImagePolicy()
@@ -693,6 +694,12 @@ func (a *Adapter) deliver(ctx context.Context, row Call) error {
 func (a *Adapter) Recover(ctx context.Context) error {
 	if !a.Enabled() {
 		return nil
+	}
+	var expiredProductMedia []string
+	if err := a.db.WithContext(ctx).Model(&productMediaResult{}).Where("expires_at <= ?", time.Now().Unix()).Limit(100).Pluck("call_id", &expiredProductMedia).Error; err == nil && len(expiredProductMedia) > 0 {
+		if err = a.db.WithContext(ctx).Where("call_id IN ?", expiredProductMedia).Delete(&productMediaResult{}).Error; err != nil {
+			common.SysError("product media result cleanup failed")
+		}
 	}
 	if a.history != nil {
 		if _, err := a.history.Cleanup(ctx, 500); err != nil {

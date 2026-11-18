@@ -713,6 +713,12 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 		} else {
 			priceModel = info.OriginModelName
 		}
+		wire := info.PlatformBilling.WireOperation().ID
+		// Governed models enter through their approved public identifier so
+		// the exact supplier binding, receipt and result vault are enforced.
+		if platformbilling.ApprovedKnowledgePair(priceModel, wire) || platformbilling.ApprovedKnowledgePair(info.ResolvedModelNameOrOrigin(), wire) {
+			return types.NewErrorWithStatusCode(errors.New("governed knowledge requires the canonical public model and its active pin"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
 		published, ok := billing_setting.ResolveProductCreditPrice(priceModel, operation, strconv.FormatFloat(operation_setting.USDExchangeRate, 'g', -1, 64))
 		if !ok {
 			return types.NewErrorWithStatusCode(errors.New("product credit tariff unavailable"), types.ErrorCodeModelPriceError, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
@@ -733,7 +739,18 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 		}
 		var reservation metering.Usage
 		var err error
-		if operation != "chat" && operation != "responses" && operation != "embedding" {
+		if operation == "multimodal_embedding" && info.PlatformBilling.ProductCredit() {
+			text, visual := info.PlatformBilling.ReservationBounds()
+			if price.Policy != "provider_reported_v1" || text <= 0 || visual <= 0 {
+				err = platformbilling.ErrInvalid
+			} else {
+				reservation = metering.Usage{Version: "metered_v2", Operation: operation, State: "confirmed", Source: "request_bound",
+					Measurements: []metering.Measurement{
+						{Key: "text", Unit: "token", Quantity: metering.Quantity{Value: strconv.FormatInt(text, 10)}},
+						{Key: "visual", Unit: "token", Quantity: metering.Quantity{Value: strconv.FormatInt(visual, 10)}},
+					}}
+			}
+		} else if operation != "chat" && operation != "responses" && operation != "embedding" {
 			if err = helper.ValidateNativeAudioAdmission(c, info); err == nil {
 				reservation, err = service.EstimateNativeMediaUsage(info, info.Request, price)
 			}
@@ -1089,6 +1106,16 @@ func RelayTask(c *gin.Context) {
 		if !ok || price.Operation != "video" {
 			c.AbortWithStatus(http.StatusBadRequest)
 			return
+		}
+		if relayInfo.PlatformBilling.ProductCredit() {
+			frozen, err := relayInfo.PlatformBilling.FrozenVideoPolicy()
+			if err != nil {
+				c.AbortWithStatus(http.StatusBadRequest)
+				return
+			}
+			// Provider receipt validation uses the certified supplier protocol;
+			// the frozen public customer tariff remains in the billing journal.
+			price.Policy = frozen.Policy.UsagePolicy
 		}
 		relayInfo.NativeBilling = &relaycommon.NativeBillingContext{CallID: relayInfo.PlatformBilling.CallID(), Platform: true, Price: price, Observe: relayInfo.PlatformBilling.ObserveMetering}
 		if price.Policy == "ali_wan26_t2v_billable_duration_v1" || price.Policy == "ali_wan26_t2v_cny6_v2" {

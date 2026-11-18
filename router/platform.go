@@ -25,6 +25,7 @@ import (
 // platform endpoint and keep the legacy router untouched.
 func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 	adapter.SetNativeMeteringCalculator(service.CalculateManagedNativeQuota)
+	adapter.SetProductCreditMeteringCalculator(service.CalculateProductCreditAmount)
 	service.PlatformTaskObserver = adapter.ObserveTask
 	service.PlatformTaskSettlementCheck = adapter.VerifyTaskSettlement
 	service.PlatformTaskRelease = adapter.ReleaseTask
@@ -71,6 +72,37 @@ func SetPlatformRouter(engine *gin.Engine, adapter *platformbilling.Adapter) {
 			return
 		}
 		c.JSON(200, receipt)
+	})
+	platform.GET("/calls/:callID/result", func(c *gin.Context) {
+		token := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
+		if !platformbilling.HasProductAuthorization(c.Request.Context()) || c.Request.URL.RawQuery != "" {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+		callID := c.Param("callID")
+		taskID := c.GetHeader("X-UniHub-Task-ID")
+		body, contentType, digest, err := adapter.ReadProductMediaResult(c.Request.Context(), token, taskID, callID)
+		if err != nil {
+			body, digest, err = adapter.ReadProductKnowledgeResult(c.Request.Context(), token, taskID, callID)
+			contentType = "application/json"
+		}
+		if err != nil {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+		row, err := adapter.Task(c.Request.Context(), token, taskID, callID)
+		if err != nil {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+		c.Header("Cache-Control", "no-store")
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("X-UniHub-Call-ID", callID)
+		if alias := platformbilling.ProductReceiptAlias(c.Request.Context(), row); alias != "" {
+			c.Header("X-UniHub-Idempotency-Key", alias)
+		}
+		c.Header("X-Content-SHA256", digest)
+		c.Data(http.StatusOK, contentType, body)
 	})
 	registerKnowledgeResultRead(platform, adapter)
 	registerKnowledgeRoute(platform, adapter)
@@ -313,6 +345,16 @@ func registerPlatformOperation(engine gin.IRoutes, adapter *platformbilling.Adap
 			c.AbortWithStatus(http.StatusUnsupportedMediaType)
 			return
 		}
+		if platformbilling.HasProductAuthorization(c.Request.Context()) {
+			if operation == "video" {
+				wire.ID = "videos.create"
+			}
+			if platformbilling.IsProductCertifiedOperation(wire.ID) {
+				serveProductCertified(c, adapter, wire, ct, body)
+				c.Abort()
+				return
+			}
+		}
 		if strings.HasPrefix(c.GetHeader("Authorization"), "Bearer uh_key_") {
 			body, err = adapter.ManagedRequestBody(operation, body, c.GetHeader("Idempotency-Key"))
 			if err != nil {
@@ -341,7 +383,7 @@ func registerPlatformOperation(engine gin.IRoutes, adapter *platformbilling.Adap
 			// resolver in AdmitPinnedKnowledge before reserve. The old global
 			// SuperWagie catalog probe is only for legacy/nonpaired operations.
 			paired := platformbilling.ApprovedKnowledgePair(modelID, wire.ID) || (operation == "embedding" && modelID == "text-embedding-v4")
-			if !paired {
+			if !paired && !(operation == "multimodal.embeddings.create" && platformbilling.HasProductAuthorization(c.Request.Context())) {
 				catalog, e := readTechnicalCatalog(c.Request.Context(), adapter, "superwagie")
 				available := false
 				if e == nil {
@@ -460,14 +502,49 @@ func registerPlatformOperation(engine gin.IRoutes, adapter *platformbilling.Adap
 			}
 		}
 		var session *platformbilling.Session
-		if wire.ID == "multimodal.embeddings.create" {
-			session, err = adapter.AdmitPreparedKnowledge(c.Request.Context(), strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "), c.GetHeader("X-UniHub-Task-ID"), c.GetHeader("Idempotency-Key"), wire, ct, body, knowledgeMediaPreparation(c, adapter))
-		} else if platformbilling.ApprovedKnowledgePair(knowledgeRequest.Model, wire.ID) && strings.HasPrefix(c.GetHeader("Authorization"), "Bearer uh_key_") {
-			if len(c.Request.Header.Values("X-UniHub-Actor-Authorization")) != 0 || len(c.Request.Header.Values("X-UniHub-Knowledge-Policy")) != 0 || len(c.Request.Header.Values("Cookie")) != 0 {
-				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "invalid_platform_scope"}})
+		defer func() {
+			if session == nil {
 				return
 			}
-			session, err = adapter.AdmitManagedKnowledge(c.Request.Context(), strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "), c.GetHeader("X-UniHub-Task-ID"), c.GetHeader("Idempotency-Key"), wire, ct, body)
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if err := session.Finish(ctx); err != nil {
+				common.SysError("platform terminal intent persistence failed; call requires reconciliation")
+			}
+		}()
+		if wire.ID == "multimodal.embeddings.create" {
+			credential := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
+			task, id := c.GetHeader("X-UniHub-Task-ID"), c.GetHeader("Idempotency-Key")
+			if platformbilling.HasProductAuthorization(c.Request.Context()) {
+				session, err = adapter.AdmitProductMultimodal(c.Request.Context(), credential, task, id, wire, ct, body, func(product string) platformbilling.KnowledgePreparation {
+					return knowledgeMediaPreparation(c, adapter, product, true)
+				})
+			} else {
+				session, err = adapter.AdmitPreparedKnowledge(c.Request.Context(), credential, task, id, wire, ct, body, knowledgeMediaPreparation(c, adapter, "superwagie", false))
+			}
+		} else if platformbilling.ApprovedKnowledgePair(knowledgeRequest.Model, wire.ID) && strings.HasPrefix(c.GetHeader("Authorization"), "Bearer uh_key_") {
+			credential := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
+			task, id := c.GetHeader("X-UniHub-Task-ID"), c.GetHeader("Idempotency-Key")
+			actorPresent := len(c.Request.Header.Values("X-UniHub-Actor-Authorization")) != 0
+			pinPresent := len(c.Request.Header.Values("X-UniHub-Knowledge-Policy")) != 0
+			if len(c.Request.Header.Values("Cookie")) != 0 {
+				err = platformbilling.ErrInvalid
+			} else if actorPresent || pinPresent {
+				actor, actorOK := singleKnowledgeHeader(c.Request.Header, "X-UniHub-Actor-Authorization")
+				pin, pinOK := singleKnowledgeHeader(c.Request.Header, "X-UniHub-Knowledge-Policy")
+				if actorOK && pinOK && strings.HasPrefix(actor, "Bearer ") {
+					session, err = adapter.AdmitProductPinnedKnowledge(c.Request.Context(), strings.TrimPrefix(actor, "Bearer "), pin, credential, task, id, wire, ct, body)
+				} else {
+					err = platformbilling.ErrInvalid
+				}
+			} else {
+				session, err = adapter.AdmitManagedKnowledge(c.Request.Context(), credential, task, id, wire, ct, body)
+			}
+			if err == nil && session.ProductCredit() {
+				err = reserveProductKnowledge(c.Request.Context(), session, adapter)
+			}
+		} else if platformbilling.HasProductAuthorization(c.Request.Context()) && (operation == "embedding" || operation == "rerank.create") {
+			err = platformbilling.ErrInvalid
 		} else if platformbilling.ApprovedKnowledgePair(knowledgeRequest.Model, wire.ID) {
 			actor, actorOK := singleKnowledgeHeader(c.Request.Header, "X-UniHub-Actor-Authorization")
 			pin, pinOK := singleKnowledgeHeader(c.Request.Header, "X-UniHub-Knowledge-Policy")
@@ -485,6 +562,9 @@ func registerPlatformOperation(engine gin.IRoutes, adapter *platformbilling.Adap
 			session, err = adapter.AdmitOperation(c.Request.Context(), strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "), c.GetHeader("X-UniHub-Task-ID"), c.GetHeader("Idempotency-Key"), operation, ct, body)
 		}
 		if err != nil {
+			if writeProductAdmissionRefusal(c, err) {
+				return
+			}
 			status, code := platformbilling.HTTPStatus(err), "platform_admission_rejected"
 			if errors.Is(err, platformbilling.ErrNativeHistory) {
 				status = http.StatusBadRequest
@@ -497,6 +577,9 @@ func registerPlatformOperation(engine gin.IRoutes, adapter *platformbilling.Adap
 			return
 		}
 		id, group := adapter.Principal()
+		if session.ProductCredit() && wire.ID == "multimodal.embeddings.create" {
+			id, group = adapter.NativePrincipal()
+		}
 		common.SetContextKey(c, constant.ContextKeyUserId, id)
 		common.SetContextKey(c, constant.ContextKeyUserGroup, group)
 		common.SetContextKey(c, constant.ContextKeyTokenGroup, group)
@@ -519,13 +602,6 @@ func registerPlatformOperation(engine gin.IRoutes, adapter *platformbilling.Adap
 		c.Request.Body = io.NopCloser(bytes.NewReader(body))
 		c.Request.ContentLength = int64(len(body))
 		c.Request.Header = http.Header{"Content-Type": []string{ct}}
-		defer func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
-			if err := session.Finish(ctx); err != nil {
-				common.SysError("platform terminal intent persistence failed; call requires reconciliation")
-			}
-		}()
 		c.Next()
 	}, middleware.DistributedRateLimit(), middleware.ModelRequestRateLimit(), func(c *gin.Context) {
 		if format == types.RelayFormat("native_image") || format == types.RelayFormat("native_speech") || format == types.RelayFormat("native_ocr") || format == types.RelayFormat("native_qwen_asr") {

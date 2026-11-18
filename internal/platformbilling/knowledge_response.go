@@ -89,13 +89,12 @@ func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, ups
 	}
 	stage = "policy_binding"
 	frozen, err := s.adapter.knowledgeSnapshot(row)
-	var rate Rate
-	if err != nil || !frozen.Policy.valid(s.adapter.config, row.Model, row.WireOperation) || common.UnmarshalUnique([]byte(row.RateSnapshot), &rate) != nil || rate.Metered == nil {
+	if err != nil || !frozen.Policy.valid(s.adapter.config, row.Model, row.WireOperation) {
 		return knowledgeResponse{}, ErrInvalid
 	}
-	asset, err := normalizeAsset(row.Asset)
-	if err != nil || rate.ID != row.RateID || rate.Model != row.Model || rate.Asset != asset || rate.Status != "published" || rate.Semantics != "metered_v2" || frozen.Policy.RateIDs[asset] != rate.ID || rate.Metered.Operation != row.Operation || metering.ValidatePrice(*rate.Metered) != nil {
-		return knowledgeResponse{}, ErrInvalid
+	price, err := s.knowledgeTariff(row, frozen)
+	if err != nil {
+		return knowledgeResponse{}, err
 	}
 	_, certified := TokenProducer(row.WireOperation, frozen.Policy.ChannelType)
 	if !certified || frozen.Policy.ChannelID != channel || frozen.Policy.UpstreamModel != upstream || row.ReservationQuantity < 1 {
@@ -163,7 +162,7 @@ func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, ups
 		}
 		evidence := dto.NativeTokenEvidence{Source: source}
 		evidence.Observe(raw, false)
-		result.usage = evidence.Usage(*rate.Metered)
+		result.usage = evidence.Usage(price)
 	case "rerank.create":
 		var request dto.RerankRequest
 		if common.UnmarshalUnique(frozen.Body, &request) != nil || len(request.Documents) == 0 {
@@ -246,7 +245,7 @@ func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, ups
 	default:
 		return knowledgeResponse{}, ErrInvalid
 	}
-	if metering.ValidateUsage(*rate.Metered, result.usage) != nil {
+	if metering.ValidateUsage(price, result.usage) != nil {
 		return knowledgeResponse{}, ErrInvalid
 	}
 	for _, measurement := range result.usage.Measurements {
@@ -260,7 +259,8 @@ func validateKnowledgeResponse(ctx context.Context, s *Session, channel int, ups
 }
 
 func sameKnowledgeCallBinding(a, b Call) bool {
-	return a.CallID == b.CallID && a.ActorID == b.ActorID && a.AccountID == b.AccountID && a.TaskID == b.TaskID && a.OriginProductID == b.OriginProductID && a.InstanceID == b.InstanceID && a.CredentialID == b.CredentialID && a.CredentialKind == b.CredentialKind && a.Model == b.Model && a.Digest == b.Digest && a.DigestVersion == b.DigestVersion && a.WireOperation == b.WireOperation && a.WirePathModel == b.WirePathModel && a.WireMode == b.WireMode && a.Operation == b.Operation && a.MediaSnapshot == b.MediaSnapshot && a.RateSnapshot == b.RateSnapshot && a.RateID == b.RateID && a.Asset == b.Asset && a.FundingMode == b.FundingMode && a.FundingProductID == b.FundingProductID && a.FundingSnapshot == b.FundingSnapshot && a.BillingProfileVersion == b.BillingProfileVersion && a.Amount == b.Amount && a.ReservationQuantity == b.ReservationQuantity && a.ReservationOutput == b.ReservationOutput
+	return a.CreditScope == b.CreditScope && a.CredentialVersion == b.CredentialVersion && a.PricingSource == b.PricingSource &&
+		a.NativeQuoteJSON == b.NativeQuoteJSON && a.NativePriceSnapshot == b.NativePriceSnapshot && a.CallID == b.CallID && a.ActorID == b.ActorID && a.AccountID == b.AccountID && a.TaskID == b.TaskID && a.OriginProductID == b.OriginProductID && a.InstanceID == b.InstanceID && a.CredentialID == b.CredentialID && a.CredentialKind == b.CredentialKind && a.Model == b.Model && a.Digest == b.Digest && a.DigestVersion == b.DigestVersion && a.WireOperation == b.WireOperation && a.WirePathModel == b.WirePathModel && a.WireMode == b.WireMode && a.Operation == b.Operation && a.MediaSnapshot == b.MediaSnapshot && a.RateSnapshot == b.RateSnapshot && a.RateID == b.RateID && a.Asset == b.Asset && a.FundingMode == b.FundingMode && a.FundingProductID == b.FundingProductID && a.FundingSnapshot == b.FundingSnapshot && a.BillingProfileVersion == b.BillingProfileVersion && a.Amount == b.Amount && a.ReservationQuantity == b.ReservationQuantity && a.ReservationOutput == b.ReservationOutput
 }
 
 // These identity fields survive database timestamp precision normalization.

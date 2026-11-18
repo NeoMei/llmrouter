@@ -16,17 +16,21 @@ import (
 )
 
 func TestProductMicrocreditsUseOneRoundingBoundary(t *testing.T) {
-	price := metering.Price{
-		Version: "metered_v2", Operation: "speech", Policy: "provider_reported_v1",
-		Terms: []metering.Term{{Key: "characters", Unit: "character", Price: metering.Rational{Numerator: "3", Denominator: "10000000"}}},
-	}
-	public := billing_setting.ProductCreditPrice{CNYPerUSD: "7", Tariff: price}
-	admission := NativeAdmission{Price: price, GroupRatio: "1", QuotaPerUnit: public.MicrocreditsPerUSD()}
-	for _, reserve := range []bool{true, false} {
-		charge, clamp, err := NativeQuota(admission, nativeUsage("1"), reserve)
-		require.NoError(t, err)
-		require.Nil(t, clamp)
-		assert.Equal(t, 21, charge)
+	for _, tc := range []struct {
+		denominator  string
+		microcredits int64
+	}{{"10000000", 210}, {"2000000000", 2}} {
+		price := metering.Price{
+			Version: "metered_v2", Operation: "speech", Policy: "provider_reported_v1",
+			Terms: []metering.Term{{Key: "characters", Unit: "character", Price: metering.Rational{Numerator: "3", Denominator: tc.denominator}}},
+		}
+		public := billing_setting.ProductCreditPrice{CNYPerUSD: "7", Tariff: price}
+		admission := NativeAdmission{ProductPrice: &public, Price: price, GroupRatio: "1", QuotaPerUnit: public.MicrocreditsPerUSD()}
+		for _, reserve := range []bool{true, false} {
+			charge, err := NativeProductCreditAmount(admission, nativeUsage("1"), reserve)
+			require.NoError(t, err)
+			assert.Equal(t, tc.microcredits, charge)
+		}
 	}
 }
 

@@ -13,9 +13,12 @@ import (
 	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/metering"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -29,9 +32,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -47,6 +52,7 @@ type imageGatewayFixture struct {
 	sends            atomic.Int64
 	downloads        atomic.Int64
 	settleFail       atomic.Bool
+	productExpired   atomic.Bool
 	wire, kind       string
 	originProduct    string
 	img              []byte
@@ -61,6 +67,10 @@ func newImageGatewayFixture(t *testing.T, kind, hubOrigin, token, dbPath string)
 	enableUniHubBoundary(t)
 	gin.SetMode(gin.TestMode)
 	f := &imageGatewayFixture{kind: kind, originProduct: "fixture-product"}
+	product := strings.HasSuffix(kind, "-product")
+	if product {
+		f.originProduct = "superwagie"
+	}
 	if kind == "wan-edit-cancel" {
 		f.providerReceived = make(chan struct{})
 		f.providerRelease = make(chan struct{})
@@ -82,7 +92,7 @@ func newImageGatewayFixture(t *testing.T, kind, hubOrigin, token, dbPath string)
 	db, e := gorm.Open(sqlite.Open("file:"+dbPath), &gorm.Config{})
 	require.NoError(t, e)
 	f.db = db
-	for _, entry := range []any{&model.User{}, &model.Token{}, &model.Channel{}, &model.Ability{}, &model.ClientModelRoute{}, &model.ClientModelTarget{}, &model.UpstreamAccountPool{}, &model.UpstreamAccountMember{}, &model.UpstreamAccountState{}, &model.UserSubscription{}} {
+	for _, entry := range []any{&model.User{}, &model.Token{}, &model.Model{}, &model.Vendor{}, &model.Channel{}, &model.Ability{}, &model.ClientModelRoute{}, &model.ClientModelTarget{}, &model.UpstreamAccountPool{}, &model.UpstreamAccountMember{}, &model.UpstreamAccountState{}, &model.UserSubscription{}} {
 		require.NoError(t, db.AutoMigrate(entry))
 	}
 	oldDB, oldLog, oldMemory, oldRedis := model.DB, model.LOG_DB, common.MemoryCacheEnabled, common.RedisEnabled
@@ -131,8 +141,20 @@ func newImageGatewayFixture(t *testing.T, kind, hubOrigin, token, dbPath string)
 	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"platform":1}`))
 	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(oldRatio)) })
 	price := metering.Price{Version: "metered_v2", Operation: op, Policy: "successful_outputs_v1", Terms: []metering.Term{{Key: "images", Unit: "image", Price: metering.Rational{Numerator: "12", Denominator: "1"}}}}
+	if product {
+		oldPrices, oldFX := billing_setting.GetModelNativePricingCopy(), operation_setting.USDExchangeRate
+		operation_setting.USDExchangeRate = 1
+		sale := price
+		sale.Terms = []metering.Term{{Key: "images", Unit: "image", Price: metering.Rational{Numerator: "1", Denominator: "1000"}}}
+		require.NoError(t, billing_setting.SetModelNativePricing(map[string]map[string]metering.Price{"image-model": {op: sale}}))
+		t.Cleanup(func() {
+			operation_setting.USDExchangeRate = oldFX
+			require.NoError(t, billing_setting.SetModelNativePricing(oldPrices))
+		})
+	}
 	rate := platformbilling.Rate{ID: "image-rate", Model: "image-model", Asset: "CNY/6", Status: "published", Semantics: "metered_v2", Metered: &price}
 	var remote platformbilling.RemoteCall
+	var nativeFinal platformbilling.NativeSettleRequest
 	if hubOrigin == "" {
 		hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var out any
@@ -140,6 +162,16 @@ func newImageGatewayFixture(t *testing.T, kind, hubOrigin, token, dbPath string)
 			case "/internal/v1/model-credentials/verify":
 				var verify map[string]string
 				require.NoError(t, common.DecodeJson(r.Body, &verify))
+				if product {
+					if verify["product_authorization"] != "image-origin-proof" {
+						w.WriteHeader(http.StatusForbidden)
+						return
+					}
+					out = platformbilling.Claims{CredentialKind: "api_key", CredentialVersion: 1, ID: "original-credential", Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: f.originProduct, InstanceID: "default", Asset: "CREDIT/6", FundingMode: "credits",
+						SourceVerified: true, CreditScope: platformbilling.ProductCreditScope, FundingProductID: f.originProduct, ModelScope: "llmrouter_available", PricingSource: platformbilling.NativeCreditPricingSource,
+						NativeCreditConversion: &platformbilling.NativeConversion{Version: "product-image-v1", Numerator: "1", Denominator: "1", Rounding: "lr-cumulative-ceil-v1"}}
+					break
+				}
 				allowed := wire
 				if kind == "gemini-text-grant" {
 					allowed = "gemini.generate"
@@ -151,6 +183,21 @@ func newImageGatewayFixture(t *testing.T, kind, hubOrigin, token, dbPath string)
 					taskID = ""
 				}
 				out = platformbilling.Claims{CredentialKind: credentialKind, ID: "original-credential", Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: f.originProduct, InstanceID: "default", Models: []string{"image-model"}, Operations: map[string][]string{"image-model": {allowed}}, TaskID: taskID, ExpiresAt: time.Now().Add(time.Hour), Asset: "CNY/6", FundingMode: "prepaid_cash"}
+			case "/internal/v1/calls/native-reserve":
+				var in platformbilling.NativeReserveRequest
+				require.NoError(t, common.DecodeJson(r.Body, &in))
+				require.Equal(t, "image-origin-proof", in.ProductAuthorization)
+				require.Equal(t, platformbilling.ProductCreditScope, in.CreditScope)
+				if f.productExpired.Load() {
+					w.WriteHeader(http.StatusForbidden)
+					_, _ = w.Write([]byte(`{"error":"product_membership_expired_no_hold"}`))
+					return
+				}
+				remote = platformbilling.RemoteCall{CreditScope: in.CreditScope, NativePricing: &in.Quote, WireOperation: in.WireOperation, CallID: in.CallID, TaskID: in.TaskID, CredentialVersion: 1,
+					ActorID: "actor", AccountID: "account", OriginProductID: f.originProduct, InstanceID: "default", CredentialID: "original-credential", RequestDigest: in.RequestDigest,
+					Rate: platformbilling.Rate{Model: in.Model, Asset: "CREDIT/6", Semantics: "llmrouter_native"}, ChargeAsset: "CREDIT/6", FundingMode: "credits",
+					FundingProductID: f.originProduct, Held: in.Quote.MaxAmount, Status: "RESERVED"}
+				out = remote
 			case "/internal/v1/rates":
 				out = []platformbilling.Rate{rate}
 			case "/internal/v1/calls/reserve":
@@ -176,6 +223,21 @@ func newImageGatewayFixture(t *testing.T, kind, hubOrigin, token, dbPath string)
 			case "/internal/v1/calls/image-call":
 				out = remote
 			default:
+				if product && r.URL.Path == "/internal/v1/calls/"+remote.CallID+"/native-settle" {
+					require.NoError(t, common.DecodeJson(r.Body, &nativeFinal))
+					require.Equal(t, "100000", nativeFinal.Amount)
+					remote.Status, remote.Charged = "SETTLED", nativeFinal.Amount
+					out = remote
+					break
+				}
+				if product && r.URL.Path == "/internal/v1/calls/"+remote.CallID {
+					out = struct {
+						platformbilling.RemoteCall
+						NativeQuota string                 `json:"native_quota"`
+						Usage       *platformbilling.Usage `json:"usage"`
+					}{remote, nativeFinal.NativeQuota, nativeFinal.Usage}
+					break
+				}
 				t.Errorf("unexpected hub path %s", r.URL.Path)
 				w.WriteHeader(404)
 				return
@@ -227,7 +289,12 @@ func newImageGatewayFixture(t *testing.T, kind, hubOrigin, token, dbPath string)
 		}
 		f.sends.Add(1)
 		var call platformbilling.Call
-		require.NoError(t, db.First(&call, "call_id = ?", "image-call").Error)
+		if product {
+			require.NoError(t, db.First(&call, "credit_scope = ?", platformbilling.ProductCreditScope).Error)
+			assert.Empty(t, r.Header.Get(platformbilling.ProductAuthorizationHeader))
+		} else {
+			require.NoError(t, db.First(&call, "call_id = ?", "image-call").Error)
+		}
 		assert.Equal(t, "UNKNOWN", call.Status)
 		assert.Equal(t, wire, call.WireOperation)
 		var attempt platformbilling.Attempt
@@ -362,9 +429,15 @@ func newImageGatewayFixture(t *testing.T, kind, hubOrigin, token, dbPath string)
 		policy.MaxInputImages = 1
 	}
 	f.cfg = platformbilling.Config{Enabled: true, Origin: hubOrigin, ServiceToken: token, PrincipalID: 1, Group: "platform", MaxBodyBytes: 1 << 20, MaxInputTokens: 1000, MaxOutputTokens: 100, ImagePolicies: map[string]map[string]platformbilling.ImagePolicy{wire: {"image-model": policy}}, OperationLimits: map[string]map[string]platformbilling.OperationLimits{op: {"image-model": {MaxBodyBytes: 10 << 20, MaxQuantity: 3, Policy: "successful_outputs_v1"}}}, OperationRateIDs: map[string]map[string]map[string]string{op: {"CNY/6": {"image-model": "image-rate"}}}}
+	if product {
+		f.cfg.NativeGroup = "platform"
+	}
 	f.adapter, e = platformbilling.New(db, f.cfg)
 	require.NoError(t, e)
 	f.engine = gin.New()
+	if product {
+		SetManagedKeyDispatch(f.engine, f.adapter)
+	}
 	SetPlatformRouter(f.engine, f.adapter)
 	return f
 }
@@ -907,4 +980,110 @@ func TestImageGatewayReviewBoundaries(t *testing.T) {
 			assert.EqualValues(t, 1, f.sends.Load())
 		})
 	}
+}
+
+func TestProductCertifiedImageReclaimsOriginalResultWithoutSecondSend(t *testing.T) {
+	for _, kind := range []string{"openai-product", "wan-edit-product"} {
+		t.Run(kind, func(t *testing.T) {
+			origin := os.Getenv("PRODUCT_CREDIT_INTEGRATION_ORIGIN")
+			token, credential, proof, callerKey := "", "uh_key_image_fixture", "image-origin-proof", "image-product-1"
+			if origin != "" {
+				endpoint, err := url.Parse(origin)
+				require.NoError(t, err)
+				ip := net.ParseIP(endpoint.Hostname())
+				require.True(t, endpoint.Scheme == "http" && (endpoint.Hostname() == "localhost" || ip != nil && ip.IsLoopback()), "integration must use isolated loopback UniHub")
+				token = os.Getenv("PRODUCT_CREDIT_INTEGRATION_SERVICE_TOKEN")
+				credential = os.Getenv("PRODUCT_CREDIT_INTEGRATION_KEY")
+				proof = os.Getenv("PRODUCT_CREDIT_INTEGRATION_PROOF")
+				require.True(t, len(token) >= 32 && platformbilling.IsModelCredential(credential) && proof != "", "integration authority is required")
+				callerKey = "image-integration-" + uuid.NewString()
+			}
+			f := newImageGatewayFixture(t, kind, origin, token, "")
+			path, ct, body := imageGatewayRequest(t, kind, f.img)
+			send := func(method, path string, body []byte) *httptest.ResponseRecorder {
+				req := httptest.NewRequest(method, path, bytes.NewReader(body))
+				req.Header.Set("Authorization", "Bearer "+credential)
+				req.Header.Set(platformbilling.ProductAuthorizationHeader, proof)
+				if method == http.MethodPost {
+					req.Header.Set("Content-Type", ct)
+					req.Header.Set("Idempotency-Key", callerKey)
+				}
+				out := httptest.NewRecorder()
+				f.engine.ServeHTTP(out, req)
+				return out
+			}
+			submit := send(http.MethodPost, path, body)
+			if strings.HasPrefix(kind, "wan-edit") {
+				require.Equal(t, http.StatusAccepted, submit.Code, submit.Body.String())
+				path += "/" + callerKey
+			} else {
+				require.Equal(t, http.StatusOK, submit.Code, submit.Body.String())
+				path = "/platform/v1/calls/" + callerKey + "/result"
+			}
+			result := send(http.MethodGet, path, nil)
+			require.Equal(t, http.StatusOK, result.Code, result.Body.String())
+			require.Contains(t, result.Body.String(), base64.StdEncoding.EncodeToString(f.img))
+			require.Equal(t, callerKey, result.Header().Get("X-UniHub-Idempotency-Key"))
+			if strings.HasPrefix(kind, "openai") {
+				require.Equal(t, submit.Body.Bytes(), result.Body.Bytes())
+			}
+			receipt := send(http.MethodGet, "/platform/v1/calls/"+callerKey, nil)
+			require.Equal(t, http.StatusOK, receipt.Code, receipt.Body.String())
+			require.Contains(t, receipt.Body.String(), `"charged":"100000"`)
+			require.Equal(t, int64(1), f.sends.Load())
+		})
+	}
+}
+
+func TestProductCertifiedImageReportsMembershipExpiryBeforeDispatch(t *testing.T) {
+	const kind = "openai-product"
+	f := newImageGatewayFixture(t, kind, "", "", "")
+	f.productExpired.Store(true)
+	path, ct, body := imageGatewayRequest(t, kind, f.img)
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer uh_key_image_fixture")
+	req.Header.Set(platformbilling.ProductAuthorizationHeader, "image-origin-proof")
+	req.Header.Set("Content-Type", ct)
+	req.Header.Set("Idempotency-Key", "image-membership-expired")
+	out := httptest.NewRecorder()
+	f.engine.ServeHTTP(out, req)
+	require.Equal(t, http.StatusForbidden, out.Code, out.Body.String())
+	assert.JSONEq(t, `{"error":{"code":"product_membership_expired","stage":"pre_admission"}}`, out.Body.String())
+	var call platformbilling.Call
+	require.NoError(t, f.db.First(&call).Error)
+	assert.Equal(t, "REJECTED", call.Status)
+	assert.Zero(t, f.sends.Load())
+}
+
+func TestProductImageReadinessRequiresCurrentProducerCertificate(t *testing.T) {
+	f := newImageGatewayFixture(t, "openai-product", "", "", "")
+	const wire = "images.generations.create"
+	grant := platformbilling.Claims{OriginProductID: "superwagie", InstanceID: "default", ActorID: "actor", AccountID: "account"}
+	assertReady := func(adapter *platformbilling.Adapter, want bool) {
+		t.Helper()
+		catalog, err := buildProviderCatalog(t.Context(), adapter, grant, true)
+		require.NoError(t, err)
+		index := slices.IndexFunc(catalog.Models, func(m ProviderCatalogModel) bool { return m.ID == "image-model" })
+		require.NotEqual(t, -1, index)
+		require.Len(t, catalog.Models[index].CapabilityMetadata.Operations, 1)
+		op := catalog.Models[index].CapabilityMetadata.Operations[0]
+		assert.Equal(t, wire, op.ID)
+		assert.Equal(t, want, op.Executable)
+		assert.Equal(t, want, op.PublicTariff != nil)
+		assert.Equal(t, want, len(catalog.CreditScopes) > 0)
+	}
+	assertReady(f.adapter, true)
+	uncertifiedConfig := f.cfg
+	uncertifiedConfig.ImagePolicies = nil
+	uncertified, err := platformbilling.New(f.db, uncertifiedConfig)
+	require.NoError(t, err)
+	assertReady(uncertified, false)
+	require.NoError(t, f.db.Model(&model.Channel{}).Where("id = ?", 1).Update("key", "rotated-fixture-key").Error)
+	assertReady(f.adapter, false)
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"gpt-image-1":1}`))
+	legacy, err := buildProviderCatalog(t.Context(), uncertified, grant, false)
+	require.NoError(t, err)
+	index := slices.IndexFunc(legacy.Models, func(m ProviderCatalogModel) bool { return m.ID == "image-model" })
+	require.NotEqual(t, -1, index)
+	require.True(t, legacy.Models[index].CapabilityMetadata.Operations[0].Executable)
 }

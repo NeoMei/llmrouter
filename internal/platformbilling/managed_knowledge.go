@@ -17,11 +17,17 @@ func (a *Adapter) verifyManagedKnowledge(ctx context.Context, credential, name, 
 	if a == nil || !a.Enabled() || !strings.HasPrefix(credential, "uh_key_") || !IsModelCredential(credential) || !ApprovedKnowledgePair(name, wire) {
 		return grant, &remoteError{status: http.StatusForbidden}
 	}
-	err := readKnowledgeAuthority(ctx, a.client, http.MethodPost, "/internal/v1/model-credentials/verify", map[string]string{"token": credential, "model": name, "wire_operation": wire, "instance_id": a.config.InstanceID}, &grant, "")
+	request := map[string]string{"token": credential, "model": name, "wire_operation": wire, "instance_id": a.config.InstanceID}
+	var err error
+	if HasProductAuthorization(ctx) {
+		grant, err = a.managedGrant(ctx, credential, name, wire, "")
+	} else {
+		err = readKnowledgeAuthority(ctx, a.client, http.MethodPost, "/internal/v1/model-credentials/verify", request, &grant, "")
+	}
 	if err != nil {
 		return grant, err
 	}
-	if a.validateModelCredential(credential, "", name, grant) != nil || !grant.ExpiresAt.After(time.Now()) || !allowsWire(grant, name, wire) {
+	if a.validateManagedCredential(ctx, credential, "", name, grant, false) != nil || !grant.ExpiresAt.After(time.Now()) || !allowsWire(grant, name, wire) {
 		return Claims{}, &remoteError{status: http.StatusForbidden}
 	}
 	return grant, nil
@@ -45,6 +51,19 @@ func (a *Adapter) ManagedKnowledgeBinding(ctx context.Context, product, name, wi
 // AdmitManagedKnowledge resolves the active certified route on the server.
 // The original key remains the reserve/settle credential, preserving its caps.
 func (a *Adapter) AdmitManagedKnowledge(ctx context.Context, credential, task, id string, wire WireOperation, ct string, body []byte) (*Session, error) {
+	return a.admitManagedKnowledge(ctx, "", "", credential, task, id, wire, ct, body)
+}
+
+// AdmitProductPinnedKnowledge binds the broker's still-current actor and
+// explicit route pin to the same product-managed Key used for settlement.
+func (a *Adapter) AdmitProductPinnedKnowledge(ctx context.Context, actor, pin, credential, task, id string, wire WireOperation, ct string, body []byte) (*Session, error) {
+	if !HasProductAuthorization(ctx) || !OriginalKnowledgeActor(actor) || !opaqueKnowledgeID(pin) {
+		return nil, ErrInvalid
+	}
+	return a.admitManagedKnowledge(ctx, actor, pin, credential, task, id, wire, ct, body)
+}
+
+func (a *Adapter) admitManagedKnowledge(ctx context.Context, actor, expectedPin, credential, task, id string, wire WireOperation, ct string, body []byte) (*Session, error) {
 	if !stableID.MatchString(task) || len(task) > 128 || !stableID.MatchString(id) || len(id) > 128 || ct != "application/json" {
 		return nil, ErrInvalid
 	}
@@ -62,6 +81,19 @@ func (a *Adapter) AdmitManagedKnowledge(ctx context.Context, credential, task, i
 	if err != nil {
 		return nil, err
 	}
-	admission := &pinnedKnowledgeAdmission{managedKey: true, credential: credential, grant: knowledgeReadGrant{Claims: grant}, binding: binding}
+	admission := &pinnedKnowledgeAdmission{managedKey: true, actor: actor, credential: credential, grant: knowledgeReadGrant{Claims: grant}, binding: binding}
+	if actor != "" {
+		if !grant.ProductCredit() || binding.PolicyDigest != expectedPin {
+			return nil, ErrConflict
+		}
+		authority, err := a.verifyProductKnowledgeActor(ctx, actor, grant)
+		if err != nil {
+			return nil, err
+		}
+		admission.grant.ActorExpiresAt = authority.expiresAt
+	}
+	if grant.ProductCredit() {
+		return a.admitProductKnowledge(ctx, task, id, wire, body, admission)
+	}
 	return a.admitWireOperation(context.WithValue(ctx, pinnedKnowledgeContextKey{}, admission), credential, task, id, wire, ct, body)
 }

@@ -8,7 +8,10 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -51,6 +54,9 @@ func TestProductCreditRelayFreezesPublicPriceAndDoesNotReplayUnknownProvider(t *
 	}
 	enableUniHubBoundary(t)
 	require.NoError(t, i18n.Init())
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
 	oldDB, oldLogDB, oldCache, oldRedis, oldRetry := model.DB, model.LOG_DB, common.MemoryCacheEnabled, common.RedisEnabled, common.RetryTimes
 	oldGlobal := common.GlobalApiRateLimitEnable
 	oldFX, oldQuota := operation_setting.USDExchangeRate, common.QuotaPerUnit
@@ -81,19 +87,29 @@ func TestProductCreditRelayFreezesPublicPriceAndDoesNotReplayUnknownProvider(t *
 	require.NoError(t, db.AutoMigrate(&model.Model{}, &model.Vendor{}, &model.Log{}, &model.User{}, &model.Token{}, &model.UserSubscription{}, &model.Channel{}, &model.Ability{}, &model.ClientModelRoute{}, &model.ClientModelTarget{}, &model.UpstreamAccountPool{}, &model.UpstreamAccountMember{}, &model.UpstreamAccountState{}))
 	model.DB, model.LOG_DB = db, db
 	require.NoError(t, db.Create(&model.User{Id: 1, Username: "routing", Status: common.UserStatusEnabled, Group: "default", Quota: 777}).Error)
-	providerCalls, reserves, settlements := 0, 0, 0
+	var providerCalls atomic.Int32
+	reserves, settlements := 0, 0
 	withUsage := true
 	expireBeforeHold := false
 	membershipEndedAfterHold := false
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		providerCalls++
+		providerCalls.Add(1)
 		assert.Empty(t, r.Header.Get(platformbilling.ProductAuthorizationHeader))
 		assert.Empty(t, r.Header.Get("Idempotency-Key"))
 		var in struct {
-			Model string `json:"model"`
+			Model  string `json:"model"`
+			Stream bool   `json:"stream"`
 		}
 		require.NoError(t, common.DecodeJson(r.Body, &in))
 		assert.Contains(t, []string{"upstream-one", "upstream-two"}, in.Model)
+		if in.Stream {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprint(w,
+				"data: "+`{"id":"answer","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"fixture product answer"},"finish_reason":null}]}`+"\n\n"+
+					"data: "+`{"id":"answer","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`+"\n\n"+
+					"data: "+`{"id":"answer","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`+"\n\ndata: [DONE]\n\n")
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		raw := fmt.Sprintf(`{"id":"answer","object":"chat.completion","model":%q,"choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]`, in.Model)
 		if withUsage {
@@ -155,14 +171,26 @@ func TestProductCreditRelayFreezesPublicPriceAndDoesNotReplayUnknownProvider(t *
 			remote[in.CallID], output = row, row
 			if reserves == 1 {
 				membershipEndedAfterHold = true
+				require.NoError(t, billing_setting.SetProductCreditPricing(`{
+				   "version":"rev2",
+				   "suppliers":{"public-credit-model":{"chat":{
+				     "a":{"version":"a-2","currency":"CNY","tariff":{"version":"metered_v2","operation":"chat","policy":"provider_reported_v1","terms":[
+				       {"key":"input","unit":"token","price":{"numerator":"1","denominator":"1000000"}},
+				       {"key":"output","unit":"token","price":{"numerator":"2","denominator":"1000000"}}]}}
+				   }}}
+				}`))
 			}
 		case strings.HasSuffix(r.URL.Path, "/native-settle"):
 			settlements++
 			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/internal/v1/calls/"), "/native-settle")
 			var in platformbilling.NativeSettleRequest
 			require.NoError(t, common.DecodeJson(r.Body, &in))
-			assert.Equal(t, "1050", in.NativeQuota)
-			assert.Equal(t, "1050", in.Amount)
+			want := "10500"
+			if settlements == 2 {
+				want = "3000"
+			}
+			assert.Equal(t, want, in.NativeQuota)
+			assert.Equal(t, want, in.Amount)
 			assert.Empty(t, in.ProviderCost)
 			require.NotNil(t, in.Usage)
 			assert.Equal(t, "confirmed", in.Usage.Metered.State)
@@ -188,8 +216,12 @@ func TestProductCreditRelayFreezesPublicPriceAndDoesNotReplayUnknownProvider(t *
 	r := gin.New()
 	SetManagedKeyDispatch(r, adapter)
 	SetRelayRouter(r)
-	send := func(key, proof string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, "/platform/v1/chat/completions", bytes.NewBufferString(`{"model":"product-alias","messages":[{"role":"user","content":"hello"}]}`))
+	send := func(key, proof string, stream bool) *httptest.ResponseRecorder {
+		body := `{"model":"product-alias","messages":[{"role":"user","content":"hello"}]}`
+		if stream {
+			body = `{"model":"product-alias","messages":[{"role":"user","content":"hello"}],"stream":true}`
+		}
+		req := httptest.NewRequest(http.MethodPost, "/platform/v1/chat/completions", bytes.NewBufferString(body))
 		req.Header.Set("Authorization", "Bearer "+credential)
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Idempotency-Key", key)
@@ -200,7 +232,7 @@ func TestProductCreditRelayFreezesPublicPriceAndDoesNotReplayUnknownProvider(t *
 		r.ServeHTTP(w, req)
 		return w
 	}
-	w := send(callerKey, proof)
+	w := send(callerKey, proof, false)
 	require.Equal(t, 200, w.Code, w.Body.String())
 	membershipEndedAfterHold = false
 	id := w.Header().Get("X-UniHub-Call-ID")
@@ -208,11 +240,11 @@ func TestProductCreditRelayFreezesPublicPriceAndDoesNotReplayUnknownProvider(t *
 	var row platformbilling.Call
 	require.NoError(t, db.First(&row, "call_id = ?", id).Error)
 	assert.Equal(t, "SETTLED", row.Status)
-	assert.Equal(t, "1050", row.Charged)
+	assert.Equal(t, "10500", row.Charged)
 	assert.Contains(t, row.NativePriceSnapshot, "public-credit-model")
 	assert.Contains(t, row.Evidence, `"state":"confirmed"`)
 	assert.False(t, strings.Contains(row.NativePriceSnapshot, proof), "pricing evidence must never persist proof")
-	w = send(callerKey, proof)
+	w = send(callerKey, proof, false)
 	assert.Equal(t, 409, w.Code, w.Body.String())
 	get := httptest.NewRequest(http.MethodGet, "/platform/v1/calls/"+callerKey, nil)
 	get.Header.Set("Authorization", "Bearer "+credential)
@@ -222,23 +254,45 @@ func TestProductCreditRelayFreezesPublicPriceAndDoesNotReplayUnknownProvider(t *
 	require.Equal(t, 200, w.Code, w.Body.String())
 	assert.Contains(t, w.Body.String(), `"idempotency_key":"`+callerKey+`"`)
 	assert.Contains(t, w.Body.String(), `"funding_product_id":"`+product+`"`)
-	assert.Contains(t, w.Body.String(), `"charged":"1050"`)
+	assert.Contains(t, w.Body.String(), `"charged":"10500"`)
 	if integration {
-		assert.Equal(t, 1, providerCalls)
+		require.EqualValues(t, 1, providerCalls.Load())
+		if app := os.Getenv("PRODUCT_CREDIT_INTEGRATION_APP_PATH"); app != "" {
+			require.True(t, filepath.IsAbs(app), "the SuperWagie fixture must use an absolute checkout")
+			httpGateway := httptest.NewServer(r)
+			t.Cleanup(httpGateway.Close)
+			run := exec.CommandContext(t.Context(), "bun", "run", "--cwd", "packages/web", "test", "server/lib/platform-account/product-model-cross-repository.test.js")
+			run.Dir = app
+			run.Env = append(os.Environ(), "PRODUCT_CREDIT_INTEGRATION_GATEWAY="+httpGateway.URL)
+			output, err := run.CombinedOutput()
+			require.NoError(t, err, "SuperWagie product proxy fixture:\n%s", output)
+			t.Logf("SuperWagie product proxy fixture:\n%s", output)
+			require.EqualValues(t, 2, providerCalls.Load(), "a replay must not dispatch a second provider request")
+		}
 		return
 	}
+	w = send("caller-stream", "product-proof", true)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "fixture product answer")
+	var streamed platformbilling.Call
+	require.NoError(t, db.First(&streamed, "call_id = ?", w.Header().Get("X-UniHub-Call-ID")).Error)
+	assert.Equal(t, "SETTLED", streamed.Status)
+	assert.Equal(t, "3000", streamed.Charged)
+	assert.Contains(t, streamed.NativePriceSnapshot, "rev2")
+	assert.NotEqual(t, row.NativePriceSnapshot, streamed.NativePriceSnapshot)
+
 	withUsage = false
-	w = send("caller-two", "product-proof")
+	w = send("caller-two", "product-proof", false)
 	require.Equal(t, 200, w.Code, w.Body.String())
 	var unknown platformbilling.Call
 	require.NoError(t, db.First(&unknown, "call_id = ?", w.Header().Get("X-UniHub-Call-ID")).Error)
 	assert.Equal(t, "UNKNOWN", unknown.Status)
-	assert.Equal(t, 409, send("caller-two", "product-proof").Code)
-	assert.Equal(t, 2, providerCalls)
-	assert.Equal(t, 2, reserves)
-	assert.Equal(t, 1, settlements)
+	assert.Equal(t, 409, send("caller-two", "product-proof", false).Code)
+	assert.EqualValues(t, 3, providerCalls.Load())
+	assert.Equal(t, 3, reserves)
+	assert.Equal(t, 2, settlements)
 	expireBeforeHold = true
-	w = send("caller-expired", "product-proof")
+	w = send("caller-expired", "product-proof", false)
 	require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
 	assert.Contains(t, w.Body.String(), "product_membership_expired")
 	ctx, err := platformbilling.WithProductAuthorization(t.Context(), "product-proof", "caller-expired")
@@ -248,7 +302,7 @@ func TestProductCreditRelayFreezesPublicPriceAndDoesNotReplayUnknownProvider(t *
 	var expired platformbilling.Call
 	require.NoError(t, db.First(&expired, "call_id = ?", callID).Error)
 	assert.Equal(t, "REJECTED", expired.Status)
-	assert.Equal(t, 2, providerCalls)
+	assert.EqualValues(t, 3, providerCalls.Load())
 	var user model.User
 	require.NoError(t, db.First(&user, 1).Error)
 	assert.Equal(t, 777, user.Quota)

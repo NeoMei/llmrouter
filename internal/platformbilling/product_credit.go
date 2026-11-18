@@ -117,8 +117,8 @@ func (s *Session) ProductCredit() bool {
 func ProductCreditOperation(wire string) bool {
 	switch wire {
 	case "chat.completions.create", "claude.messages.create", "gemini.generate", "responses.create",
-		"responses.compact", "embeddings.create", "images.generations.create", "images.edits.create",
-		"audio.speech.create", "audio.transcriptions.create", "ocr.jobs.create", "ocr.jobs.retrieve", "ocr.results.retrieve":
+		"responses.compact", "embeddings.create", "rerank.create", "multimodal.embeddings.create", "images.generations.create", "images.edits.create",
+		"audio.speech.create", "bailian.audio.speech.create", "audio.transcriptions.create", "dashscope.audio.transcriptions.create", "gemini.images.generate", "videos.create", "ocr.jobs.create", "ocr.jobs.retrieve", "ocr.results.retrieve":
 		return true
 	}
 	return false
@@ -157,9 +157,9 @@ func productCreditConversionMatches(c NativeConversion, cnyPerUSD, quotaPerUSD s
 	if !c.validCredit() || c.Numerator != "1" || c.Denominator != "1" || !fxOK || !unitsOK || fx.Sign() <= 0 || units.Sign() <= 0 {
 		return false
 	}
-	// The source tariff is denominated in USD. A major CNY unit buys 10
+	// The source tariff is denominated in USD. A major CNY unit buys 100
 	// credits; each credit comprises 10^6 microcredit units.
-	expected := new(big.Rat).Mul(fx, big.NewRat(10000000, 1))
+	expected := new(big.Rat).Mul(fx, big.NewRat(100000000, 1))
 	return units.Cmp(expected) == 0
 }
 
@@ -184,10 +184,23 @@ func ProductCreditChannelSupported(wire string, channelType int) bool {
 	case "chat.completions.create", "responses.create", "responses.compact", "claude.messages.create", "gemini.generate", "embeddings.create":
 		_, ok := TokenProducer(wire, channelType)
 		return ok
+	case "videos.create", "dashscope.audio.transcriptions.create", "bailian.audio.speech.create":
+		return channelType == constant.ChannelTypeAli
+	case "rerank.create", "multimodal.embeddings.create":
+		return channelType == constant.ChannelTypeAli
+	case "gemini.images.generate":
+		return channelType == constant.ChannelTypeGemini
 	case "ocr.jobs.create", "ocr.jobs.retrieve", "ocr.results.retrieve":
 		return true // The OCR producer verifies its specific channel/credential contract.
 	case "images.generations.create", "images.edits.create", "audio.speech.create", "audio.transcriptions.create":
 		return channelType == constant.ChannelTypeOpenAI || channelType == constant.ChannelTypeAli
 	}
 	return false
+}
+
+func (s *Session) ProductModel() string {
+	if !s.ProductCredit() {
+		return ""
+	}
+	return s.call.Model
 }

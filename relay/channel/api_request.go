@@ -543,7 +543,7 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	if info.PlatformMode && info.PlatformBilling != nil && (info.PlatformBilling.AliEmbeddingV4() || info.PlatformBilling.AliRerank()) {
 		sendContext, cancelSend = context.WithTimeout(context.WithoutCancel(sendContext), 2*time.Minute)
 	}
-	if info.PlatformBilling.ProductCredit() {
+	if info.PlatformBilling.ProductCredit() && !info.PlatformBilling.PinnedKnowledge() {
 		if err := info.PlatformBilling.BindProductUpstream(info.UpstreamModelName); err != nil {
 			return nil, err
 		}
@@ -558,6 +558,9 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 			}
 			return nil, err
 		}
+	}
+	if info.PlatformBilling.ProductCredit() && info.PlatformBilling.WireOperation().ID == "videos.create" {
+		sendContext, cancelSend = context.WithTimeout(context.WithoutCancel(sendContext), 120*time.Second)
 	}
 	resp, err := client.Do(req.WithContext(sendContext))
 	if cancelSend != nil {

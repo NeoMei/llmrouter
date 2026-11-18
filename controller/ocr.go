@@ -51,7 +51,7 @@ func (body *ocrRequestBody) Read(p []byte) (int, error) {
 
 // OCRBodyLimit precedes rate-limit/body parsing, including multipart uploads.
 func OCRBodyLimit(c *gin.Context) {
-	const limit = ocr.MaxInputBytes + (64 << 10)
+	const limit = OCRMultipartBodyLimit
 	if c.Request.ContentLength > limit {
 		c.AbortWithStatusJSON(400, gin.H{"error": "OCR request byte limit exceeded"})
 		return
@@ -249,8 +249,8 @@ func (h *OCRHandler) Create(c *gin.Context) {
 				h.serviceError(c, err, 400)
 				return
 			}
-			quota, clamp, err := model.NativeQuota(native, native.Reservation, true)
-			if err != nil || clamp != nil {
+			quota, err := service.ManagedNativeAmount(native, native.Reservation, true)
+			if err != nil {
 				h.fail(c, 400, "OCR native price unavailable")
 				return
 			}
@@ -327,6 +327,10 @@ func (h *OCRHandler) Create(c *gin.Context) {
 	if value, platform := c.Get("platform_billing"); platform {
 		session := value.(*platformbilling.Session)
 		if session.WireOperation().Mode == "paddle-native-v1" {
+			if session.ProductCredit() {
+				writeProductOCRStatus(c, status, session.CallID())
+				return
+			}
 			status.JobID = session.CallID()
 			c.JSON(200, gin.H{"code": 0, "msg": "", "data": status})
 			return
@@ -598,6 +602,21 @@ func (h *OCRHandler) fail(c *gin.Context, code int, message string) {
 	c.JSON(code, gin.H{"error": message})
 }
 func (h *OCRHandler) serviceError(c *gin.Context, err error, fallback int) {
+	if raw, platform := c.Get("platform_billing"); platform {
+		if session, ok := raw.(*platformbilling.Session); ok && session.ProductCredit() {
+			var code string
+			switch {
+			case errors.Is(err, platformbilling.ErrNativeCreditsRequired):
+				code = "platform_model_credits_required"
+			case errors.Is(err, platformbilling.ErrProductMembershipExpired):
+				code = "product_membership_expired"
+			}
+			if code != "" {
+				c.JSON(platformbilling.HTTPStatus(err), gin.H{"error": gin.H{"code": code, "stage": "pre_admission"}})
+				return
+			}
+		}
+	}
 	var unavailable *model.UpstreamAccountUnavailable
 	var price *ocr.PriceError
 	switch {
@@ -625,6 +644,13 @@ func (h *OCRHandler) serviceError(c *gin.Context, err error, fallback int) {
 		h.fail(c, fallback, "OCR request could not be completed")
 	}
 }
+func writeProductOCRStatus(c *gin.Context, status ocr.JobStatus, callID string) {
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "", "data": gin.H{
+		"jobId": callID, "state": status.State, "extractProgress": status.ExtractProgress,
+	}})
+}
+
 func (h *OCRHandler) respond(c *gin.Context, status ocr.JobStatus, name string, create bool) {
 	if strings.HasPrefix(c.Request.URL.Path, "/api/v2/ocr/") {
 		c.JSON(200, gin.H{"code": 0, "msg": "", "data": status})

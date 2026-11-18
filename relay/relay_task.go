@@ -273,8 +273,10 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		if info.PlatformBilling == nil {
 			return nil, service.TaskErrorWrapperLocal(errors.New("platform session missing"), "platform_session", 500)
 		}
-		if err := info.PlatformBilling.Dispatch(c.Request.Context(), info.ChannelId); err != nil {
-			return nil, service.TaskErrorWrapperLocal(err, "platform_dispatch", 409)
+		if !info.PlatformBilling.ProductCredit() {
+			if err := info.PlatformBilling.Dispatch(c.Request.Context(), info.ChannelId); err != nil {
+				return nil, service.TaskErrorWrapperLocal(err, "platform_dispatch", 409)
+			}
 		}
 	} else if info.NativeBilling != nil {
 		if err := service.MarkNativeBillingDispatched(c.Request.Context(), info); err != nil {

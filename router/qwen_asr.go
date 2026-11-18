@@ -35,8 +35,8 @@ func relayNativeQwenASR(c *gin.Context, adapter *platformbilling.Adapter) {
 		return
 	}
 	catalog, err := readTechnicalCatalog(c.Request.Context(), adapter, "superwagie")
-	available := false
-	if err == nil {
+	available := session.ProductCredit()
+	if !available && err == nil {
 		for _, m := range catalog.Models {
 			if m.ID == policy.PublicModel {
 				for _, op := range m.Operations {
@@ -61,11 +61,36 @@ func relayNativeQwenASR(c *gin.Context, adapter *platformbilling.Adapter) {
 		c.AbortWithStatus(503)
 		return
 	}
+	if session.ProductCredit() {
+		if err = session.BindProductUpstream(policy.UpstreamModel); err != nil {
+			c.AbortWithStatus(409)
+			return
+		}
+	}
 	if err = session.Dispatch(c.Request.Context(), channel.Id); err != nil {
 		c.AbortWithStatus(409)
 		return
 	}
-	result, sendErr := producer.SendQwenASR(c.Request.Context(), request)
+	sendContext := c.Request.Context()
+	if session.ProductCredit() {
+		work, cancel := context.WithTimeout(context.WithoutCancel(sendContext), 120*time.Second)
+		defer cancel()
+		sendContext = work
+	}
+	result, sendErr := producer.SendQwenASR(sendContext, request)
+	if session.ProductCredit() {
+		work, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 15*time.Second)
+		defer cancel()
+		price, _ := session.MeteredPrice()
+		usage := platformbilling.NativeQwenASRMetering(price, result)
+		if sendErr != nil || session.CaptureProductMediaResult(work, usage, "application/json", result.Raw) != nil {
+			c.AbortWithStatus(502)
+			return
+		}
+		c.Header("Cache-Control", "no-store")
+		c.Data(200, "application/json", result.Raw)
+		return
+	}
 	delivered := false
 	if sendErr == nil && result.Completed && c.Request.Context().Err() == nil {
 		c.Header("Content-Type", "application/json")

@@ -43,8 +43,9 @@ export function useApiInfo() {
     configured.loading ||
     configured.items.length > 0 ||
     typeof window === 'undefined'
-  )
+  ) {
     return configured
+  }
   return {
     ...configured,
     items: [

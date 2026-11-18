@@ -118,6 +118,16 @@ func SetProviderCatalogRouter(engine *gin.Engine, adapter *platformbilling.Adapt
 			}
 			pricing := "llmrouter_native"
 			if scoped {
+				grant := platformbilling.Claims{OriginProductID: req.OriginProductID, InstanceID: config.InstanceID}
+				catalog, err := buildProviderCatalog(c.Request.Context(), adapter, grant, true)
+				if err != nil {
+					c.JSON(http.StatusServiceUnavailable, gin.H{"error": "provider_catalog_unavailable"})
+					return
+				}
+				if !slices.Contains(catalog.CreditScopes, platformbilling.ProductCreditScope) {
+					c.JSON(http.StatusServiceUnavailable, gin.H{"error": "product_credit_models_unavailable"})
+					return
+				}
 				pricing = platformbilling.NativeCreditPricingSource
 			}
 			c.JSON(http.StatusOK, ProviderCatalog{CreditScope: req.CreditScope, Purpose: req.Purpose, CreditScopes: []string{platformbilling.ProductCreditScope}, NativeCreditProtocol: platformbilling.NativeCreditPricingVersion, SchemaVersion: 1, CatalogVersion: platformbilling.NativeCreditPricingVersion, ModelScope: "llmrouter_available", PricingSource: pricing, OriginProductID: req.OriginProductID, Models: []ProviderCatalogModel{}})
@@ -165,6 +175,7 @@ func buildProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter,
 	if scoped {
 		assemble = modelcatalog.AssembleManagedRuntimeCatalog
 		out.CreditScope = platformbilling.ProductCreditScope
+		out.CreditScopes = nil
 		out.PricingSource = platformbilling.NativeCreditPricingSource
 	}
 	catalog, err := assemble(ctx, runtime, routes, targets, modelcatalog.NewGormRuntimeSources(model.DB), deploymentCatalogAuthorizer{user, group, grant.OriginProductID})
@@ -211,6 +222,9 @@ func buildProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter,
 		}
 		for i, op := range projected.CapabilityMetadata.Operations {
 			if op.ID == "bailian.audio.speech.create" && !slices.ContainsFunc(candidates, func(candidate modelcatalog.ResolvedModel) bool {
+				if scoped {
+					return managedBailianSpeechChannelSupported(candidate, channelByID[candidate.ChannelID])
+				}
 				_, _, err := managedBailianSpeechTariff(candidate.BillingModel)
 				return err == nil && managedBailianSpeechChannelSupported(candidate, channelByID[candidate.ChannelID])
 			}) {
@@ -236,7 +250,7 @@ func buildProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter,
 			}
 		}
 		if scoped {
-			byID[m.PublicID] = productCreditPriceAvailability(projected, candidates, channelByID)
+			byID[m.PublicID] = productCreditPriceAvailability(projected, candidates, channelByID, adapter)
 		} else {
 			byID[m.PublicID] = providerPriceAvailability(projected, billingModels)
 		}
@@ -276,12 +290,19 @@ func buildProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter,
 		if m.ID == "" {
 			m = platformbilling.CatalogModel{ID: ability.Model, Name: ability.Model}
 		}
+		if scoped {
+			for _, wire := range []string{"videos.create", "dashscope.audio.transcriptions.create", "gemini.images.generate", "images.edits.create", "images.generations.create"} {
+				if !slices.Contains(m.Capabilities.Operations, wire) && catalogCertifiesProductTarget(adapter, ability.Model, wire, ch, "") {
+					m.Capabilities.Operations = append(m.Capabilities.Operations, wire)
+				}
+			}
+		}
 		for _, endpoint := range endpoints {
 			wire := providerEndpointOperation(endpoint)
 			if wire == "ocr.jobs.create" && !providerOCRChannelSupported(ch) {
 				continue
 			}
-			if scoped && !platformbilling.ProductCreditChannelSupported(wire, ch.Type) {
+			if scoped && (platformbilling.IsProductCertifiedOperation(wire) || !platformbilling.ProductCreditChannelSupported(wire, ch.Type)) {
 				continue
 			}
 			if wire == "" || !capability.DefaultRegistry().Supports(ch.Type, capability.ProtocolForOperation(capability.Operation(wire)), capability.Operation(wire)) {
@@ -297,11 +318,21 @@ func buildProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter,
 			byID[ability.Model] = providerPriceAvailability(projectProviderModel(m), []string{ability.Model})
 		}
 	}
-	for _, m := range byID {
-		if scoped {
-			m = productCreditPriceAvailability(m, nil, nil)
+	if scoped {
+		for id, item := range byID {
+			if !reserved[strings.ToLower(id)] {
+				byID[id] = productCreditPriceAvailability(item, nil, nil, adapter)
+			}
 		}
+		projectProductKnowledgeAvailability(ctx, adapter, grant.OriginProductID, routes, byID)
+	}
+	for _, m := range byID {
 		out.Models = append(out.Models, m)
+		if scoped && len(out.CreditScopes) == 0 && slices.ContainsFunc(m.CapabilityMetadata.Operations, func(op platformbilling.CatalogOperation) bool {
+			return op.Available && op.Executable && op.PublicTariff != nil
+		}) {
+			out.CreditScopes = []string{platformbilling.ProductCreditScope}
+		}
 	}
 	slices.SortFunc(out.Models, func(a, b ProviderCatalogModel) int { return strings.Compare(a.ID, b.ID) })
 	raw, err := common.Marshal(out.Models)
@@ -499,10 +530,26 @@ func providerPriceAvailability(m ProviderCatalogModel, billingModels []string) P
 	return m
 }
 
-func productCreditPriceAvailability(m ProviderCatalogModel, candidates []modelcatalog.ResolvedModel, channels map[int]model.Channel) ProviderCatalogModel {
+func productCreditPriceAvailability(m ProviderCatalogModel, candidates []modelcatalog.ResolvedModel, channels map[int]model.Channel, adapter *platformbilling.Adapter) ProviderCatalogModel {
 	fx := strconv.FormatFloat(operation_setting.USDExchangeRate, 'g', -1, 64)
 	for i, op := range m.CapabilityMetadata.Operations {
 		op.PublicTariff = nil
+		if op.ID == "multimodal.embeddings.create" && len(candidates) > 0 && slices.ContainsFunc(candidates, func(candidate modelcatalog.ResolvedModel) bool {
+			return !productMultimodalTarget(adapter, m.ID, candidate, channels[candidate.ChannelID])
+		}) {
+			op.Available, op.Executable, op.DisabledReason = false, false, "certified_knowledge_target_unavailable"
+		}
+		if platformbilling.IsProductCertifiedOperation(op.ID) {
+			// Ability-only operations were added only on their certified target.
+			if len(candidates) > 0 && !slices.ContainsFunc(candidates, func(candidate modelcatalog.ResolvedModel) bool {
+				return slices.Contains(candidate.Capabilities.Operations, op.ID) &&
+					catalogCertifiesProductTarget(adapter, m.ID, op.ID, channels[candidate.ChannelID], candidate.UpstreamModel)
+			}) {
+				op.Available, op.Executable, op.DisabledReason = false, false, "product_credit_certified_target_unavailable"
+			} else if op.DisabledReason == "native_operation_unavailable" {
+				op.Available, op.Executable, op.DisabledReason = true, true, ""
+			}
+		}
 		if !op.Executable {
 			m.CapabilityMetadata.Operations[i] = op
 			continue
@@ -521,6 +568,22 @@ func productCreditPriceAvailability(m ProviderCatalogModel, candidates []modelca
 	}
 	m.Probe = slices.ContainsFunc(m.CapabilityMetadata.Operations, func(op platformbilling.CatalogOperation) bool { return op.Executable })
 	return m
+}
+
+func catalogCertifiesProductTarget(adapter *platformbilling.Adapter, name, wire string, channel model.Channel, candidateUpstream string) bool {
+	id, upstream := adapter.ProductCertifiedModelTarget(name, wire)
+	if id <= 0 || id != channel.Id || channel.ChannelInfo.IsMultiKey || candidateUpstream != "" && candidateUpstream != upstream ||
+		!platformbilling.ProductCreditChannelSupported(wire, channel.Type) {
+		return false
+	}
+	switch wire {
+	case "videos.create":
+		return adapter.VideoTarget(name, id, channel.Type, upstream, channel.Key, channel.GetBaseURL())
+	case "dashscope.audio.transcriptions.create":
+		return adapter.AudioTarget(name, wire, id, channel.Type, upstream, channel.Key, channel.GetBaseURL())
+	default:
+		return adapter.ImageTarget(name, wire, id, channel.Type, upstream, channel.Key, channel.GetBaseURL())
+	}
 }
 
 // Publish only the customer tariff and immutable revision. Supplier quotes,

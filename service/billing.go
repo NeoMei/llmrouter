@@ -20,7 +20,7 @@ const (
 // 会话存储在 relayInfo.Billing 上，供后续 Settle / Refund 使用。
 func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
 	if relayInfo.ManagedNativePricing() {
-		if err := beginManagedNativeFunding(c.Request.Context(), relayInfo, preConsumedQuota, nil); err != nil {
+		if err := beginManagedNativeFunding(c.Request.Context(), relayInfo, int64(preConsumedQuota), nil); err != nil {
 			return ManagedNativeBillingError(err)
 		}
 		return nil

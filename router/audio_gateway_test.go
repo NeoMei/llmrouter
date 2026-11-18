@@ -26,6 +26,8 @@ import (
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay/channel/nativespeech"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -112,13 +114,14 @@ func newAudioGatewayFixture(t *testing.T, kind, variant, hubOrigin, serviceToken
 	require.NoError(t, i18n.Init())
 	gin.SetMode(gin.TestMode)
 	f := &audioGatewayFixture{sent: make(chan struct{})}
+	product := kind == "qwen-asr" && variant == "product"
 	if dbPath == "" {
 		dbPath = t.TempDir() + "/audio.db"
 	}
 	db, e := gorm.Open(sqlite.Open("file:"+dbPath), &gorm.Config{})
 	require.NoError(t, e)
 	f.db = db
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.Ability{}, &model.UserSubscription{}, &model.ClientModelRoute{}, &model.ClientModelTarget{}, &model.UpstreamAccountPool{}, &model.UpstreamAccountMember{}, &model.UpstreamAccountState{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Model{}, &model.Vendor{}, &model.Channel{}, &model.Ability{}, &model.UserSubscription{}, &model.ClientModelRoute{}, &model.ClientModelTarget{}, &model.UpstreamAccountPool{}, &model.UpstreamAccountMember{}, &model.UpstreamAccountState{}))
 	oldDB, oldLog, oldMemory, oldRedis := model.DB, model.LOG_DB, common.MemoryCacheEnabled, common.RedisEnabled
 	model.DB, model.LOG_DB = db, db
 	common.MemoryCacheEnabled = true
@@ -152,18 +155,56 @@ func newAudioGatewayFixture(t *testing.T, kind, variant, hubOrigin, serviceToken
 		term.Key, term.Unit = "audio", "audio_second"
 	}
 	f.price = metering.Price{Version: "metered_v2", Operation: bill, Policy: policy, Terms: []metering.Term{term}}
+	if product {
+		oldPrices, oldFX := billing_setting.GetModelNativePricingCopy(), operation_setting.USDExchangeRate
+		operation_setting.USDExchangeRate = 1
+		sale := metering.Price{Version: "metered_v2", Operation: "transcription", Policy: "provider_reported_v1", Terms: []metering.Term{
+			{Key: "audio", Unit: "audio_second", Price: metering.Rational{Numerator: "1", Denominator: "10000"}},
+		}}
+		require.NoError(t, billing_setting.SetModelNativePricing(map[string]map[string]metering.Price{"voice": {bill: sale}}))
+		t.Cleanup(func() {
+			operation_setting.USDExchangeRate = oldFX
+			require.NoError(t, billing_setting.SetModelNativePricing(oldPrices))
+		})
+	}
 	rate := platformbilling.Rate{ID: "audio-rate", Model: "voice", Asset: "CNY/6", Status: "published", Semantics: "metered_v2", Metered: &f.price}
 	var remote platformbilling.RemoteCall
+	var nativeFinal platformbilling.NativeSettleRequest
 	if hubOrigin == "" {
 		hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var out any
 			switch r.URL.Path {
 			case "/internal/v1/model-credentials/verify":
+				if product {
+					var in map[string]string
+					require.NoError(t, common.DecodeJson(r.Body, &in))
+					if in["product_authorization"] != "asr-origin-proof" {
+						w.WriteHeader(http.StatusForbidden)
+						return
+					}
+					out = platformbilling.Claims{CredentialKind: "api_key", CredentialVersion: 1, ID: "credential", Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: "superwagie", InstanceID: "default", Asset: "CREDIT/6", FundingMode: "credits",
+						SourceVerified: true, CreditScope: platformbilling.ProductCreditScope, FundingProductID: "superwagie", ModelScope: "llmrouter_available", PricingSource: platformbilling.NativeCreditPricingSource,
+						NativeCreditConversion: &platformbilling.NativeConversion{Version: "product-asr-v1", Numerator: "1", Denominator: "1", Rounding: "lr-cumulative-ceil-v1"}}
+					break
+				}
 				ops := map[string][]string{"voice": {wire}}
 				if variant == "wronggrant" {
 					ops["voice"] = []string{"chat.completions.create"}
 				}
 				out = platformbilling.Claims{ID: "credential", Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: "superwagie", Models: []string{"voice"}, Operations: ops, TaskID: "audio-task", ExpiresAt: time.Now().Add(time.Hour), Asset: "CNY/6", FundingMode: "prepaid_cash"}
+			case "/internal/v1/calls/native-reserve":
+				f.reserves++
+				var in platformbilling.NativeReserveRequest
+				require.NoError(t, common.DecodeJson(r.Body, &in))
+				require.Equal(t, "asr-origin-proof", in.ProductAuthorization)
+				require.Equal(t, platformbilling.ProductCreditScope, in.CreditScope)
+				require.Equal(t, "3000000", in.Quote.MaxAmount)
+				require.Empty(t, in.MinimumCreditAmount)
+				remote = platformbilling.RemoteCall{CreditScope: in.CreditScope, NativePricing: &in.Quote, WireOperation: in.WireOperation, CallID: in.CallID, TaskID: in.TaskID, CredentialVersion: 1,
+					ActorID: "actor", AccountID: "account", OriginProductID: "superwagie", InstanceID: "default", CredentialID: "credential", RequestDigest: in.RequestDigest,
+					Rate: platformbilling.Rate{Model: in.Model, Asset: "CREDIT/6", Semantics: "llmrouter_native"}, ChargeAsset: "CREDIT/6", FundingMode: "credits",
+					FundingProductID: "superwagie", Held: in.Quote.MaxAmount, Status: "RESERVED"}
+				out = remote
 			case "/internal/v1/rates":
 				out = []platformbilling.Rate{rate}
 			case "/internal/v1/calls/reserve":
@@ -180,6 +221,22 @@ func newAudioGatewayFixture(t *testing.T, kind, variant, hubOrigin, serviceToken
 				remote.Status = "RELEASED"
 				out = remote
 			default:
+				if product && r.URL.Path == "/internal/v1/calls/"+remote.CallID+"/native-settle" {
+					f.settles++
+					require.NoError(t, common.DecodeJson(r.Body, &nativeFinal))
+					require.Equal(t, "10000", nativeFinal.Amount)
+					remote.Status, remote.Charged = "SETTLED", nativeFinal.Amount
+					out = remote
+					break
+				}
+				if product && r.URL.Path == "/internal/v1/calls/"+remote.CallID {
+					out = struct {
+						platformbilling.RemoteCall
+						NativeQuota string                 `json:"native_quota"`
+						Usage       *platformbilling.Usage `json:"usage"`
+					}{remote, nativeFinal.NativeQuota, nativeFinal.Usage}
+					break
+				}
 				t.Errorf("unexpected hub path %s", r.URL.Path)
 				w.WriteHeader(404)
 				return
@@ -399,6 +456,9 @@ func newAudioGatewayFixture(t *testing.T, kind, variant, hubOrigin, serviceToken
 		limit.ProviderUnitCap = "10"
 	}
 	f.config = platformbilling.Config{Enabled: true, Origin: hubOrigin, ServiceToken: serviceToken, PrincipalID: 1, Group: "platform", MaxInputTokens: 20000, MaxOutputTokens: 100, MaxBodyBytes: 1 << 20, AudioPolicies: map[string]map[string]platformbilling.AudioPolicy{wire: {"voice": p}}, OperationLimits: map[string]map[string]platformbilling.OperationLimits{bill: {"voice": limit}}, OperationRateIDs: map[string]map[string]map[string]string{bill: {"CNY/6": {"voice": "audio-rate"}}}}
+	if product {
+		f.config.NativeGroup = "platform"
+	}
 	f.adapter, e = platformbilling.New(db, f.config)
 	require.NoError(t, e)
 	catalog, e := readTechnicalCatalog(context.Background(), f.adapter, "superwagie")
@@ -409,6 +469,9 @@ func newAudioGatewayFixture(t *testing.T, kind, variant, hubOrigin, serviceToken
 	}
 	f.engine = gin.New()
 	f.engine.Use(middlewareBodyCleanupForTest())
+	if product {
+		SetManagedKeyDispatch(f.engine, f.adapter)
+	}
 	SetPlatformRouter(f.engine, f.adapter)
 	t.Cleanup(perfmetrics.DrainRelaySamples)
 	return f
@@ -574,4 +637,32 @@ func TestMiniMaxAdmissionMatchesNativeProducerBounds(t *testing.T) {
 		require.NoError(t, err)
 		assert.EqualValues(t, 64<<10, catalog.Models[0].Operations[0].Limits.MaxBodyBytes)
 	})
+}
+
+func TestProductNativeDashScopeTranscriptionReclaimsOriginalTranscript(t *testing.T) {
+	f := newAudioGatewayFixture(t, "qwen-asr", "product", "", "", "")
+	path, ct, body := audioBody(t, "qwen-asr")
+	send := func(method, path string, body []byte) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer uh_key_fixture")
+		req.Header.Set(platformbilling.ProductAuthorizationHeader, "asr-origin-proof")
+		if method == http.MethodPost {
+			req.Header.Set("Content-Type", ct)
+			req.Header.Set("Idempotency-Key", "asr-product-1")
+		}
+		out := httptest.NewRecorder()
+		f.engine.ServeHTTP(out, req)
+		return out
+	}
+	submit := send(http.MethodPost, path, body)
+	require.Equal(t, http.StatusOK, submit.Code, submit.Body.String())
+	result := send(http.MethodGet, "/platform/v1/calls/asr-product-1/result", nil)
+	require.Equal(t, http.StatusOK, result.Code, result.Body.String())
+	require.Equal(t, submit.Body.Bytes(), result.Body.Bytes())
+	require.Contains(t, result.Body.String(), "你好")
+	require.Equal(t, "asr-product-1", result.Header().Get("X-UniHub-Idempotency-Key"))
+	require.Equal(t, http.StatusConflict, send(http.MethodPost, path, body).Code)
+	require.Equal(t, 1, f.sends)
+	require.Equal(t, 1, f.reserves)
+	require.Equal(t, 1, f.settles)
 }

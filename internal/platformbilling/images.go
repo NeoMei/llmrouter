@@ -1119,13 +1119,12 @@ func (s *Session) ObserveImages(ctx context.Context, r ImageResult) error {
 		}
 	}
 	u := metering.Usage{Version: "metered_v2", Operation: s.call.Operation, Source: "native_image", State: "incomplete"}
-	var rate Rate
-	if common.Unmarshal([]byte(s.call.RateSnapshot), &rate) != nil {
+	price, ok := s.MeteredPrice()
+	if !ok {
 		return ErrInvalid
 	}
-	price := rate.Metered
-	if price == nil {
-		return ErrInvalid
+	if s.ProductCredit() && s.call.ProviderTaskID != "" {
+		u.ProviderRequestID = s.call.ProviderTaskID
 	}
 	if len(r.Outputs) > 0 && len(r.Outputs) <= p.MaxImages && int64(len(r.Outputs)) <= s.call.ReservationQuantity {
 		counts := map[string]int{}
@@ -1146,6 +1145,9 @@ func (s *Session) ObserveImages(ctx context.Context, r ImageResult) error {
 		for _, term := range price.Terms {
 			u.Measurements = append(u.Measurements, metering.Measurement{Key: term.Key, Unit: "image", Quantity: metering.Quantity{Value: strconv.Itoa(counts[term.Key])}})
 		}
+	}
+	if s.ProductCredit() && s.call.ProviderTaskID == "" {
+		return s.CaptureProductMediaResult(ctx, u, "application/json", r.Body)
 	}
 	observation, e := common.Marshal(struct {
 		Usage        json.RawMessage
@@ -1244,6 +1246,9 @@ func (a *Adapter) CompleteWanImage(ctx context.Context, row Call, result ImageRe
 	}
 	if current.Status != "SETTLED" {
 		return ErrPending
+	}
+	if current.CreditScope == ProductCreditScope {
+		return a.verifyNativeTaskSettlement(ctx, current)
 	}
 	return nil
 }

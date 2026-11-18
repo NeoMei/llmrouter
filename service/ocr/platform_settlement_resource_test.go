@@ -68,6 +68,12 @@ func TestPlatformOCRExistingOutputGrantRequiresSettlement(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, reader.Close())
 	assert.Equal(t, "input", string(raw))
+	require.NoError(t, svc.db.Model(&platformbilling.Call{}).Where("call_id = ?", "call").Updates(map[string]any{
+		"origin_product_id": "fixture-product",
+		"credit_scope":      platformbilling.ProductCreditScope,
+	}).Error)
+	_, _, err = svc.OpenGrantedResource(ctx, job.ID, output.ID, out.Query().Get("token"))
+	require.ErrorIs(t, err, model.ErrOCRGrant)
 	require.NoError(t, svc.db.Delete(&platformbilling.Call{}, "call_id = ?", "call").Error)
 	_, _, err = svc.OpenGrantedResource(ctx, job.ID, output.ID, out.Query().Get("token"))
 	require.Error(t, err)

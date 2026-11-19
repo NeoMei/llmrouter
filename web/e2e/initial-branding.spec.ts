@@ -37,3 +37,42 @@ test('serves Wanliu and LLMRouter branding before application scripts run', asyn
     '万流 · LLMRouter'
   )
 })
+
+test('links the footer to Quukk with a working logo in both themes', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('setup_status_checked', 'true')
+  })
+
+  await page.emulateMedia({ colorScheme: 'light' })
+  await page.goto('/')
+
+  const footer = page.getByRole('contentinfo')
+  const attribution = footer.getByRole('link', { name: 'quukk', exact: true })
+  await expect(attribution).toHaveAttribute('href', 'https://www.quukk.com/')
+
+  const lightLogo = attribution.locator(
+    'img[src="/brand/quukk-logo-color.svg"]'
+  )
+  const darkLogo = attribution.locator(
+    'img[src="/brand/quukk-logo-ai-white.svg"]'
+  )
+  await attribution.scrollIntoViewIfNeeded()
+  await expect(lightLogo).toBeVisible()
+  await expect
+    .poll(() =>
+      lightLogo.evaluate((image: HTMLImageElement) => image.naturalWidth)
+    )
+    .toBeGreaterThan(0)
+  await expect(darkLogo).toBeHidden()
+
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await expect(darkLogo).toBeVisible()
+  await expect
+    .poll(() =>
+      darkLogo.evaluate((image: HTMLImageElement) => image.naturalWidth)
+    )
+    .toBeGreaterThan(0)
+  await expect(lightLogo).toBeHidden()
+})

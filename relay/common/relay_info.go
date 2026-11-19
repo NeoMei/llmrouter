@@ -171,6 +171,8 @@ type TokenCountMeta struct {
 // RouteCandidate is the controller-owned, package-neutral state for one
 // authoritative public-model target attempt.
 type RouteCandidate struct {
+	Priority             int
+	Weight               int
 	Capabilities         dto.ModelCapabilities
 	RouteID              int
 	TargetID             int
@@ -336,7 +338,7 @@ type RelayInfo struct {
 // ManagedNativePricing changes the price authority while retaining the
 // platform identity, resource namespace and prohibition on local debits.
 func (info *RelayInfo) ManagedNativePricing() bool {
-	return info != nil && info.PlatformMode && info.PlatformBilling != nil && info.PlatformBilling.NativePricing()
+	return info != nil && info.PlatformMode && info.PlatformBilling != nil && info.PlatformBilling.NativePricing() && !info.PlatformBilling.PinnedKnowledge()
 }
 
 func (info *RelayInfo) RemoteTariff() bool {

@@ -116,7 +116,24 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 
 	var requestBody io.Reader
 
-	if passThroughGlobal || info.ChannelSetting.PassThroughBodyEnabled {
+	if info.PlatformBilling.ProductBandedChat() {
+		raw, err := info.PlatformBilling.GenerationBody(info.ChannelType, types.RelayFormatOpenAI, info.UpstreamModelName)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		policy, err := toolpolicy.BuildFromOutboundJSON(types.RelayFormatOpenAI, raw)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		toolpolicy.Set(c, policy)
+		body, size, getBody, closer, err := relaycommon.NewOutboundJSONBody(raw)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+		defer closer.Close()
+		info.UpstreamRequestBodySize, info.UpstreamRequestGetBody = size, getBody
+		requestBody = body
+	} else if passThroughGlobal || info.ChannelSetting.PassThroughBodyEnabled {
 		toolpolicy.Set(c, requestPolicy)
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {

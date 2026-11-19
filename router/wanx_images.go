@@ -101,9 +101,15 @@ func readWanImage(c *gin.Context, a *platformbilling.Adapter) {
 		return
 	}
 	// The image polling response includes result bytes when the task finishes.
-	if superwagiePrivateResultBlocked(row) {
+	if superwagiePrivateResultBlocked(row) && !(row.CreditScope == platformbilling.ProductCreditScope && platformbilling.HasProductAuthorization(c.Request.Context())) {
 		c.AbortWithStatus(http.StatusNotFound)
 		return
+	}
+	if row.CreditScope == platformbilling.ProductCreditScope {
+		c.Header("X-UniHub-Call-ID", row.CallID)
+		if alias := platformbilling.ProductReceiptAlias(c.Request.Context(), row); alias != "" {
+			c.Header("X-UniHub-Idempotency-Key", alias)
+		}
 	}
 	pollWanImage(c, a, row, policy)
 }
@@ -118,7 +124,11 @@ func pollWanImage(c *gin.Context, a *platformbilling.Adapter, row platformbillin
 			return
 		}
 		c.Header("Cache-Control", "no-store")
-		c.JSON(http.StatusOK, gin.H{"id": row.CallID, "status": "failed"})
+		status := gin.H{"id": row.CallID, "status": "failed"}
+		if alias := platformbilling.ProductReceiptAlias(c.Request.Context(), row); alias != "" {
+			status["idempotency_key"] = alias
+		}
+		c.JSON(http.StatusOK, status)
 		return
 	}
 	if row.ImageObservation != "" {
@@ -187,7 +197,11 @@ func pollWanImage(c *gin.Context, a *platformbilling.Adapter, row platformbillin
 			return
 		}
 		c.Header("Cache-Control", "no-store")
-		c.JSON(http.StatusAccepted, gin.H{"id": row.CallID, "status": "pending"})
+		status := gin.H{"id": row.CallID, "status": "pending"}
+		if alias := platformbilling.ProductReceiptAlias(c.Request.Context(), row); alias != "" {
+			status["idempotency_key"] = alias
+		}
+		c.JSON(http.StatusAccepted, status)
 		return
 	}
 	if (output["task_status"] == "FAILED" || output["task_status"] == "CANCELED") && wanImageNoOutput(envelope, output, row.ReservationQuantity) {
@@ -198,7 +212,11 @@ func pollWanImage(c *gin.Context, a *platformbilling.Adapter, row platformbillin
 			return
 		}
 		c.Header("Cache-Control", "no-store")
-		c.JSON(http.StatusOK, gin.H{"id": row.CallID, "status": "failed"})
+		status := gin.H{"id": row.CallID, "status": "failed"}
+		if alias := platformbilling.ProductReceiptAlias(c.Request.Context(), row); alias != "" {
+			status["idempotency_key"] = alias
+		}
+		c.JSON(http.StatusOK, status)
 		return
 	}
 	if output["task_status"] != "SUCCEEDED" {

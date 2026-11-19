@@ -24,7 +24,7 @@ func (p *pinnedKnowledgeAdmission) authorizedAt(now time.Time) bool {
 		return false
 	}
 	if p.managedKey {
-		return p.grant.CredentialKind == "api_key"
+		return p.grant.CredentialKind == "api_key" && (p.actor == "" || p.grant.ActorExpiresAt > now.Unix())
 	}
 	return p.grant.ActorExpiresAt > now.Unix()
 }
@@ -106,7 +106,21 @@ func (s *Session) ClaimPinnedKnowledgeSend(ctx context.Context, channel int, ups
 	p := s.knowledgeAdmission
 	current := *p
 	if p.managedKey {
-		current.grant.Claims, err = s.adapter.verifyManagedKnowledge(ctx, p.credential, s.call.Model, s.call.WireOperation)
+		if s.ProductCredit() {
+			// A confirmed hold authorizes this admitted work across a
+			// membership rollover. Still recheck the original Key, product
+			// proof and pinned route before the one-send transaction.
+			current.grant.Claims, err = s.adapter.managedGrant(ctx, p.credential, s.call.Model, s.call.WireOperation, "receipt")
+			if err == nil {
+				err = s.adapter.validateManagedCredential(ctx, p.credential, "", s.call.Model, current.grant.Claims, true)
+			}
+		} else {
+			current.grant.Claims, err = s.adapter.verifyManagedKnowledge(ctx, p.credential, s.call.Model, s.call.WireOperation)
+		}
+		if err == nil && p.actor != "" {
+			authority, actorErr := s.adapter.verifyProductKnowledgeActor(ctx, p.actor, current.grant.Claims)
+			current.grant.ActorExpiresAt, err = authority.expiresAt, actorErr
+		}
 	} else {
 		current.grant, err = s.adapter.verifyKnowledgeDispatch(ctx, p.actor, p.credential, s.call.TaskID, s.call.Model, s.call.WireOperation)
 	}
@@ -114,10 +128,19 @@ func (s *Session) ClaimPinnedKnowledgeSend(ctx context.Context, channel int, ups
 		return err
 	}
 	grant := current.grant
-	if grant.ID != s.call.CredentialID || grant.CredentialKind != p.grant.CredentialKind || grant.ActorID != s.call.ActorID || grant.AccountID != s.call.AccountID || grant.OriginProductID != s.call.OriginProductID || grant.InstanceID != s.call.InstanceID || grant.Asset != p.grant.Asset || grant.FundingMode != p.grant.FundingMode || grant.BillingProfileVersion != s.call.BillingProfileVersion {
+	if !s.call.matchesCreditScope(grant.Claims) || grant.ID != s.call.CredentialID || grant.CredentialKind != p.grant.CredentialKind || grant.ActorID != s.call.ActorID || grant.AccountID != s.call.AccountID || grant.OriginProductID != s.call.OriginProductID || grant.InstanceID != s.call.InstanceID || grant.Asset != p.grant.Asset || grant.FundingMode != p.grant.FundingMode || grant.BillingProfileVersion != s.call.BillingProfileVersion {
 		return &remoteError{status: 403}
 	}
 	attempt := Attempt{CallID: s.call.CallID, ChannelID: channel, Status: "DISPATCHED"}
+	if s.ProductCredit() {
+		identity, err := common.Marshal(struct {
+			Model string `json:"model"`
+		}{upstream})
+		if err != nil {
+			return ErrInvalid
+		}
+		attempt.UpstreamIdentity = string(identity)
+	}
 	claimStarted := false
 	err = s.adapter.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		b, e := s.adapter.ResolveManagedBinding(tx, s.call.OriginProductID, s.call.Model, s.call.WireOperation, p.binding.PolicyDigest)
@@ -166,6 +189,10 @@ func (s *Session) ClaimPinnedKnowledgeSend(ctx context.Context, channel int, ups
 		return err
 	}
 	s.attempt = attempt
+	if s.ProductCredit() {
+		s.call.Status = "UNKNOWN"
+		s.nativeCredential = ""
+	}
 	s.safeFailure = false
 	s.uncertain = true
 	return nil

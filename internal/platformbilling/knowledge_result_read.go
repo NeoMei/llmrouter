@@ -82,6 +82,12 @@ func (a *Adapter) verifyKnowledgeSettlement(ctx context.Context, original Call) 
 	if a == nil || a.client == nil || original.Status != "SETTLED" || original.EvidenceConflict || !stableID.MatchString(original.CallID) {
 		return ErrInvalid
 	}
+	if original.CreditScope == ProductCreditScope {
+		if err := knowledgeSettledFinancialIntent(original); err != nil {
+			return err
+		}
+		return a.verifyNativeTaskSettlement(ctx, original)
+	}
 	var remote knowledgeSettledReceipt
 	if err := readKnowledgeAuthority(ctx, a.client, http.MethodGet, "/internal/v1/calls/"+original.CallID, nil, &remote, ""); err != nil {
 		return ErrPending
@@ -176,7 +182,7 @@ func (v *knowledgeResultVault) authorizedResultWithEvidence(ctx context.Context,
 	if err := v.db.WithContext(ctx).First(&original, "call_id = ?", id).Error; err != nil {
 		return nil, ErrInvalid
 	}
-	if original.TaskID != task || original.Status != "SETTLED" || original.EvidenceConflict || !((original.Operation == "embedding" && original.WireOperation == "embeddings.create") || (original.Operation == "rerank" && original.WireOperation == "rerank.create")) {
+	if original.CreditScope != "" || original.TaskID != task || original.Status != "SETTLED" || original.EvidenceConflict || !((original.Operation == "embedding" && original.WireOperation == "embeddings.create") || (original.Operation == "rerank" && original.WireOperation == "rerank.create")) {
 		return nil, ErrInvalid
 	}
 	if (original.WireOperation == "embeddings.create" && !a.config.AllowAliEmbeddingV4) || (original.WireOperation == "rerank.create" && !a.config.AllowAliRerank) {

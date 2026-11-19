@@ -3,6 +3,7 @@ package router
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"os"
 	"regexp"
@@ -78,6 +79,23 @@ func unifiedAdmissionCode(status int) string {
 	}
 }
 
+func writeProductAdmissionRefusal(c *gin.Context, err error) bool {
+	if !platformbilling.HasProductAuthorization(c.Request.Context()) {
+		return false
+	}
+	var code string
+	switch {
+	case errors.Is(err, platformbilling.ErrProductMembershipExpired):
+		code = "product_membership_expired"
+	case errors.Is(err, platformbilling.ErrNativeCreditsRequired):
+		code = "platform_model_credits_required"
+	default:
+		return false
+	}
+	c.AbortWithStatusJSON(platformbilling.HTTPStatus(err), gin.H{"error": gin.H{"code": code, "stage": "pre_admission"}})
+	return true
+}
+
 // SetManagedKeyDispatch must run before native routes are registered. It reuses
 // the platform handlers in process, so a unified key can never enter native
 // authentication, local quota reservation, or an HTTP forwarding fallback.
@@ -120,7 +138,7 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 			}
 			data := make([]gin.H, 0, len(catalog.Models))
 			for _, m := range catalog.Models {
-				entry := gin.H{"id": m.ID, "object": "model", "created": 0, "owned_by": "superwagie", "catalog_version": catalog.CatalogVersion, "capability_metadata": m.CapabilityMetadata}
+				entry := gin.H{"id": m.ID, "object": "model", "created": 0, "owned_by": grant.OriginProductID, "catalog_version": catalog.CatalogVersion, "capability_metadata": m.CapabilityMetadata}
 				addManagedPublicMetadata(entry, m.CapabilityMetadata, m.ConfiguredUpstreamModels)
 				if c.Param("model") == m.ID {
 					c.JSON(200, entry)
@@ -218,6 +236,10 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 			}
 		}
 		if !managed {
+			if len(c.Request.Header.Values(platformbilling.ProductAuthorizationHeader)) > 0 {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": gin.H{"code": "invalid_model_credential"}})
+				return
+			}
 			c.Next()
 			return
 		}
@@ -255,7 +277,52 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"code": "platform_billing_unavailable"}})
 			return
 		}
+		clientKeys := c.Request.Header.Values("Idempotency-Key")
+		validCallerKey := len(clientKeys) == 0 || len(clientKeys) == 1 && managedIdempotencyKey.MatchString(clientKeys[0])
+		ctx := c.Request.Context()
+		productProof := c.Request.Header.Values(platformbilling.ProductAuthorizationHeader)
+		if len(productProof) > 0 && !validCallerKey {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "invalid_idempotency_key"}})
+			return
+		}
+		if len(productProof) > 0 {
+			var callerKey string
+			if len(clientKeys) == 1 {
+				callerKey = clientKeys[0]
+			}
+			if len(productProof) == 1 {
+				ctx, err = platformbilling.WithProductAuthorization(ctx, productProof[0], callerKey)
+			}
+			if len(productProof) != 1 || err != nil {
+				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "invalid_product_authorization"}})
+				return
+			}
+		}
 		path := c.Request.URL.Path
+		if len(productProof) == 1 && c.Request.Method == http.MethodPost && isProductKnowledgeControlPath(path) {
+			request := c.Request.Clone(ctx)
+			request.Header.Set("Authorization", "Bearer "+credential)
+			request.Header.Del("X-Api-Key")
+			request.Header.Del("X-Goog-Api-Key")
+			request.Header.Del(platformbilling.ProductAuthorizationHeader)
+			platform.ServeHTTP(c.Writer, request)
+			c.Abort()
+			return
+		}
+		if len(productProof) == 1 && c.Request.Method == http.MethodPost {
+			path = strings.TrimPrefix(path, "/platform")
+			if path == "/v1/ocr/jobs" {
+				path = "/v1/ocr"
+			}
+		}
+		if len(productProof) == 1 && c.Request.Method == http.MethodGet && (path == "/platform/v1/models" || strings.HasPrefix(path, "/platform/v1/models/") || strings.HasPrefix(path, "/platform/api/v2/ocr/jobs/")) {
+			path = strings.TrimPrefix(path, "/platform")
+		}
+		if len(productProof) == 1 && c.Request.URL.RawQuery != "" &&
+			(path == "/v1/ocr" || strings.HasPrefix(path, "/v1/ocr/") || strings.HasPrefix(path, "/platform/v1/ocr/jobs/") || path == "/api/v2/ocr/jobs" || strings.HasPrefix(path, "/api/v2/ocr/jobs/")) {
+			c.AbortWithStatus(http.StatusBadRequest)
+			return
+		}
 		if (path == "/v1/responses/compact" || path == "/v1/audio/speech" || path == "/v1/audio/transcriptions" || path == "/v1/images/generations" || path == "/v1/images/edits" || strings.HasPrefix(path, "/v1/images/edits/") || strings.HasPrefix(path, "/platform/v1/images/edits/") || strings.HasPrefix(path, "/v1/native/")) && c.Request.URL.RawQuery != "" {
 			c.AbortWithStatus(http.StatusBadRequest)
 			return
@@ -268,7 +335,7 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 		if c.Request.Method == http.MethodPost {
 			if strings.HasPrefix(path, "/v1/videos/") && strings.HasSuffix(path, "/cancel") {
 				id := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/videos/"), "/cancel")
-				row, err := adapter.ManagedTask(c.Request.Context(), credential, id)
+				row, err := adapter.ManagedTask(ctx, credential, id)
 				if err != nil || row.Operation != "video" {
 					c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": gin.H{"code": "unified_task_not_found"}})
 					return
@@ -278,7 +345,7 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 				path = "/__managed_video_cancel_handled"
 			}
 			switch path {
-			case "/v1/native/dashscope/images/generations", "/v1/native/dashscope/ocr/recognitions", "/v1/native/bailian/audio/speech", "/v1/native/elevenlabs/audio/speech", "/v1/rerank", "/v1/multimodal/embeddings", "/api/v1/services/rerank/text-rerank/text-rerank", "/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding", "/v1/messages", "/v1/chat/completions", "/v1/responses", "/v1/responses/compact", "/v1/embeddings", "/v1/audio/speech", "/v1/audio/transcriptions", "/v1/images/generations", "/v1/images/edits", "/v1/videos":
+			case "/v1/native/dashscope/images/generations", "/v1/native/dashscope/ocr/recognitions", "/v1/native/dashscope/audio/transcriptions", "/v1/native/bailian/audio/speech", "/v1/native/elevenlabs/audio/speech", "/v1/rerank", "/v1/multimodal/embeddings", "/api/v1/services/rerank/text-rerank/text-rerank", "/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding", "/v1/messages", "/v1/chat/completions", "/v1/responses", "/v1/responses/compact", "/v1/embeddings", "/v1/audio/speech", "/v1/audio/transcriptions", "/v1/images/generations", "/v1/images/edits", "/v1/videos":
 				target = "/platform" + path
 			case "/api/v2/ocr/jobs":
 				target = "/platform/api/v2/ocr/jobs"
@@ -326,12 +393,13 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 				} else if len(parts) != 1 {
 					id = ""
 				}
-				row, err := adapter.ManagedTask(c.Request.Context(), credential, id)
-				if err != nil || (operation != "receipt" && row.Operation != operation) || ((operation == "receipt" || operation == "image_edit") && suffix != "") {
+				row, err := adapter.ManagedTask(ctx, credential, id)
+				if err != nil || (operation != "receipt" && row.Operation != operation) || (operation == "image_edit" && suffix != "") || (operation == "receipt" && suffix != "" && !platformbilling.HasProductAuthorization(ctx)) {
 					c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": gin.H{"code": "unified_task_not_found"}})
 					return
 				}
 				taskID = row.TaskID
+				ctx = platformbilling.WithProductCreditReceiptAlias(ctx, id)
 				switch operation {
 				case "video":
 					target = "/platform/v1/videos/" + row.CallID + suffix
@@ -341,7 +409,7 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 						target = "/platform/api/v2/ocr/jobs/" + row.CallID
 					}
 				case "receipt":
-					target = "/platform/v1/calls/" + row.CallID
+					target = "/platform/v1/calls/" + row.CallID + suffix
 				case "image_edit":
 					target = "/platform/v1/images/edits/" + row.CallID
 				}
@@ -351,8 +419,7 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 			c.AbortWithStatusJSON(http.StatusNotImplemented, gin.H{"error": gin.H{"code": "unified_operation_unsupported", "message": "this operation is not available for unified API keys"}})
 			return
 		}
-		clientKeys := c.Request.Header.Values("Idempotency-Key")
-		if len(clientKeys) > 1 || (len(clientKeys) == 1 && !managedIdempotencyKey.MatchString(clientKeys[0])) {
+		if !validCallerKey {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "invalid_idempotency_key"}})
 			return
 		}
@@ -361,7 +428,31 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 			sum := sha256.Sum256([]byte(credential + "\x00" + clientKeys[0]))
 			callID = "uk_" + hex.EncodeToString(sum[:])
 		}
-		request := c.Request.Clone(c.Request.Context())
+		_, nativeGroup := adapter.NativePrincipal()
+		var grant platformbilling.Claims
+		if (nativeGroup != "" || len(productProof) > 0) && c.Request.Method == http.MethodPost && !strings.HasSuffix(target, "/cancel") {
+			grant, err = adapter.ManagedModelGrant(ctx, credential)
+			if err != nil {
+				if errors.Is(err, platformbilling.ErrProductMembershipExpired) {
+					c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": gin.H{"code": "product_membership_expired", "stage": "pre_admission"}})
+				} else {
+					c.AbortWithStatus(platformbilling.HTTPStatus(err))
+				}
+				return
+			}
+			if grant.ProductCredit() {
+				if nativeGroup == "" {
+					c.AbortWithStatus(http.StatusServiceUnavailable)
+					return
+				}
+				callID, err = grant.ProductCreditCallID(ctx)
+				if err != nil {
+					c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "invalid_idempotency_key"}})
+					return
+				}
+			}
+		}
+		request := c.Request.Clone(ctx)
 		request.URL.Path, request.URL.RawPath, request.URL.RawQuery = target, "", ""
 		if strings.HasPrefix(path, "/v1beta/models/") {
 			request.URL.RawQuery = c.Request.URL.RawQuery
@@ -369,23 +460,38 @@ func SetManagedKeyDispatch(engine *gin.Engine, adapter *platformbilling.Adapter)
 		request.Header.Set("Authorization", "Bearer "+credential)
 		request.Header.Del("X-Api-Key")
 		request.Header.Del("X-Goog-Api-Key")
+		request.Header.Del(platformbilling.ProductAuthorizationHeader)
 		request.Header.Set("Idempotency-Key", callID)
 		if taskID == "" {
 			taskID = "task_" + callID
 		}
 		request.Header.Set("X-UniHub-Task-ID", taskID)
-		_, nativeGroup := adapter.NativePrincipal()
-		if nativeGroup != "" && request.Method == http.MethodPost && !strings.HasSuffix(target, "/cancel") {
-			grant, err := adapter.ManagedModelGrant(c.Request.Context(), credential)
-			if err != nil {
-				c.AbortWithStatus(platformbilling.HTTPStatus(err))
-				return
+		if grant.NativePricing() {
+			knowledge := false
+			if grant.ProductCredit() {
+				knowledge, err = productKnowledgeTarget(request)
+				if err != nil {
+					c.AbortWithStatus(http.StatusBadRequest)
+					return
+				}
 			}
-			if grant.NativePricing() {
+			certified := grant.ProductCredit() && (target == "/platform/v1/videos" || target == "/platform/v1/images/edits" || target == "/platform/v1/images/generations" ||
+				target == "/platform/v1/native/dashscope/audio/transcriptions" || strings.HasPrefix(target, "/platform/v1/native/gemini/images/models/"))
+			if knowledge && (len(c.Request.Header.Values("X-UniHub-Actor-Authorization")) > 0 || len(c.Request.Header.Values("X-UniHub-Knowledge-Policy")) > 0) {
+				task, ok := singleKnowledgeHeader(c.Request.Header, "X-UniHub-Task-ID")
+				if !ok {
+					c.AbortWithStatus(http.StatusBadRequest)
+					return
+				}
+				request.Header.Set("X-UniHub-Task-ID", task)
+			}
+			if certified || knowledge {
+				platform.ServeHTTP(c.Writer, request)
+			} else {
 				native.ServeHTTP(c.Writer, request)
-				c.Abort()
-				return
 			}
+			c.Abort()
+			return
 		}
 		platform.ServeHTTP(c.Writer, request)
 		c.Abort()

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/QuantumNous/new-api/model"
 	"github.com/stretchr/testify/require"
@@ -33,11 +32,9 @@ func TestNonRuntimeSubscriptionExtraRefundFailureStillRestoresTokenOnce(t *testi
 	t.Cleanup(func() { _ = db.Callback().Update().Remove(hook) })
 	info.SubscriptionId = 1
 	session := &BillingSession{relayInfo: info, funding: refundSubscriptionFixture{}, tokenConsumed: 20, extraReserved: 10}
-	session.Refund(c)
-	require.Eventually(t, func() bool {
-		var token model.Token
-		return db.First(&token, 7).Error == nil && token.RemainQuota == 200
-	}, 2*time.Second, time.Millisecond)
+	refund := session.prepareRefund(c)
+	require.NotNil(t, refund)
+	refund()
 	session.Refund(c)
 	var token model.Token
 	require.NoError(t, db.First(&token, 7).Error)
@@ -66,13 +63,13 @@ func TestNonRuntimeReserveRollbackFailureRefundsOnlyKnownOriginalOnce(t *testing
 	}))
 	t.Cleanup(func() { _ = db.Callback().Update().Remove(hook) })
 	require.Error(t, session.Reserve(30))
+	refund := session.prepareRefund(c)
+	require.NotNil(t, refund)
+	refund()
 	session.Refund(c)
-	require.Eventually(t, func() bool {
-		var token model.Token
-		var user model.User
-		return db.First(&token, 7).Error == nil && db.First(&user, 42).Error == nil && token.RemainQuota == 200 && user.Quota == 490
-	}, 2*time.Second, time.Millisecond)
-	session.Refund(c)
+	var token model.Token
+	require.NoError(t, db.First(&token, 7).Error)
+	require.Equal(t, 200, token.RemainQuota)
 	var user model.User
 	require.NoError(t, db.First(&user, 42).Error)
 	require.Equal(t, 490, user.Quota)

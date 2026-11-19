@@ -87,13 +87,14 @@ export async function readCashCheckoutHistory(
     let status: TopupStatus = 'pending'
     if (order.payment_status === 'PAID') status = 'success'
     else if (order.payment_status === 'REVIEW') status = 'review'
-    else if (['CLOSED', 'FAILED'].includes(order.payment_status))
+    else if (['CLOSED', 'FAILED'].includes(order.payment_status)) {
       status = 'failed'
-    else if (
+    } else if (
       order.payment_status === 'CREATED' &&
       Date.parse(order.expires_at) <= Date.now()
-    )
+    ) {
       status = 'expired'
+    }
     return {
       id: order.id,
       trade_no: order.id,

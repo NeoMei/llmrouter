@@ -199,6 +199,9 @@ func (s *Session) AliRerank() bool {
 }
 func (s *Session) KnowledgeBody(channel int, upstream string, key ...string) ([]byte, error) {
 	frozen, err := s.adapter.knowledgeSnapshot(s.call)
+	if s.productMultimodal() {
+		frozen.Body = s.canonical
+	}
 	if err != nil || frozen.Policy.ChannelID != channel || frozen.Policy.UpstreamModel != upstream || frozen.Policy.PublicModel != s.call.Model || frozen.Policy.WireOperation != s.WireOperation().ID || len(frozen.Body) == 0 {
 		return nil, ErrInvalid
 	}
@@ -221,6 +224,9 @@ func (s *Session) KnowledgeBody(channel int, upstream string, key ...string) ([]
 // routing while the original envelope remains in the call digest.
 func (s *Session) KnowledgeBodyForRelay() ([]byte, error) {
 	f, err := s.adapter.knowledgeSnapshot(s.call)
+	if s.productMultimodal() {
+		f.Body = s.canonical
+	}
 	if err != nil || len(f.Body) == 0 {
 		return nil, ErrInvalid
 	}

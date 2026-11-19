@@ -206,6 +206,7 @@ export type ModelSettings = {
   'grok.violation_deduction_enabled': boolean
   'grok.violation_deduction_amount': number
   ModelPrice: string
+  ProductCreditPricing?: string
   ModelNativePricing: string
   ModelNativeReservationLimits: string
   ModelRatio: string

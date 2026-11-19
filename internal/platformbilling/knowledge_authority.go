@@ -192,8 +192,36 @@ func (a *Adapter) verifyKnowledgeDispatch(ctx context.Context, actor, credential
 	}
 	return grant, nil
 }
+func (a *Adapter) verifyProductKnowledgeActor(ctx context.Context, actor string, grant Claims) (IndexReadAuthority, error) {
+	if !grant.ProductCredit() {
+		return IndexReadAuthority{}, ErrInvalid
+	}
+	authority, err := a.ReadKnowledgeIndexAuthority(ctx, actor, grant.AccountID)
+	if err != nil {
+		return IndexReadAuthority{}, err
+	}
+	if authority.ActorID != grant.ActorID || authority.AccountID != grant.AccountID || authority.InstanceID != grant.InstanceID ||
+		authority.OriginProductID != grant.OriginProductID {
+		return IndexReadAuthority{}, &remoteError{status: http.StatusForbidden}
+	}
+	return authority, nil
+}
+
 func (a *Adapter) PaidKnowledgeRoute(ctx context.Context, actor, credential, task, name, wire string) (KnowledgePaidRoute, error) {
-	grant, err := a.verifyKnowledgeDispatch(ctx, actor, credential, task, name, wire)
+	var grant knowledgeReadGrant
+	var err error
+	if HasProductAuthorization(ctx) {
+		if !stableID.MatchString(task) {
+			return KnowledgePaidRoute{}, ErrInvalid
+		}
+		grant.Claims, err = a.verifyManagedKnowledge(ctx, credential, name, wire)
+		if err == nil {
+			authority, actorErr := a.verifyProductKnowledgeActor(ctx, actor, grant.Claims)
+			grant.ActorExpiresAt, err = authority.expiresAt, actorErr
+		}
+	} else {
+		grant, err = a.verifyKnowledgeDispatch(ctx, actor, credential, task, name, wire)
+	}
 	if err != nil {
 		return KnowledgePaidRoute{}, err
 	}

@@ -20,13 +20,17 @@ import (
 	"time"
 )
 
-func knowledgeMediaPreparation(c *gin.Context, a *platformbilling.Adapter) platformbilling.KnowledgePreparation {
+func knowledgeMediaPreparation(c *gin.Context, a *platformbilling.Adapter, product string, scoped bool) platformbilling.KnowledgePreparation {
 	return func(ctx context.Context, raw []byte, p platformbilling.KnowledgePolicy) ([]byte, json.RawMessage, error) {
 		r, e := helper.ParseMultimodalEmbeddingRequest(raw, false)
 		if e != nil {
 			return nil, nil, e
 		}
-		catalog, e := readTechnicalCatalog(ctx, a, "superwagie")
+		user, group := a.Principal()
+		if scoped {
+			user, group = a.NativePrincipal()
+		}
+		catalog, e := readTechnicalCatalogForGroup(ctx, a, product, user, group)
 		if e != nil {
 			return nil, nil, e
 		}
@@ -37,7 +41,10 @@ func knowledgeMediaPreparation(c *gin.Context, a *platformbilling.Adapter) platf
 				break
 			}
 		}
-		if selected == nil || !reflect.DeepEqual(selected.Capabilities.EmbeddingSpace, p.Space) {
+		if selected == nil || !reflect.DeepEqual(selected.Capabilities.EmbeddingSpace, p.Space) ||
+			scoped && !slices.ContainsFunc(selected.Operations, func(op platformbilling.CatalogOperation) bool {
+				return op.ID == p.WireOperation && op.Available
+			}) {
 			return nil, nil, fmt.Errorf("certified embedding space unavailable")
 		}
 		caps := selected.Capabilities
@@ -69,7 +76,6 @@ func knowledgeMediaPreparation(c *gin.Context, a *platformbilling.Adapter) platf
 			if runtime == nil || runtime.Service == nil || caps.MediaLimits.MaxVideoSeconds == nil || *caps.MediaLimits.MaxVideoSeconds > 600 {
 				return nil, nil, fmt.Errorf("certified video runtime unavailable")
 			}
-			user, _ := a.Principal()
 			// This synthetic owner token is internal resource ownership, never native
 			// wallet/token authorization. Resource serving requires its private grant.
 			video, e := runtime.Service.PrepareMP4(ctx, relaymedia.PrepareInput{UserID: user, TokenID: user, RequestID: uuid.NewString(), SourceURL: item.Video})

@@ -50,6 +50,10 @@ func (a *Adapter) KnowledgeResultWithEvidence(ctx context.Context, actor, creden
 	if err != nil {
 		return KnowledgeResultEvidence{}, err
 	}
+	return encodeKnowledgeResultEvidence(ctx, raw, receipt)
+}
+
+func encodeKnowledgeResultEvidence(ctx context.Context, raw []byte, receipt KnowledgeReceipt) (KnowledgeResultEvidence, error) {
 	if receipt.Version == 0 {
 		return KnowledgeResultEvidence{RawBytes: raw}, nil
 	}

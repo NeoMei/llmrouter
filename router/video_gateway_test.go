@@ -30,6 +30,8 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/objectstore"
 	"github.com/QuantumNous/new-api/service/relaymedia"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
@@ -69,6 +71,22 @@ func newWanVideoGatewayFixtureWithHub(t *testing.T, variant, hubOrigin, serviceT
 	gin.SetMode(gin.TestMode)
 	require.NoError(t, i18n.Init())
 	f := &wanVideoGatewayFixture{variant: variant, originProduct: "fixture-product"}
+	product := variant == "product"
+	if product {
+		f.originProduct = "superwagie"
+		oldFX, oldUnits := operation_setting.USDExchangeRate, common.QuotaPerUnit
+		oldPrice := billing_setting.GetModelNativePricingCopy()
+		operation_setting.USDExchangeRate, common.QuotaPerUnit = 8, 1000000
+		sale := metering.Price{Version: "metered_v2", Operation: "video", Policy: "ali_wan26_t2v_billable_duration_v1", Terms: []metering.Term{
+			{Key: "video_720p", Unit: "video_second", Price: metering.Rational{Numerator: "3", Denominator: "5"}},
+			{Key: "video_1080p", Unit: "video_second", Price: metering.Rational{Numerator: "1", Denominator: "1"}},
+		}}
+		require.NoError(t, billing_setting.SetModelNativePricing(map[string]map[string]metering.Price{"wan2.6-t2v": {"video": sale}}))
+		t.Cleanup(func() {
+			operation_setting.USDExchangeRate, common.QuotaPerUnit = oldFX, oldUnits
+			require.NoError(t, billing_setting.SetModelNativePricing(oldPrice))
+		})
+	}
 	if variant == "1080" {
 		f.mp4 = wanVideoTestFile(t, "wan1080.mp4")
 	} else {
@@ -83,7 +101,7 @@ func newWanVideoGatewayFixtureWithHub(t *testing.T, variant, hubOrigin, serviceT
 	db, err := gorm.Open(sqlite.Open("file:"+dbPath), &gorm.Config{})
 	require.NoError(t, err)
 	f.db = db
-	for _, entry := range []any{&model.User{}, &model.Token{}, &model.Channel{}, &model.Ability{}, &model.ClientModelRoute{}, &model.ClientModelTarget{}, &model.Task{}, &model.RelayMediaResource{}} {
+	for _, entry := range []any{&model.User{}, &model.Token{}, &model.Model{}, &model.Vendor{}, &model.Channel{}, &model.Ability{}, &model.ClientModelRoute{}, &model.ClientModelTarget{}, &model.Task{}, &model.RelayMediaResource{}} {
 		require.NoError(t, db.AutoMigrate(entry))
 	}
 	oldDB, oldLog, oldMemory, oldRedis, oldRuntime := model.DB, model.LOG_DB, common.MemoryCacheEnabled, common.RedisEnabled, controller.RelayMediaRuntime
@@ -108,7 +126,12 @@ func newWanVideoGatewayFixtureWithHub(t *testing.T, variant, hubOrigin, serviceT
 			assert.Equal(t, "enable", r.Header.Get("X-DashScope-Async"))
 			assert.Equal(t, "Bearer synthetic-wan-key", r.Header.Get("Authorization"))
 			var call platformbilling.Call
-			require.NoError(t, db.First(&call, "call_id = ?", "wan-call").Error)
+			if product {
+				require.NoError(t, db.First(&call, "credit_scope = ?", platformbilling.ProductCreditScope).Error)
+				assert.Empty(t, r.Header.Get(platformbilling.ProductAuthorizationHeader))
+			} else {
+				require.NoError(t, db.First(&call, "call_id = ?", "wan-call").Error)
+			}
 			assert.Equal(t, "UNKNOWN", call.Status)
 			var attempt platformbilling.Attempt
 			require.NoError(t, db.First(&attempt, "call_id = ?", call.CallID).Error)
@@ -208,12 +231,39 @@ func newWanVideoGatewayFixtureWithHub(t *testing.T, variant, hubOrigin, serviceT
 	rate := platformbilling.Rate{ID: "wan-rate", Model: "wan2.6-t2v", Asset: "CNY/6", Status: "published", Semantics: "metered_v2", Metered: &price}
 	var remote platformbilling.RemoteCall
 	var final *taskSettlementInput
+	var nativeFinal platformbilling.NativeSettleRequest
 	if hubOrigin == "" {
 		hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var out any
 			switch r.URL.Path {
 			case "/internal/v1/model-credentials/verify":
+				if product {
+					var grantRequest map[string]string
+					require.NoError(t, common.DecodeJson(r.Body, &grantRequest))
+					if grantRequest["product_authorization"] != "product-proof" {
+						w.WriteHeader(http.StatusForbidden)
+						return
+					}
+					conversion := &platformbilling.NativeConversion{Version: "test-product-video", Numerator: "1", Denominator: "1", Rounding: "lr-cumulative-ceil-v1"}
+					out = platformbilling.Claims{ID: "product-video-credential", CredentialKind: "api_key", CredentialVersion: 1, Audience: "llmrouter", ActorID: "actor",
+						AccountID: "account", OriginProductID: f.originProduct, InstanceID: "default", Asset: "CREDIT/6", FundingMode: "credits", ModelScope: "llmrouter_available",
+						PricingSource: platformbilling.NativeCreditPricingSource, CreditScope: platformbilling.ProductCreditScope, FundingProductID: f.originProduct,
+						SourceVerified: true, NativeCreditConversion: conversion}
+					break
+				}
 				out = platformbilling.Claims{CredentialKind: "task", ID: "original-credential", Audience: "llmrouter", ActorID: "actor", AccountID: "account", OriginProductID: f.originProduct, InstanceID: "default", Models: []string{"wan2.6-t2v"}, Operations: map[string][]string{"wan2.6-t2v": {"videos.create"}}, TaskID: "wan-task", ExpiresAt: time.Now().Add(time.Hour), Asset: "CNY/6", FundingMode: "prepaid_cash"}
+			case "/internal/v1/calls/native-reserve":
+				var in platformbilling.NativeReserveRequest
+				require.NoError(t, common.DecodeJson(r.Body, &in))
+				assert.Equal(t, "product-proof", in.ProductAuthorization)
+				assert.Equal(t, platformbilling.ProductCreditScope, in.CreditScope)
+				assert.Equal(t, "2400000000", in.Quote.MaxAmount)
+				assert.Equal(t, "2400000000", in.MinimumCreditAmount)
+				remote = platformbilling.RemoteCall{CreditScope: in.CreditScope, NativePricing: &in.Quote, WireOperation: in.WireOperation, CallID: in.CallID,
+					ActorID: "actor", AccountID: "account", OriginProductID: f.originProduct, InstanceID: "default", CredentialID: "product-video-credential",
+					CredentialVersion: 1, TaskID: in.TaskID, RequestDigest: in.RequestDigest, Rate: platformbilling.Rate{Asset: "CREDIT/6", Model: in.Model, Semantics: "llmrouter_native"},
+					ChargeAsset: "CREDIT/6", FundingMode: "credits", FundingProductID: f.originProduct, Held: in.Quote.MaxAmount, Status: "RESERVED"}
+				out = remote
 			case "/internal/v1/rates":
 				out = []platformbilling.Rate{rate}
 			case "/internal/v1/calls/reserve":
@@ -244,6 +294,24 @@ func newWanVideoGatewayFixtureWithHub(t *testing.T, variant, hubOrigin, serviceT
 				require.NoError(t, db.First(&row, "call_id = ?", "wan-call").Error)
 				out = platformbilling.OwnedReadClaims{CredentialKind: "owned_call_read_v1", Audience: "llmrouter-read", ClientID: "sw", CallID: row.CallID, RequestDigest: row.Digest, Model: row.Model, WireOperation: row.WireOperation, TaskID: row.TaskID, CredentialID: row.CredentialID, OriginalCredentialKind: "task", ActorID: row.ActorID, AccountID: row.AccountID, OriginProductID: row.OriginProductID, InstanceID: row.InstanceID, ExpiresAt: time.Now().Add(4 * time.Minute)}
 			default:
+				if product && r.URL.Path == "/internal/v1/calls/"+remote.CallID+"/native-settle" {
+					f.settles++
+					require.NoError(t, common.DecodeJson(r.Body, &nativeFinal))
+					require.Equal(t, "2400000000", nativeFinal.Amount)
+					require.NotNil(t, nativeFinal.Usage)
+					require.Equal(t, "provider-wan", nativeFinal.Usage.Metered.ProviderRequestID)
+					remote.Status, remote.Charged = "SETTLED", nativeFinal.Amount
+					out = remote
+					break
+				}
+				if product && r.URL.Path == "/internal/v1/calls/"+remote.CallID {
+					out = struct {
+						platformbilling.RemoteCall
+						NativeQuota string                 `json:"native_quota"`
+						Usage       *platformbilling.Usage `json:"usage"`
+					}{remote, nativeFinal.NativeQuota, nativeFinal.Usage}
+					break
+				}
 				t.Errorf("unexpected hub path %s", r.URL.Path)
 				w.WriteHeader(404)
 				return
@@ -275,9 +343,15 @@ func newWanVideoGatewayFixtureWithHub(t *testing.T, variant, hubOrigin, serviceT
 	keyHash := sha256.Sum256([]byte("synthetic-wan-key"))
 	policy := platformbilling.VideoPolicy{Version: "video_v2", PublicModel: "wan2.6-t2v", WireOperation: "videos.create", ChannelID: 16, ChannelType: constant.ChannelTypeAli, UpstreamModel: "wan2.6-t2v", ChannelKeySHA256: hex.EncodeToString(keyHash[:]), Origin: "https://dashscope.aliyuncs.com", APIVersion: "dashscope-video-v1", UsagePolicy: "ali_wan26_t2v_cny6_v2", MaxSeconds: 10, MaxVideoBytes: 64 << 20, Resolutions: []string{"720P", "1080P"}, ResourceOrigins: []string{provider.URL}, AllowLoopbackHTTP: true, RateIDs: map[string]string{"CNY/6": "wan-rate"}}
 	f.cfg = platformbilling.Config{Enabled: true, Origin: hubOrigin, ServiceToken: serviceToken, PrincipalID: 1, Group: "platform", MaxBodyBytes: 1 << 20, MaxInputTokens: 1000, MaxOutputTokens: 100, VideoPolicies: map[string]map[string]platformbilling.VideoPolicy{"videos.create": {"wan2.6-t2v": policy}}, OperationLimits: map[string]map[string]platformbilling.OperationLimits{"video": {"wan2.6-t2v": {MaxQuantity: 10, Policy: "ali_wan26_t2v_cny6_v2"}}}, OperationRateIDs: map[string]map[string]map[string]string{"video": {"CNY/6": {"wan2.6-t2v": "wan-rate"}}}}
+	if product {
+		f.cfg.NativeGroup = "platform"
+	}
 	f.adapter, err = platformbilling.New(db, f.cfg)
 	require.NoError(t, err)
 	f.engine = gin.New()
+	if product {
+		SetManagedKeyDispatch(f.engine, f.adapter)
+	}
 	SetPlatformRouter(f.engine, f.adapter)
 	return f
 }
@@ -502,4 +576,46 @@ func TestWanCashAdmissionRequiresFrozenProducerCertificate(t *testing.T) {
 	response := f.submit(t, "720P")
 	require.NotEqual(t, http.StatusOK, response.Code, response.Body.String())
 	assert.Zero(t, f.sends, "supplier dispatch must not occur without a bound video certificate")
+}
+
+func TestProductWanVideoProofUsesCertifiedSubmissionAndOriginalReceiptKey(t *testing.T) {
+	f := newWanVideoGatewayFixture(t, "product")
+	const request = `{"model":"wan2.6-t2v","prompt":"hello async world","seconds":5,"size":"1280*720"}`
+	send := func(method, path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer uh_key_product_video")
+		req.Header.Set(platformbilling.ProductAuthorizationHeader, "product-proof")
+		req.Header.Set("Content-Type", "application/json")
+		if method == http.MethodPost {
+			req.Header.Set("Idempotency-Key", "product-video-1")
+		}
+		out := httptest.NewRecorder()
+		f.engine.ServeHTTP(out, req)
+		return out
+	}
+	submit := send(http.MethodPost, "/platform/v1/videos", request)
+	require.Equal(t, http.StatusOK, submit.Code, submit.Body.String())
+	require.Equal(t, 1, f.sends)
+	id := submit.Header().Get("X-UniHub-Call-ID")
+	require.NotEmpty(t, id)
+	require.Equal(t, http.StatusConflict, send(http.MethodPost, "/platform/v1/videos", request).Code)
+	require.Equal(t, 1, f.sends)
+	status := send(http.MethodGet, "/platform/v1/videos/product-video-1", "")
+	require.Equal(t, http.StatusOK, status.Code, status.Body.String())
+	require.Contains(t, status.Body.String(), `"idempotency_key":"product-video-1"`)
+	receipt := send(http.MethodGet, "/platform/v1/calls/product-video-1", "")
+	require.Equal(t, http.StatusOK, receipt.Code, receipt.Body.String())
+	require.Contains(t, receipt.Body.String(), `"credit_scope":"product_v1"`)
+	require.Contains(t, receipt.Body.String(), `"status":"UNKNOWN"`)
+	oldLimit := constant.TaskQueryLimit
+	constant.TaskQueryLimit = 10
+	t.Cleanup(func() { constant.TaskQueryLimit = oldLimit })
+	require.Equal(t, 1, service.RunTaskPollingOnce(context.Background(), nil).UnfinishedTasks)
+	result := send(http.MethodGet, "/platform/v1/videos/product-video-1/result", "")
+	require.Equal(t, http.StatusOK, result.Code, result.Body.String())
+	require.Equal(t, f.mp4, result.Body.Bytes())
+	expectSHA := sha256.Sum256(f.mp4)
+	require.Equal(t, hex.EncodeToString(expectSHA[:]), result.Header().Get("X-Content-Sha256"))
+	require.Equal(t, 1, f.sends)
+	require.Equal(t, 1, f.settles)
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/metering"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
@@ -13,6 +14,58 @@ import (
 	"testing"
 	"time"
 )
+
+func TestProductMicrocreditsUseOneRoundingBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		denominator  string
+		microcredits int64
+	}{{"10000000", 210}, {"2000000000", 2}} {
+		price := metering.Price{
+			Version: "metered_v2", Operation: "speech", Policy: "provider_reported_v1",
+			Terms: []metering.Term{{Key: "characters", Unit: "character", Price: metering.Rational{Numerator: "3", Denominator: tc.denominator}}},
+		}
+		public := billing_setting.ProductCreditPrice{CNYPerUSD: "7", Tariff: price}
+		admission := NativeAdmission{ProductPrice: &public, Price: price, GroupRatio: "1", QuotaPerUnit: public.MicrocreditsPerUSD()}
+		for _, reserve := range []bool{true, false} {
+			charge, err := NativeProductCreditAmount(admission, nativeUsage("1"), reserve)
+			require.NoError(t, err)
+			assert.Equal(t, tc.microcredits, charge)
+		}
+	}
+}
+
+func TestBandedProductCreditReservationAndSettlementUseFrozenLimits(t *testing.T) {
+	price := metering.Price{Version: "metered_v2", Operation: "chat", Policy: "provider_reported_v1", Terms: []metering.Term{
+		{Key: "input", Unit: "token", Price: metering.Rational{Numerator: "1", Denominator: "700000000"}},
+		{Key: "cache_read", Unit: "token", Price: metering.Rational{Numerator: "1", Denominator: "3500000000"}},
+		{Key: "output", Unit: "token", Price: metering.Rational{Numerator: "2", Denominator: "700000000"}},
+	}, InputTokenBands: []metering.InputTokenBand{
+		{MaxInputTokens: 100, Prices: map[string]metering.Rational{"input": {Numerator: "1", Denominator: "700000000"}, "cache_read": {Numerator: "1", Denominator: "3500000000"}, "output": {Numerator: "2", Denominator: "700000000"}}},
+		{MaxInputTokens: 200, Prices: map[string]metering.Rational{"input": {Numerator: "2", Denominator: "700000000"}, "cache_read": {Numerator: "1", Denominator: "1750000000"}, "output": {Numerator: "4", Denominator: "700000000"}}},
+	}}
+	usage := func(input, cache, output string) metering.Usage {
+		return metering.Usage{Version: "metered_v2", Operation: "chat", State: "confirmed", Measurements: []metering.Measurement{
+			{Key: "input", Unit: "token", Quantity: metering.Quantity{Value: input}},
+			{Key: "cache_read", Unit: "token", Quantity: metering.Quantity{Value: cache}},
+			{Key: "output", Unit: "token", Quantity: metering.Quantity{Value: output}},
+		}}
+	}
+	product := billing_setting.ProductCreditPrice{CNYPerUSD: "7", Tariff: price}
+	admission := NativeAdmission{ProductPrice: &product, Price: price, GroupRatio: "1", QuotaPerUnit: product.MicrocreditsPerUSD(), Reservation: usage("150", "150", "30")}
+	hold, err := NativeProductCreditAmount(admission, admission.Reservation, true)
+	require.NoError(t, err)
+	assert.EqualValues(t, 420, hold)
+	below, err := NativeProductCreditAmount(admission, usage("80", "20", "10"), false)
+	require.NoError(t, err)
+	assert.EqualValues(t, 104, below)
+	above, err := NativeProductCreditAmount(admission, usage("80", "21", "10"), false)
+	require.NoError(t, err)
+	assert.EqualValues(t, 209, above)
+	_, err = NativeProductCreditAmount(admission, usage("141", "10", "10"), false)
+	assert.ErrorContains(t, err, "exceeds frozen reservation")
+	_, err = NativeProductCreditAmount(admission, usage("90", "10", "31"), false)
+	assert.ErrorContains(t, err, "exceeds frozen reservation")
+}
 
 func nativeFixture(t *testing.T) (*NativeBillingStore, *OCRBillingStore, NativeAdmission, OCRAdmission) {
 	t.Helper()

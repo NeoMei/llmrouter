@@ -49,6 +49,7 @@ const (
 	ErrorCodeSensitiveWordsDetected       ErrorCode = "sensitive_words_detected"
 	ErrorCodeViolationFeeGrokCSAM         ErrorCode = "violation_fee.grok.csam"
 	ErrorCodePlatformModelCreditsRequired ErrorCode = "platform_model_credits_required"
+	ErrorCodeProductMembershipExpired     ErrorCode = "product_membership_expired"
 
 	// new api error
 	ErrorCodeCountTokenFailed           ErrorCode = "count_token_failed"
@@ -238,7 +239,8 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 		}
 	default:
 		errorType := string(e.errorType)
-		if e.errorCode == ErrorCodeContextCapacityExceeded || e.errorCode == ErrorCodeResponsesStateScopeInvalid {
+		switch e.errorCode {
+		case ErrorCodeContextCapacityExceeded, ErrorCodeResponsesStateScopeInvalid, ErrorCodePlatformModelCreditsRequired, ErrorCodeProductMembershipExpired:
 			errorType = string(e.errorCode)
 		}
 		result = ClaudeError{

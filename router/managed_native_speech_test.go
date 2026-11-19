@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/metering"
 	"github.com/QuantumNous/new-api/relay/channel/nativespeech"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -32,6 +34,7 @@ type managedSpeechFixture struct {
 	db                                  *gorm.DB
 	adapter                             *platformbilling.Adapter
 	mode                                string
+	product                             bool
 	sends, downloads, reserves, settles int
 	verifies                            int
 	text, reserveQuota                  string
@@ -47,13 +50,13 @@ func newManagedSpeechFixture(t *testing.T) *managedSpeechFixture {
 	_, db := providerCatalogFixture(t)
 	f := &managedSpeechFixture{db: db, text: "你好 A", reserveQuota: "6000", supplierCharacters: 3}
 	oldPrices, oldLimits := billing_setting.GetModelNativePricingCopy(), billing_setting.GetModelNativeReservationLimitsCopy()
-	oldGroups, oldQuota := ratio_setting.GroupRatio2JSONString(), common.QuotaPerUnit
+	oldGroups, oldQuota, oldFX := ratio_setting.GroupRatio2JSONString(), common.QuotaPerUnit, operation_setting.USDExchangeRate
 	oldProducer, oldCache, oldRedis, oldGlobal := newNativeSpeechProducer, common.MemoryCacheEnabled, common.RedisEnabled, common.GlobalApiRateLimitEnable
 	t.Cleanup(func() {
 		require.NoError(t, billing_setting.SetModelNativePricing(oldPrices))
 		require.NoError(t, billing_setting.SetModelNativeReservationLimits(oldLimits))
 		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(oldGroups))
-		common.QuotaPerUnit = oldQuota
+		common.QuotaPerUnit, operation_setting.USDExchangeRate = oldQuota, oldFX
 		newNativeSpeechProducer, common.MemoryCacheEnabled, common.RedisEnabled, common.GlobalApiRateLimitEnable = oldProducer, oldCache, oldRedis, oldGlobal
 	})
 	common.MemoryCacheEnabled, common.RedisEnabled, common.GlobalApiRateLimitEnable = false, false, false
@@ -127,7 +130,19 @@ func newManagedSpeechFixture(t *testing.T) *managedSpeechFixture {
 					require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 106).Update("key", "rotated-supplier-key").Error)
 				}
 			}
-			output = platformbilling.Claims{ID: "original-key", CredentialKind: "api_key", InstanceID: "fixture", Audience: "llmrouter", ActorID: "actor", AccountID: "team", OriginProductID: "superwagie", ModelScope: "llmrouter_available", PricingSource: "llmrouter_native", CredentialVersion: 2, Asset: "CNY/6", FundingMode: "prepaid_cash"}
+			grant := platformbilling.Claims{ID: "original-key", CredentialKind: "api_key", InstanceID: "fixture", Audience: "llmrouter", ActorID: "actor", AccountID: "team", OriginProductID: "superwagie", ModelScope: "llmrouter_available", PricingSource: "llmrouter_native", CredentialVersion: 2, Asset: "CNY/6", FundingMode: "prepaid_cash"}
+			if f.product {
+				var in map[string]string
+				require.NoError(t, common.DecodeJson(r.Body, &in))
+				if in["product_authorization"] != "speech-origin-proof" {
+					w.WriteHeader(http.StatusForbidden)
+					return
+				}
+				grant.CreditScope, grant.FundingProductID, grant.SourceVerified = platformbilling.ProductCreditScope, "superwagie", true
+				grant.Asset, grant.FundingMode, grant.PricingSource = "CREDIT/6", "credits", platformbilling.NativeCreditPricingSource
+				grant.NativeCreditConversion = &platformbilling.NativeConversion{Version: "test-product-speech-v1", Numerator: "1", Denominator: "1", Rounding: "lr-cumulative-ceil-v1"}
+			}
+			output = grant
 		case r.URL.Path == "/internal/v1/calls/native-reserve":
 			f.reserves++
 			if f.mode == "budget" {
@@ -141,6 +156,22 @@ func newManagedSpeechFixture(t *testing.T) *managedSpeechFixture {
 			assert.Equal(t, "bailian.audio.speech.create", in.WireOperation)
 			assert.Equal(t, f.reserveQuota, in.Quote.NativeQuotaMax)
 			remote = platformbilling.RemoteCall{CredentialVersion: 2, TaskID: in.TaskID, CallID: in.CallID, CredentialID: "original-key", InstanceID: "fixture", ActorID: "actor", AccountID: "team", OriginProductID: "superwagie", RequestDigest: in.RequestDigest, WireOperation: in.WireOperation, NativePricing: &in.Quote, Rate: platformbilling.Rate{Model: in.Model, Asset: "CNY/6", Semantics: "llmrouter_native"}, Held: in.Quote.MaxAmount, ChargeAsset: "CNY/6", FundingMode: "prepaid_cash", FundingProductID: "llmrouter", Status: "RESERVED"}
+			if f.product {
+				require.Equal(t, platformbilling.ProductCreditScope, in.CreditScope)
+				require.Equal(t, "speech-origin-proof", in.ProductAuthorization)
+				require.Empty(t, in.MinimumCreditAmount)
+				switch f.mode {
+				case "product-membership-expired":
+					w.WriteHeader(http.StatusForbidden)
+					_, _ = w.Write([]byte(`{"error":"product_membership_expired_no_hold"}`))
+					return
+				case "product-insufficient-credits":
+					w.WriteHeader(http.StatusPaymentRequired)
+					_, _ = w.Write([]byte(`{"error":"insufficient_credits"}`))
+					return
+				}
+				remote.CreditScope, remote.ChargeAsset, remote.Rate.Asset, remote.FundingMode, remote.FundingProductID = in.CreditScope, "CREDIT/6", "CREDIT/6", "credits", "superwagie"
+			}
 			if f.mode == "revoked-route" {
 				require.NoError(t, db.Model(&model.ClientModelRoute{}).Where("id = ?", 1).Update("enabled", false).Error)
 			}
@@ -165,6 +196,12 @@ func newManagedSpeechFixture(t *testing.T) *managedSpeechFixture {
 		case strings.HasSuffix(r.URL.Path, "/release"):
 			remote.Status = "RELEASED"
 			output = remote
+		case f.product && r.URL.Path == "/internal/v1/calls/"+remote.CallID:
+			output = struct {
+				platformbilling.RemoteCall
+				NativeQuota string                 `json:"native_quota"`
+				Usage       *platformbilling.Usage `json:"usage"`
+			}{remote, f.settlement.NativeQuota, f.settlement.Usage}
 		default:
 			t.Errorf("unexpected funding endpoint %s", r.URL.Path)
 			w.WriteHeader(500)
@@ -416,6 +453,75 @@ func TestManagedBailianSpeechCatalogDisablesUnsupportedAudioLimits(t *testing.T)
 			out := f.request(managedSpeechBody, "speech-unsupported-limits")
 			assert.Equal(t, 503, out.Code)
 			assert.Zero(t, f.reserves)
+			assert.Zero(t, f.sends)
+		})
+	}
+}
+
+func TestProductBailianSpeechReclaimsPaidOutputAfterLostSettlementResponse(t *testing.T) {
+	f := newManagedSpeechFixture(t)
+	f.product, f.reserveQuota, f.mode = true, "600000", "settlement-unavailable"
+	operation_setting.USDExchangeRate = 1
+	send := func(method, path, body, proof string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer uh_key_same")
+		req.Header.Set(platformbilling.ProductAuthorizationHeader, proof)
+		req.Header.Set("Content-Type", "application/json")
+		if method == http.MethodPost {
+			req.Header.Set("Idempotency-Key", "speech-product-1")
+		}
+		out := httptest.NewRecorder()
+		f.engine.ServeHTTP(out, req)
+		return out
+	}
+	submit := send(http.MethodPost, "/platform/v1/native/bailian/audio/speech", managedSpeechBody, "speech-origin-proof")
+	require.Equal(t, http.StatusServiceUnavailable, submit.Code, submit.Body.String())
+	id := submit.Header().Get("X-UniHub-Call-ID")
+	require.NotEmpty(t, id)
+	const path = "/platform/v1/calls/speech-product-1/result"
+	require.Equal(t, http.StatusNotFound, send(http.MethodGet, path, "", "speech-origin-proof").Code)
+	f.mode = ""
+	require.NoError(t, f.adapter.Recover(context.Background()))
+	require.Equal(t, http.StatusNotFound, send(http.MethodGet, path, "", "wrong-proof").Code)
+	result := send(http.MethodGet, path, "", "speech-origin-proof")
+	require.Equal(t, http.StatusOK, result.Code, result.Body.String())
+	require.Equal(t, audioWAV(), result.Body.Bytes())
+	require.Equal(t, id, result.Header().Get("X-UniHub-Call-ID"))
+	require.Equal(t, "speech-product-1", result.Header().Get("X-UniHub-Idempotency-Key"))
+	require.Equal(t, "audio/wav", result.Header().Get("Content-Type"))
+	digest := sha256.Sum256(audioWAV())
+	require.Equal(t, hex.EncodeToString(digest[:]), result.Header().Get("X-Content-SHA256"))
+	require.Equal(t, http.StatusConflict, send(http.MethodPost, "/platform/v1/native/bailian/audio/speech", managedSpeechBody, "speech-origin-proof").Code)
+	require.Equal(t, 1, f.sends)
+	require.Equal(t, 1, f.reserves)
+	require.Equal(t, "3000", f.settlement.Amount)
+}
+
+func TestProductBailianSpeechReportsConfirmedFundingRefusalBeforeDispatch(t *testing.T) {
+	for _, test := range []struct {
+		mode, code string
+		status     int
+	}{
+		{"product-membership-expired", "product_membership_expired", http.StatusForbidden},
+		{"product-insufficient-credits", "platform_model_credits_required", http.StatusPaymentRequired},
+	} {
+		t.Run(test.mode, func(t *testing.T) {
+			f := newManagedSpeechFixture(t)
+			f.product, f.reserveQuota, f.mode = true, "600000", test.mode
+			operation_setting.USDExchangeRate = 1
+			req := httptest.NewRequest(http.MethodPost, "/platform/v1/native/bailian/audio/speech", strings.NewReader(managedSpeechBody))
+			req.Header.Set("Authorization", "Bearer uh_key_same")
+			req.Header.Set(platformbilling.ProductAuthorizationHeader, "speech-origin-proof")
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Idempotency-Key", "speech-funding-refusal")
+			out := httptest.NewRecorder()
+			f.engine.ServeHTTP(out, req)
+			require.Equal(t, test.status, out.Code, out.Body.String())
+			assert.JSONEq(t, fmt.Sprintf(`{"error":{"code":%q,"stage":"pre_admission"}}`, test.code), out.Body.String())
+			var call platformbilling.Call
+			require.NoError(t, f.db.First(&call).Error)
+			assert.Equal(t, "REJECTED", call.Status)
+			assert.Equal(t, 1, f.reserves)
 			assert.Zero(t, f.sends)
 		})
 	}

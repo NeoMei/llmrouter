@@ -59,6 +59,14 @@ async function fixture(page: Page) {
           data: [
             { key: 'ModelNativePricing', value: '{}' },
             { key: 'ModelNativeReservationLimits', value: '{}' },
+            {
+              key: 'ProductCreditPricing',
+              value: JSON.stringify({
+                version: 'product-credit-pricing-v1',
+                suppliers: { 'public-model': {} },
+                fixed_public_cny: fixedPublicCNY,
+              }),
+            },
           ],
         },
       })
@@ -152,4 +160,60 @@ test('user native receipts distinguish pending from confirmed zero', async ({
   await expect(pending).toContainText('Final product measurement: Pending')
   const zero = page.getByRole('listitem').filter({ hasText: 'zero-fixture' })
   await expect(zero).toContainText('Final product measurement: 0 LR_QUOTA')
+})
+
+const fixedPublicCNY = {
+  'PaddleOCR-VL-1.6': {
+    ocr: {
+      version: 'metered_v2',
+      operation: 'ocr',
+      policy: 'success_request',
+      terms: [
+        {
+          key: 'requests',
+          unit: 'request',
+          price: { numerator: '1', denominator: '20' },
+        },
+      ],
+    },
+  },
+}
+
+test('product credit pricing can update the multiplier and edit fixed public CNY tariffs', async ({
+  page,
+}) => {
+  const writes = await fixture(page)
+  await page.goto('/system-settings/models/native-pricing')
+  await expect(page.getByLabel('Multiplier numerator')).toHaveValue('3')
+  await expect(page.getByLabel('Multiplier denominator')).toHaveValue('2')
+  const fixedTariffs = page.getByLabel('Fixed public tariffs in CNY')
+  await expect(fixedTariffs).toHaveValue(
+    JSON.stringify(fixedPublicCNY, null, 2)
+  )
+  await page.getByLabel('Pricing revision').fill('pricing-rev2')
+  await page.getByLabel('Multiplier numerator').fill('0')
+  await expect(
+    page.getByRole('button', { name: 'Save product credit pricing' })
+  ).toBeDisabled()
+  await page.getByLabel('Multiplier numerator').fill('11')
+  await page.getByLabel('Multiplier denominator').fill('5')
+  await page
+    .getByRole('button', { name: 'Save product credit pricing' })
+    .click()
+  await expect.poll(() => writes.length).toBe(1)
+  expect(writes[0].key).toBe('ProductCreditPricing')
+  expect(JSON.parse(writes[0].value)).toEqual({
+    version: 'pricing-rev2',
+    multiplier: { numerator: '11', denominator: '5' },
+    suppliers: { 'public-model': {} },
+    fixed_public_cny: fixedPublicCNY,
+  })
+  const newPrice = structuredClone(fixedPublicCNY)
+  newPrice['PaddleOCR-VL-1.6'].ocr.terms[0].price.denominator = '10'
+  await fixedTariffs.fill(JSON.stringify(newPrice))
+  await page
+    .getByRole('button', { name: 'Save product credit pricing' })
+    .click()
+  await expect.poll(() => writes.length).toBe(2)
+  expect(JSON.parse(writes[1].value).fixed_public_cny).toEqual(newPrice)
 })

@@ -27,6 +27,7 @@ import { GeminiSettingsCard } from './gemini-settings-card'
 import { GlobalSettingsCard } from './global-settings-card'
 import { GrokSettingsCard } from './grok-settings-card'
 import { NativePricingEditor } from './native-pricing-editor'
+import { ProductCreditPricingEditor } from './product-credit-pricing-editor'
 import { RoutingReliabilitySection } from './routing-reliability-section'
 
 function formatJsonForEditor(value: string, fallback: string) {
@@ -77,10 +78,18 @@ const MODELS_SECTIONS = [
     id: 'native-pricing',
     titleKey: 'Native metering prices',
     build: (settings: ModelSettings) => (
-      <NativePricingEditor
-        value={settings.ModelNativePricing}
-        reservationLimits={settings.ModelNativeReservationLimits}
-      />
+      <>
+        <NativePricingEditor
+          value={settings.ModelNativePricing}
+          reservationLimits={settings.ModelNativeReservationLimits}
+        />
+        {settings.ProductCreditPricing ? (
+          <ProductCreditPricingEditor
+            key={settings.ProductCreditPricing}
+            value={settings.ProductCreditPricing}
+          />
+        ) : null}
+      </>
     ),
   },
   {

@@ -78,10 +78,11 @@ func (s *Service) OpenGrantedResource(ctx context.Context, jobID, resourceID, gr
 		return nil, info, model.ErrOCRGrant
 	}
 	if snapshot.Job.Funding == "platform" && r.Kind != "input" {
-		// Old OCR grants are bearer URLs. A settlement receipt is insufficient
-		// to authorize SuperWagie output after the original actor is revoked.
+		// Product output requires fresh proof in the owned document route.
+		// SuperWagie's previous output policy likewise blocks bearer grants.
 		var call platformbilling.Call
-		if s.db.WithContext(ctx).Select("origin_product_id").Where("call_id = ?", snapshot.Job.PlatformCallID).First(&call).Error != nil || call.OriginProductID == "superwagie" {
+		if s.db.WithContext(ctx).Select("origin_product_id", "credit_scope").Where("call_id = ?", snapshot.Job.PlatformCallID).First(&call).Error != nil ||
+			call.OriginProductID == "superwagie" || call.CreditScope == platformbilling.ProductCreditScope {
 			return nil, info, model.ErrOCRGrant
 		}
 	}

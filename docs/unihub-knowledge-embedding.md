@@ -167,3 +167,29 @@ automatic resolution is introduced here. The bounded first observation follows
 operational call-record retention, independently of encrypted result expiry.
 This evidence does not certify a supplier's maximum token usage or change any
 reservation, rate, funding limit or production activation gate.
+
+## Product credits
+
+A trusted product proof binds the original managed Key to the originating
+product, account and current actor. The governed text embedding and rerank
+routes still require the corresponding active product pin and certified
+supplier channel. The gateway freezes the public token tariff and its currency
+conversion before reserving product credits, then captures and settles the
+verified supplier usage once before delivering output. Pricing edits after
+reservation cannot change the call's charge.
+
+The product broker uses the existing knowledge route, pinned dispatch and
+result-read contracts with the durable Key, product proof and current actor.
+The result receipt returns the original work ID and task, identifies the same
+Key for production and read authorization, and authenticates the exact output
+bytes. Broker results require the actor-authorized knowledge read. Public
+inference results use the product Key and proof on their own result endpoint.
+Both paths keep an unresolved supplier result out of the settled result store.
+
+For certified Qwen multimodal embedding, the public model must publish a
+comparable tariff for separate text and visual token measurements. The gateway
+keeps prepared input media in request memory, reserves both certified bounds,
+and validates the complete vector batch and measured token counts. Confirmed
+output and settlement are captured together, then recovered through the
+authenticated product result endpoint as needed. The source image, text and
+temporary media URL do not enter the billing journal.

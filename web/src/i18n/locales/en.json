@@ -1,5 +1,13 @@
 {
   "translation": {
+    "Product credit pricing": "Product credit pricing",
+    "Fixed public tariffs take precedence. Otherwise, the multiplier applies to the highest comparable supplier price for each billing dimension, with the published native price as a fallback.": "Fixed public tariffs take precedence. Otherwise, the multiplier applies to the highest comparable supplier price for each billing dimension, with the published native price as a fallback.",
+    "Pricing revision": "Pricing revision",
+    "Multiplier numerator": "Multiplier numerator",
+    "Multiplier denominator": "Multiplier denominator",
+    "Supplier pay-as-you-go tariffs": "Supplier pay-as-you-go tariffs",
+    "Fixed public tariffs in CNY": "Fixed public tariffs in CNY",
+    "Save product credit pricing": "Save product credit pricing",
     "Minimum ¥1, maximum ¥100000, up to 2 decimals": "Minimum ¥1, maximum ¥100000, up to 2 decimals",
     "Enter a valid CNY amount (up to 2 decimals)": "Enter a valid CNY amount (up to 2 decimals)",
     "Minimum recharge is ¥1": "Minimum recharge is ¥1",

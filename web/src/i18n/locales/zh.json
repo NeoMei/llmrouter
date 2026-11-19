@@ -1,5 +1,13 @@
 {
   "translation": {
+    "Product credit pricing": "产品额度定价",
+    "Fixed public tariffs take precedence. Otherwise, the multiplier applies to the highest comparable supplier price for each billing dimension, with the published native price as a fallback.": "固定公开费率优先。其他费率按各计费维度的可比供应商最高价乘以倍率，缺少供应商价格时使用已发布的原生费率。",
+    "Pricing revision": "定价版本",
+    "Multiplier numerator": "倍率分子",
+    "Multiplier denominator": "倍率分母",
+    "Supplier pay-as-you-go tariffs": "供应商按量费率",
+    "Fixed public tariffs in CNY": "固定公开费率（人民币）",
+    "Save product credit pricing": "保存产品额度定价",
     "Minimum ¥1, maximum ¥100000, up to 2 decimals": "最低 ¥1，最高 ¥100000，最多 2 位小数",
     "Enter a valid CNY amount (up to 2 decimals)": "请输入有效的人民币金额（最多 2 位小数）",
     "Minimum recharge is ¥1": "最低充值金额为 ¥1",

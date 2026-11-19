@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -77,8 +78,13 @@ func registerManagedNativeOperation(r *gin.Engine, adapter *platformbilling.Adap
 			requestQuery = c.Request.URL.RawQuery
 		}
 		credential := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
-		body, err := io.ReadAll(io.LimitReader(c.Request.Body, (64<<20)+1))
-		if err != nil || len(body) > 64<<20 {
+		productOCR := wire == "ocr.jobs.create" && platformbilling.HasProductAuthorization(c.Request.Context())
+		limit := 64 << 20
+		if productOCR {
+			limit = controller.OCRMultipartBodyLimit
+		}
+		body, err := io.ReadAll(io.LimitReader(c.Request.Body, int64(limit)+1))
+		if err != nil || len(body) > limit {
 			c.AbortWithStatus(http.StatusRequestEntityTooLarge)
 			return
 		}
@@ -88,7 +94,14 @@ func registerManagedNativeOperation(r *gin.Engine, adapter *platformbilling.Adap
 			return
 		}
 		var name string
-		if ct == "application/json" {
+		admissionBody := body
+		if productOCR {
+			name, admissionBody, err = controller.ManagedOCRRequestIdentity(c.Request.Context(), c.GetHeader("Content-Type"), body)
+			if err != nil {
+				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"code": "invalid_ocr_document", "stage": "pre_admission"}})
+				return
+			}
+		} else if ct == "application/json" {
 			var in struct {
 				Model              string          `json:"model"`
 				PreviousResponseID string          `json:"previous_response_id"`
@@ -172,12 +185,23 @@ func registerManagedNativeOperation(r *gin.Engine, adapter *platformbilling.Adap
 				return
 			}
 		}
+		if !productOCR {
+			admissionBody = body
+		}
 		if target == "/api/v2/ocr/jobs" {
 			operation.Mode = "paddle-native-v1"
 		}
-		s, err := adapter.AdmitNative(c.Request.Context(), credential, c.GetHeader("X-UniHub-Task-ID"), c.GetHeader("Idempotency-Key"), operation, name, body)
+		s, err := adapter.AdmitNative(c.Request.Context(), credential, c.GetHeader("X-UniHub-Task-ID"), c.GetHeader("Idempotency-Key"), operation, name, admissionBody)
 		if err != nil {
-			c.AbortWithStatusJSON(platformbilling.HTTPStatus(err), gin.H{"error": gin.H{"code": unifiedAdmissionCode(platformbilling.HTTPStatus(err))}})
+			if writeProductAdmissionRefusal(c, err) {
+				return
+			}
+			status := platformbilling.HTTPStatus(err)
+			code := unifiedAdmissionCode(status)
+			if productOCR && errors.Is(err, platformbilling.ErrConflict) {
+				code = "logical_call_conflict"
+			}
+			c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"code": code}})
 			return
 		}
 		id, group := adapter.NativePrincipal()

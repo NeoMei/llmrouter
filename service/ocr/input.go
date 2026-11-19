@@ -69,6 +69,24 @@ func (s *Service) ValidateInput(ctx context.Context, in Input) error {
 	return err
 }
 
+// ManagedInputIdentity commits to the validated document, filename and provider
+// options without including the caller's multipart boundary or field order.
+func (s *Service) ManagedInputIdentity(ctx context.Context, in Input) ([]byte, error) {
+	if in.FileURL != "" {
+		return nil, ErrInvalidInput
+	}
+	checked, err := s.validateInput(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(checked.data)
+	return common.Marshal(struct {
+		FileSHA256 string          `json:"file_sha256"`
+		Filename   string          `json:"filename"`
+		Options    json.RawMessage `json:"options"`
+	}{hex.EncodeToString(sum[:]), checked.filename, checked.optional})
+}
+
 func (s *Service) validateInput(ctx context.Context, in Input) (validatedInput, error) {
 	var out validatedInput
 	if (len(in.File) == 0) == (in.FileURL == "") {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/metering"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -19,6 +20,7 @@ import (
 // NativeAdmission is trusted service input, never a client-selected funding owner.
 // Reservation is a bounded estimate and is stored separately from final evidence.
 type NativeAdmission struct {
+	ProductPrice               *billing_setting.ProductCreditPrice `json:"product_price,omitempty"`
 	CallID                     string
 	UserID, TokenID, ChannelID int
 	Model, Group, Preference   string
@@ -71,37 +73,71 @@ func (s *NativeBillingStore) Inspect(ctx context.Context, id string) (NativeBill
 // NativeQuota performs exact rational aggregation and rounds once. Conversion
 // to the bounded database quota still uses the shared checked boundary helper.
 func NativeQuota(a NativeAdmission, u metering.Usage, reserve bool) (int, *common.QuotaClamp, error) {
-	// Reservation vectors are intentionally incomplete; they are bounded
-	// estimates and never eligible as final evidence.
-	calcUsage := u
-	if reserve && calcUsage.State != "confirmed" {
-		calcUsage.State = "confirmed"
-	}
-	cost, err := metering.Calculate(a.Price, calcUsage)
+	whole, err := nativeRoundedCharge(a, u, reserve)
 	if err != nil {
 		return 0, nil, err
 	}
+	q, clamp := common.QuotaFromDecimalChecked(decimal.NewFromBigInt(whole, 0))
+	return q, clamp, nil
+}
+
+// NativeProductCreditAmount uses CREDIT/6 signed ledger units directly.
+// No local quota meter or 32-bit projection owns this product charge.
+func NativeProductCreditAmount(a NativeAdmission, u metering.Usage, reserve bool) (int64, error) {
+	if a.ProductPrice == nil || a.GroupRatio != "1" || a.QuotaPerUnit != a.ProductPrice.MicrocreditsPerUSD() {
+		return 0, ErrOCRConflict
+	}
+	if !reserve && len(a.Price.InputTokenBands) != 0 {
+		if err := metering.ValidateBandedSettlement(a.Price, a.Reservation, u); err != nil {
+			return 0, err
+		}
+	}
+	whole, err := nativeRoundedCharge(a, u, reserve)
+	if err != nil {
+		return 0, err
+	}
+	if whole.Sign() < 0 || !whole.IsInt64() {
+		return 0, ErrOCRConflict
+	}
+	return whole.Int64(), nil
+}
+
+func nativeRoundedCharge(a NativeAdmission, u metering.Usage, reserve bool) (*big.Int, error) {
+	// Reservation vectors are bounded estimates, never eligible as final
+	// evidence. Tariff arithmetic stays rational until the final rounding.
+	if reserve && u.State != "confirmed" {
+		u.State = "confirmed"
+	}
+	calculate := metering.Calculate
+	if reserve && a.ProductPrice != nil && len(a.Price.InputTokenBands) != 0 {
+		calculate = metering.CalculateReservation
+	}
+	cost, err := calculate(a.Price, u)
+	if err != nil {
+		return nil, err
+	}
 	for index, raw := range []string{a.GroupRatio, a.QuotaPerUnit} {
 		if len(raw) == 0 || len(raw) > 128 {
-			return 0, nil, ErrOCRConflict
+			return nil, ErrOCRConflict
 		}
 		v, ok := new(big.Rat).SetString(raw)
-		if !ok || v.Sign() < 0 {
-			return 0, nil, ErrOCRConflict
-		}
-		if index == 1 && v.Sign() == 0 {
-			return 0, nil, ErrOCRConflict
+		if !ok || v.Sign() < 0 || index == 1 && v.Sign() == 0 {
+			return nil, ErrOCRConflict
 		}
 		cost.Mul(cost, v)
 	}
 	whole, rem := new(big.Int), new(big.Int)
 	whole.QuoRem(cost.Num(), cost.Denom(), rem)
-	if (reserve && rem.Sign() > 0) || (!reserve && new(big.Int).Lsh(rem, 1).Cmp(cost.Denom()) >= 0) {
+	if reserve || a.ProductPrice != nil {
+		if rem.Sign() > 0 {
+			whole.Add(whole, big.NewInt(1))
+		}
+	} else if new(big.Int).Lsh(rem, 1).Cmp(cost.Denom()) >= 0 {
 		whole.Add(whole, big.NewInt(1))
 	}
-	q, clamp := common.QuotaFromDecimalChecked(decimal.NewFromBigInt(whole, 0))
-	return q, clamp, nil
+	return whole, nil
 }
+
 func (s *NativeBillingStore) Begin(ctx context.Context, a NativeAdmission) (NativeBilling, error) {
 	if a.UserID <= 0 || a.TokenID <= 0 || a.ChannelID <= 0 || strings.TrimSpace(a.CallID) == "" || len(a.CallID) > 128 || len(a.Model) == 0 || len(a.Model) > 128 || len(a.Group) > 128 {
 		return NativeBilling{}, ErrOCRConflict

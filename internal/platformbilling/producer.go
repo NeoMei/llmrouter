@@ -48,6 +48,10 @@ func (s *Session) WireOperation() WireOperation {
 func (s *Session) GenerationBody(channel int, format types.RelayFormat, upstream string) ([]byte, error) {
 	wire := s.WireOperation()
 	expected, ok := TokenProducer(wire.ID, channel)
+	deepSeekChat := s.ProductCredit() && wire.ID == "chat.completions.create" && channel == constant.ChannelTypeDeepSeek && deepSeekProductChatUpstream(upstream)
+	if deepSeekChat {
+		expected, ok = types.RelayFormatOpenAI, true
+	}
 	if !ok || expected != format || len(s.canonical) == 0 || upstream == "" || (wire.ID == "gemini.generate" && strings.ContainsAny(upstream, "/:?#%")) {
 		return nil, ErrInvalid
 	}
@@ -69,6 +73,9 @@ func (s *Session) GenerationBody(channel int, format types.RelayFormat, upstream
 	}
 	var request map[string]any
 	if common.UnmarshalUnique(s.canonical, &request) != nil {
+		return nil, ErrInvalid
+	}
+	if deepSeekChat && normalizeDeepSeekProductChat(request) != nil {
 		return nil, ErrInvalid
 	}
 	if wire.ID != "gemini.generate" {

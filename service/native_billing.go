@@ -90,17 +90,17 @@ func RecordNativeUsageForRelay(ctx context.Context, info *relaycommon.RelayInfo,
 // sending; uncertain dispatch is thereafter a durable hold, never a refund.
 func BeginNativeBillingForRelay(ctx context.Context, info *relaycommon.RelayInfo, a model.NativeAdmission) error {
 	if info.ManagedNativePricing() {
-		quota, clamp, err := model.NativeQuota(a, a.Reservation, true)
+		quota, err := ManagedNativeAmount(a, a.Reservation, true)
 		if err != nil {
 			return err
-		}
-		if clamp != nil {
-			return clamp
 		}
 		if err := beginManagedNativeFunding(ctx, info, quota, &a); err != nil {
 			return err
 		}
 		info.NativeBilling = &relaycommon.NativeBillingContext{CallID: info.PlatformBilling.CallID(), Platform: true, Price: a.Price, Policy: a.Price.Policy, Observe: func(ctx context.Context, usage metering.Usage) error {
+			if info.PlatformBilling.ProductCredit() {
+				return info.PlatformBilling.ObserveMetering(ctx, usage)
+			}
 			actual, clamp, err := model.NativeQuota(a, usage, false)
 			if err != nil {
 				return err

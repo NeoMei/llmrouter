@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"strconv"
@@ -154,6 +156,7 @@ func platformTaskRead(c *gin.Context, result bool, documentAuthorization func() 
 			return
 		}
 
+		productOwned := row.CreditScope == platformbilling.ProductCreditScope && platformbilling.HasProductAuthorization(c.Request.Context())
 		if documentAuthorization != nil {
 			document, err := OCRRuntime.Service.ReadDocument(c.Request.Context(), job.ID, row.CallID, job.UserID, job.TokenID)
 			if err != nil {
@@ -171,10 +174,19 @@ func platformTaskRead(c *gin.Context, result bool, documentAuthorization func() 
 			}
 			c.Header("Cache-Control", "no-store")
 			c.Header("Referrer-Policy", "no-referrer")
+			if productOwned {
+				sum := sha256.Sum256(data)
+				c.Header("X-Content-SHA256", hex.EncodeToString(sum[:]))
+				c.Header("X-Content-Type-Options", "nosniff")
+			}
 			c.Data(200, "application/json", data)
 			return
 		}
-		status, err := OCRRuntime.Service.Status(c.Request.Context(), job.ID, job.UserID, job.TokenID)
+		loadStatus := OCRRuntime.Service.Status
+		if productOwned {
+			loadStatus = OCRRuntime.Service.OwnedDocumentStatus
+		}
+		status, err := loadStatus(c.Request.Context(), job.ID, job.UserID, job.TokenID)
 		if err != nil {
 			c.AbortWithStatus(502)
 			return
@@ -182,6 +194,10 @@ func platformTaskRead(c *gin.Context, result bool, documentAuthorization func() 
 		if c.GetBool("platform_ocr_native") {
 			if status.State == "done" && (service.PlatformTaskSettlementCheck == nil || service.PlatformTaskSettlementCheck(c.Request.Context(), row.CallID) != nil) {
 				c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": gin.H{"code": "native_settlement_pending"}})
+				return
+			}
+			if productOwned {
+				writeProductOCRStatus(c, status, row.CallID)
 				return
 			}
 			status.JobID = row.CallID
@@ -201,7 +217,15 @@ func platformTaskRead(c *gin.Context, result bool, documentAuthorization func() 
 			c.JSON(200, out)
 			return
 		}
-		c.JSON(200, gin.H{"id": row.CallID, "job_id": job.ID, "state": status.State, "progress": status.ExtractProgress, "result_url": "/platform/v1/ocr/jobs/" + row.CallID + "/result"})
+		response := gin.H{"id": row.CallID, "job_id": job.ID, "state": status.State, "progress": status.ExtractProgress, "result_url": "/platform/v1/ocr/jobs/" + row.CallID + "/result"}
+		if productOwned {
+			c.Header("Cache-Control", "no-store")
+			response["result_url"] = "/platform/v1/ocr/jobs/" + row.CallID + "/document"
+			if alias := platformbilling.ProductReceiptAlias(c.Request.Context(), row); alias != "" {
+				response["idempotency_key"] = alias
+			}
+		}
+		c.JSON(200, response)
 		return
 	}
 	var task model.Task
@@ -241,5 +265,9 @@ func platformTaskRead(c *gin.Context, result bool, documentAuthorization func() 
 		VideoProxy(c)
 		return
 	}
-	c.JSON(200, gin.H{"id": row.CallID, "task_id": task.TaskID, "status": task.Status, "progress": task.Progress, "result_url": "/platform/v1/videos/" + row.CallID + "/result"})
+	status := gin.H{"id": row.CallID, "task_id": task.TaskID, "status": task.Status, "progress": task.Progress, "result_url": "/platform/v1/videos/" + row.CallID + "/result"}
+	if alias := platformbilling.ProductReceiptAlias(c.Request.Context(), row); alias != "" {
+		status["idempotency_key"] = alias
+	}
+	c.JSON(200, status)
 }

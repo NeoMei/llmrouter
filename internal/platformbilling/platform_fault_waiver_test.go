@@ -79,12 +79,12 @@ func waiverFixture(t *testing.T) (*gorm.DB, Call, Attempt, map[string]any) {
 func waiverApprovalForCall(t *testing.T, row Call, attempt Attempt) map[string]any {
 	t.Helper()
 	var rate Rate
-	if row.PricingSource != "llmrouter_native" {
+	if !nativePricingSource(row.PricingSource) {
 		require.NoError(t, common.UnmarshalUnique([]byte(row.RateSnapshot), &rate))
 	}
 	remote := RemoteCall{CallID: row.CallID, ActorID: row.ActorID, AccountID: row.AccountID, OriginProductID: row.OriginProductID, InstanceID: row.InstanceID, CredentialID: row.CredentialID, RequestDigest: row.Digest, Rate: rate, Held: row.Amount, Charged: "0", Status: "RESERVED", ChargeAsset: row.Asset, FundingMode: row.FundingMode, FundingProductID: row.FundingProductID}
 	remote.WireOperation = row.WireOperation
-	if row.PricingSource == "llmrouter_native" {
+	if nativePricingSource(row.PricingSource) {
 		var quote NativeQuote
 		require.NoError(t, common.UnmarshalUnique([]byte(row.NativeQuoteJSON), &quote))
 		remote.NativePricing, remote.CredentialVersion, remote.TaskID = &quote, row.CredentialVersion, row.TaskID
@@ -324,4 +324,133 @@ func TestPlatformFaultWaiverPreservesSuperWagieNativeScope(t *testing.T) {
 	approval["origin_product_id"] = "unknown-product"
 	raw, digest = waiverApprovalBytes(t, approval)
 	require.Error(t, ValidatePlatformFaultWaiverApproval(raw, digest))
+}
+
+func TestPlatformFaultWaiverSupportsLegacyCreditUnknownAndZeroNative(t *testing.T) {
+	for _, scenario := range []struct {
+		name, asset, fundingMode, held, attemptStatus, pricing string
+		archived                                               bool
+	}{
+		{"historical_credit", "CREDIT/6", "credits", "2048", "UNKNOWN", "", true},
+		{"zero_native_credit", "CREDIT/6", "credits", "0", "UNKNOWN", NativeCreditPricingSource, true},
+		{"zero_native_cash", "CNY/6", "prepaid_cash", "0", "DISPATCHED", "llmrouter_native", false},
+		{"cash_unknown_attempt", "CNY/6", "prepaid_cash", "2048", "UNKNOWN", "", false},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			db, row, attempt, _ := waiverFixture(t)
+			row.OriginProductID = "superwagie"
+			row.Asset, row.FundingMode, row.Amount, row.PricingSource = scenario.asset, scenario.fundingMode, scenario.held, scenario.pricing
+			attempt.Status = scenario.attemptStatus
+			if row.PricingSource == "" {
+				rate := Rate{ID: row.RateID, Model: row.Model, Asset: row.Asset, Status: "published", Semantics: "metered_v2"}
+				raw, err := common.Marshal(rate)
+				require.NoError(t, err)
+				row.RateSnapshot = string(raw)
+			} else {
+				row.RateID, row.RateSnapshot, row.CredentialVersion = "", "", 2
+				conversion := NativeConversion{Version: "lr-quota-usd-cny-v1", Numerator: "1", Denominator: "1", Rounding: "lr-cumulative-ceil-v1"}
+				version := "lr-native-v1"
+				row.NativePriceSnapshot = `{"price":"original"}`
+				if row.Asset == "CREDIT/6" {
+					conversion.Version = "historical-credit-rate"
+					version = NativeCreditPricingVersion
+					frozen, err := common.Marshal(map[string]any{"conversion": conversion, "price_snapshot": row.NativePriceSnapshot})
+					require.NoError(t, err)
+					row.NativePriceSnapshot = string(frozen)
+				}
+				digest := sha256.Sum256([]byte(row.NativePriceSnapshot))
+				quote := NativeQuote{
+					PricingVersion: version, PricingDigest: hex.EncodeToString(digest[:]), BillingModel: row.Model,
+					WireOperation: row.WireOperation, RouteID: "12", ChannelID: "102", Group: "default",
+					NativeQuotaMax: row.Amount, Conversion: conversion, Asset: row.Asset, MaxAmount: row.Amount,
+				}
+				raw, err := common.Marshal(quote)
+				require.NoError(t, err)
+				row.NativeQuoteJSON = string(raw)
+			}
+			require.NoError(t, db.Save(&row).Error)
+			require.NoError(t, db.Save(&attempt).Error)
+			require.NoError(t, db.First(&row, "call_id = ?", row.CallID).Error)
+			require.NoError(t, db.First(&attempt, attempt.ID).Error)
+			approval := waiverApprovalForCall(t, row, attempt)
+			if scenario.archived {
+				require.NoError(t, db.Exec("ALTER TABLE platform_model_calls DROP COLUMN credit_scope").Error)
+				raw, err := common.Marshal(row)
+				require.NoError(t, err)
+				var archived map[string]any
+				require.NoError(t, common.UnmarshalUnique(raw, &archived))
+				delete(archived, "CreditScope")
+				approval["gateway_call"] = archived
+			}
+			raw, digest := waiverApprovalBytes(t, approval)
+			ctx := t.Context()
+			_, err := PreparePlatformFaultWaiver(ctx, db, raw, digest, false)
+			require.NoError(t, err)
+			var unchanged Call
+			require.NoError(t, db.First(&unchanged).Error)
+			require.True(t, waiverCallEqual(row, unchanged))
+			staged, err := PreparePlatformFaultWaiver(ctx, db, raw, digest, true)
+			require.NoError(t, err)
+			require.Equal(t, "WAIVER_PENDING", staged.Status)
+
+			snapshot := approval["expected_central_row"].(map[string]any)["snapshot"].(map[string]any)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, http.MethodGet, r.Method)
+				assert.Equal(t, "/internal/v1/calls/"+row.CallID, r.URL.Path)
+				data, err := common.Marshal(snapshot)
+				require.NoError(t, err)
+				_, _ = w.Write(data)
+			}))
+			defer server.Close()
+			cfg := Config{Origin: server.URL, ServiceToken: strings.Repeat("s", 32)}
+			_, err = FinalizePlatformFaultWaiver(ctx, db, cfg, raw, digest)
+			require.ErrorIs(t, err, ErrConflict)
+			finalRaw, err := common.Marshal([]string{"release", "platform_fault_waiver:" + digest})
+			require.NoError(t, err)
+			finalSum := sha256.Sum256(finalRaw)
+			snapshot["status"], snapshot["charged"], snapshot["final_digest"] = "RELEASED", "0", hex.EncodeToString(finalSum[:])
+			finished, err := FinalizePlatformFaultWaiver(ctx, db, cfg, raw, digest)
+			require.NoError(t, err)
+			require.Equal(t, "RELEASED", finished.Status)
+			require.Equal(t, "0", finished.Charged)
+			require.Empty(t, finished.Evidence)
+			var preserved Attempt
+			require.NoError(t, db.First(&preserved, attempt.ID).Error)
+			require.Equal(t, attempt, preserved)
+			_, err = FinalizePlatformFaultWaiver(ctx, db, cfg, raw, digest)
+			require.NoError(t, err)
+			var count int64
+			require.NoError(t, db.Model(&PlatformFaultWaiverEvent{}).Count(&count).Error)
+			require.EqualValues(t, 1, count)
+		})
+	}
+}
+
+func TestPlatformFaultWaiverRequiresOriginalLegacyShapeAndFunding(t *testing.T) {
+	_, row, attempt, _ := waiverFixture(t)
+	for _, check := range []string{"zero_without_native_quote", "mismatched_funding", "missing_legacy_field", "terminal_attempt"} {
+		t.Run(check, func(t *testing.T) {
+			current, send := row, attempt
+			switch check {
+			case "zero_without_native_quote":
+				current.Amount = "0"
+			case "mismatched_funding":
+				current.FundingMode = "credits"
+			case "terminal_attempt":
+				send.Status = "USAGE_CONFIRMED"
+			}
+			approval := waiverApprovalForCall(t, current, send)
+			if check == "missing_legacy_field" {
+				encoded, err := common.Marshal(current)
+				require.NoError(t, err)
+				var incomplete map[string]any
+				require.NoError(t, common.UnmarshalUnique(encoded, &incomplete))
+				delete(incomplete, "CreditScope")
+				delete(incomplete, "TelemetryLatencyMS")
+				approval["gateway_call"] = incomplete
+			}
+			raw, digest := waiverApprovalBytes(t, approval)
+			require.ErrorIs(t, ValidatePlatformFaultWaiverApproval(raw, digest), ErrInvalid)
+		})
+	}
 }

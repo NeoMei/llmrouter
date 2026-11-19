@@ -30,7 +30,7 @@ func authorizeNativeDispatch(ctx context.Context, a *platformbilling.Adapter, gr
 	for _, m := range catalog.Models {
 		if m.ID == advertisedName {
 			for _, op := range m.CapabilityMetadata.Operations {
-				if op.ID == q.WireOperation && op.Executable {
+				if op.ID == q.WireOperation && (op.Executable || grant.ProductCredit() && op.DisabledReason == "product_credit_price_unavailable") {
 					allowed = true
 				}
 			}
@@ -45,6 +45,9 @@ func authorizeNativeDispatch(ctx context.Context, a *platformbilling.Adapter, gr
 	}
 	var channel model.Channel
 	if model.DB.WithContext(ctx).First(&channel, channelID).Error != nil || channel.Status != common.ChannelStatusEnabled {
+		return platformbilling.ErrInvalid
+	}
+	if grant.ProductCredit() && !platformbilling.ProductCreditChannelSupported(q.WireOperation, channel.Type) {
 		return platformbilling.ErrInvalid
 	}
 	user, group := a.NativePrincipal()
@@ -71,7 +74,11 @@ func authorizeNativeDispatch(ctx context.Context, a *platformbilling.Adapter, gr
 		return err
 	}
 	runtime := modelcatalog.RuntimeContext{UserID: user, Groups: []string{group}, Client: grant.OriginProductID}
-	resolver, err := modelcatalog.AssembleRuntimeCatalog(ctx, runtime, routes, targets, modelcatalog.NewGormRuntimeSources(model.DB), deploymentCatalogAuthorizer{user, group, grant.OriginProductID})
+	assemble := modelcatalog.AssembleRuntimeCatalog
+	if grant.ProductCredit() {
+		assemble = modelcatalog.AssembleManagedRuntimeCatalog
+	}
+	resolver, err := assemble(ctx, runtime, routes, targets, modelcatalog.NewGormRuntimeSources(model.DB), deploymentCatalogAuthorizer{user, group, grant.OriginProductID})
 	if err != nil {
 		return err
 	}
@@ -81,6 +88,9 @@ func authorizeNativeDispatch(ctx context.Context, a *platformbilling.Adapter, gr
 	}
 	for _, candidate := range candidates {
 		if strconv.Itoa(candidate.RouteID) == q.RouteID && candidate.ChannelID == channelID && candidate.BillingModel == q.BillingModel && slices.Contains(candidate.Capabilities.Operations, q.WireOperation) {
+			if grant.ProductCredit() && q.WireOperation == "multimodal.embeddings.create" && !productMultimodalTarget(a, advertisedName, candidate, channel) {
+				return platformbilling.ErrConflict
+			}
 			return nil
 		}
 	}

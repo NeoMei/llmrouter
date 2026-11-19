@@ -23,10 +23,17 @@ type Term struct {
 	Minimum      *Quantity `json:"minimum,omitempty"`
 }
 type Price struct {
-	Version   string `json:"version"`
-	Operation string `json:"operation"`
-	Policy    string `json:"policy"`
-	Terms     []Term `json:"terms"`
+	Version         string           `json:"version"`
+	Operation       string           `json:"operation"`
+	Policy          string           `json:"policy"`
+	Terms           []Term           `json:"terms"`
+	InputTokenBands []InputTokenBand `json:"input_token_bands,omitempty"`
+}
+
+// InputTokenBand prices every dimension of one request using its total input.
+type InputTokenBand struct {
+	MaxInputTokens int64               `json:"max_input_tokens"`
+	Prices         map[string]Rational `json:"prices"`
 }
 type Measurement struct {
 	Key          string   `json:"key"`
@@ -156,6 +163,23 @@ func ValidatePrice(p Price) error {
 			return errors.New("missing Wan resolution tier")
 		}
 	}
+	if len(p.InputTokenBands) != 0 {
+		if p.Operation != "chat" || p.Policy != "provider_reported_v1" || !seen["input"] || !seen["output"] || len(p.InputTokenBands) > 16 {
+			return errors.New("invalid input token bands")
+		}
+		var previous int64
+		for _, band := range p.InputTokenBands {
+			if band.MaxInputTokens <= previous || band.MaxInputTokens > 1<<20 || len(band.Prices) != len(p.Terms) {
+				return errors.New("invalid input token band")
+			}
+			previous = band.MaxInputTokens
+			for _, term := range p.Terms {
+				if _, ok := rationalPrice(band.Prices[term.Key]); !ok || term.Minimum != nil || term.Step != nil {
+					return errors.New("invalid input token band term")
+				}
+			}
+		}
+	}
 	return nil
 }
 func ValidateUsage(p Price, u Usage) error {
@@ -199,6 +223,19 @@ func Calculate(p Price, u Usage) (*big.Rat, error) {
 	if e := ValidateUsage(p, u); e != nil {
 		return nil, e
 	}
+	var bandPrices map[string]Rational
+	if len(p.InputTokenBands) != 0 {
+		input, _ := tokenTotals(u)
+		for _, band := range p.InputTokenBands {
+			if input.Cmp(big.NewInt(band.MaxInputTokens)) <= 0 {
+				bandPrices = band.Prices
+				break
+			}
+		}
+		if bandPrices == nil {
+			return nil, errors.New("input exceeds frozen tariff bands")
+		}
+	}
 	sum := new(big.Rat)
 	for _, m := range u.Measurements {
 		var t Term
@@ -228,11 +265,118 @@ func Calculate(p Price, u Usage) (*big.Rat, error) {
 			}
 			qv.Mul(new(big.Rat).SetInt(whole), step)
 		}
-		n := new(big.Int)
-		n.SetString(t.Price.Numerator, 10)
-		d := new(big.Int)
-		d.SetString(t.Price.Denominator, 10)
-		sum.Add(sum, new(big.Rat).Mul(qv, new(big.Rat).SetFrac(n, d)))
+		price := t.Price
+		if bandPrices != nil {
+			price = bandPrices[t.Key]
+		}
+		rate, _ := rationalPrice(price)
+		sum.Add(sum, new(big.Rat).Mul(qv, rate))
 	}
 	return sum, nil
+}
+
+func rationalPrice(price Rational) (*big.Rat, bool) {
+	n, en := parseQuantity(Quantity{Value: price.Numerator})
+	d, ed := parseQuantity(Quantity{Value: price.Denominator})
+	if en != nil || ed != nil || d.Sign() == 0 {
+		return nil, false
+	}
+	return n.Quo(n, d), true
+}
+
+func inputTokenTerm(key string) bool {
+	return key == "input" || key == "cache_read" || key == "cache_write"
+}
+
+func tokenTotals(u Usage) (input, output *big.Int) {
+	input, output = new(big.Int), new(big.Int)
+	for _, m := range u.Measurements {
+		quantity, _ := new(big.Int).SetString(m.Quantity.Value, 10)
+		if inputTokenTerm(m.Key) {
+			input.Add(input, quantity)
+		} else {
+			output.Add(output, quantity)
+		}
+	}
+	return input, output
+}
+
+// CalculateReservation selects the most expensive whole request that the
+// certified bounds allow. Exclusive dimensions share an input or output cap.
+func CalculateReservation(p Price, u Usage) (*big.Rat, error) {
+	if len(p.InputTokenBands) == 0 {
+		return Calculate(p, u)
+	}
+	if err := ValidateUsage(p, u); err != nil {
+		return nil, err
+	}
+	input, output, err := reservationTokenBounds(u)
+	if err != nil {
+		return nil, err
+	}
+	maximum := new(big.Rat)
+	for _, band := range p.InputTokenBands {
+		inputRate, outputRate := new(big.Rat), new(big.Rat)
+		for key, price := range band.Prices {
+			rate, _ := rationalPrice(price)
+			greatest := outputRate
+			if inputTokenTerm(key) {
+				greatest = inputRate
+			}
+			if rate.Cmp(greatest) > 0 {
+				greatest.Set(rate)
+			}
+		}
+		bandInput := big.NewInt(band.MaxInputTokens)
+		reached := input.Cmp(bandInput) <= 0
+		if reached {
+			bandInput = input
+		}
+		cost := inputRate.Mul(inputRate, new(big.Rat).SetInt(bandInput))
+		cost.Add(cost, outputRate.Mul(outputRate, new(big.Rat).SetInt(output)))
+		if cost.Cmp(maximum) > 0 {
+			maximum.Set(cost)
+		}
+		if reached {
+			return maximum, nil
+		}
+	}
+	return nil, errors.New("input exceeds frozen tariff bands")
+}
+
+func reservationTokenBounds(u Usage) (input, output *big.Int, err error) {
+	for _, m := range u.Measurements {
+		quantity, _ := new(big.Int).SetString(m.Quantity.Value, 10)
+		bound := &output
+		if inputTokenTerm(m.Key) {
+			bound = &input
+		}
+		if *bound == nil {
+			*bound = quantity
+		} else if quantity.Cmp(*bound) != 0 {
+			return nil, nil, errors.New("exclusive token bounds differ")
+		}
+	}
+	return input, output, nil
+}
+
+// ValidateBandedSettlement enforces the admitted input and output caps against
+// complete supplier evidence, including cached input and reasoning output.
+func ValidateBandedSettlement(p Price, reservation, usage Usage) error {
+	if err := ValidateUsage(p, usage); err != nil {
+		return err
+	}
+	reservation.State = "confirmed"
+	if err := ValidateUsage(p, reservation); err != nil {
+		return err
+	}
+	maxInput, maxOutput, err := reservationTokenBounds(reservation)
+	if err != nil {
+		return err
+	}
+	input, output := tokenTotals(usage)
+	if input.Cmp(maxInput) > 0 || output.Cmp(maxOutput) > 0 {
+		return errors.New("supplier usage exceeds frozen reservation")
+	}
+	return nil
 }

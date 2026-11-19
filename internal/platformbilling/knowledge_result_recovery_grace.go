@@ -32,6 +32,9 @@ func knowledgeSettledFinancialIntent(row Call) error {
 	if row.Status != "SETTLED" || row.EvidenceConflict || row.FundingSnapshot == "" || !ApprovedKnowledgePair(row.Model, row.WireOperation) {
 		return ErrInvalid
 	}
+	if row.CreditScope == ProductCreditScope {
+		return validateProductKnowledgeFinancialIntent(row)
+	}
 	var rate Rate
 	var evidence metering.Usage
 	var intent struct {

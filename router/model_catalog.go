@@ -34,7 +34,15 @@ func (a deploymentCatalogAuthorizer) Authorize(_ context.Context, userID int, gr
 	return modelcatalog.NewAuthorizedRuntimeSnapshot(userID, groups, client), nil
 }
 func readTechnicalCatalog(ctx context.Context, adapter *platformbilling.Adapter, product string) (platformbilling.TechnicalCatalog, error) {
-	if !adapter.Enabled() || model.DB == nil {
+	if !adapter.Enabled() {
+		return platformbilling.TechnicalCatalog{}, errors.New("catalog unavailable")
+	}
+	user, group := adapter.Principal()
+	return readTechnicalCatalogForGroup(ctx, adapter, product, user, group)
+}
+
+func readTechnicalCatalogForGroup(ctx context.Context, adapter *platformbilling.Adapter, product string, user int, group string) (platformbilling.TechnicalCatalog, error) {
+	if !adapter.Enabled() || group == "" || model.DB == nil {
 		return platformbilling.TechnicalCatalog{}, errors.New("catalog unavailable")
 	}
 	var routes []model.ClientModelRoute
@@ -45,7 +53,6 @@ func readTechnicalCatalog(ctx context.Context, adapter *platformbilling.Adapter,
 	if err := model.DB.WithContext(ctx).Where("enabled = ?", true).Order("id").Find(&targets).Error; err != nil {
 		return platformbilling.TechnicalCatalog{}, err
 	}
-	user, group := adapter.Principal()
 	runtime := modelcatalog.RuntimeContext{UserID: user, Groups: []string{group}, Client: product}
 	catalog, err := modelcatalog.AssembleManagedRuntimeCatalog(ctx, runtime, routes, targets, modelcatalog.NewGormRuntimeSources(model.DB), deploymentCatalogAuthorizer{user, group, product})
 	if err != nil {

@@ -348,9 +348,7 @@ export function SubscriptionPurchaseDialog(props: Props) {
           ) : (
             insufficientBalance && (
               <Alert variant='destructive'>
-                <AlertDescription>
-                  {t('Insufficient balance')}
-                </AlertDescription>
+                <AlertDescription>{t('Insufficient balance')}</AlertDescription>
               </Alert>
             )
           )}

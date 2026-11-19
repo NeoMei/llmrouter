@@ -41,8 +41,8 @@ func relayNativeImage(c *gin.Context, a *platformbilling.Adapter) {
 		return
 	}
 	catalog, e := readTechnicalCatalog(c.Request.Context(), a, "superwagie")
-	available := false
-	if e == nil {
+	available := s.ProductCredit()
+	if !available && e == nil {
 		for _, m := range catalog.Models {
 			if m.ID == p.PublicModel {
 				for _, op := range m.Operations {
@@ -83,11 +83,17 @@ func relayNativeImage(c *gin.Context, a *platformbilling.Adapter) {
 	} else {
 		request.Header.Set("Authorization", "Bearer "+channel.Key)
 	}
+	if s.ProductCredit() {
+		if e = s.BindProductUpstream(p.UpstreamModel); e != nil {
+			c.AbortWithStatus(http.StatusConflict)
+			return
+		}
+	}
 	if e = s.Dispatch(c.Request.Context(), channel.Id); e != nil {
 		c.AbortWithStatus(409)
 		return
 	}
-	if p.ChannelType == constant.ChannelTypeAli && p.WireOperation == "images.edits.create" {
+	if s.ProductCredit() || p.ChannelType == constant.ChannelTypeAli && p.WireOperation == "images.edits.create" {
 		// Once dispatch is journaled, a disconnected client must not prevent
 		// us from receiving and binding the paid supplier task ID.
 		dispatchCtx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 120*time.Second)
@@ -131,14 +137,14 @@ func relayNativeImage(c *gin.Context, a *platformbilling.Adapter) {
 		c.JSON(http.StatusAccepted, gin.H{"id": s.CallID(), "status": "pending"})
 		return
 	}
-	if c.Request.Context().Err() != nil {
+	if !s.ProductCredit() && c.Request.Context().Err() != nil {
 		c.AbortWithStatus(502)
 		return
 	}
 	// Resources use the same DNS/SSRF-protected client but never the producer's
 	// authentication headers. The parser checks each URL against the certificate.
 	result, e := platformbilling.ObserveImageResult(p, raw, func(location string) ([]byte, string, error) {
-		req, e := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, location, nil)
+		req, e := http.NewRequestWithContext(request.Context(), http.MethodGet, location, nil)
 		if e != nil {
 			return nil, "", e
 		}
@@ -156,7 +162,7 @@ func relayNativeImage(c *gin.Context, a *platformbilling.Adapter) {
 		}
 		return data, res.Header.Get("Content-Type"), nil
 	})
-	if e != nil || c.Request.Context().Err() != nil {
+	if e != nil || !s.ProductCredit() && c.Request.Context().Err() != nil {
 		c.AbortWithStatus(502)
 		return
 	}

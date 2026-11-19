@@ -407,6 +407,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		relayInfo.LastError = newAPIError
 
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+		if relayInfo.PlatformBilling.ProductDispatchStarted() {
+			break
+		}
 
 		// Gateway resolves credentials at header construction. Exhaustion there
 		// has sent nothing, so an authorized route fallback still has its budget.
@@ -703,13 +706,60 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 		}
 		return nil
 	}
-	if price, configured := billing_setting.ResolveModelNativePrice(info.BillingModelNameOrOrigin(), operation); configured {
+	priceModel := info.BillingModelNameOrOrigin()
+	var productPrice *billing_setting.ProductCreditPrice
+	var price metering.Price
+	var configured bool
+	if info.PlatformBilling.ProductCredit() {
+		operation = info.PlatformBilling.ProductBillingOperation()
+		if info.PublicModelName != "" {
+			priceModel = info.PublicModelName
+		} else {
+			priceModel = info.OriginModelName
+		}
+		wire := info.PlatformBilling.WireOperation().ID
+		// Governed models enter through their approved public identifier so
+		// the exact supplier binding, receipt and result vault are enforced.
+		if platformbilling.ApprovedKnowledgePair(priceModel, wire) || platformbilling.ApprovedKnowledgePair(info.ResolvedModelNameOrOrigin(), wire) {
+			return types.NewErrorWithStatusCode(errors.New("governed knowledge requires the canonical public model and its active pin"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		published, ok := billing_setting.ResolveProductCreditPrice(priceModel, operation, strconv.FormatFloat(operation_setting.USDExchangeRate, 'g', -1, 64))
+		if !ok {
+			return types.NewErrorWithStatusCode(errors.New("product credit tariff unavailable"), types.ErrorCodeModelPriceError, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		if !platformbilling.ProductCreditChannelSupported(info.PlatformBilling.WireOperation().ID, c.GetInt("channel_type")) {
+			return types.NewError(errors.New("product credit usage evidence unavailable for this target"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		if len(info.ParamOverride) > 0 || len(info.HeadersOverride) > 0 || info.ChannelSetting.SystemPrompt != "" || info.ChannelSetting.PassThroughBodyEnabled || model_setting.GetGlobalSettings().PassThroughRequestEnabled {
+			return types.NewError(errors.New("product credit metering requires an unchanged validated request"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		if len(published.Tariff.InputTokenBands) != 0 {
+			if service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) || helper.ModelMappedHelper(c, info, nil) != nil {
+				return types.NewError(errors.New("banded product credit requires the certified chat target"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+			}
+		}
+		productPrice, price, configured = &published, published.Tariff, true
+	} else {
+		price, configured = billing_setting.ResolveModelNativePrice(priceModel, operation)
+	}
+	if configured {
 		if info.NativeLocalLegacy {
 			return types.NewError(errors.New("local native metered billing is not available during product runtime"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		}
 		var reservation metering.Usage
 		var err error
-		if operation != "chat" && operation != "responses" && operation != "embedding" {
+		if operation == "multimodal_embedding" && info.PlatformBilling.ProductCredit() {
+			text, visual := info.PlatformBilling.ReservationBounds()
+			if price.Policy != "provider_reported_v1" || text <= 0 || visual <= 0 {
+				err = platformbilling.ErrInvalid
+			} else {
+				reservation = metering.Usage{Version: "metered_v2", Operation: operation, State: "confirmed", Source: "request_bound",
+					Measurements: []metering.Measurement{
+						{Key: "text", Unit: "token", Quantity: metering.Quantity{Value: strconv.FormatInt(text, 10)}},
+						{Key: "visual", Unit: "token", Quantity: metering.Quantity{Value: strconv.FormatInt(visual, 10)}},
+					}}
+			}
+		} else if operation != "chat" && operation != "responses" && operation != "embedding" {
 			if err = helper.ValidateNativeAudioAdmission(c, info); err == nil {
 				reservation, err = service.EstimateNativeMediaUsage(info, info.Request, price)
 			}
@@ -717,10 +767,19 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 			reservation, err = service.NativeTokenReservation(info, price)
 		}
 		if err != nil {
+			if info.PlatformBilling.ProductCredit() && errors.Is(err, platformbilling.ErrInvalid) {
+				return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			}
 			return types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		}
 		ratio := helper.HandleGroupRatio(c, info)
-		a := model.NativeAdmission{CallID: info.RequestId, UserID: info.UserId, TokenID: info.TokenId, ChannelID: info.ChannelId, Model: info.BillingModelNameOrOrigin(), Group: info.UsingGroup, Preference: info.UserSetting.BillingPreference, Price: price, GroupRatio: strconv.FormatFloat(ratio.GroupRatio, 'f', -1, 64), QuotaPerUnit: strconv.FormatFloat(common.QuotaPerUnit, 'f', -1, 64), Reservation: reservation}
+		groupRatio := ratio.GroupRatio
+		quotaPerUnit := strconv.FormatFloat(common.QuotaPerUnit, 'f', -1, 64)
+		if productPrice != nil {
+			groupRatio = 1
+			quotaPerUnit = productPrice.MicrocreditsPerUSD()
+		}
+		a := model.NativeAdmission{ProductPrice: productPrice, CallID: info.RequestId, UserID: info.UserId, TokenID: info.TokenId, ChannelID: info.ChannelId, Model: priceModel, Group: info.UsingGroup, Preference: info.UserSetting.BillingPreference, Price: price, GroupRatio: strconv.FormatFloat(groupRatio, 'f', -1, 64), QuotaPerUnit: quotaPerUnit, Reservation: reservation}
 		if err := service.BeginNativeBillingForRelay(c.Request.Context(), info, a); err != nil {
 			if info.ManagedNativePricing() {
 				return service.ManagedNativeBillingError(err)
@@ -1060,6 +1119,16 @@ func RelayTask(c *gin.Context) {
 			c.AbortWithStatus(http.StatusBadRequest)
 			return
 		}
+		if relayInfo.PlatformBilling.ProductCredit() {
+			frozen, err := relayInfo.PlatformBilling.FrozenVideoPolicy()
+			if err != nil {
+				c.AbortWithStatus(http.StatusBadRequest)
+				return
+			}
+			// Provider receipt validation uses the certified supplier protocol;
+			// the frozen public customer tariff remains in the billing journal.
+			price.Policy = frozen.Policy.UsagePolicy
+		}
 		relayInfo.NativeBilling = &relaycommon.NativeBillingContext{CallID: relayInfo.PlatformBilling.CallID(), Platform: true, Price: price, Observe: relayInfo.PlatformBilling.ObserveMetering}
 		if price.Policy == "ali_wan26_t2v_billable_duration_v1" || price.Policy == "ali_wan26_t2v_cny6_v2" {
 			if frozen, frozenErr := relayInfo.PlatformBilling.FrozenVideoPolicy(); frozenErr == nil {
@@ -1351,7 +1420,7 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 	}
 
 	assemble := modelcatalog.AssembleRuntimeCatalog
-	if relayInfo.RemoteTariff() && relayInfo.PlatformBilling != nil {
+	if relayInfo.RemoteTariff() && relayInfo.PlatformBilling != nil || relayInfo.PlatformBilling.ProductCredit() {
 		assemble = modelcatalog.AssembleManagedRuntimeCatalog
 	}
 	catalog, err := assemble(c.Request.Context(), modelcatalog.RuntimeContext{
@@ -1442,6 +1511,13 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 	relayInfo.PublicModelName = eligible[0].PublicID
 	relayInfo.RouteCandidates = make([]relaycommon.RouteCandidate, 0, len(eligible))
 	for i := range eligible {
+		if relayInfo.PlatformBilling.ProductCredit() {
+			channel, err := model.GetChannelById(eligible[i].ChannelID, true)
+			if err != nil || channel == nil || channel.Status != common.ChannelStatusEnabled || !platformbilling.ProductCreditChannelSupported(relayInfo.PlatformBilling.WireOperation().ID, channel.Type) {
+				relayInfo.RejectedRouteCandidates = append(relayInfo.RejectedRouteCandidates, rejectedRouteCandidate(&eligible[i], "usage_evidence_unavailable"))
+				continue
+			}
+		}
 		candidate, wireErr := routeCandidateFromResolved(relayInfo, &eligible[i])
 		if wireErr != nil {
 			relayInfo.RejectedRouteCandidates = append(relayInfo.RejectedRouteCandidates, rejectedRouteCandidate(&eligible[i], "unsupported_wire"))
@@ -1456,6 +1532,19 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 			http.StatusBadRequest,
 			types.ErrOptionWithSkipRetry(),
 		)
+	}
+	if relayInfo.PlatformBilling.ProductCredit() {
+		candidates := relayInfo.RouteCandidates
+		weights := make([]int, len(candidates))
+		for i, candidate := range candidates {
+			if candidate.Priority == candidates[0].Priority {
+				weights[i] = candidate.Weight
+			}
+		}
+		i := modelcatalog.WeightedTargetIndex(weights, relayInfo.PlatformBilling.CallID())
+		selected := candidates[i]
+		copy(candidates[1:i+1], candidates[:i])
+		candidates[0] = selected
 	}
 	if err := selectRouteCandidateForAttempt(c, relayInfo, 0); err != nil {
 		return types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
@@ -1514,7 +1603,8 @@ func filterRouteCandidatesByContext(candidates []modelcatalog.ResolvedModel, est
 func routeCandidateFromResolved(relayInfo *relaycommon.RelayInfo, resolved *modelcatalog.ResolvedModel) (relaycommon.RouteCandidate, error) {
 	candidate := relaycommon.RouteCandidate{
 		Capabilities: resolved.Capabilities,
-		RouteID:      resolved.RouteID, TargetID: resolved.TargetID, ChannelID: resolved.ChannelID,
+		Priority:     resolved.Priority, Weight: resolved.RouteWeight,
+		RouteID: resolved.RouteID, TargetID: resolved.TargetID, ChannelID: resolved.ChannelID,
 		UpstreamModel: resolved.UpstreamModel, BillingModel: resolved.BillingModel,
 		SelectedGroup: resolved.SelectedGroup, ContextWindow: resolved.ContextWindow, RequiresKnownContext: resolved.RequiresKnownContext,
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -31,11 +30,12 @@ func TestWalletRefundReceiptFailureKeepsHoldAndRecoversOnce(t *testing.T) {
 			tx.AddError(errors.New("wallet write unavailable"))
 		}
 	}))
-	session.Refund(c)
-	require.Eventually(t, func() bool {
-		var receipts int64
-		return db.Model(&model.WalletRefundReceipt{}).Where("state = ?", "pending").Count(&receipts).Error == nil && receipts == 1
-	}, 2*time.Second, time.Millisecond)
+	refund := session.prepareRefund(c)
+	require.NotNil(t, refund)
+	refund()
+	var pending int64
+	require.NoError(t, db.Model(&model.WalletRefundReceipt{}).Where("state = ?", "pending").Count(&pending).Error)
+	require.EqualValues(t, 1, pending)
 	var user model.User
 	require.NoError(t, db.First(&user, 42).Error)
 	require.Equal(t, 480, user.Quota)

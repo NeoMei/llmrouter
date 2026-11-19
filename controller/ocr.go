@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,11 +17,14 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/metering"
 	"github.com/QuantumNous/new-api/relay/capability"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/accountpool"
 	"github.com/QuantumNous/new-api/service/modelcatalog"
 	"github.com/QuantumNous/new-api/service/ocr"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -47,7 +51,7 @@ func (body *ocrRequestBody) Read(p []byte) (int, error) {
 
 // OCRBodyLimit precedes rate-limit/body parsing, including multipart uploads.
 func OCRBodyLimit(c *gin.Context) {
-	const limit = ocr.MaxInputBytes + (64 << 10)
+	const limit = OCRMultipartBodyLimit
 	if c.Request.ContentLength > limit {
 		c.AbortWithStatusJSON(400, gin.H{"error": "OCR request byte limit exceeded"})
 		return
@@ -222,13 +226,31 @@ func (h *OCRHandler) Create(c *gin.Context) {
 		}
 		price, ok := session.MeteredPrice()
 		if session.NativePricing() {
-			native, err := ocr.NativeManagedPrice(admission)
+			var native model.NativeAdmission
+			var err error
+			if session.ProductCredit() {
+				publicModel := selected.PublicID
+				if publicModel == "" {
+					publicModel = in.Model
+				}
+				price, ok := billing_setting.ResolveProductCreditPrice(publicModel, "ocr", strconv.FormatFloat(operation_setting.USDExchangeRate, 'g', -1, 64))
+				if !ok {
+					h.fail(c, 400, "OCR product credit tariff unavailable")
+					return
+				}
+				native = model.NativeAdmission{ProductPrice: &price, Model: publicModel, ChannelID: selected.ChannelID, Group: selected.SelectedGroup,
+					GroupRatio: "1", QuotaPerUnit: price.MicrocreditsPerUSD(), Price: price.Tariff,
+					Reservation: metering.Usage{Version: "metered_v2", Operation: "ocr", State: "confirmed", Source: "success_request",
+						Measurements: []metering.Measurement{{Key: "requests", Unit: "request", Quantity: metering.Quantity{Value: "1"}}}}}
+			} else {
+				native, err = ocr.NativeManagedPrice(admission)
+			}
 			if err != nil {
 				h.serviceError(c, err, 400)
 				return
 			}
-			quota, clamp, err := model.NativeQuota(native, native.Reservation, true)
-			if err != nil || clamp != nil {
+			quota, err := service.ManagedNativeAmount(native, native.Reservation, true)
+			if err != nil {
 				h.fail(c, 400, "OCR native price unavailable")
 				return
 			}
@@ -287,7 +309,14 @@ func (h *OCRHandler) Create(c *gin.Context) {
 		admission.BindTaskTx = session.BindTaskOn
 		admission.PlatformCallID = session.CallID()
 		admission.PlatformPrice = &price
-		admission.Dispatch = func(ctx context.Context) error { return session.Dispatch(ctx, selected.ChannelID) }
+		admission.Dispatch = func(ctx context.Context) error {
+			if session.ProductCredit() {
+				if err := session.BindProductUpstream(target.Model); err != nil {
+					return err
+				}
+			}
+			return session.Dispatch(ctx, selected.ChannelID)
+		}
 		admission.BindTask = session.BindTask
 	}
 	status, err := h.Runtime.Service.Create(c.Request.Context(), ocr.CreateRequest{Admission: admission, RequestedModel: in.Model, Target: target, Capabilities: selected.Capabilities, Input: media, DisableRetry: strings.EqualFold(c.GetHeader("X-Should-Retry"), "false")})
@@ -298,6 +327,10 @@ func (h *OCRHandler) Create(c *gin.Context) {
 	if value, platform := c.Get("platform_billing"); platform {
 		session := value.(*platformbilling.Session)
 		if session.WireOperation().Mode == "paddle-native-v1" {
+			if session.ProductCredit() {
+				writeProductOCRStatus(c, status, session.CallID())
+				return
+			}
 			status.JobID = session.CallID()
 			c.JSON(200, gin.H{"code": 0, "msg": "", "data": status})
 			return
@@ -432,14 +465,32 @@ func (h *OCRHandler) candidates(c *gin.Context, name string) ([]modelcatalog.Res
 	}
 	if recognized {
 		assemble := modelcatalog.AssembleRuntimeCatalog
-		if _, platform := c.Get("platform_billing"); platform {
+		var client string
+		var session *platformbilling.Session
+		if value, platform := c.Get("platform_billing"); platform {
 			assemble = modelcatalog.AssembleManagedRuntimeCatalog
+			session, _ = value.(*platformbilling.Session)
+			if session.ProductCredit() {
+				client = session.NativeOriginProduct()
+			}
 		}
-		catalog, err := assemble(ctx, modelcatalog.RuntimeContext{UserID: user.Id, Groups: groups}, routes, targets, modelcatalog.NewGormRuntimeSources(h.Runtime.DB), requestCatalogAuthorizer{})
+		catalog, err := assemble(ctx, modelcatalog.RuntimeContext{UserID: user.Id, Groups: groups, Client: client}, routes, targets, modelcatalog.NewGormRuntimeSources(h.Runtime.DB), requestCatalogAuthorizer{})
 		if err != nil {
 			return nil, user, token, err
 		}
-		candidates, err := catalog.ResolveCandidates(ctx, user.Id, groups, name, "")
+		candidates, err := catalog.ResolveCandidates(ctx, user.Id, groups, name, client)
+		if err == nil && session.ProductCredit() {
+			weights := make([]int, len(candidates))
+			for i, candidate := range candidates {
+				if candidate.Priority == candidates[0].Priority && slices.Contains(candidate.PreferredWires, modelcatalog.WirePaddleOCR) {
+					weights[i] = candidate.RouteWeight
+				}
+			}
+			i := modelcatalog.WeightedTargetIndex(weights, session.CallID())
+			selected := candidates[i]
+			copy(candidates[1:i+1], candidates[:i])
+			candidates[0] = selected
+		}
 		return candidates, user, token, err
 	}
 	// Legacy fixed consumer model names resolve exclusively through live abilities.
@@ -551,6 +602,21 @@ func (h *OCRHandler) fail(c *gin.Context, code int, message string) {
 	c.JSON(code, gin.H{"error": message})
 }
 func (h *OCRHandler) serviceError(c *gin.Context, err error, fallback int) {
+	if raw, platform := c.Get("platform_billing"); platform {
+		if session, ok := raw.(*platformbilling.Session); ok && session.ProductCredit() {
+			var code string
+			switch {
+			case errors.Is(err, platformbilling.ErrNativeCreditsRequired):
+				code = "platform_model_credits_required"
+			case errors.Is(err, platformbilling.ErrProductMembershipExpired):
+				code = "product_membership_expired"
+			}
+			if code != "" {
+				c.JSON(platformbilling.HTTPStatus(err), gin.H{"error": gin.H{"code": code, "stage": "pre_admission"}})
+				return
+			}
+		}
+	}
 	var unavailable *model.UpstreamAccountUnavailable
 	var price *ocr.PriceError
 	switch {
@@ -578,6 +644,13 @@ func (h *OCRHandler) serviceError(c *gin.Context, err error, fallback int) {
 		h.fail(c, fallback, "OCR request could not be completed")
 	}
 }
+func writeProductOCRStatus(c *gin.Context, status ocr.JobStatus, callID string) {
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "", "data": gin.H{
+		"jobId": callID, "state": status.State, "extractProgress": status.ExtractProgress,
+	}})
+}
+
 func (h *OCRHandler) respond(c *gin.Context, status ocr.JobStatus, name string, create bool) {
 	if strings.HasPrefix(c.Request.URL.Path, "/api/v2/ocr/") {
 		c.JSON(200, gin.H{"code": 0, "msg": "", "data": status})

@@ -127,6 +127,11 @@ func ConfigFromEnv(get func(string) string) (Config, error) {
 			return c, ErrInvalid
 		}
 	}
+	if raw := get("UNIHUB_PRODUCT_CREDIT_TEXT_INPUT_POLICIES"); raw != "" {
+		if decodeProductCreditTextInputPolicies([]byte(raw), &c) != nil {
+			return c, ErrInvalid
+		}
+	}
 	if raw := get("UNIHUB_MODEL_RATE_IDS"); raw != "" {
 		if common.UnmarshalJsonStr(raw, &c.RateIDs) != nil {
 			return c, ErrInvalid

@@ -469,6 +469,16 @@ func (s *Service) Cancel(ctx context.Context, id string, userID, tokenID int) (J
 }
 
 func (s *Service) Status(ctx context.Context, id string, userID, tokenID int) (JobStatus, error) {
+	return s.status(ctx, id, userID, tokenID, true)
+}
+
+// OwnedDocumentStatus checks the same persisted execution and result without
+// issuing a bearer URL for the private supplier content.
+func (s *Service) OwnedDocumentStatus(ctx context.Context, id string, userID, tokenID int) (JobStatus, error) {
+	return s.status(ctx, id, userID, tokenID, false)
+}
+
+func (s *Service) status(ctx context.Context, id string, userID, tokenID int, includeURL bool) (JobStatus, error) {
 	snapshot, err := s.billing.Inspect(ctx, id)
 	if err != nil {
 		return JobStatus{}, err
@@ -478,7 +488,7 @@ func (s *Service) Status(ctx context.Context, id string, userID, tokenID int) (J
 		return JobStatus{}, errors.Join(model.ErrOCRConflict, fmt.Errorf("ocr job %s: owner mismatch user %d token %d", j.ID, j.UserID, j.TokenID))
 	}
 	if j.SubmissionState != "submitted" {
-		return s.project(ctx, j)
+		return s.projectStatus(ctx, j, includeURL)
 	}
 	if (j.ProviderState != "done" && j.ProviderState != "failed") || (j.Funding == "platform" && j.ProviderState == "done" && j.ResultResourceID == "") {
 		var execution model.OCRExecution
@@ -579,9 +589,13 @@ func (s *Service) Status(ctx context.Context, id string, userID, tokenID int) (J
 	if err != nil {
 		return JobStatus{}, err
 	}
-	return s.project(ctx, snapshot.Job)
+	return s.projectStatus(ctx, snapshot.Job, includeURL)
 }
 func (s *Service) project(ctx context.Context, j model.OCRJob) (JobStatus, error) {
+	return s.projectStatus(ctx, j, true)
+}
+
+func (s *Service) projectStatus(ctx context.Context, j model.OCRJob, includeURL bool) (JobStatus, error) {
 	if (j.Decision == "failure" || j.Decision == "cancel") && j.BillingState != "refunded" {
 		finished, err := s.billing.Finish(ctx, j.ID, j.Decision)
 		if err != nil {
@@ -612,9 +626,13 @@ func (s *Service) project(ctx context.Context, j model.OCRJob) (JobStatus, error
 		if err != nil {
 			return out, err
 		}
-		out.ResultURL.JSONURL, err = s.resourceURL(ctx, r)
-		if err != nil {
-			return out, err
+		if includeURL {
+			out.ResultURL.JSONURL, err = s.resourceURL(ctx, r)
+			if err != nil {
+				return out, err
+			}
+		} else if r.Revoked || r.ExpiresAt <= s.now().Unix() {
+			return out, model.ErrOCRGrant
 		}
 		out.State = "done"
 	}

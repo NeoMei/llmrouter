@@ -176,6 +176,7 @@ func (v *knowledgeResultVault) captureValidated(ctx context.Context, s *Session,
 	}
 	var conflict bool
 	var rejected error
+	var persistedIntent string
 	err = v.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := v.checkWriter(tx); err != nil {
 			return err
@@ -197,13 +198,12 @@ func (v *knowledgeResultVault) captureValidated(ctx context.Context, s *Session,
 			return ErrPending
 		}
 		var frozen frozenKnowledge
-		var rate Rate
-		if common.UnmarshalUnique([]byte(row.MediaSnapshot), &frozen) != nil || !frozen.Policy.valid(s.adapter.config, row.Model, row.WireOperation) || frozen.Policy.ChannelID != attempt.ChannelID || common.UnmarshalUnique([]byte(row.RateSnapshot), &rate) != nil || rate.Metered == nil {
+		if common.UnmarshalUnique([]byte(row.MediaSnapshot), &frozen) != nil || !frozen.Policy.valid(s.adapter.config, row.Model, row.WireOperation) || frozen.Policy.ChannelID != attempt.ChannelID {
 			return ErrInvalid
 		}
-		asset, err := normalizeAsset(row.Asset)
+		price, err := s.knowledgeTariff(row, frozen)
 		_, certified := TokenProducer(row.WireOperation, frozen.Policy.ChannelType)
-		if err != nil || !certified || rate.ID != row.RateID || rate.Model != row.Model || rate.Asset != asset || rate.Status != "published" || rate.Semantics != "metered_v2" || frozen.Policy.RateIDs[asset] != rate.ID || rate.Metered.Operation != row.Operation || metering.ValidateUsage(*rate.Metered, usage) != nil {
+		if err != nil || !certified || metering.ValidateUsage(price, usage) != nil {
 			return ErrInvalid
 		}
 		embeddingSource := "oai_chat"
@@ -274,10 +274,18 @@ func (v *knowledgeResultVault) captureValidated(ctx context.Context, s *Session,
 		if row.Status != "UNKNOWN" {
 			return ErrPending
 		}
-		intent, err := common.Marshal(struct {
+		var intentValue any = struct {
 			Usage        Usage  `json:"usage"`
 			ProviderCost string `json:"provider_cost"`
-		}{Usage{Metered: &usage}, ""})
+		}{Usage{Metered: &usage}, ""}
+		if row.CreditScope == ProductCreditScope {
+			intent, err := s.adapter.productKnowledgeIntent(row, usage)
+			if err != nil {
+				return err
+			}
+			intentValue = intent
+		}
+		intent, err := common.Marshal(intentValue)
 		if err != nil {
 			return ErrInvalid
 		}
@@ -303,6 +311,7 @@ func (v *knowledgeResultVault) captureValidated(ctx context.Context, s *Session,
 		if saved.Error != nil || saved.RowsAffected != 1 {
 			return ErrPending
 		}
+		persistedIntent = row.Intent
 		return nil
 	})
 	if err != nil {
@@ -310,6 +319,10 @@ func (v *knowledgeResultVault) captureValidated(ctx context.Context, s *Session,
 	}
 	if conflict {
 		return ErrConflict
+	}
+	if rejected == nil && s.ProductCredit() {
+		s.call.Status = "SETTLE_PENDING"
+		s.call.Intent = persistedIntent
 	}
 	return rejected
 }

@@ -123,19 +123,28 @@ func parsePlatformFaultWaiver(raw []byte, digest string) (platformFaultWaiverApp
 	// Full shape comparison rejects missing and unknown fields, including inside
 	// the original Call and Attempt snapshots. These are forensic preconditions.
 	canonical, err := common.Marshal(p)
-	if err != nil || !waiverJSONEqual(raw, canonical) {
+	if err != nil || !waiverApprovalShapeEqual(raw, canonical) {
 		return p, ErrInvalid
 	}
 	held, ok := new(big.Int).SetString(p.Held, 10)
-	if p.Schema != 1 || !stableID.MatchString(p.CaseID) || !stableID.MatchString(p.OperatorID) || strings.TrimSpace(p.Reason) == "" || len(p.Reason) > 1024 || strings.TrimSpace(p.ApprovalStatement) == "" || len(p.ApprovalStatement) > 8192 || !waiverDigest.MatchString(p.ApprovalSourceSHA256) || !stableID.MatchString(p.CallID) || !stableID.MatchString(p.ActorID) || !stableID.MatchString(p.AccountID) || (p.OriginProductID != "llmrouter" && p.OriginProductID != "superwagie") || !stableID.MatchString(p.InstanceID) || p.Asset != "CNY/6" || !ok || held.Sign() <= 0 || held.BitLen() > 63 || held.String() != p.Held || p.ProviderState != "PROVIDER_UNRESOLVED" || !waiverDigest.MatchString(p.OriginalEvidenceSHA256) || !waiverDigest.MatchString(p.FollowupEvidenceSHA256) {
+	if p.Schema != 1 || !stableID.MatchString(p.CaseID) || !stableID.MatchString(p.OperatorID) || strings.TrimSpace(p.Reason) == "" || len(p.Reason) > 1024 || strings.TrimSpace(p.ApprovalStatement) == "" || len(p.ApprovalStatement) > 8192 || !waiverDigest.MatchString(p.ApprovalSourceSHA256) || !stableID.MatchString(p.CallID) || !stableID.MatchString(p.ActorID) || !stableID.MatchString(p.AccountID) || (p.OriginProductID != "llmrouter" && p.OriginProductID != "superwagie") || !stableID.MatchString(p.InstanceID) || !ok || held.Sign() < 0 || held.BitLen() > 63 || held.String() != p.Held || p.ProviderState != "PROVIDER_UNRESOLVED" || !waiverDigest.MatchString(p.OriginalEvidenceSHA256) || !waiverDigest.MatchString(p.FollowupEvidenceSHA256) {
+		return p, ErrInvalid
+	}
+	var fundingMode string
+	switch p.Asset {
+	case "CNY/6":
+		fundingMode = "prepaid_cash"
+	case "CREDIT/6":
+		fundingMode = "credits"
+	default:
 		return p, ErrInvalid
 	}
 	r := p.GatewayCall
-	if r.CallID != p.CallID || r.ActorID != p.ActorID || r.AccountID != p.AccountID || r.OriginProductID != p.OriginProductID || r.InstanceID != p.InstanceID || r.Asset != p.Asset || r.Amount != p.Held || r.FundingMode != "prepaid_cash" || r.FundingProductID != "llmrouter" || r.Status != "UNKNOWN" || r.Evidence != "" || r.Intent != "" || r.EvidenceConflict || (r.Charged != "" && r.Charged != "0") || len(p.GatewayAttempts) != 1 {
+	if r.CallID != p.CallID || r.ActorID != p.ActorID || r.AccountID != p.AccountID || r.OriginProductID != p.OriginProductID || r.InstanceID != p.InstanceID || r.CreditScope != "" || r.Asset != p.Asset || r.Amount != p.Held || r.FundingMode != fundingMode || r.FundingProductID != "llmrouter" || r.Status != "UNKNOWN" || r.Evidence != "" || r.Intent != "" || r.EvidenceConflict || (r.Charged != "" && r.Charged != "0") || len(p.GatewayAttempts) != 1 {
 		return p, ErrInvalid
 	}
 	a := p.GatewayAttempts[0]
-	if a.ID == 0 || a.ChannelID <= 0 || a.CallID != p.CallID || a.Status != "DISPATCHED" {
+	if a.ID == 0 || a.ChannelID <= 0 || a.CallID != p.CallID || (a.Status != "DISPATCHED" && a.Status != "UNKNOWN") {
 		return p, ErrInvalid
 	}
 	var central struct {
@@ -145,8 +154,14 @@ func parsePlatformFaultWaiver(raw []byte, digest string) (platformFaultWaiverApp
 	}
 	var remote RemoteCall
 	var centralSnapshot map[string]any
-	if common.UnmarshalUnique(p.ExpectedCentralRow, &central) != nil || central.ID != p.CallID || central.AccountID != p.AccountID || common.UnmarshalUnique(central.Snapshot, &remote) != nil || common.UnmarshalUnique(central.Snapshot, &centralSnapshot) != nil || !remote.matches(r) || remote.Status != "RESERVED" || remote.Held != p.Held || remote.Charged != "0" {
+	if common.UnmarshalUnique(p.ExpectedCentralRow, &central) != nil || central.ID != p.CallID || central.AccountID != p.AccountID || common.UnmarshalUnique(central.Snapshot, &remote) != nil || common.UnmarshalUnique(central.Snapshot, &centralSnapshot) != nil || !remote.matches(r) || remote.CreditScope != "" || remote.Status != "RESERVED" || remote.Held != p.Held || remote.Charged != "0" {
 		return p, ErrInvalid
+	}
+	if held.Sign() == 0 {
+		quote, err := (&Session{call: r}).NativeQuote()
+		if err != nil || quote.MaxAmount != "0" || len(remote.Allocations) != 0 {
+			return p, ErrInvalid
+		}
 	}
 	if centralSnapshot["task_id"] != r.TaskID || centralSnapshot["service_id"] != "llmrouter" {
 		return p, ErrInvalid
@@ -163,6 +178,21 @@ func parsePlatformFaultWaiver(raw []byte, digest string) (platformFaultWaiverApp
 func ValidatePlatformFaultWaiverApproval(raw []byte, digest string) error {
 	_, err := parsePlatformFaultWaiver(raw, digest)
 	return err
+}
+
+// Older snapshots predate CreditScope. Only that defaulted field may be
+// absent; the rest of the approval, call and attempt shapes remain exact.
+func waiverApprovalShapeEqual(raw, canonical []byte) bool {
+	var actual, expected map[string]any
+	if common.UnmarshalUnique(raw, &actual) != nil || common.UnmarshalUnique(canonical, &expected) != nil {
+		return false
+	}
+	actualCall, _ := actual["gateway_call"].(map[string]any)
+	expectedCall, _ := expected["gateway_call"].(map[string]any)
+	if _, exists := actualCall["CreditScope"]; !exists && expectedCall["CreditScope"] == "" {
+		delete(expectedCall, "CreditScope")
+	}
+	return reflect.DeepEqual(actual, expected)
 }
 
 func waiverJSONEqual(a, b []byte) bool {

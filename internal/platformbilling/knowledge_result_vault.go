@@ -256,11 +256,15 @@ func knowledgeResultStoredAAD(row Call, stored knowledgeResultRow) ([]byte, erro
 	// Version 2 additionally authenticates the reservation and exact settlement
 	// intent. Status and charged are not fixed at capture time; the authorized
 	// read must verify the settled receipt with the authoritative billing service.
-	return common.Marshal([]any{"knowledge-result-bound-v2", base, stored.AttemptID, stored.ObservationTag,
+	binding := []any{"knowledge-result-bound-v2", base, stored.AttemptID, stored.ObservationTag,
 		row.DigestVersion, row.WirePathModel, row.Operation, row.MediaSnapshot,
 		row.RateSnapshot, row.RateID, row.Asset, row.FundingMode, row.FundingProductID,
 		row.FundingSnapshot, row.BillingProfileVersion, row.Amount, row.ReservationQuantity,
-		row.ReservationOutput, row.Intent})
+		row.ReservationOutput, row.Intent}
+	if row.CreditScope == ProductCreditScope {
+		binding = append(binding, row.CreditScope, row.CredentialVersion, row.PricingSource, row.NativeQuoteJSON, row.NativePriceSnapshot)
+	}
+	return common.Marshal(binding)
 }
 
 func (v *knowledgeResultVault) capture(ctx context.Context, callID string, result []byte) error {

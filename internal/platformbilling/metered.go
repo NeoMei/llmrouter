@@ -381,7 +381,7 @@ func (a *Adapter) admitWireOperation(ctx context.Context, credential, task, id s
 			return nil, ErrInvalid
 		}
 	}
-	if err = metering.ValidatePrice(*chosen.Metered); err != nil {
+	if err = metering.ValidatePrice(*chosen.Metered); err != nil || len(chosen.Metered.InputTokenBands) != 0 {
 		return nil, ErrInvalid
 	}
 	if IsAudioWire(wire.ID) {
@@ -554,6 +554,21 @@ func meteredReserve(price metering.Price, req operationRequest) (string, error) 
 	return q.String(), nil
 }
 func (s *Session) MeteredPrice() (metering.Price, bool) {
+	if s.ProductCredit() {
+		if _, err := s.NativeQuote(); err != nil {
+			return metering.Price{}, false
+		}
+		var frozen struct {
+			PriceSnapshot string `json:"price_snapshot"`
+		}
+		var price struct {
+			Native struct{ Price metering.Price } `json:"native"`
+		}
+		if common.UnmarshalUnique([]byte(s.call.NativePriceSnapshot), &frozen) != nil || common.UnmarshalUnique([]byte(frozen.PriceSnapshot), &price) != nil {
+			return metering.Price{}, false
+		}
+		return price.Native.Price, true
+	}
 	var r Rate
 	if s.call.Operation == "" || common.Unmarshal([]byte(s.call.RateSnapshot), &r) != nil || r.Metered == nil {
 		return metering.Price{}, false
@@ -565,6 +580,9 @@ func (s *Session) CallID() string { return s.call.CallID }
 // ObserveMetering persists evidence before settlement. Once conflicting evidence
 // is seen, a later valid observation cannot erase that conflict.
 func (s *Session) ObserveMetering(ctx context.Context, u metering.Usage) error {
+	if s.ProductCredit() {
+		return s.observeProductNativeMetering(ctx, u)
+	}
 	price, ok := s.MeteredPrice()
 	if !ok {
 		return ErrInvalid

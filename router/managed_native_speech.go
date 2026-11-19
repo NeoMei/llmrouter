@@ -25,6 +25,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/modelcatalog"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 )
@@ -62,7 +63,7 @@ func managedBailianSpeechChannelSupported(candidate modelcatalog.ResolvedModel, 
 	return err == nil
 }
 
-func managedBailianSpeechTarget(ctx context.Context, adapter *platformbilling.Adapter, name string) (modelcatalog.ResolvedModel, model.Channel, error) {
+func managedBailianSpeechTarget(ctx context.Context, adapter *platformbilling.Adapter, name string, productOrigin ...string) (modelcatalog.ResolvedModel, model.Channel, error) {
 	var routes []model.ClientModelRoute
 	var targets []model.ClientModelTarget
 	if err := model.DB.WithContext(ctx).Where("enabled = ?", true).Order("id").Find(&routes).Error; err != nil {
@@ -73,7 +74,12 @@ func managedBailianSpeechTarget(ctx context.Context, adapter *platformbilling.Ad
 	}
 	user, group := adapter.NativePrincipal()
 	runtime := modelcatalog.RuntimeContext{UserID: user, Groups: []string{group}, Client: "superwagie"}
-	catalog, err := modelcatalog.AssembleRuntimeCatalog(ctx, runtime, routes, targets, modelcatalog.NewGormRuntimeSources(model.DB), deploymentCatalogAuthorizer{user, group, runtime.Client})
+	assemble := modelcatalog.AssembleRuntimeCatalog
+	if len(productOrigin) != 0 {
+		runtime.Client = productOrigin[0]
+		assemble = modelcatalog.AssembleManagedRuntimeCatalog
+	}
+	catalog, err := assemble(ctx, runtime, routes, targets, modelcatalog.NewGormRuntimeSources(model.DB), deploymentCatalogAuthorizer{user, group, runtime.Client})
 	if err != nil {
 		return modelcatalog.ResolvedModel{}, model.Channel{}, err
 	}
@@ -87,6 +93,9 @@ func managedBailianSpeechTarget(ctx context.Context, adapter *platformbilling.Ad
 			return modelcatalog.ResolvedModel{}, model.Channel{}, err
 		}
 		if managedBailianSpeechChannelSupported(candidate, channel) {
+			if len(productOrigin) != 0 {
+				return candidate, channel, nil
+			}
 			if _, _, err := managedBailianSpeechTariff(candidate.BillingModel); err == nil {
 				return candidate, channel, nil
 			}
@@ -127,7 +136,19 @@ func registerManagedNativeSpeech(r *gin.Engine, adapter *platformbilling.Adapter
 			c.AbortWithStatus(503)
 			return
 		}
-		selected, channel, err := managedBailianSpeechTarget(c.Request.Context(), adapter, name)
+		credential := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
+		var productOrigin []string
+		if platformbilling.HasProductAuthorization(c.Request.Context()) {
+			grant, err := adapter.ManagedModelGrant(c.Request.Context(), credential)
+			if err != nil || !grant.ProductCredit() {
+				if !writeProductAdmissionRefusal(c, err) {
+					c.AbortWithStatus(http.StatusForbidden)
+				}
+				return
+			}
+			productOrigin = []string{grant.OriginProductID}
+		}
+		selected, channel, err := managedBailianSpeechTarget(c.Request.Context(), adapter, name, productOrigin...)
 		if err != nil {
 			c.AbortWithStatus(503)
 			return
@@ -154,6 +175,23 @@ func registerManagedNativeSpeech(r *gin.Engine, adapter *platformbilling.Adapter
 			return
 		}
 		price, quantity, err := managedBailianSpeechTariff(selected.BillingModel)
+		priceModel := selected.BillingModel
+		var productPrice *billing_setting.ProductCreditPrice
+		if len(productOrigin) != 0 {
+			priceModel = selected.PublicID
+			frozen, ok := billing_setting.ResolveProductCreditPrice(priceModel, "speech", strconv.FormatFloat(operation_setting.USDExchangeRate, 'g', -1, 64))
+			if !ok || frozen.Tariff.Policy != "provider_reported_v1" || len(frozen.Tariff.Terms) != 1 || frozen.Tariff.Terms[0].Key != "characters" || frozen.Tariff.Terms[0].Unit != "character" {
+				c.AbortWithStatus(http.StatusBadRequest)
+				return
+			}
+			limit, bounded := billing_setting.ResolveModelNativeReservationLimit(priceModel, "speech")
+			quantity, err = strconv.Atoi(limit.Value)
+			if !bounded || err != nil || quantity < 1 || quantity > 1200 || limit.Scale != 0 {
+				c.AbortWithStatus(http.StatusBadRequest)
+				return
+			}
+			price, productPrice = frozen.Tariff, &frozen
+		}
 		if err != nil {
 			c.AbortWithStatus(503)
 			return
@@ -169,10 +207,16 @@ func registerManagedNativeSpeech(r *gin.Engine, adapter *platformbilling.Adapter
 		if override, ok := ratio_setting.GetGroupGroupRatio(selected.SelectedGroup, selected.SelectedGroup); ok {
 			ratio = override
 		}
+		if productPrice != nil {
+			ratio = 1
+		}
 		usage := metering.Usage{Version: "metered_v2", Operation: "speech", State: "incomplete", Source: "local_admission", Measurements: []metering.Measurement{{Key: "characters", Unit: "character", Quantity: metering.Quantity{Value: strconv.Itoa(quantity)}}}}
-		native := model.NativeAdmission{Model: selected.BillingModel, ChannelID: selected.ChannelID, Group: selected.SelectedGroup, GroupRatio: strconv.FormatFloat(ratio, 'g', -1, 64), QuotaPerUnit: strconv.FormatFloat(common.QuotaPerUnit, 'g', -1, 64), Price: price, Reservation: usage}
-		quota, clamp, err := model.NativeQuota(native, usage, true)
-		if err != nil || clamp != nil {
+		native := model.NativeAdmission{ProductPrice: productPrice, Model: priceModel, ChannelID: selected.ChannelID, Group: selected.SelectedGroup, GroupRatio: strconv.FormatFloat(ratio, 'g', -1, 64), QuotaPerUnit: strconv.FormatFloat(common.QuotaPerUnit, 'g', -1, 64), Price: price, Reservation: usage}
+		if productPrice != nil {
+			native.QuotaPerUnit = productPrice.MicrocreditsPerUSD()
+		}
+		quota, err := service.ManagedNativeAmount(native, usage, true)
+		if err != nil {
 			c.AbortWithStatus(503)
 			return
 		}
@@ -183,10 +227,11 @@ func registerManagedNativeSpeech(r *gin.Engine, adapter *platformbilling.Adapter
 			c.AbortWithStatus(503)
 			return
 		}
-		credential := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
 		session, err := adapter.AdmitNative(c.Request.Context(), credential, c.GetHeader("X-UniHub-Task-ID"), c.GetHeader("Idempotency-Key"), platformbilling.WireOperation{ID: "bailian.audio.speech.create"}, name, raw)
 		if err != nil {
-			c.AbortWithStatus(platformbilling.HTTPStatus(err))
+			if !writeProductAdmissionRefusal(c, err) {
+				c.AbortWithStatus(platformbilling.HTTPStatus(err))
+			}
 			return
 		}
 		c.Header("X-UniHub-Call-ID", session.CallID())
@@ -199,7 +244,7 @@ func registerManagedNativeSpeech(r *gin.Engine, adapter *platformbilling.Adapter
 		}()
 		c.Set("platform_billing", session)
 		if err = session.BindNativeDispatchGuard(func(ctx context.Context) error {
-			currentTarget, current, err := managedBailianSpeechTarget(ctx, adapter, name)
+			currentTarget, current, err := managedBailianSpeechTarget(ctx, adapter, name, productOrigin...)
 			if err != nil {
 				return err
 			}
@@ -212,14 +257,28 @@ func registerManagedNativeSpeech(r *gin.Engine, adapter *platformbilling.Adapter
 			return
 		}
 		if err = service.ReserveManagedNativePrice(c.Request.Context(), session, selected.BillingModel, selected.SelectedGroup, selected.RouteID, selected.ChannelID, quota, snapshot); err != nil {
-			c.AbortWithStatus(platformbilling.HTTPStatus(err))
+			if !writeProductAdmissionRefusal(c, err) {
+				c.AbortWithStatus(platformbilling.HTTPStatus(err))
+			}
 			return
+		}
+		if session.ProductCredit() {
+			if err = session.BindProductUpstream(selected.UpstreamModel); err != nil {
+				c.AbortWithStatus(http.StatusConflict)
+				return
+			}
 		}
 		if err = session.Dispatch(c.Request.Context(), channel.Id); err != nil {
 			c.AbortWithStatus(409)
 			return
 		}
-		result, sendErr := producer.Send(c.Request.Context(), request)
+		sendContext := c.Request.Context()
+		if session.ProductCredit() {
+			work, cancel := context.WithTimeout(context.WithoutCancel(sendContext), 120*time.Second)
+			defer cancel()
+			sendContext = work
+		}
+		result, sendErr := producer.Send(sendContext, request)
 		durable, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 15*time.Second)
 		defer cancel()
 		// Persist supplier evidence before money or delivery. Failed downloads and
@@ -228,12 +287,21 @@ func registerManagedNativeSpeech(r *gin.Engine, adapter *platformbilling.Adapter
 			c.AbortWithStatus(502)
 			return
 		}
-		if sendErr != nil || !result.Completed || c.Request.Context().Err() != nil {
+		if sendErr != nil || !result.Completed || !session.ProductCredit() && c.Request.Context().Err() != nil {
 			c.AbortWithStatus(502)
 			return
 		}
 		usage = platformbilling.NativeSpeechMetering(price, result)
 		usage.ProviderRequestID = result.RequestID
+		if session.ProductCredit() {
+			if err := session.CaptureProductMediaResult(durable, usage, result.ContentType, result.Audio); err != nil {
+				c.AbortWithStatus(http.StatusServiceUnavailable)
+				return
+			}
+			c.Header("Cache-Control", "no-store")
+			c.Data(http.StatusOK, result.ContentType, result.Audio)
+			return
+		}
 		actual, clamp, err := model.NativeQuota(native, usage, false)
 		if err != nil || clamp != nil {
 			c.AbortWithStatus(502)

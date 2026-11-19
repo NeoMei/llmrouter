@@ -1,6 +1,7 @@
 package router
 
 import (
+	"errors"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/gin-gonic/gin"
@@ -69,7 +70,8 @@ func registerKnowledgeRoute(routes gin.IRoutes, a *platformbilling.Adapter) {
 			c.JSON(200, reply)
 			return
 		}
-		if len(fields) != 2 || !platformbilling.ApprovedKnowledgePair(fields["model"], fields["wire_operation"]) {
+		if len(fields) != 2 || !platformbilling.ApprovedKnowledgePair(fields["model"], fields["wire_operation"]) ||
+			platformbilling.HasProductAuthorization(c.Request.Context()) && len(c.Request.Header.Values("Idempotency-Key")) > 0 {
 			fail(400)
 			return
 		}
@@ -81,6 +83,10 @@ func registerKnowledgeRoute(routes gin.IRoutes, a *platformbilling.Adapter) {
 		}
 		reply, err := a.PaidKnowledgeRoute(c.Request.Context(), strings.TrimPrefix(actor, "Bearer "), token, task, fields["model"], fields["wire_operation"])
 		if err != nil {
+			if errors.Is(err, platformbilling.ErrProductMembershipExpired) {
+				c.AbortWithStatusJSON(403, gin.H{"error": gin.H{"code": "product_membership_expired", "stage": "pre_admission"}})
+				return
+			}
 			fail(platformbilling.HTTPStatus(err))
 			return
 		}

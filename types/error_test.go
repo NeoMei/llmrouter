@@ -32,3 +32,18 @@ func TestResponsesStateScopeInvalidRemainsMachineVisibleInClaudeError(t *testing
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"type":"error","error":{"type":"responses_state_scope_invalid","message":"responses continuity scope mismatch"}}`, string(envelope))
 }
+
+func TestFundingRefusalRemainsMachineVisibleInClaudeError(t *testing.T) {
+	for _, test := range []struct {
+		code   ErrorCode
+		status int
+	}{
+		{ErrorCodePlatformModelCreditsRequired, http.StatusPaymentRequired},
+		{"product_membership_expired", http.StatusForbidden},
+	} {
+		t.Run(string(test.code), func(t *testing.T) {
+			apiErr := NewErrorWithStatusCode(errors.New("product admission refused"), test.code, test.status, ErrOptionWithSkipRetry())
+			assert.Equal(t, string(test.code), apiErr.ToClaudeError().Type)
+		})
+	}
+}

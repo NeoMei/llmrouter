@@ -84,8 +84,13 @@ export function useCashTopupEligibility(props: {
       // OIDC sessions predate the explicit flag; runtime-actor sessions must
       // carry it and an unexpired central identity to expose the topup card.
       if (grant.transport === 'oidc') return true
-      return grant.transport === 'runtime_actor' && grant.cash_topup_available === true
+      return (
+        grant.transport === 'runtime_actor' &&
+        grant.cash_topup_available === true
+      )
     },
   })
-  return eligibleIdentity && props.ready && query.isSuccess && query.data === true
+  return (
+    eligibleIdentity && props.ready && query.isSuccess && query.data === true
+  )
 }

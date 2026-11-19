@@ -47,6 +47,7 @@ type ocrGatewayFixture struct {
 	denySettlementRead                         bool
 	runtime                                    *ocr.Runtime
 	image                                      []byte
+	productUploads                             [][]byte
 	cfg                                        platformbilling.Config
 	serviceCfg                                 ocr.Config
 }
@@ -195,7 +196,11 @@ func newOCRGatewayFixture(t *testing.T, variant, hubOrigin, serviceToken, dbPath
 			f.sends++
 			assert.Equal(t, "Bearer synthetic-paddle-key", r.Header.Get("Authorization"))
 			var call platformbilling.Call
-			require.NoError(t, db.First(&call, "call_id = ?", "ocr-call").Error)
+			if len(f.productUploads) != 0 {
+				require.NoError(t, db.First(&call, "credit_scope = ? AND operation = ? AND status = ? AND provider_task_id = ?", platformbilling.ProductCreditScope, "ocr", "UNKNOWN", "").Error)
+			} else {
+				require.NoError(t, db.First(&call, "call_id = ?", "ocr-call").Error)
+			}
 			assert.Equal(t, "UNKNOWN", call.Status)
 			var attempt platformbilling.Attempt
 			require.NoError(t, db.First(&attempt, "call_id = ?", call.CallID).Error)
@@ -262,7 +267,11 @@ func newOCRGatewayFixture(t *testing.T, variant, hubOrigin, serviceToken, dbPath
 			f.sends++
 			assert.Equal(t, "Bearer synthetic-paddle-key", r.Header.Get("Authorization"))
 			var call platformbilling.Call
-			require.NoError(t, db.First(&call, "call_id = ?", "ocr-call").Error)
+			if len(f.productUploads) != 0 {
+				require.NoError(t, db.First(&call, "credit_scope = ? AND operation = ? AND status = ? AND provider_task_id = ?", platformbilling.ProductCreditScope, "ocr", "UNKNOWN", "").Error)
+			} else {
+				require.NoError(t, db.First(&call, "call_id = ?", "ocr-call").Error)
+			}
 			assert.Equal(t, "UNKNOWN", call.Status)
 			var attempt platformbilling.Attempt
 			require.NoError(t, db.First(&attempt, "call_id = ?", call.CallID).Error)
@@ -273,13 +282,23 @@ func newOCRGatewayFixture(t *testing.T, variant, hubOrigin, serviceToken, dbPath
 			require.NoError(t, r.ParseMultipartForm(1<<20))
 			defer r.MultipartForm.RemoveAll()
 			assert.Equal(t, upstream, r.FormValue("model"))
-			assert.JSONEq(t, `{"useDocOrientationClassify":false,"temperature":0}`, r.FormValue("optionalPayload"))
+			if len(f.productUploads) == 0 || f.sends == 1 {
+				assert.JSONEq(t, `{"useDocOrientationClassify":false,"temperature":0}`, r.FormValue("optionalPayload"))
+			}
 			file, _, e := r.FormFile("file")
 			require.NoError(t, e)
 			data, e := io.ReadAll(file)
 			file.Close()
 			require.NoError(t, e)
-			assert.Equal(t, f.image, data)
+			expected, providerJob := f.image, "provider-owned"
+			if len(f.productUploads) != 0 {
+				require.LessOrEqual(t, f.sends, len(f.productUploads))
+				expected = f.productUploads[f.sends-1]
+				if f.sends > 1 {
+					providerJob = fmt.Sprintf("provider-owned-%d", f.sends)
+				}
+			}
+			assert.Equal(t, expected, data)
 			if variant == "refused" {
 				w.WriteHeader(429)
 				return
@@ -295,9 +314,10 @@ func newOCRGatewayFixture(t *testing.T, variant, hubOrigin, serviceToken, dbPath
 				c.Close()
 				return
 			}
-			_, _ = w.Write([]byte(`{"code":0,"data":{"jobId":"provider-owned"}}`))
-		case "/api/v2/ocr/jobs/provider-owned":
+			fmt.Fprintf(w, `{"code":0,"data":{"jobId":%q}}`, providerJob)
+		case "/api/v2/ocr/jobs/provider-owned", "/api/v2/ocr/jobs/provider-owned-2":
 			f.polls++
+			providerJob := strings.TrimPrefix(r.URL.Path, "/api/v2/ocr/jobs/")
 			if variant == "failed" {
 				_, _ = w.Write([]byte(`{"code":0,"data":{"state":"failed","jobId":"provider-owned"}}`))
 				return
@@ -307,7 +327,7 @@ func newOCRGatewayFixture(t *testing.T, variant, hubOrigin, serviceToken, dbPath
 				_, _ = w.Write([]byte(`{"code":0,"data":{"jobId":"provider-owned","state":"pending"}}`))
 				return
 			}
-			fmt.Fprintf(w, `{"code":0,"data":{"jobId":"provider-owned","state":"done","extractProgress":{"totalPages":1,"extractedPages":1},"resultUrl":{"jsonUrl":%q}}}`, f.resultOrigin+"/result.jsonl")
+			fmt.Fprintf(w, `{"code":0,"data":{"jobId":%q,"state":"done","extractProgress":{"totalPages":1,"extractedPages":1},"resultUrl":{"jsonUrl":%q}}}`, providerJob, f.resultOrigin+"/result.jsonl")
 		case "/result.jsonl":
 			switch variant {
 			case "empty-page":

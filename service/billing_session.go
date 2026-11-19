@@ -129,17 +129,23 @@ func (s *BillingSession) settleLocked(actualQuota int) error {
 
 // Refund 退还所有预扣费，幂等安全，异步执行。
 func (s *BillingSession) Refund(c *gin.Context) {
+	if work := s.prepareRefund(c); work != nil {
+		gopool.Go(work)
+	}
+}
+
+func (s *BillingSession) prepareRefund(c *gin.Context) func() {
 	if s.usesNativeTokenQuota() {
 		s.refundNative(c)
-		return
+		return nil
 	}
 	if s.relayInfo != nil && s.relayInfo.PlatformMode {
-		return
+		return nil
 	}
 	s.mu.Lock()
 	if s.settled || s.settlementFailed || s.refunded || s.fundingSettled || s.reconciliationPending {
 		s.mu.Unlock()
-		return
+		return nil
 	}
 	if !s.needsRefundLocked() {
 		// A zero/trusted pre-consume owns a migration lease but no money.
@@ -149,7 +155,7 @@ func (s *BillingSession) Refund(c *gin.Context) {
 		if err := s.finishLegacyLease("refunded"); err != nil {
 			common.SysError("legacy empty admission receipt pending")
 		}
-		return
+		return nil
 	}
 	// Capture every refund leg before releasing the lock. Receipts make the
 	// subsequent asynchronous writes idempotent even if the process stops after
@@ -179,10 +185,10 @@ func (s *BillingSession) Refund(c *gin.Context) {
 	))
 	if receiptErr != nil {
 		common.SysError("legacy funding refund receipt pending: " + receiptErr.Error())
-		return
+		return nil
 	}
 
-	gopool.Go(func() { s.applyRefundReceipts(refundCtx, receipts) })
+	return func() { s.applyRefundReceipts(refundCtx, receipts) }
 }
 
 func (s *BillingSession) refundRequestID() string {

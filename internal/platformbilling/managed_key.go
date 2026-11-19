@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,10 +20,18 @@ func IsModelCredential(credential string) bool {
 }
 
 func (a *Adapter) validateModelCredential(credential, task, model string, grant Claims) error {
-	if grant.ModelScope != "" && grant.ModelScope != "selected" && !grant.NativePricing() {
+	if grant.CreditScope != "" {
 		return ErrInvalid
 	}
-	if grant.ID == "" || grant.Audience != "llmrouter" || grant.ActorID == "" || grant.AccountID == "" || grant.OriginProductID == "" || (model != "" && !grant.NativePricing() && !slices.Contains(grant.Models, model)) {
+	if grant.ModelScope != "" && grant.ModelScope != "selected" && !grant.NativePricing() ||
+		model != "" && !grant.NativePricing() && !slices.Contains(grant.Models, model) {
+		return ErrInvalid
+	}
+	return a.validateCredentialIdentity(credential, task, grant)
+}
+
+func (a *Adapter) validateCredentialIdentity(credential, task string, grant Claims) error {
+	if grant.ID == "" || grant.Audience != "llmrouter" || grant.ActorID == "" || grant.AccountID == "" || grant.OriginProductID == "" {
 		return ErrInvalid
 	}
 	if strings.HasPrefix(credential, "uh_key_") {
@@ -49,6 +56,9 @@ func (a *Adapter) validateModelCredential(credential, task, model string, grant 
 // the legacy model list. Identity, membership and revocation remain central.
 func (grant Claims) NativePricing() bool {
 	validFunding := grant.PricingSource == "llmrouter_native" && grant.Asset == "CNY/6" && grant.FundingMode == "prepaid_cash" || grant.PricingSource == NativeCreditPricingSource && grant.Asset == "CREDIT/6" && grant.FundingMode == "credits" && grant.NativeCreditConversion != nil && grant.NativeCreditConversion.validCredit()
+	if grant.CreditScope != "" {
+		return grant.ProductCredit() && grant.PricingSource == NativeCreditPricingSource && validFunding && grant.ModelScope == "llmrouter_available" && grant.CredentialVersion > 0 && grant.CredentialKind == "api_key"
+	}
 	return grant.ModelScope == "llmrouter_available" && validFunding && grant.CredentialVersion > 0 && grant.CredentialKind == "api_key" && grant.OriginProductID == "superwagie"
 }
 
@@ -75,11 +85,11 @@ func (a *Adapter) ManagedModelGrant(ctx context.Context, credential string) (Cla
 	if !a.Enabled() || !strings.HasPrefix(credential, "uh_key_") || !IsModelCredential(credential) {
 		return Claims{}, ErrInvalid
 	}
-	var grant Claims
-	if err := a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": "", "instance_id": a.config.InstanceID}, &grant); err != nil {
+	grant, err := a.managedGrant(ctx, credential, "", "", "")
+	if err != nil {
 		return Claims{}, err
 	}
-	if err := a.validateModelCredential(credential, "", "", grant); err != nil {
+	if err := a.validateManagedCredential(ctx, credential, "", "", grant, false); err != nil {
 		return Claims{}, err
 	}
 	models := make([]string, 0, len(grant.Models))
@@ -103,14 +113,19 @@ func (a *Adapter) ManagedTask(ctx context.Context, credential, id string) (Call,
 	if !a.Enabled() || !strings.HasPrefix(credential, "uh_key_") || !IsModelCredential(credential) || id == "" || len(id) > 255 || strings.TrimSpace(id) != id {
 		return Call{}, ErrInvalid
 	}
-	var grant Claims
-	if err := a.client.do(ctx, http.MethodPost, "/internal/v1/model-credentials/verify", "", map[string]string{"token": credential, "model": "", "purpose": "receipt", "instance_id": a.config.InstanceID}, &grant); err != nil {
+	grant, err := a.managedGrant(ctx, credential, "", "", "receipt")
+	if err != nil {
 		return Call{}, err
 	}
-	if err := a.validateModelCredential(credential, "", "", grant); err != nil {
+	if err := a.validateManagedCredential(ctx, credential, "", "", grant, true); err != nil {
 		return Call{}, err
 	}
 	idScope := a.db.Where("call_id = ? OR provider_task_id = ?", id, id)
+	if grant.ProductCredit() {
+		if original, err := grant.productCreditCallID(id); err == nil {
+			idScope = idScope.Or("call_id = ?", original)
+		}
+	}
 	// SDKs receive public job IDs, while the platform journal stores supplier
 	// task IDs. Resolve the public binding within the already verified key scope.
 	if a.db.Migrator().HasTable("tasks") {
@@ -122,7 +137,7 @@ func (a *Adapter) ManagedTask(ctx context.Context, credential, id string) (Call,
 		idScope = idScope.Or("call_id IN (?)", publicJobs)
 	}
 	var rows []Call
-	err := a.db.WithContext(ctx).Where("credential_id = ? AND actor_id = ? AND account_id = ? AND origin_product_id = ? AND instance_id = ?", grant.ID, grant.ActorID, grant.AccountID, grant.OriginProductID, a.config.InstanceID).Where(idScope).Limit(2).Find(&rows).Error
+	err = a.db.WithContext(ctx).Where("credential_id = ? AND actor_id = ? AND account_id = ? AND origin_product_id = ? AND instance_id = ?", grant.ID, grant.ActorID, grant.AccountID, grant.OriginProductID, a.config.InstanceID).Where(idScope).Limit(2).Find(&rows).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return Call{}, ErrInvalid
@@ -133,7 +148,7 @@ func (a *Adapter) ManagedTask(ctx context.Context, credential, id string) (Call,
 		return Call{}, ErrInvalid
 	}
 	row := rows[0]
-	if a.validateModelCredential(credential, row.TaskID, row.Model, grant) != nil {
+	if a.validateManagedCredential(ctx, credential, row.TaskID, row.Model, grant, true) != nil || !row.matchesCreditReceiptScope(grant) {
 		return Call{}, ErrInvalid
 	}
 	return row, nil

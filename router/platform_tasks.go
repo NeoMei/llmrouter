@@ -15,6 +15,13 @@ func superwagiePrivateResultBlocked(row platformbilling.Call) bool {
 	return row.OriginProductID == "superwagie"
 }
 
+func setProductTaskReadHeaders(c *gin.Context, row platformbilling.Call) {
+	c.Header("X-UniHub-Call-ID", row.CallID)
+	if alias := platformbilling.ProductReceiptAlias(c.Request.Context(), row); alias != "" {
+		c.Header("X-UniHub-Idempotency-Key", alias)
+	}
+}
+
 func registerPlatformTaskReads(engine gin.IRoutes, a *platformbilling.Adapter) {
 	engine.GET("/ocr/jobs/:callID/document", func(c *gin.Context) {
 		token := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
@@ -26,6 +33,9 @@ func registerPlatformTaskReads(engine gin.IRoutes, a *platformbilling.Adapter) {
 		if err != nil || row.Operation != "ocr" {
 			c.AbortWithStatus(404)
 			return
+		}
+		if row.CreditScope == platformbilling.ProductCreditScope {
+			setProductTaskReadHeaders(c, row)
 		}
 		c.Set("platform_task_call", row)
 		controller.PlatformOCRDocument(c, func() error {
@@ -48,7 +58,7 @@ func registerPlatformTaskReads(engine gin.IRoutes, a *platformbilling.Adapter) {
 			token := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
 			if c.Request.Method == http.MethodGet && len(c.Request.Header.Values("Authorization")) == 1 && strings.HasPrefix(c.GetHeader("Authorization"), "Bearer ") && c.Request.URL.RawQuery == "" && platformbilling.IsOwnedReadCredential(token) {
 				row, err := a.OwnedTaskRead(c.Request.Context(), token, c.Param("callID"))
-				if err != nil || row.Operation != op {
+				if err != nil || row.Operation != op || (op == "ocr" && row.CreditScope == platformbilling.ProductCreditScope) {
 					c.AbortWithStatus(404)
 					return
 				}
@@ -73,9 +83,15 @@ func registerPlatformTaskReads(engine gin.IRoutes, a *platformbilling.Adapter) {
 				c.AbortWithStatus(404)
 				return
 			}
-			if superwagiePrivateResultBlocked(row) && ((c.Request.Method == http.MethodGet && strings.HasSuffix(c.Request.URL.Path, "/result")) || c.Request.Method == http.MethodPost) {
+			productOwned := row.CreditScope == platformbilling.ProductCreditScope && platformbilling.HasProductAuthorization(c.Request.Context())
+			rawResult := c.Request.Method == http.MethodGet && strings.HasSuffix(c.Request.URL.Path, "/result")
+			if (op == "ocr" && rawResult && row.CreditScope == platformbilling.ProductCreditScope) ||
+				(superwagiePrivateResultBlocked(row) && !productOwned && (rawResult || c.Request.Method == http.MethodPost)) {
 				c.AbortWithStatus(http.StatusNotFound)
 				return
+			}
+			if productOwned {
+				setProductTaskReadHeaders(c, row)
 			}
 			c.Set("platform_task_call", row)
 			c.Next()

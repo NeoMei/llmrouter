@@ -2,6 +2,7 @@ package dto
 
 import (
 	"math/big"
+	"slices"
 	"strings"
 
 	"github.com/QuantumNous/new-api/pkg/metering"
@@ -11,12 +12,13 @@ import (
 // NativeTokenEvidence retains provider counters before legacy fallback or conversion.
 // Stream counters are cumulative snapshots, never additive deltas.
 type NativeTokenEvidence struct {
-	Source    string
-	Operation string
-	values    map[string]int64
-	invalid   bool
-	seen      bool
-	terminal  bool
+	Source            string
+	Operation         string
+	ImplicitCacheOnly bool
+	values            map[string]int64
+	invalid           bool
+	seen              bool
+	terminal          bool
 }
 
 func (e *NativeTokenEvidence) Observe(raw []byte, stream bool) {
@@ -61,6 +63,14 @@ func (e *NativeTokenEvidence) Observe(raw []byte, stream bool) {
 	if !u.IsObject() {
 		e.invalid = true
 		return
+	}
+	if e.ImplicitCacheOnly && e.Source == BillingUsageSourceOAIChat {
+		for _, key := range []string{"cache_creation_input_tokens", "cache_write_tokens"} {
+			if counter := u.Get("prompt_tokens_details." + key); counter.Exists() && counter.Raw != "0" {
+				e.invalid = true
+				return
+			}
+		}
 	}
 	if e.Source == BillingUsageSourceAliEmbeddingV4 {
 		// Bill the provider total once. Compatible responses may also carry
@@ -223,6 +233,11 @@ func (e *NativeTokenEvidence) Usage(price metering.Price) metering.Usage {
 			return u
 		}
 		output -= reasoning
+	}
+	if e.ImplicitCacheOnly && e.Source == BillingUsageSourceOAIChat && !slices.ContainsFunc(price.Terms, func(term metering.Term) bool { return term.Key == "reasoning" }) {
+		// The standard output price includes both the answer and reasoning.
+		output += reasoning
+		reasoning = 0
 	}
 	values := map[string]int64{"input": input, "output": output, "cache_read": cacheRead, "cache_write": cacheWrite, "reasoning": reasoning}
 	for _, term := range price.Terms {

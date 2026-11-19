@@ -87,6 +87,11 @@ func NativeProductCreditAmount(a NativeAdmission, u metering.Usage, reserve bool
 	if a.ProductPrice == nil || a.GroupRatio != "1" || a.QuotaPerUnit != a.ProductPrice.MicrocreditsPerUSD() {
 		return 0, ErrOCRConflict
 	}
+	if !reserve && len(a.Price.InputTokenBands) != 0 {
+		if err := metering.ValidateBandedSettlement(a.Price, a.Reservation, u); err != nil {
+			return 0, err
+		}
+	}
 	whole, err := nativeRoundedCharge(a, u, reserve)
 	if err != nil {
 		return 0, err
@@ -103,7 +108,11 @@ func nativeRoundedCharge(a NativeAdmission, u metering.Usage, reserve bool) (*bi
 	if reserve && u.State != "confirmed" {
 		u.State = "confirmed"
 	}
-	cost, err := metering.Calculate(a.Price, u)
+	calculate := metering.Calculate
+	if reserve && a.ProductPrice != nil && len(a.Price.InputTokenBands) != 0 {
+		calculate = metering.CalculateReservation
+	}
+	cost, err := calculate(a.Price, u)
 	if err != nil {
 		return nil, err
 	}

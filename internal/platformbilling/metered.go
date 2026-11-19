@@ -381,7 +381,7 @@ func (a *Adapter) admitWireOperation(ctx context.Context, credential, task, id s
 			return nil, ErrInvalid
 		}
 	}
-	if err = metering.ValidatePrice(*chosen.Metered); err != nil {
+	if err = metering.ValidatePrice(*chosen.Metered); err != nil || len(chosen.Metered.InputTokenBands) != 0 {
 		return nil, ErrInvalid
 	}
 	if IsAudioWire(wire.ID) {

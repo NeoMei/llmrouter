@@ -1,7 +1,7 @@
 {
   "translation": {
     "Product credit pricing": "Product credit pricing",
-    "The multiplier applies to the highest comparable pay-as-you-go supplier price for each billing dimension. Published native prices take precedence.": "The multiplier applies to the highest comparable pay-as-you-go supplier price for each billing dimension. Published native prices take precedence.",
+    "The multiplier applies to the highest comparable supplier price for each billing dimension. The published native price applies when no supplier price is configured.": "The multiplier applies to the highest comparable supplier price for each billing dimension. The published native price applies when no supplier price is configured.",
     "Pricing revision": "Pricing revision",
     "Multiplier numerator": "Multiplier numerator",
     "Multiplier denominator": "Multiplier denominator",

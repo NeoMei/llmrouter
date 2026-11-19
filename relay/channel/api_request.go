@@ -446,6 +446,11 @@ func DoRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	return doRequest(c, req, info)
 }
 func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
+	if info.PlatformBilling.ProductBandedChat() {
+		if err := info.PlatformBilling.ValidateProductBandedChatOutbound(info.ChannelId, info.ChannelType, info.UpstreamModelName, req, common2.TLSInsecureSkipVerify); err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+	}
 	if info.RemoteTariff() && info.PlatformBilling != nil {
 		if err := info.PlatformBilling.ValidateTextInputOutbound(info.ChannelId, info.ChannelType, info.UpstreamModelName, req, common2.TLSInsecureSkipVerify); err != nil {
 			info.PlatformBilling.Rejected()

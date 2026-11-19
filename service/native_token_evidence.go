@@ -14,7 +14,7 @@ import (
 // NativeTokenObserver captures raw upstream evidence and persists one cumulative
 // observation even when downstream validation or delivery fails afterwards.
 func NativeTokenObserver(ctx context.Context, info *relaycommon.RelayInfo, source string) (*dto.NativeTokenEvidence, func()) {
-	evidence := &dto.NativeTokenEvidence{Source: source}
+	evidence := &dto.NativeTokenEvidence{Source: source, ImplicitCacheOnly: info != nil && info.PlatformBilling.ProductBandedChat()}
 	return evidence, func() {
 		if info == nil || (info.NativeBilling == nil && !info.ManagedNativePricing()) {
 			return
@@ -68,6 +68,18 @@ func NativeTokenReservation(info *relaycommon.RelayInfo, price metering.Price) (
 			return metering.Usage{}, errors.New("native token billing requires explicit bounded max tokens")
 		}
 		output = meta.MaxTokens
+	}
+	if bands := price.InputTokenBands; len(bands) != 0 {
+		publicModel := info.PublicModelName
+		if publicModel == "" {
+			publicModel = info.OriginModelName
+		}
+		endpoint := relaycommon.GetFullRequestURL(info.ChannelBaseUrl, "/v1/chat/completions", info.ChannelType)
+		var err error
+		input, output, err = info.PlatformBilling.BindProductBandedChat(publicModel, info.ChannelId, info.ChannelType, info.UpstreamModelName, endpoint, bands[len(bands)-1].MaxInputTokens)
+		if err != nil {
+			return metering.Usage{}, err
+		}
 	}
 	u := metering.Usage{Version: "metered_v2", Operation: price.Operation, State: "incomplete", Source: "reservation_bound_v1"}
 	// Each exclusive input/output dimension gets its conservative upper bound.

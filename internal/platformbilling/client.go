@@ -136,6 +136,7 @@ type Config struct {
 	CompactPolicies                 map[string]CompactPolicy
 	NativeInputPolicies             map[string]map[string]NativeInputPolicy
 	TextInputPolicies               map[string]map[string]TextInputPolicy
+	ProductCreditTextInputPolicies  map[string]map[string]TextInputPolicy
 	OperationLimits                 map[string]map[string]OperationLimits
 	OperationRateIDs                map[string]map[string]map[string]string
 	Enabled                         bool

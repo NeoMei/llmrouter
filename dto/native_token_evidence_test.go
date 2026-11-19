@@ -1,6 +1,7 @@
 package dto
 
 import (
+	"fmt"
 	"github.com/QuantumNous/new-api/pkg/metering"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -58,6 +59,30 @@ func TestNativeCumulativeAndExclusiveCounters(t *testing.T) {
 	}
 	e.Observe([]byte(`{"usage":{"prompt_tokens":10,"completion_tokens":7}}`), true)
 	assert.Equal(t, "invalid", e.Usage(nativeTokenTestPrice("chat", "input", "output")).State)
+}
+
+func TestImplicitProductChatRejectsExplicitCacheReceiptsAndKeepsReasoningInOutput(t *testing.T) {
+	p := nativeTokenTestPrice("chat", "input", "output", "cache_read")
+	const terminal = `{"usage":{"prompt_tokens":10,"completion_tokens":8,"total_tokens":18,"prompt_tokens_details":%s,"completion_tokens_details":{"reasoning_tokens":2}}}`
+	for _, tt := range []struct{ name, details, state string }{
+		{"verified implicit hit", `{"cached_tokens":3}`, "confirmed"},
+		{"explicit cache created", `{"cached_tokens":3,"cache_creation_input_tokens":2}`, "invalid"},
+		{"legacy explicit cache creation field", `{"cached_tokens":3,"cache_write_tokens":2}`, "invalid"},
+		{"invalid explicit cache counter", `{"cached_tokens":3,"cache_creation_input_tokens":null}`, "invalid"},
+		{"unknown cache", `{}`, "incomplete"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			e := NativeTokenEvidence{Source: BillingUsageSourceOAIChat, ImplicitCacheOnly: true}
+			e.Observe([]byte(fmt.Sprintf(terminal, tt.details)), false)
+			u := e.Usage(p)
+			require.Equal(t, tt.state, u.State)
+			if tt.state == "confirmed" {
+				assert.Equal(t, "7", u.Measurements[0].Quantity.Value)
+				assert.Equal(t, "8", u.Measurements[1].Quantity.Value)
+				assert.Equal(t, "3", u.Measurements[2].Quantity.Value)
+			}
+		})
+	}
 }
 
 func TestNativeClaudeCacheOnlyAndGeminiThoughts(t *testing.T) {

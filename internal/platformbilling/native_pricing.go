@@ -374,7 +374,13 @@ func (s *Session) ReserveNative(ctx context.Context, q NativeQuote, snapshot str
 		}
 	}
 	s.call.Amount = q.MaxAmount
-	saved := s.adapter.db.WithContext(ctx).Model(&Call{}).Where("call_id = ? AND status = ?", s.call.CallID, "ADMITTED").Updates(map[string]any{"status": "RESERVING", "native_quote_json": s.call.NativeQuoteJSON, "native_price_snapshot": snapshot, "amount": q.MaxAmount})
+	updates := map[string]any{"status": "RESERVING", "native_quote_json": s.call.NativeQuoteJSON, "native_price_snapshot": snapshot, "amount": q.MaxAmount}
+	if s.ProductBandedChat() {
+		updates["text_input_snapshot"] = s.call.TextInputSnapshot
+		updates["reservation_quantity"] = s.call.ReservationQuantity
+		updates["reservation_output"] = s.call.ReservationOutput
+	}
+	saved := s.adapter.db.WithContext(ctx).Model(&Call{}).Where("call_id = ? AND status = ?", s.call.CallID, "ADMITTED").Updates(updates)
 	if saved.Error != nil {
 		return saved.Error
 	}

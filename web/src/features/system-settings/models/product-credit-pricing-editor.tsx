@@ -89,7 +89,7 @@ export function ProductCreditPricingEditor(props: { value: string }) {
     <SettingsSection title={t('Product credit pricing')}>
       <p className='text-muted-foreground text-sm'>
         {t(
-          'The multiplier applies to the highest comparable pay-as-you-go supplier price for each billing dimension. Published native prices take precedence.'
+	          'The multiplier applies to the highest comparable supplier price for each billing dimension. The published native price applies when no supplier price is configured.'
         )}
       </p>
       <div className='grid gap-3 sm:grid-cols-3'>

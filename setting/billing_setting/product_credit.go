@@ -95,8 +95,13 @@ func parseProductCreditPricing(raw string) (productCreditPricing, error) {
 					comparable = &price
 					continue
 				}
-				if comparable.Policy != price.Policy || len(comparable.Terms) != len(price.Terms) {
+				if comparable.Policy != price.Policy || len(comparable.Terms) != len(price.Terms) || len(comparable.InputTokenBands) != len(price.InputTokenBands) {
 					return config, errProductCreditPricing
+				}
+				for i, band := range price.InputTokenBands {
+					if band.MaxInputTokens != comparable.InputTokenBands[i].MaxInputTokens {
+						return config, errProductCreditPricing
+					}
 				}
 				for i, term := range price.Terms {
 					base := comparable.Terms[i]
@@ -112,6 +117,10 @@ func parseProductCreditPricing(raw string) (productCreditPricing, error) {
 }
 
 func validProductCreditSupplierPrice(model, operation string, tariff metering.Price) bool {
+	if len(tariff.InputTokenBands) != 0 {
+		return operation == "chat" && tariff.Operation == operation && metering.ValidatePrice(tariff) == nil &&
+			!slices.ContainsFunc(tariff.Terms, func(term metering.Term) bool { return term.Key == "cache_write" })
+	}
 	if operation == "multimodal_embedding" {
 		return tariff.Operation == operation && tariff.Policy == "provider_reported_v1" && len(tariff.Terms) == 2 &&
 			metering.ValidatePrice(tariff) == nil
@@ -158,16 +167,17 @@ func ResolveProductCreditPrice(model, operation, cnyPerUSD string) (ProductCredi
 		return ProductCreditPrice{}, false
 	}
 	quote := ProductCreditPrice{Model: model, CNYPerUSD: fx.RatString()}
-	if price, ok := ResolveModelNativePrice(model, operation); ok {
-		quote.Source, quote.Tariff = "published_override", price
-	} else {
-		productCreditPricingMu.RLock()
-		p := productCreditPricingConfig
-		productCreditPricingMu.RUnlock()
-		suppliers := p.Suppliers[model][operation]
-		if len(suppliers) == 0 {
+	productCreditPricingMu.RLock()
+	p := productCreditPricingConfig
+	productCreditPricingMu.RUnlock()
+	suppliers := p.Suppliers[model][operation]
+	if len(suppliers) == 0 {
+		price, ok := ResolveModelNativePrice(model, operation)
+		if !ok {
 			return ProductCreditPrice{}, false
 		}
+		quote.Source, quote.Tariff = "published_override", price
+	} else {
 		quote.Source, quote.PolicyVersion = "supplier_paygo_max", p.Version
 		quote.Multiplier = metering.Rational{Numerator: "3", Denominator: "2"}
 		if p.Multiplier != nil {
@@ -181,24 +191,37 @@ func ResolveProductCreditPrice(model, operation, cnyPerUSD string) (ProductCredi
 		digest := sha256.Sum256(evidence)
 		quote.EvidenceDigest = hex.EncodeToString(digest[:])
 		maxima := make(map[string]*big.Rat)
+		var bandMaxima []map[string]*big.Rat
 		for _, supplier := range suppliers {
-			for _, term := range supplier.Tariff.Terms {
-				rate, _ := new(big.Rat).SetString(term.Price.Numerator + "/" + term.Price.Denominator)
-				if supplier.Currency == "CNY" {
-					rate.Quo(rate, fx)
-				}
-				if prior := maxima[term.Key]; prior == nil || rate.Cmp(prior) > 0 {
-					maxima[term.Key] = rate
-				}
-			}
 			if quote.Tariff.Version == "" {
 				quote.Tariff = supplier.Tariff
 				quote.Tariff.Terms = slices.Clone(supplier.Tariff.Terms)
+				quote.Tariff.InputTokenBands = slices.Clone(supplier.Tariff.InputTokenBands)
+				bandMaxima = make([]map[string]*big.Rat, len(quote.Tariff.InputTokenBands))
+				for i := range bandMaxima {
+					bandMaxima[i] = make(map[string]*big.Rat, len(quote.Tariff.Terms))
+				}
+			}
+			for _, term := range supplier.Tariff.Terms {
+				selectSupplierMaximum(maxima, term.Key, term.Price, supplier.Currency, fx)
+			}
+			for i, band := range supplier.Tariff.InputTokenBands {
+				for key, price := range band.Prices {
+					selectSupplierMaximum(bandMaxima[i], key, price, supplier.Currency, fx)
+				}
 			}
 		}
 		for i, term := range quote.Tariff.Terms {
 			rate := maxima[term.Key].Mul(maxima[term.Key], multiplier)
 			quote.Tariff.Terms[i].Price = metering.Rational{Numerator: rate.Num().String(), Denominator: rate.Denom().String()}
+		}
+		for i, maxima := range bandMaxima {
+			prices := make(map[string]metering.Rational, len(maxima))
+			for key, maximum := range maxima {
+				rate := maximum.Mul(maximum, multiplier)
+				prices[key] = metering.Rational{Numerator: rate.Num().String(), Denominator: rate.Denom().String()}
+			}
+			quote.Tariff.InputTokenBands[i].Prices = prices
 		}
 		if metering.ValidatePrice(quote.Tariff) != nil {
 			return ProductCreditPrice{}, false
@@ -211,4 +234,14 @@ func ResolveProductCreditPrice(model, operation, cnyPerUSD string) (ProductCredi
 	digest := sha256.Sum256(raw)
 	quote.Revision = hex.EncodeToString(digest[:])
 	return quote, true
+}
+
+func selectSupplierMaximum(maxima map[string]*big.Rat, key string, price metering.Rational, currency string, fx *big.Rat) {
+	rate, _ := new(big.Rat).SetString(price.Numerator + "/" + price.Denominator)
+	if currency == "CNY" {
+		rate.Quo(rate, fx)
+	}
+	if prior := maxima[key]; prior == nil || rate.Cmp(prior) > 0 {
+		maxima[key] = rate
+	}
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/metering"
 	"github.com/QuantumNous/new-api/relay/capability"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service/modelcatalog"
 	"github.com/QuantumNous/new-api/service/ocr"
@@ -582,8 +583,18 @@ func productCreditPriceAvailability(m ProviderCatalogModel, candidates []modelca
 			op.Available, op.Executable, op.DisabledReason = false, false, "product_credit_operation_unavailable"
 		} else if price, ok := billing_setting.ResolveProductCreditPrice(m.ID, op.BillingOperation, fx); !ok {
 			op.Available, op.Executable, op.DisabledReason = false, false, "product_credit_price_unavailable"
+		} else if bands := price.Tariff.InputTokenBands; len(bands) != 0 && (op.ID != "chat.completions.create" || !slices.ContainsFunc(candidates, func(candidate modelcatalog.ResolvedModel) bool {
+			channel := channels[candidate.ChannelID]
+			endpoint := relaycommon.GetFullRequestURL(channel.GetBaseURL(), "/v1/chat/completions", channel.Type)
+			return slices.Contains(candidate.Capabilities.Operations, op.ID) && adapter.ProductBandedChatTarget(m.ID, channel.Id, channel.Type, candidate.UpstreamModel, endpoint, bands[len(bands)-1].MaxInputTokens)
+		})) {
+			op.Available, op.Executable, op.DisabledReason = false, false, "product_credit_banded_chat_target_unavailable"
 		} else {
 			op.PublicTariff = publicProductCreditTariff(price)
+			if len(price.Tariff.InputTokenBands) != 0 && len(m.CapabilityMetadata.Operations) == 1 {
+				m.InputModalities = []string{"text"}
+				m.CapabilityMetadata.Capabilities.InputModalities = []string{"text"}
+			}
 		}
 		m.CapabilityMetadata.Operations[i] = op
 	}
@@ -613,11 +624,21 @@ func publicProductCreditTariff(price billing_setting.ProductCreditPrice) *platfo
 	microcreditsPerUSD, _ := new(big.Rat).SetString(price.MicrocreditsPerUSD())
 	tariff := price.Tariff
 	tariff.Terms = slices.Clone(price.Tariff.Terms)
-	for i := range tariff.Terms {
-		term := &tariff.Terms[i]
-		rate, _ := new(big.Rat).SetString(term.Price.Numerator + "/" + term.Price.Denominator)
+	convert := func(price metering.Rational) metering.Rational {
+		rate, _ := new(big.Rat).SetString(price.Numerator + "/" + price.Denominator)
 		rate.Mul(rate, microcreditsPerUSD)
-		term.Price = metering.Rational{Numerator: rate.Num().String(), Denominator: rate.Denom().String()}
+		return metering.Rational{Numerator: rate.Num().String(), Denominator: rate.Denom().String()}
+	}
+	for i := range tariff.Terms {
+		tariff.Terms[i].Price = convert(tariff.Terms[i].Price)
+	}
+	tariff.InputTokenBands = slices.Clone(price.Tariff.InputTokenBands)
+	for i, band := range price.Tariff.InputTokenBands {
+		prices := make(map[string]metering.Rational, len(band.Prices))
+		for key, rate := range band.Prices {
+			prices[key] = convert(rate)
+		}
+		tariff.InputTokenBands[i].Prices = prices
 	}
 	return &platformbilling.CatalogPublicTariff{Asset: "CREDIT/6", Revision: price.Revision, Tariff: tariff}
 }

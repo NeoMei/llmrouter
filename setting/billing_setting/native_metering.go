@@ -116,7 +116,7 @@ func ValidateModelNativePricing(c map[string]map[string]metering.Price) error {
 			return errors.New("too many native pricing operations")
 		}
 		for operation, p := range ops {
-			if operation != p.Operation {
+			if operation != p.Operation || len(p.InputTokenBands) != 0 {
 				return errors.New("native pricing operation key mismatch")
 			}
 			policyOK := false

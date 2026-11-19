@@ -42,7 +42,7 @@ func TestProductCreditDefaultPriceUsesMaximumComparablePayAsYouGoPerDimension(t 
 	assert.False(t, ok)
 }
 
-func TestProductCreditPricingCanAdjustMultiplierAndKeepPublishedOverride(t *testing.T) {
+func TestProductCreditPricingAppliesMultiplierWithoutChangingLegacyPrice(t *testing.T) {
 	previous := ProductCreditPricingJSONString()
 	oldPrices := GetModelNativePricingCopy()
 	t.Cleanup(func() {
@@ -59,11 +59,18 @@ func TestProductCreditPricingCanAdjustMultiplierAndKeepPublishedOverride(t *test
 	override := derived.Tariff
 	override.Terms = []metering.Term{{Key: "input", Unit: "token", Price: metering.Rational{Numerator: "4", Denominator: "1000000"}}}
 	require.NoError(t, SetModelNativePricing(map[string]map[string]metering.Price{"test-model": {"embedding": override}}))
-	published, ok := ResolveProductCreditPrice("test-model", "embedding", "7")
+	configured, ok := ResolveProductCreditPrice("test-model", "embedding", "7")
 	require.True(t, ok)
-	assert.Equal(t, "published_override", published.Source)
-	assert.Equal(t, override, published.Tariff)
-	assert.NotEqual(t, derived.Revision, published.Revision)
+	assert.Equal(t, derived, configured)
+	legacy, ok := ResolveModelNativePrice("test-model", "embedding")
+	require.True(t, ok)
+	assert.Equal(t, override, legacy)
+	require.NoError(t, SetProductCreditPricing(`{"version":"no-supplier"}`))
+	fallback, ok := ResolveProductCreditPrice("test-model", "embedding", "7")
+	require.True(t, ok)
+	assert.Equal(t, "published_override", fallback.Source)
+	assert.Equal(t, override, fallback.Tariff)
+	assert.NotEqual(t, derived.Revision, fallback.Revision)
 	assert.Error(t, SetProductCreditPricing(`{"version":"rev3","multiplier":{"numerator":"0","denominator":"1"}}`))
 }
 
@@ -98,4 +105,35 @@ func TestProductCreditVideoSupplierRatesKeepResolutionDimensions(t *testing.T) {
 	}
 	assert.Equal(t, metering.Rational{Numerator: "3", Denominator: "20"}, rates["video_720p"])
 	assert.Equal(t, metering.Rational{Numerator: "9", Denominator: "32"}, rates["video_1080p"])
+}
+
+func TestProductCreditInputBandsPickCurrencyNormalizedMaximaWithinEachBand(t *testing.T) {
+	previous := ProductCreditPricingJSONString()
+	t.Cleanup(func() { require.NoError(t, SetProductCreditPricing(previous)) })
+	require.NoError(t, SetProductCreditPricing(`{
+	  "version":"band-rev",
+	  "suppliers":{"banded-model":{"chat":{
+	    "usd":{"version":"usd-1","currency":"USD","tariff":{"version":"metered_v2","operation":"chat","policy":"provider_reported_v1","terms":[
+	      {"key":"input","unit":"token","price":{"numerator":"2","denominator":"1000000"}},
+	      {"key":"output","unit":"token","price":{"numerator":"8","denominator":"1000000"}}],"input_token_bands":[
+	      {"max_input_tokens":100,"prices":{"input":{"numerator":"2","denominator":"1000000"},"output":{"numerator":"8","denominator":"1000000"}}},
+	      {"max_input_tokens":200,"prices":{"input":{"numerator":"4","denominator":"1000000"},"output":{"numerator":"16","denominator":"1000000"}}}]}},
+	    "cny":{"version":"cny-1","currency":"CNY","tariff":{"version":"metered_v2","operation":"chat","policy":"provider_reported_v1","terms":[
+	      {"key":"input","unit":"token","price":{"numerator":"24","denominator":"1000000"}},
+	      {"key":"output","unit":"token","price":{"numerator":"32","denominator":"1000000"}}],"input_token_bands":[
+	      {"max_input_tokens":100,"prices":{"input":{"numerator":"24","denominator":"1000000"},"output":{"numerator":"32","denominator":"1000000"}}},
+	      {"max_input_tokens":200,"prices":{"input":{"numerator":"80","denominator":"1000000"},"output":{"numerator":"96","denominator":"1000000"}}}]}}
+	  }}}
+	}`))
+	quote, ok := ResolveProductCreditPrice("banded-model", "chat", "8")
+	require.True(t, ok)
+	require.Len(t, quote.Tariff.InputTokenBands, 2)
+	assert.Equal(t, metering.Rational{Numerator: "9", Denominator: "2000000"}, quote.Tariff.InputTokenBands[0].Prices["input"])
+	assert.Equal(t, metering.Rational{Numerator: "3", Denominator: "250000"}, quote.Tariff.InputTokenBands[0].Prices["output"])
+	assert.Equal(t, metering.Rational{Numerator: "3", Denominator: "200000"}, quote.Tariff.InputTokenBands[1].Prices["input"])
+	assert.Equal(t, metering.Rational{Numerator: "3", Denominator: "125000"}, quote.Tariff.InputTokenBands[1].Prices["output"])
+	quote.Tariff.InputTokenBands[1].Prices["output"] = metering.Rational{Numerator: "1", Denominator: "1"}
+	replayed, ok := ResolveProductCreditPrice("banded-model", "chat", "8")
+	require.True(t, ok)
+	assert.Equal(t, metering.Rational{Numerator: "3", Denominator: "125000"}, replayed.Tariff.InputTokenBands[1].Prices["output"])
 }

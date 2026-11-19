@@ -733,6 +733,11 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 		if len(info.ParamOverride) > 0 || len(info.HeadersOverride) > 0 || info.ChannelSetting.SystemPrompt != "" || info.ChannelSetting.PassThroughBodyEnabled || model_setting.GetGlobalSettings().PassThroughRequestEnabled {
 			return types.NewError(errors.New("product credit metering requires an unchanged validated request"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		}
+		if len(published.Tariff.InputTokenBands) != 0 {
+			if service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) || helper.ModelMappedHelper(c, info, nil) != nil {
+				return types.NewError(errors.New("banded product credit requires the certified chat target"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+			}
+		}
 		productPrice, price, configured = &published, published.Tariff, true
 	} else {
 		price, configured = billing_setting.ResolveModelNativePrice(priceModel, operation)

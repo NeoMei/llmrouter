@@ -2,6 +2,7 @@ package router
 
 import (
 	"bytes"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -32,8 +34,16 @@ import (
 )
 
 func TestProductCreditRelayFreezesPublicPriceAndDoesNotReplayUnknownProvider(t *testing.T) {
+	testProductCreditRelayFreezesPublicPrice(t, false)
+}
+
+func TestBandedProductCreditRelayFreezesHighestReachableHoldAndSettlesActualBand(t *testing.T) {
+	testProductCreditRelayFreezesPublicPrice(t, true)
+}
+
+func testProductCreditRelayFreezesPublicPrice(t *testing.T, banded bool) {
 	origin := os.Getenv("PRODUCT_CREDIT_INTEGRATION_ORIGIN")
-	integration := origin != ""
+	integration := origin != "" && !banded
 	product, instance := "agentwiki", "default"
 	credential, proof, serviceToken := "uh_key_test", "product-proof", "service-service-service-service-token"
 	callerKey := "caller-one"
@@ -82,18 +92,30 @@ func TestProductCreditRelayFreezesPublicPriceAndDoesNotReplayUnknownProvider(t *
 	       {"key":"output","unit":"token","price":{"numerator":"2","denominator":"1000000"}}]}}
 	   }}}
 	}`))
+	if banded {
+		require.NoError(t, billing_setting.SetProductCreditPricing(`{
+		 "version":"banded-rev1","suppliers":{"public-credit-model":{"chat":{"a":{"version":"benchmark-1","currency":"CNY","tariff":{
+		   "version":"metered_v2","operation":"chat","policy":"provider_reported_v1","terms":[
+		     {"key":"input","unit":"token","price":{"numerator":"1","denominator":"1000000"}},
+		     {"key":"output","unit":"token","price":{"numerator":"2","denominator":"1000000"}}],"input_token_bands":[
+		     {"max_input_tokens":9,"prices":{"input":{"numerator":"1","denominator":"1000000"},"output":{"numerator":"2","denominator":"1000000"}}},
+		     {"max_input_tokens":1000,"prices":{"input":{"numerator":"4","denominator":"1000000"},"output":{"numerator":"6","denominator":"1000000"}}}]
+		 }}}}}}`))
+	}
 	db, err := gorm.Open(sqlite.Open(t.TempDir()+"/product-relay.db"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&model.Model{}, &model.Vendor{}, &model.Log{}, &model.User{}, &model.Token{}, &model.UserSubscription{}, &model.Channel{}, &model.Ability{}, &model.ClientModelRoute{}, &model.ClientModelTarget{}, &model.UpstreamAccountPool{}, &model.UpstreamAccountMember{}, &model.UpstreamAccountState{}))
 	model.DB, model.LOG_DB = db, db
 	require.NoError(t, db.Create(&model.User{Id: 1, Username: "routing", Status: common.UserStatusEnabled, Group: "default", Quota: 777}).Error)
 	var providerCalls atomic.Int32
+	var providerBodyBytes atomic.Int64
 	reserves, settlements := 0, 0
 	withUsage := true
 	expireBeforeHold := false
 	membershipEndedAfterHold := false
-	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	providerHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		providerCalls.Add(1)
+		providerBodyBytes.Store(r.ContentLength)
 		assert.Empty(t, r.Header.Get(platformbilling.ProductAuthorizationHeader))
 		assert.Empty(t, r.Header.Get("Idempotency-Key"))
 		var in struct {
@@ -116,10 +138,18 @@ func TestProductCreditRelayFreezesPublicPriceAndDoesNotReplayUnknownProvider(t *
 			raw += `,"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}`
 		}
 		_, _ = w.Write([]byte(raw + "}"))
-	}))
+	})
+	startProvider := httptest.NewServer
+	if banded {
+		startProvider = httptest.NewTLSServer
+	}
+	provider := startProvider(providerHandler)
 	t.Cleanup(provider.Close)
 	require.NoError(t, db.Create(&model.ClientModelRoute{Id: 1, PublicId: "public-credit-model", Client: product, DisplayName: "Public", Enabled: true, Metadata: `{"operations":["chat.completions.create"]}`, Aliases: `["product-alias"]`}).Error)
 	for i, upstream := range []string{"upstream-one", "upstream-two"} {
+		if banded && i > 0 {
+			break
+		}
 		id, base := i+1, provider.URL
 		require.NoError(t, db.Create(&model.Channel{Id: id, Type: constant.ChannelTypeOpenAI, Key: "fixture-provider-key", Status: common.ChannelStatusEnabled, BaseURL: &base, Name: upstream, Models: upstream, Group: "default"}).Error)
 		require.NoError(t, db.Create(&model.Ability{Group: "default", Model: upstream, ChannelId: id, Enabled: true}).Error)
@@ -127,6 +157,11 @@ func TestProductCreditRelayFreezesPublicPriceAndDoesNotReplayUnknownProvider(t *
 	}
 	model.InitChannelCache()
 	service.InitHttpClient()
+	if banded {
+		pool := x509.NewCertPool()
+		pool.AddCert(provider.Certificate())
+		service.GetHttpClient().Transport.(*http.Transport).TLSClientConfig.RootCAs = pool
+	}
 	service.InitTokenEncoders()
 	conversion := platformbilling.NativeConversion{Version: "product-fixture-1", Numerator: "1", Denominator: "1", Rounding: "lr-cumulative-ceil-v1"}
 	grant := platformbilling.Claims{CreditScope: platformbilling.ProductCreditScope, SourceVerified: true, FundingProductID: "agentwiki",
@@ -210,8 +245,16 @@ func TestProductCreditRelayFreezesPublicPriceAndDoesNotReplayUnknownProvider(t *
 	if !integration {
 		origin = hub.URL
 	}
-	adapter, err := platformbilling.New(db, platformbilling.Config{Enabled: true, Origin: origin, ServiceToken: serviceToken, InstanceID: instance,
-		PrincipalID: 1, Group: "platform", NativeGroup: "default", MaxBodyBytes: 8192, MaxInputTokens: 1000, MaxOutputTokens: 100})
+	config := platformbilling.Config{Enabled: true, Origin: origin, ServiceToken: serviceToken, InstanceID: instance,
+		PrincipalID: 1, Group: "platform", NativeGroup: "default", MaxBodyBytes: 8192, MaxInputTokens: 1000, MaxOutputTokens: 100}
+	if banded {
+		config.ProductCreditTextInputPolicies = map[string]map[string]platformbilling.TextInputPolicy{"chat.completions.create": {"public-credit-model": {
+			Version: "full_body_bytes_v1", ChannelID: 1, ChannelType: constant.ChannelTypeOpenAI, UpstreamModel: "upstream-one",
+			Endpoint: provider.URL + "/v1/chat/completions", ContextTokens: 1100, MaxInputTokens: 1000, MaxOutputTokens: 100,
+			ProviderReference: "https://example.invalid/text-token-contract",
+		}}}
+	}
+	adapter, err := platformbilling.New(db, config)
 	require.NoError(t, err)
 	r := gin.New()
 	SetManagedKeyDispatch(r, adapter)
@@ -241,6 +284,15 @@ func TestProductCreditRelayFreezesPublicPriceAndDoesNotReplayUnknownProvider(t *
 	require.NoError(t, db.First(&row, "call_id = ?", id).Error)
 	assert.Equal(t, "SETTLED", row.Status)
 	assert.Equal(t, "10500", row.Charged)
+	if banded {
+		inputCap := providerBodyBytes.Load() * 2
+		assert.Positive(t, inputCap)
+		assert.Equal(t, inputCap, row.ReservationQuantity)
+		assert.EqualValues(t, 100, row.ReservationOutput)
+		assert.Equal(t, strconv.FormatInt(inputCap*600+100*900, 10), row.Amount)
+		assert.Contains(t, row.NativePriceSnapshot, "banded-rev1")
+		assert.Contains(t, row.TextInputSnapshot, "full_body_bytes_v1")
+	}
 	assert.Contains(t, row.NativePriceSnapshot, "public-credit-model")
 	assert.Contains(t, row.Evidence, `"state":"confirmed"`)
 	assert.False(t, strings.Contains(row.NativePriceSnapshot, proof), "pricing evidence must never persist proof")

@@ -188,6 +188,12 @@ func New(db *gorm.DB, c Config) (*Adapter, error) {
 			return nil, ErrInvalid
 		}
 	}
+	if c.ProductCreditTextInputPolicies != nil {
+		raw, err := common.Marshal(c.ProductCreditTextInputPolicies)
+		if err != nil || decodeProductCreditTextInputPolicies(raw, &c) != nil {
+			return nil, ErrInvalid
+		}
+	}
 	if c.NativePresetPolicies != nil {
 		raw, err := common.Marshal(c.NativePresetPolicies)
 		if err != nil {

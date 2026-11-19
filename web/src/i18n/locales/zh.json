@@ -1,7 +1,7 @@
 {
   "translation": {
     "Product credit pricing": "产品额度定价",
-    "The multiplier applies to the highest comparable pay-as-you-go supplier price for each billing dimension. Published native prices take precedence.": "每个计费维度按可比供应商按量价格的最高价乘以倍率。已发布的原生价格优先。",
+    "The multiplier applies to the highest comparable supplier price for each billing dimension. The published native price applies when no supplier price is configured.": "每个计费维度按可比供应商价格的最高价乘以倍率。未配置供应商价格时，使用已发布的原生价格。",
     "Pricing revision": "定价版本",
     "Multiplier numerator": "倍率分子",
     "Multiplier denominator": "倍率分母",

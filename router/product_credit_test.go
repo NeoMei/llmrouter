@@ -35,14 +35,18 @@ import (
 )
 
 func TestProductCreditRelayFreezesPublicPriceAndDoesNotReplayUnknownProvider(t *testing.T) {
-	testProductCreditRelayFreezesPublicPrice(t, false)
+	testProductCreditRelayFreezesPublicPrice(t, false, false)
 }
 
 func TestBandedProductCreditRelayFreezesHighestReachableHoldAndSettlesActualBand(t *testing.T) {
-	testProductCreditRelayFreezesPublicPrice(t, true)
+	testProductCreditRelayFreezesPublicPrice(t, true, false)
 }
 
-func testProductCreditRelayFreezesPublicPrice(t *testing.T, banded bool) {
+func TestBandedProductCreditAbilityRelayUsesTheCertifiedMappedTarget(t *testing.T) {
+	testProductCreditRelayFreezesPublicPrice(t, true, true)
+}
+
+func testProductCreditRelayFreezesPublicPrice(t *testing.T, banded, abilityOnly bool) {
 	origin := os.Getenv("PRODUCT_CREDIT_INTEGRATION_ORIGIN")
 	integration := origin != "" && !banded
 	product, instance := "agentwiki", "default"
@@ -147,15 +151,26 @@ func testProductCreditRelayFreezesPublicPrice(t *testing.T, banded bool) {
 	}
 	provider := startProvider(providerHandler)
 	t.Cleanup(provider.Close)
-	require.NoError(t, db.Create(&model.ClientModelRoute{Id: 1, PublicId: "public-credit-model", Client: product, DisplayName: "Public", Enabled: true, Metadata: `{"operations":["chat.completions.create"]}`, Aliases: `["product-alias"]`}).Error)
+	requestModel := "product-alias"
+	if abilityOnly {
+		requestModel = "public-credit-model"
+	} else {
+		require.NoError(t, db.Create(&model.ClientModelRoute{Id: 1, PublicId: "public-credit-model", Client: product, DisplayName: "Public", Enabled: true, Metadata: `{"operations":["chat.completions.create"]}`, Aliases: `["product-alias"]`}).Error)
+	}
 	for i, upstream := range []string{"upstream-one", "upstream-two"} {
 		if banded && i > 0 {
 			break
 		}
 		id, base := i+1, provider.URL
-		require.NoError(t, db.Create(&model.Channel{Id: id, Type: constant.ChannelTypeOpenAI, Key: "fixture-provider-key", Status: common.ChannelStatusEnabled, BaseURL: &base, Name: upstream, Models: upstream, Group: "default"}).Error)
-		require.NoError(t, db.Create(&model.Ability{Group: "default", Model: upstream, ChannelId: id, Enabled: true}).Error)
-		require.NoError(t, db.Create(&model.ClientModelTarget{Id: id, RouteId: 1, ChannelId: id, UpstreamModel: upstream, BillingModel: upstream, PreferredWires: `["openai_chat"]`, Enabled: true, Weight: 1 + 2*i}).Error)
+		channel := model.Channel{Id: id, Type: constant.ChannelTypeOpenAI, Key: "fixture-provider-key", Status: common.ChannelStatusEnabled, BaseURL: &base, Name: upstream, Models: upstream, Group: "default"}
+		if abilityOnly {
+			channel.Models = requestModel
+			channel.ModelMapping = common.GetPointer(fmt.Sprintf(`{%q:%q}`, requestModel, upstream))
+		} else {
+			require.NoError(t, db.Create(&model.ClientModelTarget{Id: id, RouteId: 1, ChannelId: id, UpstreamModel: upstream, BillingModel: upstream, PreferredWires: `["openai_chat"]`, Enabled: true, Weight: 1 + 2*i}).Error)
+		}
+		require.NoError(t, db.Create(&channel).Error)
+		require.NoError(t, db.Create(&model.Ability{Group: "default", Model: channel.Models, ChannelId: id, Enabled: true}).Error)
 	}
 	model.InitChannelCache()
 	service.InitHttpClient()
@@ -262,10 +277,7 @@ func testProductCreditRelayFreezesPublicPrice(t *testing.T, banded bool) {
 	SetManagedKeyDispatch(r, adapter)
 	SetRelayRouter(r)
 	send := func(key, proof string, stream bool) *httptest.ResponseRecorder {
-		body := `{"model":"product-alias","messages":[{"role":"user","content":"hello"}]}`
-		if stream {
-			body = `{"model":"product-alias","messages":[{"role":"user","content":"hello"}],"stream":true}`
-		}
+		body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hello"}],"stream":%t}`, requestModel, stream)
 		req := httptest.NewRequest(http.MethodPost, "/platform/v1/chat/completions", bytes.NewBufferString(body))
 		req.Header.Set("Authorization", "Bearer "+credential)
 		req.Header.Set("Content-Type", "application/json")

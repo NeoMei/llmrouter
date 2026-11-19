@@ -206,7 +206,7 @@ func buildProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter,
 		}
 	}
 	var channels []model.Channel
-	if err := model.DB.WithContext(ctx).Select("id", "type", "status", "settings", "setting", "key", "channel_info", "base_url", "param_override", "header_override").Where("status = ?", common.ChannelStatusEnabled).Find(&channels).Error; err != nil {
+	if err := model.DB.WithContext(ctx).Select("id", "type", "status", "settings", "setting", "key", "channel_info", "base_url", "param_override", "header_override", "model_mapping").Where("status = ?", common.ChannelStatusEnabled).Find(&channels).Error; err != nil {
 		return out, err
 	}
 	channelByID := map[int]model.Channel{}
@@ -271,7 +271,7 @@ func buildProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter,
 			}
 		}
 		if scoped {
-			byID[m.PublicID] = productCreditPriceAvailability(projected, candidates, channelByID, adapter)
+			byID[m.PublicID] = productCreditPriceAvailability(projected, candidates, nil, channelByID, adapter)
 		} else {
 			byID[m.PublicID] = providerPriceAvailability(projected, billingModels)
 		}
@@ -284,6 +284,7 @@ func buildProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter,
 	}
 	// Existing endpoint metadata augments the adapter's native defaults.
 	model.GetPricing()
+	chatAbilityTargets := map[string][]modelcatalog.ResolvedModel{}
 	for _, ability := range abilities {
 		if strings.EqualFold(ability.Model, "qwen3-vl-embedding") || reserved[strings.ToLower(ability.Model)] ||
 			(!scoped && !helper.HasModelBillingConfig(ability.Model) && !billing_setting.HasModelNativePricing(ability.Model)) {
@@ -334,6 +335,17 @@ func buildProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter,
 			if wire == "" || !capability.DefaultRegistry().Supports(ch.Type, capability.ProtocolForOperation(capability.Operation(wire)), capability.Operation(wire)) {
 				continue
 			}
+			if scoped && wire == "chat.completions.create" && ch.Type == constant.ChannelTypeOpenAI {
+				var mapping map[string]string
+				rawMapping := ch.GetModelMapping()
+				if rawMapping == "" || common.UnmarshalJsonStr(rawMapping, &mapping) == nil {
+					if upstream, err := common.ResolveModelMapping(ability.Model, mapping); err == nil {
+						chatAbilityTargets[ability.Model] = append(chatAbilityTargets[ability.Model], modelcatalog.ResolvedModel{
+							ChannelID: ch.Id, UpstreamModel: upstream, Capabilities: dto.ModelCapabilities{Operations: []string{wire}},
+						})
+					}
+				}
+			}
 			if !slices.Contains(m.Capabilities.Operations, wire) {
 				m.Capabilities.Operations = append(m.Capabilities.Operations, wire)
 			}
@@ -347,7 +359,7 @@ func buildProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter,
 	if scoped {
 		for id, item := range byID {
 			if !reserved[strings.ToLower(id)] {
-				byID[id] = productCreditPriceAvailability(item, nil, nil, adapter)
+				byID[id] = productCreditPriceAvailability(item, nil, chatAbilityTargets[id], channelByID, adapter)
 			}
 		}
 		projectProductKnowledgeAvailability(ctx, adapter, grant.OriginProductID, routes, byID)
@@ -556,8 +568,12 @@ func providerPriceAvailability(m ProviderCatalogModel, billingModels []string) P
 	return m
 }
 
-func productCreditPriceAvailability(m ProviderCatalogModel, candidates []modelcatalog.ResolvedModel, channels map[int]model.Channel, adapter *platformbilling.Adapter) ProviderCatalogModel {
+func productCreditPriceAvailability(m ProviderCatalogModel, candidates, chatAbilityTargets []modelcatalog.ResolvedModel, channels map[int]model.Channel, adapter *platformbilling.Adapter) ProviderCatalogModel {
 	fx := strconv.FormatFloat(operation_setting.USDExchangeRate, 'g', -1, 64)
+	chatTargets := candidates
+	if len(chatTargets) == 0 {
+		chatTargets = chatAbilityTargets
+	}
 	for i, op := range m.CapabilityMetadata.Operations {
 		op.PublicTariff = nil
 		if op.ID == "multimodal.embeddings.create" && len(candidates) > 0 && slices.ContainsFunc(candidates, func(candidate modelcatalog.ResolvedModel) bool {
@@ -587,7 +603,7 @@ func productCreditPriceAvailability(m ProviderCatalogModel, candidates []modelca
 			op.Available, op.Executable, op.DisabledReason = false, false, "product_credit_operation_unavailable"
 		} else if price, ok := billing_setting.ResolveProductCreditPrice(m.ID, op.BillingOperation, fx); !ok {
 			op.Available, op.Executable, op.DisabledReason = false, false, "product_credit_price_unavailable"
-		} else if !productCreditChatPriceAvailable(m.ID, op.ID, candidates, channels, adapter, price.Tariff) {
+		} else if !productCreditChatPriceAvailable(m.ID, op.ID, chatTargets, channels, adapter, price.Tariff) {
 			op.Available, op.Executable, op.DisabledReason = false, false, "product_credit_banded_chat_target_unavailable"
 		} else {
 			op.PublicTariff = publicProductCreditTariff(price)

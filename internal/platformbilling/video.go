@@ -43,10 +43,51 @@ type frozenVideo struct {
 	Resolution string      `json:"resolution"`
 }
 
+func decodeVideoPolicies(raw string, productCredit bool) (map[string]map[string]VideoPolicy, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	var fields map[string]map[string]map[string]any
+	if common.UnmarshalUnique([]byte(raw), &fields) != nil {
+		return nil, ErrInvalid
+	}
+	for _, models := range fields {
+		for _, p := range models {
+			if !protocolKeys(p, "version public_model wire_operation channel_id channel_type upstream_model channel_key_sha256 origin api_version usage_policy max_seconds max_video_bytes resolutions resource_origins rate_ids") {
+				return nil, ErrInvalid
+			}
+		}
+	}
+	var policies map[string]map[string]VideoPolicy
+	if common.UnmarshalUnique([]byte(raw), &policies) != nil {
+		return nil, ErrInvalid
+	}
+	for wire, models := range policies {
+		for model, p := range models {
+			if productCredit {
+				if !p.validProduct(model, wire) || len(p.RateIDs) != 0 {
+					return nil, ErrInvalid
+				}
+			} else if !p.valid(model, wire) {
+				return nil, ErrInvalid
+			}
+		}
+	}
+	return policies, nil
+}
+
 func (p VideoPolicy) valid(model, wire string) bool {
+	return p.validCertificate(model, wire) && len(p.RateIDs) > 0
+}
+
+func (p VideoPolicy) validProduct(model, wire string) bool {
+	return p.Version == "video_v2" && p.validCertificate(model, wire)
+}
+
+func (p VideoPolicy) validCertificate(model, wire string) bool {
 	hash, err := hex.DecodeString(p.ChannelKeySHA256)
 	origin, originErr := url.Parse(p.Origin)
-	if err != nil || len(hash) != 32 || (p.Version != "video_v1" && p.Version != "video_v2") || p.PublicModel != model || !protocolString(model) || p.WireOperation != wire || p.ChannelID < 1 || p.UpstreamModel == "" || originErr != nil || origin.Scheme != "https" || origin.Host == "" || origin.Path != "" || origin.RawQuery != "" || origin.User != nil || origin.Fragment != "" || p.MaxSeconds < 1 || p.MaxSeconds > 300 || p.MaxVideoBytes < 1 || p.MaxVideoBytes > 64<<20 || len(p.RateIDs) == 0 {
+	if err != nil || len(hash) != 32 || (p.Version != "video_v1" && p.Version != "video_v2") || p.PublicModel != model || !protocolString(model) || p.WireOperation != wire || p.ChannelID < 1 || p.UpstreamModel == "" || originErr != nil || origin.Scheme != "https" || origin.Host == "" || origin.Path != "" || origin.RawQuery != "" || origin.User != nil || origin.Fragment != "" || p.MaxSeconds < 1 || p.MaxSeconds > 300 || p.MaxVideoBytes < 1 || p.MaxVideoBytes > 64<<20 {
 		return false
 	}
 	for asset, rate := range p.RateIDs {
@@ -75,7 +116,8 @@ func (p VideoPolicy) valid(model, wire string) bool {
 	if p.Version == "video_v1" && p.UsagePolicy == "ali_wan26_t2v_billable_duration_v1" {
 		return true
 	} // immutable historical snapshots
-	return p.Version == "video_v2" && p.PublicModel == "wan2.6-t2v" && p.UsagePolicy == "ali_wan26_t2v_cny6_v2" && len(p.RateIDs) == 1 && p.RateIDs["CNY/6"] != "" && p.MaxSeconds <= 15
+	return p.Version == "video_v2" && p.PublicModel == "wan2.6-t2v" && p.UsagePolicy == "ali_wan26_t2v_cny6_v2" && p.MaxSeconds <= 15 &&
+		(len(p.RateIDs) == 0 || len(p.RateIDs) == 1 && p.RateIDs["CNY/6"] != "")
 }
 
 func wanVideoResolution(size string) (resolution, measurementKey string, ok bool) {
@@ -95,7 +137,7 @@ func parseVideoOperation(p VideoPolicy, contentType string, body []byte) (operat
 	if bound > 64<<20 {
 		bound = 64 << 20
 	}
-	if !p.valid(p.PublicModel, p.WireOperation) || contentType != "application/json" || int64(len(body)) > bound || !utf8.Valid(body) {
+	if !p.validCertificate(p.PublicModel, p.WireOperation) || contentType != "application/json" || int64(len(body)) > bound || !utf8.Valid(body) {
 		return result, ErrInvalid
 	}
 	var request map[string]any
@@ -158,10 +200,27 @@ func (a *Adapter) VideoPolicy(model string) (VideoPolicy, bool) {
 	return p, ok && p.valid(model, "videos.create")
 }
 
+func (a *Adapter) productCreditVideoPolicy(model string) (VideoPolicy, bool) {
+	if p, ok := a.config.ProductCreditVideoPolicies["videos.create"][model]; ok {
+		return p, len(p.RateIDs) == 0 && p.validProduct(model, "videos.create")
+	}
+	p, ok := a.VideoPolicy(model)
+	return p, ok && p.Version == "video_v2"
+}
+
 func (a *Adapter) VideoTarget(model string, id, kind int, upstream, key, origin string) bool {
 	p, ok := a.VideoPolicy(model)
+	return ok && p.matchesTarget(id, kind, upstream, key, origin)
+}
+
+func (a *Adapter) ProductCreditVideoTarget(model string, id, kind int, upstream, key, origin string) bool {
+	p, ok := a.productCreditVideoPolicy(model)
+	return ok && p.matchesTarget(id, kind, upstream, key, origin)
+}
+
+func (p VideoPolicy) matchesTarget(id, kind int, upstream, key, origin string) bool {
 	sum := sha256.Sum256([]byte(key))
-	if !ok || p.ChannelID != id || p.ChannelType != kind || p.UpstreamModel != upstream || p.ChannelKeySHA256 != hex.EncodeToString(sum[:]) {
+	if p.ChannelID != id || p.ChannelType != kind || p.UpstreamModel != upstream || p.ChannelKeySHA256 != hex.EncodeToString(sum[:]) {
 		return false
 	}
 	trimmed := strings.TrimRight(origin, "/")
@@ -174,21 +233,35 @@ func (a *Adapter) VideoTarget(model string, id, kind int, upstream, key, origin 
 
 func (s *Session) FrozenVideoPolicy() (frozenVideo, error) {
 	var frozen frozenVideo
-	if common.UnmarshalUnique([]byte(s.call.MediaSnapshot), &frozen) != nil || !frozen.Policy.valid(s.call.Model, s.WireOperation().ID) {
+	if common.UnmarshalUnique([]byte(s.call.MediaSnapshot), &frozen) != nil {
+		return frozenVideo{}, ErrInvalid
+	}
+	valid := frozen.Policy.valid
+	if s.ProductCredit() {
+		valid = frozen.Policy.validProduct
+	}
+	if !valid(s.call.Model, s.WireOperation().ID) {
 		return frozenVideo{}, ErrInvalid
 	}
 	return frozen, nil
 }
 
 func (s *Session) ValidateVideoTarget(id, kind int, upstream, key, origin string) error {
-	if _, ok := s.adapter.config.VideoPolicies["videos.create"][s.call.Model]; !ok {
+	_, legacyPolicy := s.adapter.config.VideoPolicies["videos.create"][s.call.Model]
+	if !s.ProductCredit() && !legacyPolicy {
 		return nil
 	}
 	frozen, err := s.FrozenVideoPolicy()
 	if err != nil {
 		return err
 	}
-	if !s.adapter.VideoTarget(frozen.Policy.PublicModel, id, kind, upstream, key, origin) || frozen.Policy.ChannelID != id {
+	if s.ProductCredit() {
+		if !s.adapter.ProductCreditVideoTarget(frozen.Policy.PublicModel, id, kind, upstream, key, origin) ||
+			!frozen.Policy.matchesTarget(id, kind, upstream, key, origin) {
+			return ErrInvalid
+		}
+	} else if !s.adapter.VideoTarget(frozen.Policy.PublicModel, id, kind, upstream, key, origin) ||
+		frozen.Policy.ChannelID != id {
 		return ErrInvalid
 	}
 	return nil
@@ -214,6 +287,9 @@ func (a *Adapter) VideoReplay(ctx context.Context, token, task, id string, wire 
 	}
 	var frozen frozenVideo
 	if common.UnmarshalUnique([]byte(old.MediaSnapshot), &frozen) != nil {
+		return true, ErrConflict
+	}
+	if !frozen.Policy.valid(old.Model, old.WireOperation) {
 		return true, ErrConflict
 	}
 	req, parseErr := parseVideoOperation(frozen.Policy, contentType, body)

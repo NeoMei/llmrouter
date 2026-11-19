@@ -132,7 +132,9 @@ type Config struct {
 	OCRPolicies                     map[string]map[string]OCRPolicy
 	AudioPolicies                   map[string]map[string]AudioPolicy
 	VideoPolicies                   map[string]map[string]VideoPolicy
+	ProductCreditVideoPolicies      map[string]map[string]VideoPolicy
 	KnowledgePolicies               map[string]map[string]KnowledgePolicy
+	KnowledgeRoutingGroup           string `json:"KnowledgeRoutingGroup,omitempty"`
 	CompactPolicies                 map[string]CompactPolicy
 	NativeInputPolicies             map[string]map[string]NativeInputPolicy
 	TextInputPolicies               map[string]map[string]TextInputPolicy

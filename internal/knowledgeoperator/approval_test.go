@@ -96,6 +96,28 @@ func TestOperatorDryRunApplyAndReplayFence(t *testing.T) {
 	}
 }
 
+func TestKnowledgeRoutingGroupChangesApprovalAndKeepsBindingsScoped(t *testing.T) {
+	db, cfg := operatorFixture(t, false)
+	for _, id := range []int{102, 103} {
+		var channel model.Channel
+		require.NoError(t, db.First(&channel, id).Error)
+		channel.Group = "default"
+		require.NoError(t, channel.Update())
+	}
+	originalRows := snapshotRows(t, db)
+	raw, sha := approvalFor(t, db, cfg, false)
+	cfg.KnowledgeRoutingGroup = "default"
+	_, err := Run(t.Context(), db, cfg, raw, sha, testRevision, false)
+	require.ErrorIs(t, err, ErrRejected)
+	raw, sha = approvalFor(t, db, cfg, false)
+	result, err := Run(t.Context(), db, cfg, raw, sha, testRevision, false)
+	require.NoError(t, err)
+	require.Equal(t, "dry-run-rolled-back", result.Status)
+	require.Equal(t, "platform", result.Group)
+	require.Len(t, result.Bindings, 4)
+	require.Equal(t, originalRows, snapshotRows(t, db))
+}
+
 func TestOptionKeyPredicateQuotesMySQLReservedColumn(t *testing.T) {
 	db, err := gorm.Open(mysql.New(mysql.Config{DSN: "user:pass@tcp(localhost:3306)/db", SkipInitializeWithVersion: true}), &gorm.Config{DryRun: true, DisableAutomaticPing: true})
 	require.NoError(t, err)

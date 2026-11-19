@@ -652,7 +652,7 @@ func catalogCertifiesProductTarget(adapter *platformbilling.Adapter, name, wire 
 	}
 	switch wire {
 	case "videos.create":
-		return adapter.VideoTarget(name, id, channel.Type, upstream, channel.Key, channel.GetBaseURL())
+		return adapter.ProductCreditVideoTarget(name, id, channel.Type, upstream, channel.Key, channel.GetBaseURL())
 	case "dashscope.audio.transcriptions.create":
 		return adapter.AudioTarget(name, wire, id, channel.Type, upstream, channel.Key, channel.GetBaseURL())
 	default:

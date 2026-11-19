@@ -345,6 +345,12 @@ func newWanVideoGatewayFixtureWithHub(t *testing.T, variant, hubOrigin, serviceT
 	f.cfg = platformbilling.Config{Enabled: true, Origin: hubOrigin, ServiceToken: serviceToken, PrincipalID: 1, Group: "platform", MaxBodyBytes: 1 << 20, MaxInputTokens: 1000, MaxOutputTokens: 100, VideoPolicies: map[string]map[string]platformbilling.VideoPolicy{"videos.create": {"wan2.6-t2v": policy}}, OperationLimits: map[string]map[string]platformbilling.OperationLimits{"video": {"wan2.6-t2v": {MaxQuantity: 10, Policy: "ali_wan26_t2v_cny6_v2"}}}, OperationRateIDs: map[string]map[string]map[string]string{"video": {"CNY/6": {"wan2.6-t2v": "wan-rate"}}}}
 	if product {
 		f.cfg.NativeGroup = "platform"
+		f.cfg.VideoPolicies = nil
+		f.cfg.OperationRateIDs = nil
+		policy.RateIDs = nil
+		f.cfg.ProductCreditVideoPolicies = map[string]map[string]platformbilling.VideoPolicy{
+			"videos.create": {"wan2.6-t2v": policy},
+		}
 	}
 	f.adapter, err = platformbilling.New(db, f.cfg)
 	require.NoError(t, err)

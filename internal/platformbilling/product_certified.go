@@ -60,8 +60,8 @@ func (a *Adapter) AdmitProductCertifiedOperation(ctx context.Context, credential
 		if _, ok := exact["seconds"].(json.Number); !ok {
 			return nil, target, ErrInvalid
 		}
-		p, ok := a.VideoPolicy(fields.Model)
-		if !ok || p.Version != "video_v2" {
+		p, ok := a.productCreditVideoPolicy(fields.Model)
+		if !ok {
 			return nil, target, ErrInvalid
 		}
 		req, err = parseVideoOperation(p, contentType, body)
@@ -148,7 +148,7 @@ func (a *Adapter) ProductCertifiedModelTarget(name, wire string) (int, string) {
 	}
 	switch wire {
 	case "videos.create":
-		if policy, ok := a.VideoPolicy(name); ok && policy.Version == "video_v2" {
+		if policy, ok := a.productCreditVideoPolicy(name); ok {
 			return policy.ChannelID, policy.UpstreamModel
 		}
 	case "images.generations.create", "images.edits.create", "gemini.images.generate":

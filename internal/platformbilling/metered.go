@@ -162,6 +162,9 @@ func (a *Adapter) admitWireOperation(ctx context.Context, credential, task, id s
 	}
 	if err == nil && operation == "video" {
 		if p, ok := a.config.VideoPolicies["videos.create"][req.Model]; ok {
+			if !p.valid(req.Model, wire.ID) {
+				return nil, ErrInvalid
+			}
 			req, err = parseVideoOperation(p, contentType, body)
 		}
 	}

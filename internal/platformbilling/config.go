@@ -34,6 +34,13 @@ func ConfigFromEnv(get func(string) string) (Config, error) {
 	c.AllowAliEmbeddingV4 = get("UNIHUB_ALI_EMBEDDING_ENABLED") == "true"
 	c.AllowAliRerank = get("UNIHUB_ALI_RERANK_ENABLED") == "true"
 	c.EnableKnowledgeResultRead = get("UNIHUB_KNOWLEDGE_RESULT_READ_ENABLED") == "true"
+	c.KnowledgeRoutingGroup = get("UNIHUB_KNOWLEDGE_ROUTING_GROUP")
+	if len(c.KnowledgeRoutingGroup) > 64 || strings.EqualFold(c.KnowledgeRoutingGroup, "auto") ||
+		strings.ContainsFunc(c.KnowledgeRoutingGroup, func(ch rune) bool {
+			return !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '-' || ch == '_')
+		}) {
+		return c, ErrInvalid
+	}
 	if c.EnableKnowledgeResultRead && !c.AllowAliEmbeddingV4 && !c.AllowAliRerank {
 		return c, ErrInvalid
 	}
@@ -191,28 +198,14 @@ func ConfigFromEnv(get func(string) string) (Config, error) {
 			}
 		}
 	}
-	if raw := get("UNIHUB_VIDEO_POLICIES"); raw != "" {
-		var policies map[string]map[string]map[string]any
-		if common.UnmarshalUnique([]byte(raw), &policies) != nil {
-			return c, ErrInvalid
-		}
-		for _, models := range policies {
-			for _, p := range models {
-				if !protocolKeys(p, "version public_model wire_operation channel_id channel_type upstream_model channel_key_sha256 origin api_version usage_policy max_seconds max_video_bytes resolutions resource_origins rate_ids") {
-					return c, ErrInvalid
-				}
-			}
-		}
-		if common.UnmarshalUnique([]byte(raw), &c.VideoPolicies) != nil {
-			return c, ErrInvalid
-		}
-		for wire, models := range c.VideoPolicies {
-			for model, p := range models {
-				if !p.valid(model, wire) {
-					return c, ErrInvalid
-				}
-			}
-		}
+	var videoError error
+	c.VideoPolicies, videoError = decodeVideoPolicies(get("UNIHUB_VIDEO_POLICIES"), false)
+	if videoError != nil {
+		return c, videoError
+	}
+	c.ProductCreditVideoPolicies, videoError = decodeVideoPolicies(get("UNIHUB_PRODUCT_CREDIT_VIDEO_POLICIES"), true)
+	if videoError != nil {
+		return c, videoError
 	}
 	if raw := get("UNIHUB_KNOWLEDGE_POLICIES"); raw != "" {
 		var policies map[string]map[string]map[string]any

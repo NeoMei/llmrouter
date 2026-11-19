@@ -113,6 +113,48 @@ func TestProductKnowledgeSettlesPinnedResponseAtFrozenCreditTariff(t *testing.T)
 	}
 }
 
+func TestProductKnowledgeUsesCertifiedSupplierGroupWithoutChangingFunding(t *testing.T) {
+	for _, embedding := range []bool{true, false} {
+		t.Run(fmt.Sprintf("embedding=%t", embedding), func(t *testing.T) {
+			f := newProductKnowledgeFixture(t, embedding)
+			var channel model.Channel
+			require.NoError(t, f.db.First(&channel, f.channel).Error)
+			channel.Group = "default"
+			require.NoError(t, channel.Update())
+			model.InitChannelCache()
+			f.config.KnowledgeRoutingGroup = "default"
+			adapter, err := platformbilling.New(f.db, f.config)
+			require.NoError(t, err)
+			f.adapter = adapter
+			f.engine = gin.New()
+			SetManagedKeyDispatch(f.engine, f.adapter)
+			bindings, err := f.adapter.ActivateManagedKnowledge(t.Context(), f.name, f.wire, []string{"llmrouter", f.product})
+			require.NoError(t, err)
+			require.Len(t, bindings, 2)
+			assert.Equal(t, f.channel, bindings[1].ChannelID)
+			_, err = f.adapter.ManagedKnowledgeBinding(t.Context(), "other-product", f.name, f.wire)
+			require.Error(t, err)
+			assert.Empty(t, f.adapter.ManagedKnowledgeGroup("another-model", f.wire))
+			assert.Empty(t, f.adapter.ManagedKnowledgeGroup(f.name, "chat.completions.create"))
+			assert.True(t, model.IsChannelEnabledForGroupModel("default", f.upstream, f.channel))
+			assert.False(t, model.IsChannelEnabledForGroupModel("platform", f.upstream, f.channel))
+			_, group := f.adapter.Principal()
+			assert.Equal(t, "platform", group)
+
+			withProof := func(r *http.Request) { r.Header.Set(platformbilling.ProductAuthorizationHeader, "product-proof") }
+			result := managedKnowledgeRequest(f, f.body, withProof)
+			require.Equal(t, http.StatusOK, result.Code, result.Body.String())
+			require.Equal(t, 1, f.reserves)
+			require.Equal(t, 1, f.sends)
+			require.Equal(t, 1, f.settles)
+			require.NotNil(t, f.remote.NativePricing)
+			assert.Equal(t, "platform", f.remote.NativePricing.Group)
+			assert.Equal(t, f.product, f.remote.FundingProductID)
+			assert.Equal(t, f.wantProductCharge, f.remote.Charged)
+		})
+	}
+}
+
 func TestProductKnowledgeBrokerPreservesAuthorizedKeyAndWorkReceipt(t *testing.T) {
 	for _, embedding := range []bool{true, false} {
 		t.Run(fmt.Sprintf("embedding=%t", embedding), func(t *testing.T) {

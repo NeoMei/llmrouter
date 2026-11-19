@@ -8,6 +8,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1388,8 +1389,10 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 	if relayInfo == nil || strings.TrimSpace(relayInfo.OriginModelName) == "" {
 		return nil
 	}
+	knowledgeBinding, knowledgeGroup, pinnedKnowledge := relayInfo.PlatformBilling.PinnedKnowledgeRoute()
+	pinnedKnowledge = relayInfo.PlatformMode && pinnedKnowledge
 	if model.DB == nil || !model.DB.Migrator().HasTable(&model.ClientModelRoute{}) || !model.DB.Migrator().HasTable(&model.ClientModelTarget{}) {
-		if common.GetContextKeyBool(c, constant.ContextKeyDeferredModelRoute) {
+		if pinnedKnowledge || common.GetContextKeyBool(c, constant.ContextKeyDeferredModelRoute) {
 			return types.NewErrorWithStatusCode(errors.New("configured model route is no longer available"), types.ErrorCodeGetChannelFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
 		return nil
@@ -1401,8 +1404,12 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 	}
 
 	client := clientForRequest(c, relayInfo)
-	if relayInfo.PlatformMode && relayInfo.PlatformBilling != nil && relayInfo.PlatformBilling.PinnedKnowledge() {
-		client = relayInfo.PlatformBilling.PinnedKnowledgeProduct()
+	if pinnedKnowledge {
+		if knowledgeGroup == "" || knowledgeBinding.Model != relayInfo.OriginModelName {
+			return types.NewError(platformbilling.ErrConflict, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		}
+		client = knowledgeBinding.OriginProductID
+		groups.ownerGroups = []string{knowledgeGroup}
 	}
 	var routes []model.ClientModelRoute
 	var targets []model.ClientModelTarget
@@ -1413,7 +1420,7 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 		return types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
 	}
 	if !hasMatchingClientModelRoute(routes, relayInfo.OriginModelName, client) {
-		if common.GetContextKeyBool(c, constant.ContextKeyDeferredModelRoute) {
+		if pinnedKnowledge || common.GetContextKeyBool(c, constant.ContextKeyDeferredModelRoute) {
 			return types.NewErrorWithStatusCode(errors.New("configured model route is no longer available for this client"), types.ErrorCodeGetChannelFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
 		return nil
@@ -1435,6 +1442,16 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 	resolved, err := catalog.ResolveCandidates(c.Request.Context(), c.GetInt("id"), groups.ownerGroups, relayInfo.OriginModelName, client)
 	if err != nil {
 		return types.NewError(fmt.Errorf("configured model route %s has no available target: %w", relayInfo.OriginModelName, err), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+	}
+	if pinnedKnowledge {
+		index := slices.IndexFunc(resolved, func(candidate modelcatalog.ResolvedModel) bool {
+			return candidate.RouteID == knowledgeBinding.RouteID && candidate.TargetID == knowledgeBinding.TargetID &&
+				candidate.ChannelID == knowledgeBinding.ChannelID && candidate.SelectedGroup == knowledgeGroup
+		})
+		if index < 0 {
+			return types.NewError(platformbilling.ErrConflict, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		}
+		resolved = resolved[index : index+1]
 	}
 	if relayInfo.PlatformBilling != nil {
 		if pinned, ok := relayInfo.PlatformBilling.NativeHistoryTarget(); ok {

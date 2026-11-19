@@ -6,7 +6,9 @@ import (
 	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/pkg/metering"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 )
@@ -14,7 +16,11 @@ import (
 // NativeTokenObserver captures raw upstream evidence and persists one cumulative
 // observation even when downstream validation or delivery fails afterwards.
 func NativeTokenObserver(ctx context.Context, info *relaycommon.RelayInfo, source string) (*dto.NativeTokenEvidence, func()) {
-	evidence := &dto.NativeTokenEvidence{Source: source, ImplicitCacheOnly: info != nil && info.PlatformBilling.ProductBandedChat()}
+	banded := info != nil && info.PlatformBilling.ProductBandedChat()
+	if banded && info.ChannelMeta != nil && info.ChannelType == constant.ChannelTypeDeepSeek && source == dto.BillingUsageSourceOAIChat {
+		source = dto.BillingUsageSourceDeepSeekProductChat
+	}
+	evidence := &dto.NativeTokenEvidence{Source: source, ImplicitCacheOnly: banded}
 	return evidence, func() {
 		if info == nil || (info.NativeBilling == nil && !info.ManagedNativePricing()) {
 			return
@@ -56,6 +62,9 @@ func NativeTokenReservation(info *relaycommon.RelayInfo, price metering.Price) (
 	}
 	if price.Operation != "chat" && price.Operation != "responses" && price.Operation != "embedding" {
 		return metering.Usage{}, errors.New("not a token operation")
+	}
+	if info.PlatformBilling.ProductCredit() && info.ChannelType == constant.ChannelTypeDeepSeek && !platformbilling.DeepSeekProductChatTariff(price) {
+		return metering.Usage{}, platformbilling.ErrInvalid
 	}
 	input := info.GetEstimatePromptTokens()
 	if input < 0 || input > common.MaxQuota {

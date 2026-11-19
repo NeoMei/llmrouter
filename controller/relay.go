@@ -767,6 +767,9 @@ func prepareAttemptBilling(c *gin.Context, info *relaycommon.RelayInfo, promptTo
 			reservation, err = service.NativeTokenReservation(info, price)
 		}
 		if err != nil {
+			if info.PlatformBilling.ProductCredit() && errors.Is(err, platformbilling.ErrInvalid) {
+				return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			}
 			return types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		}
 		ratio := helper.HandleGroupRatio(c, info)

@@ -22,13 +22,18 @@ func decodeProductCreditTextInputPolicies(raw []byte, c *Config) error {
 			return ErrInvalid
 		}
 		for _, policy := range policies {
-			if policy.ChannelType != constant.ChannelTypeOpenAI {
+			if !productBandedChatProducer(policy) {
 				return ErrInvalid
 			}
 		}
 	}
 	c.ProductCreditTextInputPolicies = separate.TextInputPolicies
 	return nil
+}
+
+func productBandedChatProducer(policy TextInputPolicy) bool {
+	return policy.ChannelType == constant.ChannelTypeOpenAI ||
+		policy.ChannelType == constant.ChannelTypeDeepSeek && policy.Endpoint == deepSeekProductChatEndpoint && deepSeekProductChatUpstream(policy.UpstreamModel)
 }
 
 func (s *Session) ProductBandedChat() bool {
@@ -43,11 +48,11 @@ func (a *Adapter) ProductBandedChatTarget(model string, channel, channelType int
 }
 
 func (a *Adapter) productBandedChatPolicy(model string, channel, channelType int, upstream string, tariffCap int64) bool {
-	if a == nil || channelType != constant.ChannelTypeOpenAI {
+	if a == nil {
 		return false
 	}
 	p, ok := a.config.ProductCreditTextInputPolicies[productBandedChatWire][model]
-	return ok && p.valid(a.config, productBandedChatWire, model) && p.ChannelID == channel &&
+	return ok && productBandedChatProducer(p) && p.valid(a.config, productBandedChatWire, model) && p.ChannelID == channel &&
 		p.ChannelType == channelType && p.UpstreamModel == upstream && int64(p.MaxInputTokens) <= tariffCap
 }
 

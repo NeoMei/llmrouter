@@ -324,6 +324,10 @@ func buildProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter,
 			if wire == "ocr.jobs.create" && !providerOCRChannelSupported(ch) {
 				continue
 			}
+			if scoped && wire == "chat.completions.create" && ch.Type == constant.ChannelTypeDeepSeek {
+				// The scoped producer requires an explicit certified route target.
+				continue
+			}
 			if scoped && (platformbilling.IsProductCertifiedOperation(wire) || !platformbilling.ProductCreditChannelSupported(wire, ch.Type)) {
 				continue
 			}
@@ -583,11 +587,7 @@ func productCreditPriceAvailability(m ProviderCatalogModel, candidates []modelca
 			op.Available, op.Executable, op.DisabledReason = false, false, "product_credit_operation_unavailable"
 		} else if price, ok := billing_setting.ResolveProductCreditPrice(m.ID, op.BillingOperation, fx); !ok {
 			op.Available, op.Executable, op.DisabledReason = false, false, "product_credit_price_unavailable"
-		} else if bands := price.Tariff.InputTokenBands; len(bands) != 0 && (op.ID != "chat.completions.create" || !slices.ContainsFunc(candidates, func(candidate modelcatalog.ResolvedModel) bool {
-			channel := channels[candidate.ChannelID]
-			endpoint := relaycommon.GetFullRequestURL(channel.GetBaseURL(), "/v1/chat/completions", channel.Type)
-			return slices.Contains(candidate.Capabilities.Operations, op.ID) && adapter.ProductBandedChatTarget(m.ID, channel.Id, channel.Type, candidate.UpstreamModel, endpoint, bands[len(bands)-1].MaxInputTokens)
-		})) {
+		} else if !productCreditChatPriceAvailable(m.ID, op.ID, candidates, channels, adapter, price.Tariff) {
 			op.Available, op.Executable, op.DisabledReason = false, false, "product_credit_banded_chat_target_unavailable"
 		} else {
 			op.PublicTariff = publicProductCreditTariff(price)
@@ -600,6 +600,32 @@ func productCreditPriceAvailability(m ProviderCatalogModel, candidates []modelca
 	}
 	m.Probe = slices.ContainsFunc(m.CapabilityMetadata.Operations, func(op platformbilling.CatalogOperation) bool { return op.Executable })
 	return m
+}
+
+func productCreditChatPriceAvailable(modelID, wire string, candidates []modelcatalog.ResolvedModel, channels map[int]model.Channel, adapter *platformbilling.Adapter, price metering.Price) bool {
+	bands := price.InputTokenBands
+	if wire != "chat.completions.create" || len(candidates) == 0 {
+		return len(bands) == 0
+	}
+	for _, candidate := range candidates {
+		channel := channels[candidate.ChannelID]
+		if !slices.Contains(candidate.Capabilities.Operations, wire) || !platformbilling.ProductCreditChannelSupported(wire, channel.Type) ||
+			channel.Type == constant.ChannelTypeDeepSeek && !platformbilling.DeepSeekProductChatTariff(price) {
+			continue
+		}
+		if len(bands) == 0 {
+			return true
+		}
+		base := channel.GetBaseURL()
+		if base == "" {
+			base = constant.ChannelBaseURLs[channel.Type]
+		}
+		endpoint := relaycommon.GetFullRequestURL(base, "/v1/chat/completions", channel.Type)
+		if adapter.ProductBandedChatTarget(modelID, channel.Id, channel.Type, candidate.UpstreamModel, endpoint, bands[len(bands)-1].MaxInputTokens) {
+			return true
+		}
+	}
+	return false
 }
 
 func catalogCertifiesProductTarget(adapter *platformbilling.Adapter, name, wire string, channel model.Channel, candidateUpstream string) bool {

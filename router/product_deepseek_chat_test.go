@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -14,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/metering"
+	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -31,6 +34,7 @@ func TestProductDeepSeekChatCertifiedSettlement(t *testing.T) {
 	oldFX, oldTimeout, oldTLS := operation_setting.USDExchangeRate, constant.StreamingTimeout, common.TLSInsecureSkipVerify
 	oldTariff := billing_setting.ProductCreditPricingJSONString()
 	t.Cleanup(func() {
+		perfmetrics.DrainRelaySamples()
 		model.DB, model.LOG_DB, common.MemoryCacheEnabled, common.RedisEnabled = oldDB, oldLog, oldCache, oldRedis
 		operation_setting.USDExchangeRate, constant.StreamingTimeout, common.TLSInsecureSkipVerify = oldFX, oldTimeout, oldTLS
 		require.NoError(t, billing_setting.SetProductCreditPricing(oldTariff))
@@ -79,17 +83,20 @@ func TestProductDeepSeekChatCertifiedSettlement(t *testing.T) {
 	service.InitHttpClient()
 	service.InitTokenEncoders()
 
-	var supplierRequests, reserves, settlements int
-	badUsage := false
+	var supplierRequests, reserves, settlements atomic.Int32
+	var badUsage atomic.Bool
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		supplierRequests++
+		supplierRequests.Add(1)
 		assert.Equal(t, providerPath, r.URL.Path)
 		assert.Equal(t, "Bearer fixture-provider-key", r.Header.Get("Authorization"))
 		assert.Empty(t, r.Header.Get(platformbilling.ProductAuthorizationHeader))
 		var request struct {
-			Model         string `json:"model"`
-			Stream        bool   `json:"stream"`
-			MaxTokens     int    `json:"max_tokens"`
+			Model     string `json:"model"`
+			Stream    bool   `json:"stream"`
+			MaxTokens int    `json:"max_tokens"`
+			Tools     []struct {
+				Type string `json:"type"`
+			} `json:"tools"`
 			StreamOptions struct {
 				IncludeUsage bool `json:"include_usage"`
 			} `json:"stream_options"`
@@ -98,11 +105,13 @@ func TestProductDeepSeekChatCertifiedSettlement(t *testing.T) {
 		assert.Equal(t, upstream, request.Model)
 		assert.Equal(t, 20, request.MaxTokens)
 		usage := `"usage":{"prompt_tokens":22,"completion_tokens":17,"total_tokens":39,"prompt_cache_hit_tokens":13,"prompt_cache_miss_tokens":9,"prompt_tokens_details":{"cached_tokens":13},"completion_tokens_details":{"reasoning_tokens":5}}`
-		if badUsage {
+		if badUsage.Load() {
 			usage = strings.Replace(usage, `"cached_tokens":13`, `"cached_tokens":12`, 1)
 		}
 		if request.Stream {
 			assert.True(t, request.StreamOptions.IncludeUsage)
+			require.Len(t, request.Tools, 1)
+			assert.Equal(t, "function", request.Tools[0].Type)
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = fmt.Fprintf(w, "data: %s\n\ndata: %s\n\ndata: [DONE]\n\n",
 				`{"id":"answer","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"fixture"},"finish_reason":null}]}`,
@@ -123,7 +132,10 @@ func TestProductDeepSeekChatCertifiedSettlement(t *testing.T) {
 		ID: "stable-key", CredentialKind: "api_key", InstanceID: "default", Audience: "llmrouter", ActorID: "actor", AccountID: "team", OriginProductID: product,
 		ModelScope: "llmrouter_available", PricingSource: platformbilling.NativeCreditPricingSource, CredentialVersion: 2, Asset: "CREDIT/6", FundingMode: "credits", NativeCreditConversion: &conversion}
 	remote := map[string]platformbilling.RemoteCall{}
+	var remoteMu sync.Mutex
 	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		remoteMu.Lock()
+		defer remoteMu.Unlock()
 		var output any
 		switch {
 		case r.URL.Path == "/internal/v1/model-credentials/verify":
@@ -132,7 +144,7 @@ func TestProductDeepSeekChatCertifiedSettlement(t *testing.T) {
 			assert.Equal(t, proof, in["product_authorization"])
 			output = grant
 		case r.URL.Path == "/internal/v1/calls/native-reserve":
-			reserves++
+			reserves.Add(1)
 			var in platformbilling.NativeReserveRequest
 			require.NoError(t, common.DecodeJson(r.Body, &in))
 			assert.Equal(t, "3", in.Quote.ChannelID)
@@ -145,7 +157,7 @@ func TestProductDeepSeekChatCertifiedSettlement(t *testing.T) {
 				ChargeAsset: "CREDIT/6", FundingMode: "credits", FundingProductID: product, Status: "RESERVED"}
 			remote[in.CallID], output = row, row
 		case strings.HasSuffix(r.URL.Path, "/native-settle"):
-			settlements++
+			settlements.Add(1)
 			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/internal/v1/calls/"), "/native-settle")
 			var in platformbilling.NativeSettleRequest
 			require.NoError(t, common.DecodeJson(r.Body, &in))
@@ -195,7 +207,8 @@ func TestProductDeepSeekChatCertifiedSettlement(t *testing.T) {
 		return w
 	}
 	const request = `{"model":"deepseek-chat-product","messages":[{"role":"user","content":"hello"}],"max_tokens":20}`
-	for i, body := range []string{request, strings.Replace(request, `"max_tokens"`, `"stream":true,"max_completion_tokens"`, 1)} {
+	streamRequest := strings.Replace(request, `"max_tokens":20`, `"stream":true,"max_completion_tokens":20,"tools":[{"type":"function","function":{"name":"read","parameters":{"type":"object"}}}]`, 1)
+	for i, body := range []string{request, streamRequest} {
 		w := send(fmt.Sprintf("deepseek-%d", i), body)
 		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 		var settled platformbilling.Call
@@ -204,7 +217,7 @@ func TestProductDeepSeekChatCertifiedSettlement(t *testing.T) {
 		assert.Equal(t, "23178", settled.Charged)
 	}
 	assert.Equal(t, http.StatusConflict, send("deepseek-0", request).Code)
-	badUsage = true
+	badUsage.Store(true)
 	w := send("invalid-meter", request)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	var pending platformbilling.Call
@@ -215,9 +228,12 @@ func TestProductDeepSeekChatCertifiedSettlement(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, send("vision", vision).Code)
 	hosted := strings.Replace(request, `"max_tokens":20`, `"max_tokens":20,"tools":[{"type":"web_search"}]`, 1)
 	assert.Equal(t, http.StatusBadRequest, send("hosted-tools", hosted).Code)
-	assert.Equal(t, 3, supplierRequests)
-	assert.Equal(t, 3, reserves)
-	assert.Equal(t, 2, settlements)
+	require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 3).Update("base_url", "https://different.example").Error)
+	model.InitChannelCache()
+	assert.Equal(t, http.StatusBadRequest, send("different-route", request).Code)
+	assert.EqualValues(t, 3, supplierRequests.Load())
+	assert.EqualValues(t, 3, reserves.Load())
+	assert.EqualValues(t, 2, settlements.Load())
 }
 
 type deepSeekProductFixtureTransport struct {

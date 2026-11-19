@@ -181,7 +181,11 @@ func ProductCreditChannelSupported(wire string, channelType int) bool {
 		return false
 	}
 	switch wire {
-	case "chat.completions.create", "responses.create", "responses.compact", "claude.messages.create", "gemini.generate", "embeddings.create":
+	case "chat.completions.create":
+		// DeepSeek is scoped to an exact product text certificate and tariff
+		// at admission, with the target checked again at dispatch.
+		return channelType == constant.ChannelTypeOpenAI || channelType == constant.ChannelTypeDeepSeek
+	case "responses.create", "responses.compact", "claude.messages.create", "gemini.generate", "embeddings.create":
 		_, ok := TokenProducer(wire, channelType)
 		return ok
 	case "videos.create", "dashscope.audio.transcriptions.create", "bailian.audio.speech.create":

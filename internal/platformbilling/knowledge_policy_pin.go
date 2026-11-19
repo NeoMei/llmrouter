@@ -29,6 +29,19 @@ type ManagedBinding struct {
 func ApprovedKnowledgePair(name, wire string) bool {
 	return name == "text-embedding-v4" && wire == "embeddings.create" || name == "qwen3-rerank" && wire == "rerank.create"
 }
+
+// ManagedKnowledgeGroup selects the supplier's routing group for the certified
+// pairs. The platform principal and funding group are independent of this check.
+func (a *Adapter) ManagedKnowledgeGroup(name, wire string) string {
+	if a == nil || !ApprovedKnowledgePair(name, wire) {
+		return ""
+	}
+	if a.config.KnowledgeRoutingGroup != "" {
+		return a.config.KnowledgeRoutingGroup
+	}
+	return a.config.Group
+}
+
 func opaqueKnowledgeID(value string) bool {
 	b, e := hex.DecodeString(value)
 	return e == nil && len(b) == 32 && hex.EncodeToString(b) == value

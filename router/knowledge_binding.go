@@ -33,9 +33,10 @@ func InstallKnowledgeBindings(a *platformbilling.Adapter) {
 // resolveKnowledgeFacts reads only the supplied transaction. It intentionally
 // accepts the two bounded, single openai_chat targets used by this integration.
 func resolveKnowledgeFacts(a *platformbilling.Adapter, tx *gorm.DB, product, name, wire string) (platformbilling.ManagedBinding, string, error) {
-	principal, group := a.Principal()
+	principal, _ := a.Principal()
+	group := a.ManagedKnowledgeGroup(name, wire)
 	b := platformbilling.ManagedBinding{InstanceID: a.KnowledgeInstanceID(), OriginProductID: product, Model: name, WireOperation: wire}
-	if !platformbilling.ApprovedKnowledgePair(name, wire) || (product != "llmrouter" && product != "superwagie") {
+	if group == "" || (product != "llmrouter" && product != "superwagie") {
 		return b, "", platformbilling.ErrInvalid
 	}
 	p, policyErr := a.ManagedKnowledgePolicy(name, wire)

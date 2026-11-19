@@ -56,13 +56,14 @@ func (a *Adapter) AdmitPinnedKnowledge(ctx context.Context, actor, credential, t
 	return a.admitWireOperation(context.WithValue(ctx, pinnedKnowledgeContextKey{}, admission), credential, task, id, wire, ct, body)
 }
 
-// PinnedKnowledgeProduct exposes only the origin already verified by center
-// and sealed into this admitted call. Browser client/query hints are irrelevant.
-func (s *Session) PinnedKnowledgeProduct() string {
+// PinnedKnowledgeRoute supplies the server-verified product and target to the
+// relay. This supplier routing group does not change the funding group.
+func (s *Session) PinnedKnowledgeRoute() (ManagedBinding, string, bool) {
 	if !s.PinnedKnowledge() {
-		return ""
+		return ManagedBinding{}, "", false
 	}
-	return s.call.OriginProductID
+	binding := s.knowledgeAdmission.binding
+	return binding, s.adapter.ManagedKnowledgeGroup(binding.Model, binding.WireOperation), true
 }
 func (s *Session) PinnedKnowledge() bool { return s != nil && s.knowledgeAdmission != nil }
 func (a *Adapter) preparePinnedCallTx(tx *gorm.DB, row *Call, admission *pinnedKnowledgeAdmission) error {

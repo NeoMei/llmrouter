@@ -196,3 +196,29 @@ remain unchanged. A settled receipt alone cannot release those resources.
 The new route does not change OCR admission, reservation, rates, settlement or
 retry policy. Submission still uses the persisted original idempotency identity;
 an unknown result never authorizes a second supplier dispatch.
+
+## Product credit video certificates
+
+Set `UNIHUB_PRODUCT_CREDIT_VIDEO_POLICIES` to configure a product credit only
+certificate for `videos.create` and `wan2.6-t2v`. The map uses the video
+certificate schema, with `version` set to `video_v2`, `usage_policy` set to
+`ali_wan26_t2v_cny6_v2`, and empty or omitted `rate_ids`. The certificate
+binds the exact channel and producer. Product credit dispatch checks the
+current and reserved certificates. Product credit pricing comes from
+`ProductCreditPricing`.
+
+`UNIHUB_VIDEO_POLICIES` remains the configuration for legacy video billing.
+When no product credit certificate is configured, a valid `video_v2` legacy
+certificate can also serve the product credit operation. Existing in-flight
+and completed requests keep the video certificate and price recorded at
+admission.
+
+## Governed knowledge routing group
+
+`UNIHUB_KNOWLEDGE_ROUTING_GROUP` optionally selects one existing ability group
+for the pinned `text-embedding-v4` and `qwen3-rerank` producers. It is part
+of the configuration digest reviewed by the `knowledge-bindings` operator.
+The same certified routes must pass the channel, exact ability and key checks
+in the selected group. The instance routing group still governs other models
+and billing. If unset, the pinned producers also use the instance routing
+group.

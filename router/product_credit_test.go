@@ -21,6 +21,7 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/internal/platformbilling"
 	"github.com/QuantumNous/new-api/model"
+	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -72,6 +73,7 @@ func testProductCreditRelayFreezesPublicPrice(t *testing.T, banded bool) {
 	oldFX, oldQuota := operation_setting.USDExchangeRate, common.QuotaPerUnit
 	oldGroup, oldTariff := ratio_setting.GroupRatio2JSONString(), billing_setting.ProductCreditPricingJSONString()
 	t.Cleanup(func() {
+		perfmetrics.DrainRelaySamples()
 		model.DB, model.LOG_DB, common.MemoryCacheEnabled, common.RedisEnabled, common.RetryTimes = oldDB, oldLogDB, oldCache, oldRedis, oldRetry
 		common.GlobalApiRateLimitEnable = oldGlobal
 		operation_setting.USDExchangeRate, common.QuotaPerUnit = oldFX, oldQuota

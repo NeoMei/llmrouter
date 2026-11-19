@@ -43,11 +43,9 @@ interface FooterProps {
   className?: string
 }
 
-const NEW_API_FOOTER_ATTRIBUTION_KEY = [
-  'footer',
-  'new' + 'api',
-  'projectAttributionSuffix',
-].join('.')
+const QUUKK_WEBSITE_URL = 'https://www.quukk.com/'
+const QUUKK_LOGO_LIGHT = '/brand/quukk-logo-color.svg'
+const QUUKK_LOGO_DARK = '/brand/quukk-logo-ai-white.svg'
 
 function FooterLinkItem(props: { link: FooterLink }) {
   const { t } = useTranslation()
@@ -127,17 +125,30 @@ function LegalLinks(props: { leadingSeparator?: boolean }) {
 function ProjectAttribution(props: { currentYear: number; inline?: boolean }) {
   const { t } = useTranslation()
   const content = (
-    <span className='text-muted-foreground/45'>
-      &copy; {props.currentYear}{' '}
+    <span className='text-muted-foreground/45 inline-flex items-center gap-1.5'>
+      <span>&copy; {props.currentYear}</span>
       <a
-        href='https://github.com/QuantumNous/new-api'
+        href={QUUKK_WEBSITE_URL}
         target='_blank'
         rel='noopener noreferrer'
-        className='text-foreground/70 hover:text-foreground font-medium transition-colors'
+        aria-label='quukk'
+        className='inline-flex items-center transition-opacity duration-200 hover:opacity-80'
       >
-        {t('New API')}
+        <img
+          src={QUUKK_LOGO_LIGHT}
+          alt='quukk'
+          className='h-3.5 w-auto dark:hidden'
+          loading='lazy'
+        />
+        <img
+          src={QUUKK_LOGO_DARK}
+          alt=''
+          aria-hidden='true'
+          className='hidden h-3.5 w-auto dark:block'
+          loading='lazy'
+        />
       </a>
-      . {t(NEW_API_FOOTER_ATTRIBUTION_KEY)}
+      <span>{t('footer.defaultCopyright')}</span>
     </span>
   )
   if (props.inline) {

@@ -30,7 +30,7 @@ import { useUpdateOption } from '../hooks/use-update-option'
 
 const ratioPart = /^[1-9][0-9]{0,8}$/
 const pricingRevision = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/
-const supplierCatalogSchema = z.record(z.string(), z.unknown())
+const tariffCatalogSchema = z.record(z.string(), z.unknown())
 const policySchema = z.object({
   version: z.string().regex(pricingRevision),
   multiplier: z
@@ -39,7 +39,8 @@ const policySchema = z.object({
       denominator: z.string().regex(ratioPart),
     })
     .default({ numerator: '3', denominator: '2' }),
-  suppliers: supplierCatalogSchema.default({}),
+  suppliers: tariffCatalogSchema.default({}),
+  fixed_public_cny: tariffCatalogSchema.default({}),
 })
 
 function readSavedPolicy(value: string) {
@@ -62,6 +63,9 @@ export function ProductCreditPricingEditor(props: { value: string }) {
   const [supplierJSON, setSupplierJSON] = useState(() =>
     JSON.stringify(saved?.suppliers ?? {}, null, 2)
   )
+  const [fixedPublicCNY, setFixedPublicCNY] = useState(() =>
+    JSON.stringify(saved?.fixed_public_cny ?? {}, null, 2)
+  )
   const validPolicy =
     !!saved &&
     pricingRevision.test(revision) &&
@@ -71,17 +75,19 @@ export function ProductCreditPricingEditor(props: { value: string }) {
   function save() {
     if (!validPolicy) return
     try {
-      const suppliers = supplierCatalogSchema.parse(JSON.parse(supplierJSON))
+      const suppliers = tariffCatalogSchema.parse(JSON.parse(supplierJSON))
+      const fixedTariffs = tariffCatalogSchema.parse(JSON.parse(fixedPublicCNY))
       update.mutate({
         key: 'ProductCreditPricing',
         value: JSON.stringify({
           version: revision,
           multiplier: { numerator, denominator },
           suppliers,
+          fixed_public_cny: fixedTariffs,
         }),
       })
     } catch {
-      toast.error(t('Invalid supplier tariff JSON'))
+      toast.error(t('Invalid JSON'))
     }
   }
 
@@ -89,7 +95,7 @@ export function ProductCreditPricingEditor(props: { value: string }) {
     <SettingsSection title={t('Product credit pricing')}>
       <p className='text-muted-foreground text-sm'>
         {t(
-          'The multiplier applies to the highest comparable supplier price for each billing dimension. The published native price applies when no supplier price is configured.'
+          'Fixed public tariffs take precedence. Otherwise, the multiplier applies to the highest comparable supplier price for each billing dimension, with the published native price as a fallback.'
         )}
       </p>
       <div className='grid gap-3 sm:grid-cols-3'>
@@ -127,6 +133,15 @@ export function ProductCreditPricingEditor(props: { value: string }) {
           className='font-mono text-xs'
           value={supplierJSON}
           onChange={(event) => setSupplierJSON(event.target.value)}
+        />
+      </label>
+      <label className='space-y-1'>
+        <span className='text-sm'>{t('Fixed public tariffs in CNY')}</span>
+        <Textarea
+          rows={6}
+          className='font-mono text-xs'
+          value={fixedPublicCNY}
+          onChange={(event) => setFixedPublicCNY(event.target.value)}
         />
       </label>
       <Button

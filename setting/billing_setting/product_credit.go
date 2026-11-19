@@ -22,9 +22,10 @@ type productCreditSupplierTariff struct {
 }
 
 type productCreditPricing struct {
-	Version    string                                                       `json:"version"`
-	Multiplier *metering.Rational                                           `json:"multiplier,omitempty"`
-	Suppliers  map[string]map[string]map[string]productCreditSupplierTariff `json:"suppliers,omitempty"`
+	Version        string                                                       `json:"version"`
+	Multiplier     *metering.Rational                                           `json:"multiplier,omitempty"`
+	Suppliers      map[string]map[string]map[string]productCreditSupplierTariff `json:"suppliers,omitempty"`
+	FixedPublicCNY map[string]map[string]metering.Price                         `json:"fixed_public_cny,omitempty"`
 }
 
 // ProductCreditPrice captures public pricing and the configured supplier
@@ -55,12 +56,12 @@ var (
 	productCreditPricingMu      sync.RWMutex
 	productCreditPricingConfig  = productCreditPricing{Version: "product-credit-pricing-v1"}
 	productCreditPricingVersion = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
-	errProductCreditPricing     = errors.New("invalid product credit supplier tariff or multiplier")
+	errProductCreditPricing     = errors.New("invalid product credit tariff or multiplier")
 )
 
 func parseProductCreditPricing(raw string) (productCreditPricing, error) {
 	var config productCreditPricing
-	if len(raw) > 4<<20 || common.UnmarshalUnique([]byte(raw), &config) != nil || !productCreditPricingVersion.MatchString(config.Version) || len(config.Suppliers) > 10000 {
+	if len(raw) > 4<<20 || common.UnmarshalUnique([]byte(raw), &config) != nil || !productCreditPricingVersion.MatchString(config.Version) || len(config.Suppliers) > 10000 || len(config.FixedPublicCNY) > 10000 {
 		return config, errProductCreditPricing
 	}
 	d := common.NewJsonDecoder(strings.NewReader(raw))
@@ -71,6 +72,16 @@ func parseProductCreditPricing(raw string) (productCreditPricing, error) {
 	if config.Multiplier != nil {
 		for _, part := range []string{config.Multiplier.Numerator, config.Multiplier.Denominator} {
 			if len(part) == 0 || len(part) > 9 || part[0] == '0' || strings.Trim(part, "0123456789") != "" {
+				return config, errProductCreditPricing
+			}
+		}
+	}
+	for model, operations := range config.FixedPublicCNY {
+		if model == "" || strings.TrimSpace(model) != model || len(model) > 128 || len(operations) > 16 {
+			return config, errProductCreditPricing
+		}
+		for operation, tariff := range operations {
+			if len(tariff.InputTokenBands) != 0 || !validProductCreditTariff(model, operation, tariff) {
 				return config, errProductCreditPricing
 			}
 		}
@@ -86,7 +97,7 @@ func parseProductCreditPricing(raw string) (productCreditPricing, error) {
 			var comparable *metering.Price
 			for supplier, evidence := range suppliers {
 				if !productCreditPricingVersion.MatchString(supplier) || !productCreditPricingVersion.MatchString(evidence.Version) || evidence.Currency != "USD" && evidence.Currency != "CNY" ||
-					!validProductCreditSupplierPrice(model, operation, evidence.Tariff) {
+					!validProductCreditTariff(model, operation, evidence.Tariff) {
 					return config, errProductCreditPricing
 				}
 				price := evidence.Tariff
@@ -116,7 +127,7 @@ func parseProductCreditPricing(raw string) (productCreditPricing, error) {
 	return config, nil
 }
 
-func validProductCreditSupplierPrice(model, operation string, tariff metering.Price) bool {
+func validProductCreditTariff(model, operation string, tariff metering.Price) bool {
 	if len(tariff.InputTokenBands) != 0 {
 		return operation == "chat" && tariff.Operation == operation && metering.ValidatePrice(tariff) == nil &&
 			!slices.ContainsFunc(tariff.Terms, func(term metering.Term) bool { return term.Key == "cache_write" })
@@ -159,8 +170,8 @@ func ProductCreditPricingJSONString() string {
 }
 
 // ResolveProductCreditPrice requires an exact canonical public model and
-// operation. Supplier tariffs use major currency units per single metered
-// dimension; CNY prices are converted to USD before computing each maximum.
+// operation. A fixed public CNY tariff takes precedence over supplier-derived
+// pricing. All resolved rates are expressed as USD before credit conversion.
 func ResolveProductCreditPrice(model, operation, cnyPerUSD string) (ProductCreditPrice, bool) {
 	fx, ok := new(big.Rat).SetString(cnyPerUSD)
 	if !ok || fx.Sign() <= 0 {
@@ -171,7 +182,18 @@ func ResolveProductCreditPrice(model, operation, cnyPerUSD string) (ProductCredi
 	p := productCreditPricingConfig
 	productCreditPricingMu.RUnlock()
 	suppliers := p.Suppliers[model][operation]
-	if len(suppliers) == 0 {
+	if fixed, ok := p.FixedPublicCNY[model][operation]; ok {
+		quote.Source, quote.PolicyVersion, quote.Tariff = "fixed_public_cny", p.Version, fixed
+		quote.Multiplier = metering.Rational{Numerator: "1", Denominator: "1"}
+		quote.Tariff.Terms = slices.Clone(fixed.Terms)
+		for i, term := range quote.Tariff.Terms {
+			rate := productCreditRateUSD(term.Price, "CNY", fx)
+			quote.Tariff.Terms[i].Price = metering.Rational{Numerator: rate.Num().String(), Denominator: rate.Denom().String()}
+		}
+		if metering.ValidatePrice(quote.Tariff) != nil {
+			return ProductCreditPrice{}, false
+		}
+	} else if len(suppliers) == 0 {
 		price, ok := ResolveModelNativePrice(model, operation)
 		if !ok {
 			return ProductCreditPrice{}, false
@@ -237,11 +259,16 @@ func ResolveProductCreditPrice(model, operation, cnyPerUSD string) (ProductCredi
 }
 
 func selectSupplierMaximum(maxima map[string]*big.Rat, key string, price metering.Rational, currency string, fx *big.Rat) {
+	rate := productCreditRateUSD(price, currency, fx)
+	if prior := maxima[key]; prior == nil || rate.Cmp(prior) > 0 {
+		maxima[key] = rate
+	}
+}
+
+func productCreditRateUSD(price metering.Rational, currency string, fx *big.Rat) *big.Rat {
 	rate, _ := new(big.Rat).SetString(price.Numerator + "/" + price.Denominator)
 	if currency == "CNY" {
 		rate.Quo(rate, fx)
 	}
-	if prior := maxima[key]; prior == nil || rate.Cmp(prior) > 0 {
-		maxima[key] = rate
-	}
+	return rate
 }

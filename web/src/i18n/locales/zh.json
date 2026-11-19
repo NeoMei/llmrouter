@@ -1,12 +1,12 @@
 {
   "translation": {
     "Product credit pricing": "产品额度定价",
-    "The multiplier applies to the highest comparable supplier price for each billing dimension. The published native price applies when no supplier price is configured.": "每个计费维度按可比供应商价格的最高价乘以倍率。未配置供应商价格时，使用已发布的原生价格。",
+    "Fixed public tariffs take precedence. Otherwise, the multiplier applies to the highest comparable supplier price for each billing dimension, with the published native price as a fallback.": "固定公开费率优先。其他费率按各计费维度的可比供应商最高价乘以倍率，缺少供应商价格时使用已发布的原生费率。",
     "Pricing revision": "定价版本",
     "Multiplier numerator": "倍率分子",
     "Multiplier denominator": "倍率分母",
     "Supplier pay-as-you-go tariffs": "供应商按量费率",
-    "Invalid supplier tariff JSON": "供应商费率 JSON 无效",
+    "Fixed public tariffs in CNY": "固定公开费率（人民币）",
     "Save product credit pricing": "保存产品额度定价",
     "Minimum ¥1, maximum ¥100000, up to 2 decimals": "最低 ¥1，最高 ¥100000，最多 2 位小数",
     "Enter a valid CNY amount (up to 2 decimals)": "请输入有效的人民币金额（最多 2 位小数）",

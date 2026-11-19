@@ -1,12 +1,42 @@
 package billing_setting
 
 import (
+	"math/big"
 	"testing"
 
 	"github.com/QuantumNous/new-api/pkg/metering"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFixedPublicCNYPriceIsIndependentOfExchangeRateAndMultiplier(t *testing.T) {
+	previous := ProductCreditPricingJSONString()
+	t.Cleanup(func() { require.NoError(t, SetProductCreditPricing(previous)) })
+	require.NoError(t, SetProductCreditPricing(`{
+	  "version":"paddle-public-1","multiplier":{"numerator":"9","denominator":"2"},
+	  "fixed_public_cny":{"PaddleOCR-VL-1.6":{"ocr":{"version":"metered_v2","operation":"ocr","policy":"success_request",
+	    "terms":[{"key":"requests","unit":"request","price":{"numerator":"1","denominator":"20"}}]}}},
+	  "suppliers":{"PaddleOCR-VL-1.6":{"ocr":{"paddle":{"version":"paddle-free","currency":"CNY",
+	    "tariff":{"version":"metered_v2","operation":"ocr","policy":"success_request",
+	      "terms":[{"key":"requests","unit":"request","price":{"numerator":"0","denominator":"1"}}]}}}}}
+	}`))
+	for _, fx := range []string{"1", "7.3", "7.65813"} {
+		quote, ok := ResolveProductCreditPrice("PaddleOCR-VL-1.6", "ocr", fx)
+		require.True(t, ok)
+		assert.Equal(t, "fixed_public_cny", quote.Source)
+		assert.Equal(t, "paddle-public-1", quote.PolicyVersion)
+		assert.Empty(t, quote.SupplierTariffs)
+		assert.Empty(t, quote.EvidenceDigest)
+		assert.NotEmpty(t, quote.Revision)
+		rate := quote.Tariff.Terms[0].Price
+		usd, ok := new(big.Rat).SetString(rate.Numerator + "/" + rate.Denominator)
+		require.True(t, ok)
+		credits, ok := new(big.Rat).SetString(quote.MicrocreditsPerUSD())
+		require.True(t, ok)
+		assert.Equal(t, "5000000", usd.Mul(usd, credits).RatString())
+	}
+	assert.Contains(t, ProductCreditPricingJSONString(), `"fixed_public_cny"`)
+}
 
 func TestProductCreditDefaultPriceUsesMaximumComparablePayAsYouGoPerDimension(t *testing.T) {
 	previous := ProductCreditPricingJSONString()

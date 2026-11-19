@@ -55,7 +55,7 @@ func TestProductPaddleOCRScopedDocumentRecovery(t *testing.T) {
 	const (
 		name   = "PaddleOCR-VL-1.6"
 		submit = "/platform/api/v2/ocr/jobs"
-		charge = "100000"
+		charge = "5000000"
 	)
 	callerKey := "product-ocr-document-1"
 	origin := os.Getenv("PRODUCT_CREDIT_INTEGRATION_ORIGIN")
@@ -77,14 +77,17 @@ func TestProductPaddleOCRScopedDocumentRecovery(t *testing.T) {
 		operation_setting.USDExchangeRate = oldFX
 		require.NoError(t, billing_setting.SetProductCreditPricing(oldTariff))
 	})
-	operation_setting.USDExchangeRate = 1
+	operation_setting.USDExchangeRate = 7.3
 	require.NoError(t, billing_setting.SetProductCreditPricing(`{
-	  "version":"ocr-fixture-1",
+	  "version":"paddle-public-1",
+	  "fixed_public_cny":{"PaddleOCR-VL-1.6":{"ocr":{"version":"metered_v2","operation":"ocr","policy":"success_request",
+	    "terms":[{"key":"requests","unit":"request","price":{"numerator":"1","denominator":"20"}}]}}},
 	  "suppliers":{"PaddleOCR-VL-1.6":{"ocr":{"paddle":{
-	    "version":"paddle-1","currency":"CNY",
+	    "version":"paddle-free","currency":"CNY",
 	    "tariff":{"version":"metered_v2","operation":"ocr","policy":"success_request",
-	      "terms":[{"key":"requests","unit":"request","price":{"numerator":"1","denominator":"1500"}}]}}}}}
+	      "terms":[{"key":"requests","unit":"request","price":{"numerator":"0","denominator":"1"}}]}}}}}
 	}`))
+	admittedTariff := billing_setting.ProductCreditPricingJSONString()
 
 	var f *ocrGatewayFixture
 	var remote platformbilling.RemoteCall
@@ -158,6 +161,7 @@ func TestProductPaddleOCRScopedDocumentRecovery(t *testing.T) {
 		origin = hub.URL
 	}
 	f = newOCRGatewayFixture(t, "success", origin, token, "", "")
+	require.NoError(t, f.db.AutoMigrate(&model.Model{}, &model.Vendor{}))
 	firstPDF := productOCRPDF("first PDF")
 	f.productUploads = [][]byte{firstPDF}
 	require.NoError(t, f.db.Model(&model.ClientModelRoute{}).Where("id = ?", 1).Update("public_id", name).Error)
@@ -211,6 +215,29 @@ func TestProductPaddleOCRScopedDocumentRecovery(t *testing.T) {
 	require.NotEmpty(t, id)
 	require.Contains(t, created.Body.String(), `"jobId":"`+id+`"`)
 	require.NotContains(t, created.Body.String(), "resultUrl")
+	var frozen platformbilling.Call
+	require.NoError(t, f.db.First(&frozen, "call_id = ?", id).Error)
+	require.Equal(t, charge, frozen.Amount)
+	var wrapped struct {
+		PriceSnapshot string `json:"price_snapshot"`
+	}
+	var snapshot struct {
+		Native model.NativeAdmission `json:"native"`
+	}
+	require.NoError(t, common.Unmarshal([]byte(frozen.NativePriceSnapshot), &wrapped))
+	require.NoError(t, common.Unmarshal([]byte(wrapped.PriceSnapshot), &snapshot))
+	require.NotNil(t, snapshot.Native.ProductPrice)
+	require.Equal(t, "fixed_public_cny", snapshot.Native.ProductPrice.Source)
+	require.Equal(t, "paddle-public-1", snapshot.Native.ProductPrice.PolicyVersion)
+	require.Empty(t, snapshot.Native.ProductPrice.SupplierTariffs)
+	operation_setting.USDExchangeRate = 8
+	updatedTariff := strings.NewReplacer("paddle-public-1", "paddle-public-2", `"denominator":"20"`, `"denominator":"10"`).Replace(admittedTariff)
+	require.NoError(t, billing_setting.SetProductCreditPricing(updatedTariff))
+	next, ok := billing_setting.ResolveProductCreditPrice(name, "ocr", "8")
+	require.True(t, ok)
+	require.Equal(t, "paddle-public-2", next.PolicyVersion)
+	require.Equal(t, "1", next.Tariff.Terms[0].Price.Numerator)
+	require.Equal(t, "80", next.Tariff.Terms[0].Price.Denominator)
 
 	replayed := create(firstPDF)
 	require.Equal(t, http.StatusConflict, replayed.Code, replayed.Body.String())
@@ -257,7 +284,14 @@ func TestProductPaddleOCRScopedDocumentRecovery(t *testing.T) {
 	require.Equal(t, http.StatusOK, finance.Code, finance.Body.String())
 	require.Contains(t, finance.Body.String(), `"charged":"`+charge+`"`)
 	require.Equal(t, 1, f.sends)
+	var settled platformbilling.Call
+	require.NoError(t, f.db.First(&settled, "call_id = ?", id).Error)
+	require.Equal(t, "SETTLED", settled.Status)
+	require.Equal(t, charge, settled.Charged)
+	require.Equal(t, frozen.NativePriceSnapshot, settled.NativePriceSnapshot)
 	if app := os.Getenv("PRODUCT_CREDIT_INTEGRATION_APP_PATH"); integration && app != "" {
+		operation_setting.USDExchangeRate = 7.3
+		require.NoError(t, billing_setting.SetProductCreditPricing(admittedTariff))
 		require.True(t, filepath.IsAbs(app), "the SuperWagie fixture must use an absolute checkout")
 		secondPDF := productOCRPDF("independent document from SuperWagie")
 		f.productUploads = append(f.productUploads, secondPDF)

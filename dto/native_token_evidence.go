@@ -32,6 +32,11 @@ func (e *NativeTokenEvidence) Observe(raw []byte, stream bool) {
 		return
 	}
 	u := root.Get("usage")
+	if e.Source == BillingUsageSourceDeepSeekProductChat && stream &&
+		(e.seen || (u.Exists() && u.Type != gjson.Null && !deepSeekProductChatFinalFrame(root))) {
+		e.invalid = true
+		return
+	}
 	switch e.Source {
 	case BillingUsageSourceOAIResponses:
 		if stream {
@@ -97,6 +102,12 @@ func (e *NativeTokenEvidence) Observe(raw []byte, stream bool) {
 	}
 	names := []string{"prompt_tokens", "completion_tokens", "total_tokens", "prompt_tokens_details.cached_tokens", "prompt_tokens_details.cache_write_tokens", "completion_tokens_details.reasoning_tokens"}
 	switch e.Source {
+	case BillingUsageSourceDeepSeekProductChat:
+		if u.Get("server_tool_use").Exists() {
+			e.invalid = true
+			return
+		}
+		names = append(names, deepSeekChatCacheHit, deepSeekChatCacheMiss, chatCacheCreationAlias)
 	case BillingUsageSourceOAIResponses:
 		names = []string{"input_tokens", "output_tokens", "total_tokens", "input_tokens_details.cached_tokens", "input_tokens_details.cache_write_tokens", "output_tokens_details.reasoning_tokens"}
 	case BillingUsageSourceClaudeMessages:
@@ -174,6 +185,8 @@ func (e *NativeTokenEvidence) Usage(price metering.Price) metering.Usage {
 	}
 	p, c, total, cr, cw, r := "prompt_tokens", "completion_tokens", "total_tokens", "prompt_tokens_details.cached_tokens", "prompt_tokens_details.cache_write_tokens", "completion_tokens_details.reasoning_tokens"
 	switch e.Source {
+	case BillingUsageSourceDeepSeekProductChat:
+		cr = deepSeekChatCacheHit
 	case BillingUsageSourceOAIResponses:
 		p, c, cr, cw, r = "input_tokens", "output_tokens", "input_tokens_details.cached_tokens", "input_tokens_details.cache_write_tokens", "output_tokens_details.reasoning_tokens"
 	case BillingUsageSourceClaudeMessages:
@@ -208,6 +221,20 @@ func (e *NativeTokenEvidence) Usage(price metering.Price) metering.Usage {
 		return u
 	}
 	cacheRead, cacheWrite, reasoning := e.values[cr], e.values[cw], e.values[r]
+	if e.Source == BillingUsageSourceDeepSeekProductChat {
+		_, hitPresent := e.values[deepSeekChatCacheHit]
+		miss, missPresent := e.values[deepSeekChatCacheMiss]
+		_, totalPresent := e.values[total]
+		if !hitPresent || !missPresent || !totalPresent {
+			return u
+		}
+		alias, aliasPresent := e.values[chatCachedTokens]
+		if price.Operation != "chat" || cacheRead > input || input-cacheRead != miss ||
+			(aliasPresent && alias != cacheRead) || cacheWrite != 0 || e.values[chatCacheCreationAlias] != 0 {
+			u.State = "invalid"
+			return u
+		}
+	}
 	sum := new(big.Int).Add(big.NewInt(input), big.NewInt(output))
 	if e.Source == BillingUsageSourceGeminiChat {
 		sum.Add(sum, big.NewInt(reasoning))
@@ -249,7 +276,8 @@ func (e *NativeTokenEvidence) Usage(price metering.Price) metering.Usage {
 		// A separately priced optional counter must be present, including explicit zero.
 		field := map[string]string{"cache_read": cr, "cache_write": cw, "reasoning": r}[term.Key]
 		if term.Key != "input" && term.Key != "output" {
-			if _, exists := e.values[field]; !exists {
+			optionalDeepSeekReasoning := e.Source == BillingUsageSourceDeepSeekProductChat && term.Key == "reasoning"
+			if _, exists := e.values[field]; !exists && !optionalDeepSeekReasoning {
 				return u
 			}
 		}

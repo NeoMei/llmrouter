@@ -603,10 +603,18 @@ func productCreditPriceAvailability(m ProviderCatalogModel, candidates, chatAbil
 			op.Available, op.Executable, op.DisabledReason = false, false, "product_credit_operation_unavailable"
 		} else if price, ok := billing_setting.ResolveProductCreditPrice(m.ID, op.BillingOperation, fx); !ok {
 			op.Available, op.Executable, op.DisabledReason = false, false, "product_credit_price_unavailable"
-		} else if !productCreditChatPriceAvailable(m.ID, op.ID, chatTargets, channels, adapter, price.Tariff) {
+		} else if contextTokens, maxOutput, available := productCreditChatRoute(m.ID, op.ID, chatTargets, channels, adapter, price.Tariff); !available {
 			op.Available, op.Executable, op.DisabledReason = false, false, "product_credit_banded_chat_target_unavailable"
 		} else {
 			op.PublicTariff = publicProductCreditTariff(price)
+			// A banded chat tariff is executable only on its exact certified
+			// target. Keep any tighter catalog bounds.
+			if contextTokens > 0 && (m.Context <= 0 || int64(contextTokens) < m.Context) {
+				m.Context = int64(contextTokens)
+			}
+			if maxOutput > 0 && (m.MaxOutput <= 0 || int64(maxOutput) < m.MaxOutput) {
+				m.MaxOutput = int64(maxOutput)
+			}
 			if len(price.Tariff.InputTokenBands) != 0 && len(m.CapabilityMetadata.Operations) == 1 {
 				m.InputModalities = []string{"text"}
 				m.CapabilityMetadata.Capabilities.InputModalities = []string{"text"}
@@ -618,10 +626,10 @@ func productCreditPriceAvailability(m ProviderCatalogModel, candidates, chatAbil
 	return m
 }
 
-func productCreditChatPriceAvailable(modelID, wire string, candidates []modelcatalog.ResolvedModel, channels map[int]model.Channel, adapter *platformbilling.Adapter, price metering.Price) bool {
+func productCreditChatRoute(modelID, wire string, candidates []modelcatalog.ResolvedModel, channels map[int]model.Channel, adapter *platformbilling.Adapter, price metering.Price) (contextTokens, maxOutput int, available bool) {
 	bands := price.InputTokenBands
 	if wire != "chat.completions.create" || len(candidates) == 0 {
-		return len(bands) == 0
+		return 0, 0, len(bands) == 0
 	}
 	for _, candidate := range candidates {
 		channel := channels[candidate.ChannelID]
@@ -630,18 +638,18 @@ func productCreditChatPriceAvailable(modelID, wire string, candidates []modelcat
 			continue
 		}
 		if len(bands) == 0 {
-			return true
+			return 0, 0, true
 		}
 		base := channel.GetBaseURL()
 		if base == "" {
 			base = constant.ChannelBaseURLs[channel.Type]
 		}
 		endpoint := relaycommon.GetFullRequestURL(base, "/v1/chat/completions", channel.Type)
-		if adapter.ProductBandedChatTarget(modelID, channel.Id, channel.Type, candidate.UpstreamModel, endpoint, bands[len(bands)-1].MaxInputTokens) {
-			return true
+		if contextTokens, maxOutput, ok := adapter.ProductBandedChatTarget(modelID, channel.Id, channel.Type, candidate.UpstreamModel, endpoint, bands[len(bands)-1].MaxInputTokens); ok {
+			return contextTokens, maxOutput, true
 		}
 	}
-	return false
+	return 0, 0, false
 }
 
 func catalogCertifiesProductTarget(adapter *platformbilling.Adapter, name, wire string, channel model.Channel, candidateUpstream string) bool {

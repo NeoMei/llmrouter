@@ -77,8 +77,12 @@ func TestBandedChatCatalogUsesExactOpenAIAbilityTarget(t *testing.T) {
 				require.NotNil(t, op.PublicTariff)
 				assert.Equal(t, "CREDIT/6", op.PublicTariff.Asset)
 				assert.Equal(t, []string{"text"}, m.InputModalities)
+				assert.EqualValues(t, 1100, m.Context)
+				assert.EqualValues(t, 100, m.MaxOutput)
 			} else {
 				assert.Nil(t, op.PublicTariff)
+				assert.Zero(t, m.Context)
+				assert.Zero(t, m.MaxOutput)
 			}
 		})
 	}

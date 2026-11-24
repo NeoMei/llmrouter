@@ -40,25 +40,26 @@ func (s *Session) ProductBandedChat() bool {
 	return s.ProductCredit() && s.call.TextInputSnapshot != ""
 }
 
-// ProductBandedChatTarget gates discovery on the same exact operator-certified
-// text producer and tariff ceiling that admission requires.
-func (a *Adapter) ProductBandedChatTarget(model string, channel, channelType int, upstream, endpoint string, tariffCap int64) bool {
-	return a.productBandedChatPolicy(model, channel, channelType, upstream, tariffCap) &&
-		a.config.ProductCreditTextInputPolicies[productBandedChatWire][model].Endpoint == endpoint
-}
-
-func (a *Adapter) productBandedChatPolicy(model string, channel, channelType int, upstream string, tariffCap int64) bool {
+// ProductBandedChatTarget returns the operator-certified bounds for the exact
+// target and tariff ceiling that admission requires.
+func (a *Adapter) ProductBandedChatTarget(model string, channel, channelType int, upstream, endpoint string, tariffCap int64) (contextTokens, maxOutputTokens int, ok bool) {
 	if a == nil {
-		return false
+		return 0, 0, false
 	}
 	p, ok := a.config.ProductCreditTextInputPolicies[productBandedChatWire][model]
-	return ok && productBandedChatProducer(p) && p.valid(a.config, productBandedChatWire, model) && p.ChannelID == channel &&
-		p.ChannelType == channelType && p.UpstreamModel == upstream && int64(p.MaxInputTokens) <= tariffCap
+	if !ok || !productBandedChatProducer(p) || !p.valid(a.config, productBandedChatWire, model) ||
+		p.ChannelID != channel || p.ChannelType != channelType || p.UpstreamModel != upstream ||
+		p.Endpoint != endpoint || int64(p.MaxInputTokens) > tariffCap {
+		return 0, 0, false
+	}
+	return p.ContextTokens, p.MaxOutputTokens, true
 }
 
 func (s *Session) BindProductBandedChat(publicModel string, channel, channelType int, upstream, endpoint string, tariffCap int64) (int, int, error) {
-	if !s.ProductCredit() || s.call.Status != "ADMITTED" || s.WireOperation().ID != productBandedChatWire ||
-		!s.adapter.ProductBandedChatTarget(publicModel, channel, channelType, upstream, endpoint, tariffCap) {
+	if !s.ProductCredit() || s.call.Status != "ADMITTED" || s.WireOperation().ID != productBandedChatWire {
+		return 0, 0, ErrInvalid
+	}
+	if _, _, ok := s.adapter.ProductBandedChatTarget(publicModel, channel, channelType, upstream, endpoint, tariffCap); !ok {
 		return 0, 0, ErrInvalid
 	}
 	request, err := strictChatRequest(s.canonical)

@@ -51,6 +51,7 @@ async function installFixture(page: Page, role = 10): Promise<FixtureState> {
 
   await page.addInitScript(() => {
     window.localStorage.setItem('setup_status_checked', 'true')
+    window.localStorage.setItem('i18nextLng', 'en')
     window.localStorage.setItem(
       'status',
       JSON.stringify({ system_name: 'Codex Gateway E2E' })
@@ -62,6 +63,17 @@ async function installFixture(page: Page, role = 10): Promise<FixtureState> {
     const path = new URL(request.url()).pathname
     const method = request.method()
 
+    const user = {
+      id: 1,
+      username: 'e2e-admin',
+      display_name: 'E2E Admin',
+      role,
+      status: 1,
+    }
+    if (path === '/api/user/self') {
+      await route.fulfill({ json: { success: true, data: user } })
+      return
+    }
     if (path === '/api/user/auth/refresh') {
       await route.fulfill({
         json: {
@@ -70,13 +82,7 @@ async function installFixture(page: Page, role = 10): Promise<FixtureState> {
             access_token: 'e2e-access-token',
             token_type: 'Bearer',
             access_expires_at: now + 3600,
-            user: {
-              id: 1,
-              username: 'e2e-admin',
-              display_name: 'E2E Admin',
-              role,
-              status: 1,
-            },
+            user,
             session: {
               sid: 'e2e-session',
               current: true,
@@ -182,7 +188,7 @@ test('admin can create, edit, and delete a client model route', async ({
   await page.getByRole('button', { name: 'Save route' }).click()
 
   await expect(
-    page.getByText('deepseek/deepseek-chat', { exact: true })
+    page.getByText('deepseek/deepseek-chat #41', { exact: true })
   ).toBeVisible()
   expect(state.writes[0]).toMatchObject({
     method: 'POST',
@@ -204,11 +210,13 @@ test('admin can create, edit, and delete a client model route', async ({
   await page.getByRole('button', { name: 'Edit' }).click()
   await page.getByLabel('Display name').fill('DeepSeek Chat Updated')
   await page.getByRole('button', { name: 'Save route' }).click()
-  expect(state.writes[1]).toMatchObject({
-    method: 'PUT',
-    path: '/api/client_model_routes/',
-    body: { id: 41, display_name: 'DeepSeek Chat Updated' },
-  })
+  await expect
+    .poll(() => state.writes[1])
+    .toMatchObject({
+      method: 'PUT',
+      path: '/api/client_model_routes/',
+      body: { id: 41, display_name: 'DeepSeek Chat Updated' },
+    })
   await expect(page.getByRole('button', { name: 'Save route' })).toBeEnabled()
 
   await page

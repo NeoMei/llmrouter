@@ -108,10 +108,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
       priceSummary = (
         <>
           {dynamicSummary.primaryEntries.map((entry) => (
-            <span
-              key={entry.key}
-              className='text-muted-foreground whitespace-nowrap'
-            >
+            <span key={entry.key} className='text-muted-foreground'>
               {t(entry.shortLabel)}{' '}
               <span className='text-foreground font-mono font-semibold'>
                 {entry.formatted}
@@ -130,7 +127,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
   } else if (isTokenBased) {
     priceSummary = (
       <>
-        <span className='text-muted-foreground whitespace-nowrap'>
+        <span className='text-muted-foreground'>
           {t('Input')}{' '}
           <span className='text-foreground font-mono font-semibold'>
             {formatPrice(
@@ -144,7 +141,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
             )}
           </span>
         </span>
-        <span className='text-muted-foreground whitespace-nowrap'>
+        <span className='text-muted-foreground'>
           {t('Output')}{' '}
           <span className='text-foreground font-mono font-semibold'>
             {formatPrice(
@@ -159,7 +156,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
           </span>
         </span>
         {hasCachedPrice && (
-          <span className='text-muted-foreground whitespace-nowrap'>
+          <span className='text-muted-foreground'>
             {t('Cached')}{' '}
             <span className='text-foreground font-mono font-semibold'>
               {formatPrice(
@@ -178,7 +175,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
     )
   } else {
     priceSummary = (
-      <span className='text-muted-foreground whitespace-nowrap'>
+      <span className='text-muted-foreground'>
         <span className='text-foreground font-mono font-semibold'>
           {formatRequestPrice(
             props.model,
@@ -202,7 +199,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
     >
       {/* Header: icon + name + price + actions */}
       <div className='flex items-start justify-between gap-2.5 sm:gap-3'>
-        <div className='flex min-w-0 items-start gap-2.5 sm:gap-3'>
+        <div className='flex min-w-0 flex-1 items-start gap-2.5 sm:gap-3'>
           <div className='bg-muted/40 flex size-9 shrink-0 items-center justify-center rounded-lg sm:size-10 sm:rounded-xl'>
             {modelIcon || (
               <span className='text-muted-foreground text-sm font-bold'>
@@ -210,8 +207,8 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
               </span>
             )}
           </div>
-          <div className='min-w-0'>
-            <h3 className='text-foreground truncate font-mono text-[15px] leading-tight font-bold'>
+          <div className='min-w-0 flex-1 wrap-anywhere'>
+            <h3 className='text-foreground font-mono text-[15px] leading-tight font-bold'>
               {props.model.model_name}
             </h3>
             <div className='mt-0.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm sm:mt-1 sm:gap-x-3'>

@@ -3,7 +3,7 @@ import { join } from 'node:path'
 
 import { test, expect, type Page } from '@playwright/test'
 
-async function openKeyDrawer(page: Page) {
+async function openKeys(page: Page) {
   const now = Math.floor(Date.now() / 1000)
   const key = {
     id: 2,
@@ -105,18 +105,54 @@ async function openKeyDrawer(page: Page) {
     return route.fulfill({ json: { success: true, data: [] } })
   })
   await page.goto('/keys')
-  await page.getByRole('button', { name: 'Edit', exact: true }).first().click()
+  return writes
+}
+
+async function editKey(page: Page) {
+  await page.getByRole('button', { name: 'Edit', exact: true }).click()
   await expect(
     page.getByRole('textbox', { name: 'Name', exact: true })
   ).toHaveValue('native key')
-  return writes
 }
+
+test('keeps sidebar, table selection and row editing after narrowing the console', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await openKeys(page)
+  const sidebar = page.locator('[data-slot="sidebar"]')
+  const keyRow = page.getByRole('row', { name: /native key/ })
+  await expect(sidebar).toBeVisible()
+  await expect(keyRow).toBeVisible()
+
+  await page.setViewportSize({ width: 560, height: 800 })
+  await expect(sidebar).toBeVisible()
+  const toggle = page
+    .locator('header')
+    .getByRole('button', { name: 'Toggle Sidebar' })
+  await toggle.click()
+  await expect(sidebar).toHaveAttribute('data-state', 'collapsed')
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  await toggle.press('Enter')
+  await expect(sidebar).toHaveAttribute('data-state', 'expanded')
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+
+  await keyRow.getByRole('checkbox', { name: 'Select row' }).check()
+  const clearSelection = page.getByRole('button', { name: 'Clear selection' })
+  await expect(clearSelection).toBeVisible()
+  await clearSelection.click()
+  await expect(
+    keyRow.getByRole('checkbox', { name: 'Select row' })
+  ).not.toBeChecked()
+  await editKey(page)
+})
 
 for (const edit of ['name', 'quota', 'unlimited'] as const) {
   test(`key drawer ${edit} edit sends the intended quota mutation scope`, async ({
     page,
   }) => {
-    const writes = await openKeyDrawer(page)
+    const writes = await openKeys(page)
+    await editKey(page)
     if (edit === 'name') {
       await page
         .getByRole('textbox', { name: 'Name', exact: true })

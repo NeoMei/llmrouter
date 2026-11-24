@@ -138,22 +138,8 @@ export function DocsPage() {
           <p className='text-muted-foreground'>{content.introduction}</p>
         </div>
 
-        <nav aria-label={labels.navigation} className='border-b lg:hidden'>
-          <div className='flex gap-1 overflow-x-auto py-3'>
-            {content.sections.map((section) => (
-              <a
-                key={section.id}
-                href={`#${section.id}`}
-                className='text-muted-foreground hover:text-foreground shrink-0 rounded-md px-2 py-1 text-sm transition-colors'
-              >
-                {section.title}
-              </a>
-            ))}
-          </div>
-        </nav>
-
-        <div className='mt-6 grid gap-8 lg:grid-cols-[12rem_minmax(0,1fr)]'>
-          <nav aria-label={labels.navigation} className='hidden lg:block'>
+        <div className='mt-6 grid grid-cols-[12rem_minmax(0,1fr)] gap-8'>
+          <nav aria-label={labels.navigation}>
             <div className='sticky top-20 space-y-1'>
               {content.sections.map((section) => (
                 <a

@@ -17,14 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  Layers3,
-  Loader2,
-  Pencil,
-  Plus,
-  RefreshCcw,
-  Trash2,
-} from 'lucide-react'
+import { Layers3, Loader2, Plus, RefreshCcw } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -38,21 +31,12 @@ import { TableId } from '@/components/table-id'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
-import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
 } from '@/components/ui/empty'
-import { useIsMobile } from '@/hooks/use-mobile'
-import { cn } from '@/lib/utils'
 
 import { deletePrefillGroup, getPrefillGroups } from '../../api'
 import { prefillGroupsQueryKeys } from '../../lib'
@@ -78,7 +62,6 @@ export function PrefillGroupManagementDialog({
 }: PrefillGroupManagementDialogProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const isMobile = useIsMobile()
   const [deleteState, setDeleteState] = useState<{
     open: boolean
     group: PrefillGroup | null
@@ -186,95 +169,6 @@ export function PrefillGroupManagementDialog({
           {t('Prefill groups help you keep complex configurations in sync.')}
         </EmptyDescription>
       </Empty>
-    )
-  } else if (isMobile) {
-    groupsContent = (
-      <div className='space-y-3'>
-        {normalizedGroups.map(({ group, meta, parsedItems }) => (
-          <Card key={group.id} className='border-border/60'>
-            <CardHeader className='flex flex-row items-start justify-between gap-4'>
-              <div className='space-y-2'>
-                <CardTitle className='flex flex-wrap items-center gap-2'>
-                  {group.name}
-                  <StatusBadge variant={meta.badge} size='sm' copyable={false}>
-                    {meta.label}
-                    <span className='text-muted-foreground/30'>·</span>
-                    <span className='text-muted-foreground font-mono'>
-                      #{group.id}
-                    </span>
-                  </StatusBadge>
-                </CardTitle>
-                {group.description ? (
-                  <CardDescription className='line-clamp-2'>
-                    {group.description}
-                  </CardDescription>
-                ) : (
-                  <CardDescription className='text-muted-foreground italic'>
-                    No description provided
-                  </CardDescription>
-                )}
-              </div>
-
-              <div className='flex items-center gap-2'>
-                <Button
-                  size='icon'
-                  variant='outline'
-                  onClick={() => onEditGroup(group)}
-                >
-                  <Pencil className='h-4 w-4' />
-                  <span className='sr-only'>{t('Edit group')}</span>
-                </Button>
-                <Button
-                  size='icon'
-                  variant='ghost'
-                  className='text-destructive hover:text-destructive'
-                  onClick={() => handleDeleteClick(group)}
-                >
-                  <Trash2 className='h-4 w-4' />
-                  <span className='sr-only'>{t('Delete group')}</span>
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent className='space-y-3'>
-              <div className='text-muted-foreground flex flex-wrap items-center gap-2 text-xs font-medium tracking-wide uppercase'>
-                <span>Items</span>
-                <StatusBadge
-                  label={`${parsedItems.length} item${parsedItems.length === 1 ? '' : 's'}`}
-                  variant='neutral'
-                  size='sm'
-                  copyable={false}
-                />
-              </div>
-              {parsedItems.length > 0 ? (
-                <div className='flex flex-wrap gap-2'>
-                  {parsedItems.slice(0, 6).map((item) => (
-                    <StatusBadge
-                      key={item}
-                      label={item}
-                      autoColor={item}
-                      size='sm'
-                    />
-                  ))}
-                  {parsedItems.length > 6 && (
-                    <StatusBadge
-                      label={`+${parsedItems.length - 6} more`}
-                      variant='neutral'
-                      size='sm'
-                      copyable={false}
-                    />
-                  )}
-                </div>
-              ) : (
-                <p className='text-muted-foreground text-sm'>
-                  {group.type === 'endpoint'
-                    ? 'No endpoint mappings configured.'
-                    : 'No items configured yet.'}
-                </p>
-              )}
-            </CardContent>
-          </Card>
-        ))}
-      </div>
     )
   } else {
     groupsContent = (
@@ -394,17 +288,11 @@ export function PrefillGroupManagementDialog({
         description={t(
           'Create reusable bundles of models, tags, endpoints, and user groups to speed up configuration elsewhere in the console.'
         )}
-        contentClassName={cn(
-          'w-[calc(100vw-2rem)] sm:max-w-[52rem]',
-          isMobile && 'max-w-none rounded-none'
-        )}
+        contentClassName='w-[calc(100vw-2rem)] sm:max-w-[52rem]'
         titleClassName='flex flex-wrap items-center gap-2 text-lg'
         descriptionClassName='text-sm leading-relaxed'
         contentHeight='auto'
-        bodyClassName={cn(
-          'space-y-3',
-          isMobile && 'pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]'
-        )}
+        bodyClassName='space-y-3'
       >
         <div className='bg-muted/30 flex flex-wrap items-center justify-between gap-3 rounded-md border p-2 text-sm'>
           <div className='flex flex-wrap items-center gap-2'>

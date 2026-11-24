@@ -91,7 +91,6 @@ export function ConfigDrawer() {
             variant='ghost'
             aria-label={t('Open theme settings')}
             aria-describedby='config-drawer-description'
-            className='max-md:hidden'
           />
         }
       >
@@ -543,7 +542,7 @@ function SidebarConfig() {
   const { t } = useTranslation()
   const { defaultVariant, variant, setVariant } = useLayout()
   return (
-    <div className='max-md:hidden'>
+    <div>
       <SectionTitle
         title={t('Sidebar')}
         showReset={defaultVariant !== variant}
@@ -583,7 +582,7 @@ function LayoutConfig() {
   const radioState = open ? 'default' : collapsible
 
   return (
-    <div className='max-md:hidden'>
+    <div>
       <SectionTitle
         title={t('Layout')}
         showReset={radioState !== 'default'}
@@ -631,7 +630,7 @@ function ContentLayoutConfig() {
   const { t } = useTranslation()
   const { defaults, customization, setContentLayout } = useThemeCustomization()
   return (
-    <div className='max-md:hidden'>
+    <div>
       <SectionTitle
         title={t('Content width')}
         showReset={customization.contentLayout !== defaults.contentLayout}

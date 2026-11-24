@@ -42,7 +42,6 @@ For commercial licensing, please contact support@quantumnous.com
 import * as React from 'react'
 
 import { PageFooterPortal } from '@/components/layout/components/page-footer'
-import { useMediaQuery } from '@/hooks'
 import { cn } from '@/lib/utils'
 
 import {
@@ -60,7 +59,6 @@ import {
 import { DataTableToolbar } from '../toolbar/toolbar'
 import { DataTableViewModeToggle } from '../toolbar/view-mode-toggle'
 import { DataTableCardGrid } from './card-grid'
-import { MobileCardList } from './mobile-card-list'
 
 /**
  * Pass-through configuration for the default {@link DataTableToolbar}.
@@ -83,7 +81,7 @@ export type DataTablePageProps<TData> = {
   columns: ColumnDef<TData, unknown>[]
 
   /**
-   * Initial loading state — renders {@link TableSkeleton} or mobile skeleton.
+   * Initial loading state — renders {@link TableSkeleton}.
    */
   isLoading?: boolean
 
@@ -93,7 +91,7 @@ export type DataTablePageProps<TData> = {
   isFetching?: boolean
 
   /**
-   * Empty-state title (used for both desktop {@link TableEmpty} and mobile fallback).
+   * Empty-state title.
    */
   emptyTitle?: string
 
@@ -103,7 +101,7 @@ export type DataTablePageProps<TData> = {
   emptyDescription?: string
 
   /**
-   * Empty-state icon override (desktop only; mobile uses default Database icon).
+   * Empty-state icon override.
    */
   emptyIcon?: React.ReactNode
 
@@ -127,41 +125,11 @@ export type DataTablePageProps<TData> = {
 
   /**
    * Bulk action bar — typically a wrapped {@link DataTableBulkActions} component.
-   * Rendered only on desktop (mobile selection is uncommon).
    */
   bulkActions?: React.ReactNode
 
-  /**
-   * Custom mobile list node — fully replaces the default {@link MobileCardList}.
-   */
-  mobile?: React.ReactNode
-
-  /**
-   * Pass-through props for the default {@link MobileCardList}.
-   * Ignored if `mobile` is provided.
-   */
-  mobileProps?: {
-    getRowKey?: (row: Row<TData>) => string | number
-    getRowClassName?: (row: Row<TData>) => string | undefined
-  }
-
-  /**
-   * Disable the mobile-specific layout entirely — always renders desktop table.
-   * Useful for pages where the table is read-only and short.
-   */
-  hideMobile?: boolean
-
-  /**
-   * Row className resolver — applied to both desktop `TableRow` and mobile card.
-   * Composes with the default `data-state="selected"` styling on desktop.
-   * The `ctx.isMobile` flag is provided so consumers can return the
-   * appropriate variant (e.g. `DISABLED_ROW_DESKTOP` vs `DISABLED_ROW_MOBILE`)
-   * without having to re-call `useMediaQuery` themselves.
-   */
-  getRowClassName?: (
-    row: Row<TData>,
-    ctx: { isMobile: boolean }
-  ) => string | undefined
+  /** Row styling shared by the table and card grid. */
+  getRowClassName?: (row: Row<TData>) => string | undefined
 
   /**
    * Custom desktop row renderer — replaces the default `<TableRow>`/`<TableCell>` mapping.
@@ -209,7 +177,7 @@ export type DataTablePageProps<TData> = {
   paginationInFooter?: boolean
 
   /**
-   * Extra content rendered between the table/mobile list and the pagination.
+   * Extra content rendered between the table or card grid and the pagination.
    * E.g. summary stats, helper text.
    */
   afterTable?: React.ReactNode
@@ -242,8 +210,7 @@ export type DataTablePageProps<TData> = {
    * pages render the table only and behave exactly as before. When enabled, a
    * {@link DataTableViewModeToggle} is injected into the default toolbar
    * (requires `toolbarProps`; ignored when a fully custom `toolbar` is used)
-   * and the view switches between the table and a card grid on desktop and
-   * mobile. Mobile card mode reuses the same card renderer in a single column.
+   * and the view switches between the table and a card grid.
    */
   enableCardView?: boolean
 
@@ -288,7 +255,7 @@ export type DataTablePageProps<TData> = {
 
 /**
  * Unified table page wrapper. Encapsulates the canonical structure used across
- * all list pages: toolbar → desktop table / mobile list → pagination, plus
+ * all list pages: toolbar → table or card grid → pagination, plus
  * loading/empty states and an opt-in bulk action bar.
  *
  * Most pages should be expressible as:
@@ -304,13 +271,10 @@ export type DataTablePageProps<TData> = {
  * />
  * ```
  *
- * For complex layouts (custom mobile, expanded rows, custom toolbar), use the
- * `toolbar` / `mobile` / `renderRow` slots instead of the `*Props` variants.
+ * For complex layouts (expanded rows, custom toolbar), use the
+ * `toolbar` / `renderRow` slots instead of the `*Props` variants.
  */
 export function DataTablePage<TData>(props: DataTablePageProps<TData>) {
-  const isMobile = useMediaQuery('(max-width: 640px)')
-  const showMobile = isMobile && !props.hideMobile
-
   const [internalViewMode, setInternalViewMode] = useDataTableViewMode({
     storageKey: props.viewModeStorageKey,
     // When card view is enabled, prefer it as the default unless the consumer
@@ -329,8 +293,7 @@ export function DataTablePage<TData>(props: DataTablePageProps<TData>) {
   ) : undefined
 
   const toolbarNode = renderToolbar(props, viewToggle)
-  const mobileNode = renderMobile(props, showMobile, cardViewActive, viewMode)
-  const desktopNode = renderDesktop(props, showMobile, cardViewActive, viewMode)
+  const tableNode = renderTableOrCards(props, cardViewActive, viewMode)
   const paginationNode = renderPagination(props)
 
   return (
@@ -344,14 +307,11 @@ export function DataTablePage<TData>(props: DataTablePageProps<TData>) {
         )}
       >
         {toolbarNode}
-        {mobileNode}
-        {desktopNode}
+        {tableNode}
         {props.afterTable}
       </div>
 
-      {/* Bulk actions are typically a fixed-position toolbar; let the consumer
-          handle its own visibility, we just gate it to non-mobile. */}
-      {!showMobile && props.bulkActions}
+      {props.bulkActions}
 
       {paginationNode}
     </>
@@ -397,96 +357,11 @@ function renderPagination<TData>(
   )
 }
 
-function renderMobile<TData>(
+function renderTableOrCards<TData>(
   props: DataTablePageProps<TData>,
-  showMobile: boolean,
   cardViewActive: boolean,
   viewMode: DataTableViewMode
 ): React.ReactNode {
-  if (!showMobile) {
-    return null
-  }
-
-  const isFetchingOnly = props.isFetching && !props.isLoading
-  const ownGetRowClassName = props.getRowClassName
-  const mobileGetRowClassName =
-    props.mobileProps?.getRowClassName ??
-    (ownGetRowClassName
-      ? (row: Row<TData>) => ownGetRowClassName(row, { isMobile: true })
-      : undefined)
-
-  let mobileContent = props.mobile
-  if (mobileContent === undefined) {
-    if (cardViewActive && viewMode === DATA_TABLE_VIEW_MODES.TABLE) {
-      mobileContent = (
-        <DataTableView
-          table={props.table}
-          isLoading={props.isLoading}
-          emptyTitle={props.emptyTitle}
-          emptyDescription={props.emptyDescription}
-          emptyIcon={props.emptyIcon}
-          emptyAction={props.emptyAction}
-          skeletonKeyPrefix={props.skeletonKeyPrefix}
-          renderRow={props.renderRow}
-          applyHeaderSize={props.applyHeaderSize}
-          tableHeaderClassName={cn(
-            '[background-color:var(--table-header)]',
-            props.tableHeaderClassName
-          )}
-          getColumnClassName={props.getColumnClassName}
-          pinnedColumns={props.pinnedColumns}
-          containerClassName={cn(
-            'transition-opacity duration-150',
-            isFetchingOnly && 'pointer-events-none opacity-60',
-            props.tableClassName
-          )}
-          getRowClassName={(row) =>
-            props.getRowClassName?.(row, { isMobile: false })
-          }
-        />
-      )
-    } else if (cardViewActive) {
-      mobileContent = (
-        <DataTableCardGrid
-          table={props.table}
-          isLoading={props.isLoading}
-          emptyTitle={props.emptyTitle}
-          emptyDescription={props.emptyDescription}
-          emptyIcon={props.emptyIcon}
-          renderCard={props.renderCard}
-          gridClassName={props.cardGridClassName ?? 'grid grid-cols-1 gap-3'}
-          skeletonKeyPrefix={props.skeletonKeyPrefix}
-          getRowKey={props.mobileProps?.getRowKey}
-          getRowClassName={mobileGetRowClassName}
-        />
-      )
-    } else {
-      mobileContent = (
-        <MobileCardList
-          table={props.table}
-          isLoading={props.isLoading}
-          emptyTitle={props.emptyTitle}
-          emptyDescription={props.emptyDescription}
-          getRowKey={props.mobileProps?.getRowKey}
-          getRowClassName={mobileGetRowClassName}
-        />
-      )
-    }
-  }
-
-  return <div className='min-h-0 flex-1 overflow-y-auto'>{mobileContent}</div>
-}
-
-function renderDesktop<TData>(
-  props: DataTablePageProps<TData>,
-  showMobile: boolean,
-  cardViewActive: boolean,
-  viewMode: DataTableViewMode
-): React.ReactNode {
-  if (showMobile) {
-    return null
-  }
-
   const isFetchingOnly = props.isFetching && !props.isLoading
   const fixedHeight = props.fixedHeight !== false
 
@@ -508,9 +383,7 @@ function renderDesktop<TData>(
           renderCard={props.renderCard}
           gridClassName={props.cardGridClassName}
           skeletonKeyPrefix={props.skeletonKeyPrefix}
-          getRowClassName={(row) =>
-            props.getRowClassName?.(row, { isMobile: false })
-          }
+          getRowClassName={props.getRowClassName}
         />
       </div>
     )
@@ -541,9 +414,7 @@ function renderDesktop<TData>(
         isFetchingOnly && 'pointer-events-none opacity-60',
         props.tableClassName
       )}
-      getRowClassName={(row) =>
-        props.getRowClassName?.(row, { isMobile: false })
-      }
+      getRowClassName={props.getRowClassName}
     />
   )
 }

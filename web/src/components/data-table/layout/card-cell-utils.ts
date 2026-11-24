@@ -21,7 +21,7 @@ import type { ReactNode } from 'react'
 
 /**
  * Shared cell helpers for the column-meta-driven card content used by both the
- * mobile list and the desktop card grid. Kept separate from the card content
+ * card grid. Kept separate from the card content
  * component so the module exports only non-component utilities.
  */
 

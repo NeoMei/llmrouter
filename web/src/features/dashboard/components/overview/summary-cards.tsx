@@ -288,7 +288,6 @@ export function SummaryCards() {
                   sparkline={it.sparkline}
                   sparklineVariant={it.sparklineVariant}
                   loading={loading}
-                  compactMobile
                 />
               </StaggerItem>
             ))}

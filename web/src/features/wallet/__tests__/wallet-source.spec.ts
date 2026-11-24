@@ -450,9 +450,9 @@ test('Chinese cash wallet shows the in-site recharge card and keeps native actio
   }
   await expectNoUniHubLinks(page)
   expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= window.innerWidth
-    )
+    await page
+      .locator('[data-slot="sidebar-inset"]')
+      .evaluate((content) => content.scrollWidth <= content.clientWidth)
   ).toBe(true)
   expect(tracked.writes).toEqual([])
 })

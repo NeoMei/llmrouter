@@ -60,26 +60,18 @@ function ChatMenuItem({
   active,
   loading,
   onOpen,
-  onNavigate,
 }: {
   preset: ChatPreset
   active: boolean
   loading: boolean
   onOpen: (preset: ChatPreset) => void | Promise<void>
-  onNavigate: () => void
 }) {
   if (preset.type === 'web') {
     return (
       <SidebarMenuSubItem>
         <SidebarMenuSubButton
           isActive={active}
-          render={
-            <Link
-              to='/chat/$chatId'
-              params={{ chatId: preset.id }}
-              onClick={onNavigate}
-            />
-          }
+          render={<Link to='/chat/$chatId' params={{ chatId: preset.id }} />}
         >
           <span className='min-w-0 flex-1 truncate whitespace-nowrap'>
             {preset.name}
@@ -157,7 +149,7 @@ function DropdownPresetItem({
 export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
   const { t } = useTranslation()
   const { chatPresets, serverAddress } = useChatPresets()
-  const { state, isMobile, setOpenMobile } = useSidebar()
+  const { state } = useSidebar()
   const href = useLocation({ select: (location) => location.href })
   const [loadingPresetId, setLoadingPresetId] = useState<string | null>(null)
   const loadingPresetIdRef = useRef<string | null>(null)
@@ -213,9 +205,8 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
       if (typeof window === 'undefined') return
 
       window.open(url, '_blank', 'noopener')
-      setOpenMobile(false)
     },
-    [serverAddress, setOpenMobile, t]
+    [serverAddress, t]
   )
 
   const normalizedHref = normalizeHref(href)
@@ -225,8 +216,8 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
     return null
   }
 
-  // Collapsed state on non-mobile - render dropdown menu
-  if (state === 'collapsed' && !isMobile) {
+  // Collapsed state - render dropdown menu
+  if (state === 'collapsed') {
     return (
       <SidebarMenuItem>
         <DropdownMenu>
@@ -276,7 +267,6 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
               active={normalizedHref === `/chat/${preset.id}`}
               loading={loadingPresetId === preset.id}
               onOpen={handleOpenExternal}
-              onNavigate={() => setOpenMobile(false)}
             />
           ))}
         </SidebarMenuSub>

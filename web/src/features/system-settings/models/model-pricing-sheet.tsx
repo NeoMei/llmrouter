@@ -29,7 +29,6 @@ import {
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 
-import { sideDrawerContentClassName } from '@/components/drawer-layout'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -53,13 +52,6 @@ import {
   InputGroupAddon,
   InputGroupInput,
 } from '@/components/ui/input-group'
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from '@/components/ui/sheet'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 
@@ -85,57 +77,16 @@ import { TieredPricingEditor } from './tiered-pricing-editor'
 
 export type { ModelRatioData } from './model-pricing-core'
 
-type ModelPricingSheetProps = {
-  open: boolean
-  onOpenChange: (open: boolean) => void
+type ModelPricingEditorPanelProps = {
+  className?: string
   editData?: ModelRatioData | null
   onSave?: () => void | Promise<void>
   isSaving?: boolean
 }
 
-type ModelPricingEditorPanelProps = Omit<
-  ModelPricingSheetProps,
-  'open' | 'onOpenChange'
-> & {
-  className?: string
-}
-
 export type ModelPricingEditorPanelHandle = {
   commitDraft: () => Promise<ModelRatioData | null>
 }
-
-export const ModelPricingSheet = forwardRef<
-  ModelPricingEditorPanelHandle,
-  ModelPricingSheetProps
->(function ModelPricingSheet(
-  { open, onOpenChange, editData, onSave, isSaving },
-  ref
-) {
-  const { t } = useTranslation()
-  const title = editData ? t('Edit model pricing') : t('Add model pricing')
-  const description = editData?.name || t('New model')
-
-  return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent
-        side='right'
-        className={sideDrawerContentClassName('sm:max-w-2xl')}
-      >
-        <SheetHeader className='sr-only'>
-          <SheetTitle>{title}</SheetTitle>
-          <SheetDescription>{description}</SheetDescription>
-        </SheetHeader>
-        <ModelPricingEditorPanel
-          ref={ref}
-          editData={editData}
-          onSave={onSave}
-          isSaving={isSaving}
-          className='h-full rounded-none border-0'
-        />
-      </SheetContent>
-    </Sheet>
-  )
-})
 
 export const ModelPricingEditorPanel = forwardRef<
   ModelPricingEditorPanelHandle,

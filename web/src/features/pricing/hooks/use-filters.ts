@@ -176,16 +176,6 @@ export function useFilters(models: PricingModel[]) {
     [vendorFilter, groupFilter, quotaTypeFilter, endpointTypeFilter, tagFilter]
   )
 
-  const activeFilterCount = useMemo(
-    () =>
-      (vendorFilter !== FILTER_ALL ? 1 : 0) +
-      (groupFilter !== FILTER_ALL ? 1 : 0) +
-      (quotaTypeFilter !== QUOTA_TYPES.ALL ? 1 : 0) +
-      (endpointTypeFilter !== ENDPOINT_TYPES.ALL ? 1 : 0) +
-      (tagFilter !== FILTER_ALL ? 1 : 0),
-    [vendorFilter, groupFilter, quotaTypeFilter, endpointTypeFilter, tagFilter]
-  )
-
   const clearFilters = useCallback(() => {
     updateFilters({
       vendor: undefined,
@@ -223,7 +213,6 @@ export function useFilters(models: PricingModel[]) {
     setShowRechargePrice,
     filteredModels,
     hasActiveFilters,
-    activeFilterCount,
     availableTags,
     clearFilters,
     clearSearch,

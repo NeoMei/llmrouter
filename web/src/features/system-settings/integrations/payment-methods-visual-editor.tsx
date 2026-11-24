@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Lightbulb, Pencil, Plus, Search, Trash2 } from 'lucide-react'
+import { Lightbulb, Plus, Search } from 'lucide-react'
 import { useState, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -306,7 +306,7 @@ export function PaymentMethodsVisualEditor({
         <div className='rounded-md border'>
           {/* Desktop table view */}
           <StaticDataTable
-            className='hidden rounded-none border-0 md:block'
+            className='rounded-none border-0'
             data={filteredMethods}
             getRowKey={(method, index) => `${method.type}-${index}`}
             columns={[
@@ -376,90 +376,6 @@ export function PaymentMethodsVisualEditor({
               },
             ]}
           />
-
-          {/* Mobile card view */}
-          <div className='divide-y md:hidden'>
-            {filteredMethods.map((method) => {
-              const iconName = getEffectiveIconName(method)
-              const methodKey = [
-                method.type,
-                method.name,
-                method.icon,
-                method.min_topup,
-                method.color,
-              ]
-                .filter(Boolean)
-                .join('-')
-
-              return (
-                <div key={methodKey} className='p-4'>
-                  <div className='mb-3 flex items-start justify-between'>
-                    <div className='flex-1'>
-                      <div className='mb-1 font-medium'>{method.name}</div>
-                      <code className='bg-muted rounded px-1.5 py-0.5 text-xs'>
-                        {method.type}
-                      </code>
-                    </div>
-                    <div className='flex gap-1'>
-                      <Button
-                        type='button'
-                        variant='ghost'
-                        size='sm'
-                        onClick={(e) => {
-                          e.preventDefault()
-                          e.stopPropagation()
-                          handleEdit(method)
-                        }}
-                      >
-                        <Pencil className='h-4 w-4' />
-                      </Button>
-                      <Button
-                        type='button'
-                        variant='ghost'
-                        size='sm'
-                        onClick={(e) => {
-                          e.preventDefault()
-                          e.stopPropagation()
-                          handleDelete(method)
-                        }}
-                      >
-                        <Trash2 className='h-4 w-4' />
-                      </Button>
-                    </div>
-                  </div>
-                  <div className='space-y-2 text-sm'>
-                    <div className='flex items-center gap-2'>
-                      <span className='text-muted-foreground min-w-20'>
-                        {t('Icon')}
-                      </span>
-                      {iconName ? (
-                        <div className='flex min-w-0 items-center gap-2'>
-                          <ReactIconByName
-                            name={iconName}
-                            className='text-muted-foreground size-5 shrink-0'
-                            title={iconName}
-                          />
-                          <span className='text-muted-foreground truncate font-mono text-xs'>
-                            {iconName}
-                          </span>
-                        </div>
-                      ) : (
-                        <span className='text-muted-foreground text-xs'>—</span>
-                      )}
-                    </div>
-                    {method.min_topup && (
-                      <div className='flex items-center gap-2'>
-                        <span className='text-muted-foreground min-w-20'>
-                          {t('Min Top-up:')}
-                        </span>
-                        <span className='font-mono'>{method.min_topup}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
         </div>
       )}
 

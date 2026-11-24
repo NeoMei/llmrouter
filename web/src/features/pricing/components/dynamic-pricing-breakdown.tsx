@@ -259,72 +259,8 @@ export function DynamicPricingBreakdown({
           >
             {t('Tiered price table')}
           </div>
-          <div className='space-y-1.5 sm:hidden'>
-            {tiers.map((tier, i) => {
-              const condSummary = formatConditionSummary(tier.conditions, t)
-              const isMatched =
-                matchedTierLabel != null &&
-                matchedTierLabel !== '' &&
-                tier.label === matchedTierLabel
-              return (
-                <div
-                  key={`tier-mobile-${i}`}
-                  className={cn(
-                    'rounded-md border p-2',
-                    isMatched && 'border-emerald-500/40 bg-emerald-500/10'
-                  )}
-                >
-                  <div className='mb-1.5 flex flex-wrap items-center gap-1.5'>
-                    <Badge
-                      variant='secondary'
-                      className='bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300'
-                    >
-                      {tier.label || t('Default')}
-                    </Badge>
-                    {isMatched && (
-                      <Badge
-                        variant='secondary'
-                        className='bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300'
-                      >
-                        {t('Matched')}
-                      </Badge>
-                    )}
-                  </div>
-                  {condSummary && (
-                    <div className='text-muted-foreground mb-1.5 text-xs'>
-                      {condSummary}
-                    </div>
-                  )}
-                  <div className='grid grid-cols-2 gap-x-3 gap-y-1.5'>
-                    {visiblePriceFields.map((v) => {
-                      const value = Number(
-                        tier[v.field as string as keyof ParsedTier] || 0
-                      )
-                      return (
-                        <div key={v.field} className='min-w-0'>
-                          <div className='text-muted-foreground truncate text-[10px] font-medium tracking-wider uppercase'>
-                            {t(v.shortLabel)}
-                          </div>
-                          <div
-                            className={cn(
-                              'truncate font-mono',
-                              compact ? 'text-xs' : 'text-sm font-semibold'
-                            )}
-                          >
-                            {value > 0
-                              ? `${symbol}${(value * rate).toFixed(4)}`
-                              : '-'}
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
           <StaticDataTable
-            className='hidden rounded-none border-0 sm:block'
+            className='rounded-none border-0'
             tableClassName={
               compact
                 ? '[&_td]:text-xs [&_td_*]:text-xs [&_th]:text-xs [&_th_*]:text-xs'

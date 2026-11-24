@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"gorm.io/gorm"
 )
 
@@ -75,25 +76,31 @@ var defaultVendorIcons = map[string]string{
 
 // initDefaultVendorMapping 简化的默认供应商映射
 func initDefaultVendorMapping(metaMap map[string]*Model, vendorMap map[int]*Vendor, enableAbilities []AbilityWithChannel) {
+	arkModels := make(map[string]bool)
+	for _, ability := range enableAbilities {
+		if ability.Enabled && ability.ChannelType == constant.ChannelTypeVolcEngine && ability.ChannelStatus == common.ChannelStatusEnabled {
+			arkModels[ability.Model] = true
+		}
+	}
 	for _, ability := range enableAbilities {
 		modelName := ability.Model
 		if _, exists := metaMap[modelName]; exists {
 			continue
 		}
 
-		// 匹配供应商
+		persist := arkModels[modelName]
 		vendorID := 0
+		icon := ""
 		modelLower := strings.ToLower(modelName)
 		for pattern, vendorName := range defaultVendorRules {
 			if strings.Contains(modelLower, pattern) {
-				vendorID = getOrCreateVendor(vendorName, vendorMap)
+				vendorID = pricingVendorID(vendorName, vendorMap, persist)
+				icon = getDefaultVendorIcon(vendorName)
+				if vendorID != 0 {
+					icon = vendorMap[vendorID].Icon
+				}
 				break
 			}
-		}
-
-		icon := ""
-		if vendorID != 0 {
-			icon = vendorMap[vendorID].Icon
 		}
 
 		meta := &Model{
@@ -102,6 +109,12 @@ func initDefaultVendorMapping(metaMap map[string]*Model, vendorMap map[int]*Vend
 			Status:    1,
 			NameRule:  NameRuleExact,
 			Icon:      icon,
+		}
+		// Pricing and catalog reads can synthesize legacy metadata in memory.
+		// Only active Ark abilities opt into persistent discovery.
+		if !persist {
+			metaMap[modelName] = meta
+			continue
 		}
 		var existing Model
 		if err := DB.Where("model_name = ?", modelName).First(&existing).Error; err == nil {
@@ -119,13 +132,15 @@ func initDefaultVendorMapping(metaMap map[string]*Model, vendorMap map[int]*Vend
 	}
 }
 
-// 查找或创建供应商
-func getOrCreateVendor(vendorName string, vendorMap map[int]*Vendor) int {
+func pricingVendorID(vendorName string, vendorMap map[int]*Vendor, persist bool) int {
 	// 查找现有供应商
 	for id, vendor := range vendorMap {
 		if vendor.Name == vendorName {
 			return id
 		}
+	}
+	if !persist {
+		return 0
 	}
 
 	// 创建新供应商

@@ -314,3 +314,23 @@ func TestArkModelMetadataPersistsSupplierAndModalities(t *testing.T) {
 		assert.Equal(t, "Doubao.Color", item.Icon)
 	}
 }
+
+func TestPricingFallbackLeavesUncoveredNonArkMetadataReadOnly(t *testing.T) {
+	resetPricingEndpointTestTables(t)
+	insertPricingEndpointChannel(t, 146, constant.ChannelTypeOpenAI, dto.ChannelOtherSettings{})
+	insertPricingEndpointChannel(t, 147, constant.ChannelTypeVolcEngine, dto.ChannelOtherSettings{})
+	require.NoError(t, DB.Model(&Channel{}).Where("id = ?", 147).Update("status", common.ChannelStatusManuallyDisabled).Error)
+	insertPricingEndpointAbility(t, 146, "qwen-legacy-uncovered")
+	insertPricingEndpointAbility(t, 146, "doubao-seedream-on-other-channel")
+	insertPricingEndpointAbility(t, 147, "doubao-seedream-on-disabled-channel")
+
+	byModel := pricingEndpointTypesByModel(t)
+	require.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAI}, byModel["qwen-legacy-uncovered"])
+	require.Contains(t, byModel, "doubao-seedream-on-other-channel")
+
+	var models, vendors int64
+	require.NoError(t, DB.Model(&Model{}).Count(&models).Error)
+	require.NoError(t, DB.Model(&Vendor{}).Count(&vendors).Error)
+	assert.Zero(t, models)
+	assert.Zero(t, vendors)
+}

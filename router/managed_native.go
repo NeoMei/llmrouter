@@ -193,7 +193,7 @@ func registerManagedNativeOperation(r *gin.Engine, adapter *platformbilling.Adap
 		}
 		s, err := adapter.AdmitNative(c.Request.Context(), credential, c.GetHeader("X-UniHub-Task-ID"), c.GetHeader("Idempotency-Key"), operation, name, admissionBody)
 		if err != nil {
-			if writeProductAdmissionRefusal(c, err) {
+			if middleware.WriteManagedModelPolicyRefusal(c, err) || writeProductAdmissionRefusal(c, err) {
 				return
 			}
 			status := platformbilling.HTTPStatus(err)

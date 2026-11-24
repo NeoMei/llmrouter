@@ -56,6 +56,11 @@ export default defineConfig(({ envMode }) => {
       entry: {
         index: './src/main.tsx',
       },
+      define: {
+        'import.meta.env.VITE_REACT_APP_VERSION': JSON.stringify(
+          env.rawPublicVars.VITE_REACT_APP_VERSION ?? ''
+        ),
+      },
     },
     resolve: {
       alias: {

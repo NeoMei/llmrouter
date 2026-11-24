@@ -26,6 +26,7 @@ var (
 	ErrDuplicate                = errors.New("platform logical call already exists; never resend upstream")
 	ErrPending                  = errors.New("platform billing pending reconciliation")
 	ErrProductMembershipExpired = errors.New("product_membership_expired")
+	ErrManagedModelNotAllowed   = errors.New("managed_model_not_allowed")
 	ErrNativeCreditsRequired    = errors.New("platform_model_credits_required")
 )
 
@@ -230,12 +231,20 @@ func (c *client) do(ctx context.Context, method, path, key string, body, out any
 					if path == "/internal/v1/model-credentials/verify" && problem["error"] == "product_membership_expired" {
 						return ErrProductMembershipExpired
 					}
+					if path == "/internal/v1/model-credentials/verify" && input["managed_operation"] != "" &&
+						problem["error"] == "managed_model_not_allowed" {
+						return ErrManagedModelNotAllowed
+					}
 				case NativeReserveRequest:
-					if path == "/internal/v1/calls/native-reserve" && input.CreditScope == ProductCreditScope &&
-						problem["error"] == "product_membership_expired_no_hold" {
-						// UniHub emits this after checking the original call
-						// under its account lock and before creating a hold.
-						remote.reserveRejected, remote.reserveCode = true, "product_membership_expired"
+					if path == "/internal/v1/calls/native-reserve" && input.CreditScope == ProductCreditScope {
+						// UniHub checks the original call under its account
+						// lock, then rejects new calls before creating a hold.
+						switch problem["error"] {
+						case "product_membership_expired_no_hold":
+							remote.reserveRejected, remote.reserveCode = true, "product_membership_expired"
+						case "managed_model_not_allowed":
+							remote.reserveRejected, remote.reserveCode = true, "managed_model_not_allowed"
+						}
 					}
 				}
 			}
@@ -328,7 +337,7 @@ func reserveBound(rate Rate, input, output int) (string, error) {
 
 // HTTPStatus exposes only bounded classifications, never service bodies/secrets.
 func HTTPStatus(err error) int {
-	if errors.Is(err, ErrProductMembershipExpired) {
+	if errors.Is(err, ErrProductMembershipExpired) || errors.Is(err, ErrManagedModelNotAllowed) {
 		return http.StatusForbidden
 	}
 	if errors.Is(err, ErrNativeCreditsRequired) {

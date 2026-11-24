@@ -150,6 +150,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if newAPIError != nil {
 			common.SetContextKey(c, constant.ContextKeyRelayFailed, true)
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
+			if middleware.WriteManagedModelPolicyRefusal(c, newAPIError.Err) {
+				return
+			}
 			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
 			// A non-streaming success body was already delivered before the
 			// settlement failed. Its reservation is held for reconciliation;
@@ -241,6 +244,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	routeErr := resolveClientModelRoute(c, relayInfo, tokens)
 	recordRouteAdmissionDecision(GetRequestId(c), relayInfo)
 	if routeErr != nil {
+		var noSupply *modelcatalog.NoEligibleSupplyError
+		if errors.As(routeErr.Err, &noSupply) && middleware.WriteSuperWagieChatRouteUnavailable(c, relayInfo.PlatformBilling) {
+			common.SetContextKey(c, constant.ContextKeyRelayFailed, true)
+			return
+		}
 		newAPIError = routeErr
 		return
 	}
@@ -1527,10 +1535,12 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 
 	relayInfo.PublicModelName = eligible[0].PublicID
 	relayInfo.RouteCandidates = make([]relaycommon.RouteCandidate, 0, len(eligible))
+	channelLookupFailed := false
 	for i := range eligible {
 		if relayInfo.PlatformBilling.ProductCredit() {
 			channel, err := model.GetChannelById(eligible[i].ChannelID, true)
 			if err != nil || channel == nil || channel.Status != common.ChannelStatusEnabled || !platformbilling.ProductCreditChannelSupported(relayInfo.PlatformBilling.WireOperation().ID, channel.Type) {
+				channelLookupFailed = channelLookupFailed || err != nil && !errors.Is(err, gorm.ErrRecordNotFound)
 				relayInfo.RejectedRouteCandidates = append(relayInfo.RejectedRouteCandidates, rejectedRouteCandidate(&eligible[i], "usage_evidence_unavailable"))
 				continue
 			}
@@ -1543,8 +1553,12 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 		relayInfo.RouteCandidates = append(relayInfo.RouteCandidates, candidate)
 	}
 	if len(relayInfo.RouteCandidates) == 0 {
+		err := fmt.Errorf("model %s has no route target supporting request format %s", relayInfo.OriginModelName, relayInfo.RelayFormat)
+		if !channelLookupFailed {
+			err = &modelcatalog.NoEligibleSupplyError{Message: err.Error()}
+		}
 		return types.NewErrorWithStatusCode(
-			fmt.Errorf("model %s has no route target supporting request format %s", relayInfo.OriginModelName, relayInfo.RelayFormat),
+			err,
 			types.ErrorCodeNoCapableChannel,
 			http.StatusBadRequest,
 			types.ErrOptionWithSkipRetry(),

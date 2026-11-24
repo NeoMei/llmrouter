@@ -1,6 +1,7 @@
 package router
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -193,6 +194,29 @@ func TestProductDeepSeekChatCertifiedSettlement(t *testing.T) {
 	require.NoError(t, err)
 	adapter, err := platformbilling.New(db, config)
 	require.NoError(t, err)
+	discovery := platformbilling.Claims{OriginProductID: product, InstanceID: "fixture", ActorID: "actor", AccountID: "team"}
+	projected, err := buildProviderCatalog(context.Background(), adapter, discovery, true)
+	require.NoError(t, err)
+	require.NotEmpty(t, projected.Models)
+	item := projected.Models[0]
+	require.Equal(t, public, item.ID)
+	require.Len(t, item.CapabilityMetadata.Operations, 1)
+	require.True(t, item.CapabilityMetadata.Operations[0].Executable)
+	require.NotNil(t, item.CapabilityMetadata.Operations[0].PublicTariff)
+	assert.EqualValues(t, 4096, item.Context)
+	assert.EqualValues(t, 100, item.MaxOutput)
+
+	require.NoError(t, db.Model(&model.ClientModelRoute{}).Where("id = ?", 1).Update("metadata",
+		`{"operations":["chat.completions.create"],"context_window":2048,"max_output_tokens":500}`).Error)
+	capped, err := buildProviderCatalog(context.Background(), adapter, discovery, true)
+	require.NoError(t, err)
+	require.NotEmpty(t, capped.Models)
+	require.Equal(t, public, capped.Models[0].ID)
+	assert.EqualValues(t, 2048, capped.Models[0].Context)
+	assert.EqualValues(t, 100, capped.Models[0].MaxOutput)
+	require.NoError(t, db.Model(&model.ClientModelRoute{}).Where("id = ?", 1).Update("metadata",
+		`{"operations":["chat.completions.create"]}`).Error)
+
 	r := gin.New()
 	SetManagedKeyDispatch(r, adapter)
 	SetRelayRouter(r)

@@ -18,6 +18,12 @@ import (
 
 var ErrAuthorizerRequired = errors.New("model catalog authorizer is required")
 
+// NoEligibleSupplyError identifies a completed lookup that found no model
+// supply. Authorization, cancellation and catalog read failures are separate.
+type NoEligibleSupplyError struct{ Message string }
+
+func (e *NoEligibleSupplyError) Error() string { return e.Message }
+
 // Re-export the durable records from model so catalog callers only need one
 // package when loading and resolving public routes.
 type ClientModelRoute = model.ClientModelRoute
@@ -352,7 +358,7 @@ func (c *Catalog) resolveCandidatesAuthorized(snapshot AuthorizedRuntimeSnapshot
 	}
 	publicID, ok := c.byKey[strings.ToLower(requested)]
 	if !ok {
-		return nil, fmt.Errorf("model %q is not available", requestedModel)
+		return nil, &NoEligibleSupplyError{Message: fmt.Sprintf("model %q is not available", requestedModel)}
 	}
 	i := c.byPublic[publicID]
 	entry := c.entries[i]

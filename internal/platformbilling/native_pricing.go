@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/metering"
@@ -39,6 +40,7 @@ type NativeQuote struct {
 }
 
 type NativeReserveRequest struct {
+	ManagedOperation     string      `json:"managed_operation,omitempty"`
 	MinimumCreditAmount  string      `json:"minimum_credit_amount,omitempty"`
 	CreditScope          string      `json:"credit_scope,omitempty"`
 	ProductAuthorization string      `json:"product_authorization,omitempty"`
@@ -162,7 +164,18 @@ func (a *Adapter) admitNative(ctx context.Context, credential, task, id string, 
 		}
 		return nil, compareCall(old, row)
 	}
-	return &Session{adapter: a, call: row, canonical: body, nativeCredential: credential, nativeCreditConversion: grant.NativeCreditConversion, safeFailure: true}, nil
+	session := &Session{adapter: a, call: row, canonical: body, nativeCredential: credential, nativeCreditConversion: grant.NativeCreditConversion, safeFailure: true}
+	// Keep the existing duplicate and receipt lane available for historical
+	// requests even when a model has since been removed from product policy.
+	if err := session.verifyManagedConversation(ctx, task); err != nil {
+		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		defer cancel()
+		if finishErr := session.Finish(finishCtx); finishErr != nil {
+			common.SysError("managed conversation refusal persistence failed")
+		}
+		return nil, err
+	}
+	return session, nil
 }
 
 func (s *Session) NativeQuote() (NativeQuote, error) {
@@ -389,7 +402,7 @@ func (s *Session) ReserveNative(ctx context.Context, q NativeQuote, snapshot str
 	}
 	s.call.Status = "RESERVING"
 	var remote RemoteCall
-	err = s.adapter.client.do(ctx, http.MethodPost, "/internal/v1/calls/native-reserve", s.call.CallID, NativeReserveRequest{MinimumCreditAmount: minimumCreditAmount, CreditScope: s.call.CreditScope, ProductAuthorization: productAuthorizationFrom(ctx).proof, Credential: s.nativeCredential, InstanceID: s.call.InstanceID, TaskID: s.call.TaskID, CallID: s.call.CallID, RequestDigest: s.call.Digest, Model: s.call.Model, WireOperation: s.call.WireOperation, Quote: q}, &remote)
+	err = s.adapter.client.do(ctx, http.MethodPost, "/internal/v1/calls/native-reserve", s.call.CallID, NativeReserveRequest{ManagedOperation: s.managedOperation, MinimumCreditAmount: minimumCreditAmount, CreditScope: s.call.CreditScope, ProductAuthorization: productAuthorizationFrom(ctx).proof, Credential: s.nativeCredential, InstanceID: s.call.InstanceID, TaskID: s.call.TaskID, CallID: s.call.CallID, RequestDigest: s.call.Digest, Model: s.call.Model, WireOperation: s.call.WireOperation, Quote: q}, &remote)
 	if err != nil || !remote.matches(s.call) || remote.Status != "RESERVED" || remote.Held != q.MaxAmount {
 		status := "RESERVE_UNKNOWN"
 		var rejected *remoteError
@@ -402,6 +415,10 @@ func (s *Session) ReserveNative(ctx context.Context, q NativeQuote, snapshot str
 		// authenticated native CREDIT contract. Budget/cash errors never qualify.
 		if status == "REJECTED" && rejected.reserveCode == "insufficient_credits" && s.call.PricingSource == NativeCreditPricingSource && s.call.Asset == "CREDIT/6" && s.call.FundingMode == "credits" {
 			return ErrNativeCreditsRequired
+		}
+		if status == "REJECTED" && rejected.reserveCode == "managed_model_not_allowed" &&
+			s.ProductCredit() && s.call.OriginProductID == "superwagie" {
+			return ErrManagedModelNotAllowed
 		}
 		if status == "REJECTED" && rejected.reserveCode == "product_membership_expired" && s.ProductCredit() {
 			return ErrProductMembershipExpired

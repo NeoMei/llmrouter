@@ -113,6 +113,7 @@ type Session struct {
 	nativeDispatchGuard    func(context.Context) error
 	knowledgeAdmission     *pinnedKnowledgeAdmission
 	nativeSend             string
+	managedOperation       string
 	canonical              []byte
 	adapter                *Adapter
 	call                   Call

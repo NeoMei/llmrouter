@@ -38,13 +38,16 @@ func productAuthorizationFrom(ctx context.Context) productAuthorization {
 	return p
 }
 
-func (a *Adapter) managedGrant(ctx context.Context, credential, model, wire, purpose string) (Claims, error) {
+func (a *Adapter) managedGrant(ctx context.Context, credential, model, wire, purpose string, managedOperation ...string) (Claims, error) {
 	request := map[string]string{"token": credential, "model": model, "instance_id": a.config.InstanceID}
 	if wire != "" {
 		request["wire_operation"] = wire
 	}
 	if purpose != "" {
 		request["purpose"] = purpose
+	}
+	if len(managedOperation) == 1 {
+		request["managed_operation"] = managedOperation[0]
 	}
 	proof := productAuthorizationFrom(ctx).proof
 	if proof != "" {
@@ -110,6 +113,13 @@ func (row Call) matchesCreditScope(grant Claims) bool {
 
 func (s *Session) ProductCredit() bool {
 	return s != nil && s.call.CreditScope == ProductCreditScope
+}
+
+// SuperWagieChatAwaitingReserve identifies the verified product chat lane
+// before any remote reserve attempt has begun.
+func (s *Session) SuperWagieChatAwaitingReserve() bool {
+	return s.ProductCredit() && s.NativeOriginProduct() == "superwagie" &&
+		s.call.WireOperation == "chat.completions.create" && s.call.Status == "ADMITTED"
 }
 
 // ProductCreditOperation admits only producers with a durable native measured

@@ -36,9 +36,11 @@ type ModelRequest struct {
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		var channel *model.Channel
+		var platformSession *platformbilling.Session
 		channelId, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId)
 		if v, exists := c.Get("platform_billing"); exists {
 			if session, yes := v.(*platformbilling.Session); yes {
+				platformSession = session
 				if target, bound := session.NativeHistoryTarget(); bound {
 					channelId = strconv.FormatInt(target.ChannelID, 10)
 					ok = true
@@ -231,6 +233,18 @@ func Distribute() func(c *gin.Context) {
 						return
 					}
 					if channel == nil {
+						if usingGroup != "auto" && platformSession.SuperWagieChatAwaitingReserve() {
+							// The initial selector can miss lower-priority abilities. Verify
+							// absence across priorities before publishing the refusal.
+							var enabledAbilities int64
+							err := model.DB.WithContext(c.Request.Context()).Model(&model.Ability{}).
+								Where(&model.Ability{Group: usingGroup, Enabled: true}).
+								Where("model IN ?", []string{modelRequest.Model, ratio_setting.FormatMatchingModelName(modelRequest.Model)}).
+								Count(&enabledAbilities).Error
+							if err == nil && enabledAbilities == 0 && WriteSuperWagieChatRouteUnavailable(c, platformSession) {
+								return
+							}
+						}
 						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": usingGroup, "Model": modelRequest.Model}), types.ErrorCodeNoCapableChannel)
 						return
 					}
@@ -254,6 +268,29 @@ func Distribute() func(c *gin.Context) {
 			service.RecordChannelAffinity(c, channel.Id)
 		}
 	}
+}
+
+// WriteSuperWagieChatRouteUnavailable marks a proven absence of supply before
+// any reserve or provider attempt. Call only from a source of that evidence.
+func WriteSuperWagieChatRouteUnavailable(c *gin.Context, session *platformbilling.Session) bool {
+	return session.SuperWagieChatAwaitingReserve() &&
+		writeGatewayPreAdmission(c, http.StatusServiceUnavailable, "platform_model_route_unavailable")
+}
+
+// WriteManagedModelPolicyRefusal accepts only UniHub's typed model check or
+// confirmed no-hold refusal. A generic 403 does not establish that evidence.
+func WriteManagedModelPolicyRefusal(c *gin.Context, err error) bool {
+	return errors.Is(err, platformbilling.ErrManagedModelNotAllowed) &&
+		writeGatewayPreAdmission(c, http.StatusForbidden, platformbilling.ErrManagedModelNotAllowed.Error())
+}
+
+func writeGatewayPreAdmission(c *gin.Context, status int, code string) bool {
+	if c.Writer.Written() || c.Request.Context().Err() != nil {
+		return false
+	}
+	c.Header(common.ErrorOriginHeader, "gateway")
+	c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"code": code, "stage": "pre_admission"}})
+	return true
 }
 
 // channelSupportsRequestPath reports whether a channel can serve the request path.

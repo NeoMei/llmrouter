@@ -2,6 +2,8 @@ package openai
 
 import (
 	"encoding/json"
+
+	"github.com/tidwall/gjson"
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
@@ -23,27 +25,21 @@ func arkImageBillingFixture(model string) *relaycommon.RelayInfo {
 
 func TestArkImageBillingUsesOfficialDimensions(t *testing.T) {
 	for _, tc := range []struct {
-		name, model, body     string
-		inputRatio, sizeRatio float64
+		name, model, body string
+		basePrice, cost   float64
 	}{
-		{name: "Seedream 5.5 base resolution", model: "doubao-seedream-5-5-261028", body: `{"data":[{},{}],"size":"1600x1600","usage":{"input_images":1}}`, inputRatio: 1 + 0.05/0.26},
-		{name: "Seedream 5.5 high resolution", model: "doubao-seedream-5-5-261028", body: `{"data":[{}],"size":"2048x2048","usage":{"input_images":1}}`, inputRatio: 1 + 0.05/0.13, sizeRatio: 0.23 / 0.13},
-		{name: "Seedream 5.0 Pro input allowance", model: "doubao-seedream-5-0-pro-260628", body: `{"data":[{},{}],"size":"2048x2048","usage":{"input_images":3}}`, inputRatio: 1 + 0.04/0.60, sizeRatio: 2},
-		{name: "Seedream 5.0 Flash flat price", model: "doubao-seedream-5-0-flash-260915", body: `{"data":[{},{}]}`, inputRatio: 1},
+		{name: "Seedream 5.5 base resolution", model: "doubao-seedream-5-5-261028", body: `{"data":[{"size":"1600x1600"},{"size":"1600x1600"}],"usage":{"input_images":1}}`, basePrice: 0.13, cost: 0.31},
+		{name: "Seedream 5.5 high resolution does not multiply input charge", model: "doubao-seedream-5-5-261028", body: `{"data":[{"size":"2048x2048"}],"usage":{"input_images":1}}`, basePrice: 0.13, cost: 0.28},
+		{name: "Seedream 5.0 Pro input allowance", model: "doubao-seedream-5-0-pro-260628", body: `{"data":[{"size":"2048x2048"},{"size":"2048x2048"}],"usage":{"input_images":3}}`, basePrice: 0.30, cost: 1.24},
+		{name: "Seedream 5.0 Flash flat price", model: "doubao-seedream-5-0-flash-260915", body: `{"data":[{},{}]}`, basePrice: 0.12, cost: 0.24},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			info := arkImageBillingFixture(tc.model)
+			info.PriceData.ModelPrice = tc.basePrice / 7.3
+			updateOpenAIImageCount(info, gjson.GetBytes([]byte(tc.body), "data.#").Int())
 			require.NoError(t, applyArkImageBilling(info, []byte(tc.body)))
-			if tc.inputRatio == 1 {
-				assert.False(t, info.PriceData.HasOtherRatio("ark_input_images"))
-			} else {
-				assert.InDelta(t, tc.inputRatio, info.PriceData.OtherRatios()["ark_input_images"], 1e-10)
-			}
-			if tc.sizeRatio == 0 {
-				assert.False(t, info.PriceData.HasOtherRatio("ark_resolution"))
-			} else {
-				assert.InDelta(t, tc.sizeRatio, info.PriceData.OtherRatios()["ark_resolution"], 1e-10)
-			}
+			cost := info.PriceData.ApplyOtherRatiosToFloat(info.PriceData.ModelPrice) * 7.3
+			assert.InDelta(t, tc.cost, cost, 1e-10)
 		})
 	}
 }
@@ -55,7 +51,10 @@ func TestArkImageBillingRejectsUnverifiedContracts(t *testing.T) {
 
 	info = arkImageBillingFixture("doubao-seedream-5-5-261028")
 	require.ErrorContains(t, applyArkImageBilling(info, []byte(`{"data":[]}`)), "invalid output count")
-	require.ErrorContains(t, applyArkImageBilling(info, []byte(`{"data":[{}],"usage":{"input_images":0}}`)), "actual output dimensions")
+	require.ErrorContains(t, applyArkImageBilling(info, []byte(`{"data":[{}],"usage":{"input_images":0}}`)), "actual dimensions")
+
+	unknown := arkImageBillingFixture("doubao-seedream-9-9-991231")
+	require.ErrorContains(t, ValidateArkImageBilling(unknown, nil), "no verified per-image price")
 
 	info.IsStream = true
 	require.ErrorContains(t, ValidateArkImageBilling(info, nil), "streaming image billing")

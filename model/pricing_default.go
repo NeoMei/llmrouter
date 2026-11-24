@@ -37,8 +37,6 @@ var defaultVendorRules = map[string]string{
 	"grok":     "xAI",
 	"llama":    "Meta",
 	"doubao":   "字节跳动",
-	"seedream": "字节跳动",
-	"seedance": "字节跳动",
 	"kling":    "快手",
 	"jimeng":   "即梦",
 	"vidu":     "Vidu",
@@ -91,16 +89,19 @@ func initDefaultVendorMapping(metaMap map[string]*Model, vendorMap map[int]*Vend
 		persist := arkModels[modelName]
 		vendorID := 0
 		icon := ""
-		modelLower := strings.ToLower(modelName)
-		for pattern, vendorName := range defaultVendorRules {
-			if strings.Contains(modelLower, pattern) {
-				vendorID = pricingVendorID(vendorName, vendorMap, persist)
-				icon = getDefaultVendorIcon(vendorName)
-				if vendorID != 0 {
-					icon = vendorMap[vendorID].Icon
+		if persist && (common.IsSeedreamModel(modelName) || common.IsSeedanceModel(modelName)) {
+			vendorID = pricingVendorID("字节跳动", vendorMap, true)
+		} else {
+			modelLower := strings.ToLower(modelName)
+			for pattern, vendorName := range defaultVendorRules {
+				if strings.Contains(modelLower, pattern) {
+					vendorID = pricingVendorID(vendorName, vendorMap, persist)
+					break
 				}
-				break
 			}
+		}
+		if persist && vendorID != 0 {
+			icon = vendorMap[vendorID].Icon
 		}
 
 		meta := &Model{

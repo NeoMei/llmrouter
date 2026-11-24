@@ -334,3 +334,27 @@ func TestPricingFallbackLeavesUncoveredNonArkMetadataReadOnly(t *testing.T) {
 	assert.Zero(t, models)
 	assert.Zero(t, vendors)
 }
+
+func TestPricingFallbackKeepsLegacyVendorPresentation(t *testing.T) {
+	resetPricingEndpointTestTables(t)
+	insertPricingEndpointChannel(t, 148, constant.ChannelTypeOpenAI, dto.ChannelOtherSettings{})
+	vendor := &Vendor{Name: "字节跳动", Icon: "Doubao.Color"}
+	require.NoError(t, vendor.Insert())
+	insertPricingEndpointAbility(t, 148, "doubao-legacy-uncovered")
+	insertPricingEndpointAbility(t, 148, "seedream-legacy-uncovered")
+	prices := make(map[string]Pricing)
+	for _, item := range GetPricing() {
+		prices[item.ModelName] = item
+	}
+	require.Contains(t, prices, "doubao-legacy-uncovered")
+	require.Contains(t, prices, "seedream-legacy-uncovered")
+	assert.Equal(t, vendor.Id, prices["doubao-legacy-uncovered"].VendorID)
+	assert.Empty(t, prices["doubao-legacy-uncovered"].Icon)
+	assert.Zero(t, prices["seedream-legacy-uncovered"].VendorID)
+
+	var models, vendors int64
+	require.NoError(t, DB.Model(&Model{}).Count(&models).Error)
+	require.NoError(t, DB.Model(&Vendor{}).Count(&vendors).Error)
+	assert.Zero(t, models)
+	assert.EqualValues(t, 1, vendors)
+}

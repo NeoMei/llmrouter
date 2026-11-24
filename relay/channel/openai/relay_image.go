@@ -95,6 +95,9 @@ func OpenaiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 	}
 
 	updateOpenAIImageCount(info, gjson.GetBytes(responseBody, "data.#").Int())
+	if err := applyArkImageBilling(info, responseBody); err != nil {
+		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+	}
 	if err := recordNativeImageJSONUsage(c, info, responseBody); err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
@@ -224,6 +227,9 @@ func OpenaiImageStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp 
 		}
 		if upstreamFinished || float64(completedImages) > requestedN {
 			updateOpenAIImageCount(info, completedImages)
+			if err := applyArkImageBilling(info, lastStreamData); err != nil {
+				return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+			}
 		}
 	}
 	if info.NativeBilling != nil {
@@ -322,6 +328,9 @@ func openaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 
 	imageCount := gjson.GetBytes(responseBody, "data.#").Int()
 	updateOpenAIImageCount(info, imageCount)
+	if err := applyArkImageBilling(info, responseBody); err != nil {
+		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+	}
 	if err := recordNativeImageJSONUsage(c, info, responseBody); err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}

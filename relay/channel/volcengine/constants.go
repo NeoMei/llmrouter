@@ -15,6 +15,7 @@ var ModelList = slices.Concat([]string{
 	"Doubao-lite-4k",
 	"Doubao-embedding",
 	"doubao-seedream-4-0-250828",
+	"doubao-seedream-4-0-20260415",
 	"seedream-4-0-250828",
 	"doubao-seedream-4-5-251128",
 	"doubao-seedream-5-0-260128",

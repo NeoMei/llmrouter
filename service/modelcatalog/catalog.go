@@ -631,7 +631,7 @@ func OperationOnlyRoute(operations []string) bool {
 		case capability.OperationImageGeneration, capability.OperationImageEdit, capability.OperationQwenImage,
 			capability.OperationEmbeddingCreate, capability.OperationMultimodalEmbedding, capability.OperationRerankCreate,
 			capability.OperationAudioSpeech, capability.OperationBailianSpeech, capability.OperationAudioTranscription, capability.OperationOCRCreate,
-			capability.OperationToolsSearch, capability.OperationToolsFetch:
+			capability.OperationToolsSearch, capability.OperationToolsFetch, capability.OperationVideoCreate:
 		default:
 			return false
 		}
@@ -651,6 +651,12 @@ func decodeWires(raw string, operations ...string) ([]WireProtocol, error) {
 		return nil, fmt.Errorf("preferred wires are required")
 	}
 	result := make([]WireProtocol, 0, len(values))
+	// Older video-only routes carried a chat placeholder before native
+	// operation-only targets were supported. It conveys no chat capability.
+	if len(operations) == 1 && operations[0] == string(capability.OperationVideoCreate) &&
+		len(values) == 1 && strings.EqualFold(strings.TrimSpace(values[0]), string(WireOpenAIChat)) {
+		return []WireProtocol{}, nil
+	}
 	seen := make(map[WireProtocol]struct{}, len(values))
 	for _, value := range values {
 		wire := WireProtocol(strings.ToLower(strings.TrimSpace(value)))

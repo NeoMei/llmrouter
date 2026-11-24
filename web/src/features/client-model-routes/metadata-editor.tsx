@@ -36,6 +36,7 @@ const operations = [
   'audio.speech.create',
   'images.generations.create',
   'images.edits.create',
+  'videos.create',
   'ocr.jobs.create',
   'ocr.jobs.retrieve',
 ]

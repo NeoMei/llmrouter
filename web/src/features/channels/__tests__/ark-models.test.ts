@@ -21,6 +21,10 @@ import { test } from 'node:test'
 
 import { filterComboboxOptions } from '../../../components/ui/combobox-input'
 import { CHANNEL_TYPE_OPTIONS } from '../constants'
+import {
+  getChannelAdapterLabel,
+  getChannelSupplierFamily,
+} from '../lib/channel-utils'
 
 test('ByteDance VolcEngine and Doubao video are visible channel options', () => {
   assert.equal(
@@ -48,5 +52,18 @@ test('Chinese and English provider aliases find the Ark channel', () => {
   }
   for (const search of ['字节', '火山引擎', '豆包', 'doubao', 'volcengine']) {
     assert.deepEqual(filterComboboxOptions([option], search), [option])
+  }
+})
+
+test('Ark adapters have distinct names and the same stable supplier family', () => {
+  assert.equal(getChannelAdapterLabel(45), 'VolcEngine Ark')
+  assert.equal(getChannelAdapterLabel(54), 'Doubao Video')
+  assert.equal(getChannelSupplierFamily(45), 'ByteDance')
+  assert.equal(getChannelSupplierFamily(54), 'ByteDance')
+})
+
+test('compatible and custom proxies do not infer an upstream supplier', () => {
+  for (const type of [1, 8, 20, 58]) {
+    assert.equal(getChannelSupplierFamily(type), undefined)
   }
 })

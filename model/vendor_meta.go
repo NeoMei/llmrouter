@@ -1,6 +1,9 @@
 package model
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/QuantumNous/new-api/common"
 
 	"gorm.io/gorm"
@@ -25,10 +28,31 @@ type Vendor struct {
 
 // Insert 创建新的供应商记录
 func (v *Vendor) Insert() error {
+	return v.insertWithDB(DB)
+}
+
+func (v *Vendor) insertWithDB(tx *gorm.DB) error {
 	now := common.GetTimestamp()
 	v.CreatedTime = now
 	v.UpdatedTime = now
-	return DB.Create(v).Error
+	return tx.Create(v).Error
+}
+
+// FindOrInsertWithDB reuses a configured supplier without changing its metadata.
+func (v *Vendor) FindOrInsertWithDB(tx *gorm.DB) (bool, error) {
+	var existing Vendor
+	err := lockForUpdate(tx).Where("name = ?", v.Name).First(&existing).Error
+	if err == nil {
+		*v = existing
+		return false, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, err
+	}
+	if err := v.insertWithDB(tx); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // IsVendorNameDuplicated 检查供应商名称是否重复（排除自身 ID）
@@ -44,12 +68,38 @@ func IsVendorNameDuplicated(id int, name string) (bool, error) {
 // Update 更新供应商记录
 func (v *Vendor) Update() error {
 	v.UpdatedTime = common.GetTimestamp()
-	return DB.Save(v).Error
+	return DB.Model(&Vendor{}).Where("id = ?", v.Id).
+		Select("name", "description", "icon", "status", "updated_time").Updates(v).Error
 }
 
 // Delete 软删除供应商
 func (v *Vendor) Delete() error {
-	return DB.Delete(v).Error
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockModelVendor(tx, v.Id); err != nil {
+			return err
+		}
+		var count int64
+		if err := tx.Model(&Model{}).Where("vendor_id = ?", v.Id).Count(&count).Error; err != nil {
+			return err
+		}
+		if count != 0 {
+			return fmt.Errorf("vendor is referenced by %d model metadata records", count)
+		}
+		return tx.Delete(v).Error
+	})
+}
+
+// lockModelVendor serializes changes to model references with vendor deletion.
+func lockModelVendor(tx *gorm.DB, id int) error {
+	if id == 0 {
+		return nil
+	}
+	var vendor Vendor
+	err := lockForUpdate(tx).Select("id").Where("id = ?", id).First(&vendor).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return fmt.Errorf("vendor %d does not exist", id)
+	}
+	return err
 }
 
 // GetVendorByID 根据 ID 获取供应商

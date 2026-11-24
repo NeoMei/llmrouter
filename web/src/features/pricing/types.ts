@@ -27,6 +27,9 @@ export type PricingVendor = {
   description?: string
 }
 
+export type PricingEndpointInfo = { path: string; method: string }
+export type PricingEndpointMap = Record<string, Partial<PricingEndpointInfo>>
+
 export type PricingModel = {
   id: number
   model_name: string
@@ -48,6 +51,7 @@ export type PricingModel = {
   enable_groups: string[]
   tags?: string
   supported_endpoint_types?: string[]
+  endpoint_info?: Record<string, PricingEndpointInfo>
   key?: string
   group_ratio?: Record<string, number>
   /** Billing mode (e.g. "tiered_expr") used to flag dynamic pricing */
@@ -95,7 +99,7 @@ export type PricingData = {
   vendors: PricingVendor[]
   group_ratio: Record<string, number>
   usable_group: Record<string, { desc: string; ratio: number }>
-  supported_endpoint: Record<string, string>
+  supported_endpoint: PricingEndpointMap
   client_model_routes?: Array<{
     id: string
     display_name?: string

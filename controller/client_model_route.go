@@ -300,7 +300,7 @@ func validateClientModelRoutePayload(tx *gorm.DB, payload clientModelRoutePayloa
 		}
 		target.RouteId = route.Id
 		var channel model.Channel
-		if err := tx.Select("id", "type", "status", "models").First(&channel, target.ChannelId).Error; err != nil {
+		if err := tx.Select("id", "type", "status", "models", "model_mapping").First(&channel, target.ChannelId).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return fmt.Errorf("target %d references nonexistent channel %d", target.Id, target.ChannelId)
 			}
@@ -309,16 +309,24 @@ func validateClientModelRoutePayload(tx *gorm.DB, payload clientModelRoutePayloa
 		if channel.Status != common.ChannelStatusEnabled {
 			return fmt.Errorf("target %d references disabled channel %d", target.Id, target.ChannelId)
 		}
-		if !containsClientModelOption(channel.GetModels(), target.UpstreamModel) {
+		mappedModel, err := modelcatalog.MapUpstreamModel(channel.GetModelMapping(), strings.TrimSpace(target.UpstreamModel))
+		if err != nil {
+			return fmt.Errorf("target %d: %w", target.Id, err)
+		}
+		if !containsClientModelOption(channel.GetModels(), mappedModel) {
 			return fmt.Errorf("target %d model %q is not enabled on channel %d", target.Id, target.UpstreamModel, target.ChannelId)
 		}
-		if !helper.HasModelBillingConfig(strings.TrimSpace(target.BillingModel)) {
+		billingModel := strings.TrimSpace(target.BillingModel)
+		if !helper.HasModelBillingConfig(billingModel) && !billing_setting.HasModelNativePricing(billingModel) {
 			return fmt.Errorf("target %d billing model %q has no billing configuration", target.Id, target.BillingModel)
 		}
 		if err := modelcatalog.ValidateChannelOperations(metadata, channel.Type); err != nil {
 			return err
 		}
-		if err := validateTargetWiresForChannel(target, channel.Type); err != nil {
+		if err := modelcatalog.NewGormRuntimeSources(tx).ValidateTargetPricing(channel.Type, mappedModel, billingModel, metadata.Operations); err != nil {
+			return fmt.Errorf("target %d: %w", target.Id, err)
+		}
+		if err := validateTargetWiresForChannel(target, channel.Type, metadata.Operations...); err != nil {
 			return err
 		}
 		if target.Enabled {
@@ -350,13 +358,20 @@ func loadClientModelRouteResponse(tx *gorm.DB, id int) (clientModelRouteResponse
 	}, nil
 }
 
-func validateTargetWiresForChannel(target model.ClientModelTarget, channelType int) error {
+func validateTargetWiresForChannel(target model.ClientModelTarget, channelType int, operations ...string) error {
 	var wires []string
 	if err := common.Unmarshal([]byte(target.PreferredWires), &wires); err != nil {
 		return fmt.Errorf("target %d preferred wires must be a JSON array", target.Id)
 	}
 	if len(wires) == 0 {
+		if modelcatalog.OperationOnlyRoute(operations) {
+			return nil
+		}
 		return fmt.Errorf("target %d preferred wires are required", target.Id)
+	}
+	if len(operations) == 1 && operations[0] == string(capability.OperationVideoCreate) &&
+		len(wires) == 1 && strings.EqualFold(strings.TrimSpace(wires[0]), string(modelcatalog.WireOpenAIChat)) {
+		return nil
 	}
 	registry := capability.DefaultRegistry()
 	for _, raw := range wires {

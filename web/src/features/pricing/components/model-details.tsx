@@ -72,6 +72,7 @@ import { formatFixedPrice, formatGroupPrice } from '../lib/price'
 import type {
   ModelCapability,
   PriceType,
+  PricingEndpointMap,
   PricingModel,
   TokenUnit,
 } from '../types'
@@ -1129,7 +1130,7 @@ export interface ModelDetailsContentProps {
   model: PricingModel
   groupRatio: Record<string, number>
   usableGroup: Record<string, { desc: string; ratio: number }>
-  endpointMap: Record<string, { path?: string; method?: string }>
+  endpointMap: PricingEndpointMap
   autoGroups: string[]
   priceRate: number
   usdExchangeRate: number
@@ -1338,12 +1339,7 @@ export function ModelDetails() {
           usdExchangeRate={usdExchangeRate ?? 1}
           tokenUnit={tokenUnit}
           showRechargePrice={search.rechargePrice ?? false}
-          endpointMap={
-            (endpointMap as Record<
-              string,
-              { path?: string; method?: string }
-            >) || {}
-          }
+          endpointMap={endpointMap}
         />
       </div>
     </PublicLayout>

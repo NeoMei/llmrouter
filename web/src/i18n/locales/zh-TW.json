@@ -1,5 +1,16 @@
 {
   "translation": {
+    "Adapter type": "配接器類型",
+    "ByteDance": "字節跳動",
+    "Channel instance": "渠道執行個體",
+    "Complete every target": "請填寫所有目標的必填資訊",
+    "Explicit operations can use an empty protocol list": "已明確宣告操作時，可以保留空白的通訊協定清單",
+    "Routes for {{model}}": "{{model}} 的路由",
+    "Select supported protocols for each target that requires them": "請為需要通訊協定的目標選擇支援的協定",
+    "Supplier family": "供應商歸屬",
+    "Target": "目標",
+    "View routes": "檢視路由",
+    "VolcEngine Ark": "火山方舟",
     "360": "360",
     "1000": "1000",
     "10000": "10000",

@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { Link } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
 import { useTranslation } from 'react-i18next'
 
@@ -31,8 +32,14 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import {
+  getChannelAdapterLabel,
+  getChannelStatusBadge,
+} from '@/features/channels/lib/channel-utils'
 import { formatTimestampToDate } from '@/lib/format'
 import { getLobeIcon } from '@/lib/lobe-icon'
+import { canUseProductFeature } from '@/lib/product-access'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   getModelStatusConfig,
@@ -43,6 +50,13 @@ import { parseModelTags, formatEndpointsDisplay } from '../lib'
 import type { Model, Vendor } from '../types'
 import { DataTableRowActions } from './data-table-row-actions'
 import { DescriptionCell } from './description-cell'
+
+const MODEL_NAME_MATCH_RULES = [
+  undefined,
+  'prefix',
+  'contains',
+  'suffix',
+] as const
 
 function getCompactModelIcon(iconKey: string) {
   const baseIconKey = iconKey.split('.')[0]
@@ -55,6 +69,10 @@ function getCompactModelIcon(iconKey: string) {
  */
 export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
   const { t } = useTranslation()
+
+  const canReadRoutes = useAuthStore((state) =>
+    canUseProductFeature(state.auth.user, 'routing')
+  )
 
   // Get translated configs
   const NAME_RULE_CONFIG = getNameRuleConfig(t)
@@ -323,28 +341,64 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
     {
       accessorKey: 'bound_channels',
       header: t('Bound Channels'),
-      meta: { mobileHidden: true },
       cell: ({ row }) => {
-        const channels = row.getValue('bound_channels') as Array<{
-          id: number
-          name: string
-          type?: number
-          status?: number
-        }>
+        const model = row.original
+        const channels = model.bound_channels ?? []
         return (
-          <BadgeListCell
-            items={(channels ?? []).map((c) => (
-              <StatusBadge
-                key={c.id}
-                label={`${c.name} (${c.type})`}
-                autoColor={c.name}
-                size='sm'
-              />
-            ))}
-          />
+          <div className='space-y-1'>
+            {channels.length === 0 && (
+              <span className='text-muted-foreground text-xs'>—</span>
+            )}
+            {channels.length > 0 && (
+              <ul className='space-y-2'>
+                {channels.map((channel) => {
+                  const status = getChannelStatusBadge(channel.status)
+                  return (
+                    <li
+                      key={channel.id ?? `${channel.type}:${channel.name}`}
+                      className='space-y-0.5'
+                    >
+                      <div className='text-sm [overflow-wrap:anywhere]'>
+                        {channel.id != null && (
+                          <span className='text-muted-foreground'>
+                            #{channel.id} ·{' '}
+                          </span>
+                        )}
+                        {channel.name}
+                      </div>
+                      <div className='flex flex-wrap items-center gap-x-1.5 text-xs'>
+                        <span className='text-muted-foreground'>
+                          {t(getChannelAdapterLabel(channel.type))} (
+                          {channel.type})
+                        </span>
+                        <StatusBadge
+                          label={t(status.label)}
+                          variant={status.variant}
+                          size='sm'
+                          copyable={false}
+                        />
+                      </div>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+            {canReadRoutes && (
+              <Link
+                to='/client-model-routes'
+                search={{
+                  model: model.model_name,
+                  match: MODEL_NAME_MATCH_RULES[model.name_rule],
+                }}
+                className='text-primary block w-fit text-xs hover:underline'
+              >
+                {t('View routes')}
+              </Link>
+            )}
+          </div>
         )
       },
-      size: 150,
+      size: 260,
       enableSorting: false,
     },
 

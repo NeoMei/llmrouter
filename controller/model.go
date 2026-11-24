@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -27,7 +26,6 @@ import (
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
-	"gorm.io/gorm"
 )
 
 // https://platform.openai.com/docs/api-reference/models/list
@@ -111,7 +109,11 @@ func init() {
 		}}
 		adaptor := relay.GetAdaptor(apiType)
 		adaptor.Init(meta)
-		channelId2Models[i] = adaptor.GetModelList()
+		models := adaptor.GetModelList()
+		if i == constant.ChannelTypeVolcEngine {
+			models = lo.Filter(models, func(name string, _ int) bool { return !common.IsSeedanceModel(name) })
+		}
+		channelId2Models[i] = models
 	}
 	openAIModels = lo.UniqBy(openAIModels, func(m dto.OpenAIModels) string {
 		return m.Id
@@ -264,13 +266,24 @@ func ListModels(c *gin.Context, modelType int) {
 		}
 	}
 
+	disabledModels, catalogErr := model.DisabledModelNames(c.Request.Context(), model.DB)
+	var clientModels []modelcatalog.ClientModel
+	var claimedNames map[string]bool
+	if catalogErr == nil {
+		clientModels, claimedNames, catalogErr = runtimeClientModelList(c, ownerGroups, modelType)
+	}
+	if catalogErr != nil {
+		common.SysLog(fmt.Sprintf("load runtime client models: %v", catalogErr))
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"message": "model catalog unavailable"}})
+		return
+	}
 	ownerByModel := map[string]string{}
 	if len(ownerGroups) > 0 {
 		ownerByModel = getPreferredModelOwners(userModelNames, ownerGroups)
 	}
 	userOpenAiModels := make([]dto.OpenAIModels, 0, len(userModelNames))
 	for _, modelName := range userModelNames {
-		if strings.EqualFold(modelName, "qwen3-vl-embedding") {
+		if strings.EqualFold(modelName, "qwen3-vl-embedding") || claimedNames[strings.ToLower(modelName)] || disabledModels[strings.ToLower(modelName)] {
 			continue // This model needs a validated multimodal route, not a legacy ability.
 		}
 		userOpenAiModels = append(userOpenAiModels, buildOpenAIModel(modelName, ownerByModel))
@@ -278,7 +291,10 @@ func ListModels(c *gin.Context, modelType int) {
 	// Client model routes are a first-class public catalog. They are assembled
 	// from authorized channel/ability/pricing state and merged with the legacy
 	// ability list so existing clients remain compatible during migration.
-	for _, clientModel := range listRuntimeClientModels(c, groups.ownerGroups, modelType) {
+	for _, clientModel := range clientModels {
+		clientModel.Aliases = slices.DeleteFunc(clientModel.Aliases, func(alias string) bool {
+			return disabledModels[strings.ToLower(alias)]
+		})
 		appendPublicClientModel(&userOpenAiModels, clientModel, tokenModelLimit)
 	}
 
@@ -378,43 +394,51 @@ func (requestCatalogAuthorizer) Authorize(_ context.Context, userID int, groups 
 }
 
 func listRuntimeClientModels(c *gin.Context, ownerGroups []string, modelType int) []modelcatalog.ClientModel {
+	models, _, err := runtimeClientModelList(c, ownerGroups, modelType)
+	if err != nil {
+		common.SysLog(fmt.Sprintf("list runtime client models: %v", err))
+	}
+	return models
+}
+
+func runtimeClientModelList(c *gin.Context, ownerGroups []string, modelType int) ([]modelcatalog.ClientModel, map[string]bool, error) {
 	if model.DB == nil || !model.DB.Migrator().HasTable(&model.ClientModelRoute{}) || !model.DB.Migrator().HasTable(&model.ClientModelTarget{}) {
-		return nil
+		return nil, nil, nil
 	}
 	var routes []model.ClientModelRoute
 	var targets []model.ClientModelTarget
-	if err := model.DB.Where("enabled = ?", true).Find(&routes).Error; err != nil {
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			common.SysLog(fmt.Sprintf("load client model routes error: %v", err))
-		}
-		return nil
+	if err := model.DB.WithContext(c.Request.Context()).Find(&routes).Error; err != nil {
+		return nil, nil, err
 	}
-	if err := model.DB.Where("enabled = ?", true).Find(&targets).Error; err != nil {
-		common.SysLog(fmt.Sprintf("load client model targets error: %v", err))
-		return nil
+	if err := model.DB.WithContext(c.Request.Context()).Where("enabled = ?", true).Find(&targets).Error; err != nil {
+		return nil, nil, err
 	}
-	client := strings.TrimSpace(c.Query("client"))
-	if client == "" {
+	client := modelcatalog.RequestClient(c.Query("client"), c.Request.URL.Path)
+	if strings.TrimSpace(c.Query("client")) == "" {
 		switch modelType {
 		case constant.ChannelTypeAnthropic:
 			client = "claude"
 		case constant.ChannelTypeGemini:
 			client = "gemini"
-		default:
-			client = "codex"
+		}
+	}
+	claimed := make(map[string]bool)
+	for _, route := range routes {
+		if modelcatalog.RouteMatchesClient(route.Client, client) {
+			for _, name := range modelcatalog.RouteNames(route) {
+				claimed[name] = true
+			}
 		}
 	}
 	catalog, err := modelcatalog.AssembleRuntimeCatalog(c.Request.Context(), modelcatalog.RuntimeContext{
 		UserID: c.GetInt("id"), Groups: ownerGroups, Client: client,
 	}, routes, targets, modelcatalog.NewGormRuntimeSources(model.DB), requestCatalogAuthorizer{})
 	if err != nil {
-		common.SysLog(fmt.Sprintf("assemble runtime client model catalog error: %v", err))
-		return nil
+		return nil, nil, err
 	}
 	returnValue, err := catalog.List(c.Request.Context(), c.GetInt("id"), ownerGroups, client)
 	if err != nil {
-		common.SysLog(fmt.Sprintf("list runtime client models error: %v", err))
-		return nil
+		return nil, nil, err
 	}
 	visible := returnValue[:0]
 	for _, entry := range returnValue {
@@ -441,7 +465,7 @@ func listRuntimeClientModels(c *gin.Context, ownerGroups []string, modelType int
 		}
 		visible = append(visible, entry)
 	}
-	return visible
+	return visible, claimed, nil
 }
 
 func anthropicModelPage(models []dto.AnthropicModel) gin.H {

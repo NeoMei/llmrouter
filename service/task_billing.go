@@ -24,7 +24,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	tokenName := c.GetString("token_name")
 	logContent := fmt.Sprintf("操作 %s", info.Action)
 	// 支持任务仅按次计费
-	if common.StringsContains(constant.TaskPricePatches, info.OriginModelName) {
+	if common.StringsContains(constant.TaskPricePatches, info.BillingModelNameOrOrigin()) {
 		logContent = fmt.Sprintf("%s，按次计费", logContent)
 	} else {
 		if otherRatios := info.PriceData.OtherRatios(); len(otherRatios) > 0 {
@@ -43,6 +43,9 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	other["is_task"] = true
 	other["request_path"] = c.Request.URL.Path
 	other["model_price"] = info.PriceData.ModelPrice
+	if info.BillingModelName != "" && info.BillingModelName != info.OriginModelName {
+		other["billing_model_name"] = info.BillingModelName
+	}
 	if info.PriceData.ModelRatio > 0 {
 		other["model_ratio"] = info.PriceData.ModelRatio
 	}
@@ -128,6 +131,9 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 	other := make(map[string]interface{})
 	if bc := task.PrivateData.BillingContext; bc != nil {
 		other["model_price"] = bc.ModelPrice
+		if bc.BillingModelName != "" && bc.BillingModelName != taskModelName(task) {
+			other["billing_model_name"] = bc.BillingModelName
+		}
 		if bc.ModelRatio > 0 {
 			other["model_ratio"] = bc.ModelRatio
 		}
@@ -373,47 +379,40 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 		return
 	}
 
-	modelName := taskModelName(task)
-
-	// 获取模型价格和倍率
-	modelRatio, hasRatioSetting, _ := ratio_setting.GetModelRatio(modelName)
-	if task.ProductCallID != "" && task.PrivateData.BillingContext != nil {
-		modelRatio = task.PrivateData.BillingContext.ModelRatio
-		hasRatioSetting = modelRatio > 0
-	}
-	// 只有配置了倍率(非固定价格)时才按 token 重新计费
-	if !hasRatioSetting || modelRatio <= 0 {
-		return
-	}
-
-	// 获取用户和组的倍率信息
-	group := task.Group
-	if group == "" {
-		user, err := model.GetUserById(task.UserId, false)
-		if err == nil {
-			group = user.Group
+	bc := task.PrivateData.BillingContext
+	var modelRatio, finalGroupRatio float64
+	if bc != nil {
+		if bc.PerCallBilling || bc.ModelRatio <= 0 {
+			return
+		}
+		modelRatio, finalGroupRatio = bc.ModelRatio, bc.GroupRatio
+	} else {
+		// Historical tasks without a submission snapshot retain live-rate settlement.
+		var configured bool
+		modelRatio, configured, _ = ratio_setting.GetModelRatio(taskModelName(task))
+		if !configured || modelRatio <= 0 {
+			return
+		}
+		group := task.Group
+		if group == "" {
+			user, err := model.GetUserById(task.UserId, false)
+			if err == nil {
+				group = user.Group
+			}
+		}
+		if group == "" {
+			return
+		}
+		if specialRatio, ok := ratio_setting.GetGroupGroupRatio(group, group); ok {
+			finalGroupRatio = specialRatio
+		} else {
+			finalGroupRatio = ratio_setting.GetGroupRatio(group)
 		}
 	}
-	if group == "" {
-		return
-	}
 
-	groupRatio := ratio_setting.GetGroupRatio(group)
-	userGroupRatio, hasUserGroupRatio := ratio_setting.GetGroupGroupRatio(group, group)
-
-	var finalGroupRatio float64
-	if hasUserGroupRatio {
-		finalGroupRatio = userGroupRatio
-	} else {
-		finalGroupRatio = groupRatio
-	}
-
-	if task.ProductCallID != "" && task.PrivateData.BillingContext != nil {
-		finalGroupRatio = task.PrivateData.BillingContext.GroupRatio
-	}
 	// 计算 OtherRatios 乘积（视频折扣、时长等）
 	otherMultiplier := 1.0
-	if priceData := taskBillingContextPriceData(task.PrivateData.BillingContext); priceData != nil {
+	if priceData := taskBillingContextPriceData(bc); priceData != nil {
 		otherMultiplier = priceData.OtherRatioMultiplier()
 	}
 

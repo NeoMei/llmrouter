@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -17,8 +18,10 @@ const (
 )
 
 type BoundChannel struct {
-	Name string `json:"name"`
-	Type int    `json:"type"`
+	ID     int    `json:"id"`
+	Name   string `json:"name"`
+	Type   int    `json:"type"`
+	Status int    `json:"status"`
 }
 
 type Model struct {
@@ -44,24 +47,100 @@ type Model struct {
 	MatchedCount  int      `json:"matched_count,omitempty" gorm:"-"`
 }
 
+// MatchesName applies a metadata rule to a configured model name.
+func (mi *Model) MatchesName(name string) bool {
+	switch mi.NameRule {
+	case NameRuleExact:
+		return name == mi.ModelName
+	case NameRulePrefix:
+		return strings.HasPrefix(name, mi.ModelName)
+	case NameRuleSuffix:
+		return strings.HasSuffix(name, mi.ModelName)
+	case NameRuleContains:
+		return strings.Contains(name, mi.ModelName)
+	default:
+		return false
+	}
+}
+
+// resolveModelMetadata keeps the existing exact, prefix, suffix, contains
+// precedence. Callers supply rows in ID order to break ties consistently.
+func resolveModelMetadata(rows []Model, names []string) map[string]*Model {
+	result := make(map[string]*Model, len(names))
+	rules := make(map[int][]*Model)
+	for i := range rows {
+		item := &rows[i]
+		if item.NameRule == NameRuleExact {
+			if result[item.ModelName] == nil {
+				result[item.ModelName] = item
+			}
+		} else {
+			rules[item.NameRule] = append(rules[item.NameRule], item)
+		}
+	}
+	for _, rule := range []int{NameRulePrefix, NameRuleSuffix, NameRuleContains} {
+		for _, item := range rules[rule] {
+			for _, name := range names {
+				if result[name] == nil && item.MatchesName(name) {
+					result[name] = item
+				}
+			}
+		}
+	}
+	return result
+}
+
+// EndpointOverrides accepts both the legacy path string and the object form.
+func (mi *Model) EndpointOverrides() map[string]common.EndpointInfo {
+	var raw map[string]any
+	if mi.Endpoints == "" || common.UnmarshalJsonStr(mi.Endpoints, &raw) != nil {
+		return nil
+	}
+	endpoints := make(map[string]common.EndpointInfo)
+	for name, value := range raw {
+		info := common.EndpointInfo{Method: "POST"}
+		switch v := value.(type) {
+		case string:
+			info.Path = strings.TrimSpace(v)
+		case map[string]any:
+			path, _ := v["path"].(string)
+			info.Path = strings.TrimSpace(path)
+			method, _ := v["method"].(string)
+			if method = strings.TrimSpace(method); method != "" {
+				info.Method = strings.ToUpper(method)
+			}
+		}
+		if name != "" && info.Path != "" {
+			endpoints[name] = info
+		}
+	}
+	return endpoints
+}
+
 func (mi *Model) Insert() error {
+	return DB.Transaction(mi.InsertWithDB)
+}
+
+// InsertWithDB creates metadata inside the caller's configuration transaction.
+func (mi *Model) InsertWithDB(tx *gorm.DB) error {
+	if err := lockModelVendor(tx, mi.VendorID); err != nil {
+		return err
+	}
 	now := common.GetTimestamp()
 	mi.CreatedTime = now
 	mi.UpdatedTime = now
 
-	// 保存原始值（因为 Create 后可能被 GORM 的 default 标签覆盖为 1）
-	originalStatus := mi.Status
-	originalSyncOfficial := mi.SyncOfficial
-
-	// 先创建记录（GORM 会对零值字段应用默认值）
-	if err := DB.Create(mi).Error; err != nil {
+	// GORM fills zero values from schema defaults during Create.
+	status, syncOfficial := mi.Status, mi.SyncOfficial
+	if err := tx.Create(mi).Error; err != nil {
 		return err
 	}
-
-	// 使用保存的原始值进行更新，确保零值能正确保存
-	return DB.Model(&Model{}).Where("id = ?", mi.Id).Updates(map[string]interface{}{
-		"status":        originalStatus,
-		"sync_official": originalSyncOfficial,
+	if status == mi.Status && syncOfficial == mi.SyncOfficial {
+		return nil
+	}
+	mi.Status, mi.SyncOfficial = status, syncOfficial
+	return tx.Model(&Model{}).Where("id = ?", mi.Id).Updates(map[string]any{
+		"status": status, "sync_official": syncOfficial,
 	}).Error
 }
 
@@ -74,16 +153,83 @@ func IsModelNameDuplicated(id int, name string) (bool, error) {
 	return cnt > 0, err
 }
 
+// GetModelMetadataForUpdate loads the current metadata in a write transaction.
+func GetModelMetadataForUpdate(tx *gorm.DB, name string) (*Model, error) {
+	var metadata Model
+	if err := lockForUpdate(tx).Where("model_name = ?", name).First(&metadata).Error; err != nil {
+		return nil, err
+	}
+	return &metadata, nil
+}
+
 func (mi *Model) Update() error {
+	return DB.Transaction(mi.UpdateWithDB)
+}
+
+func (mi *Model) UpdateWithDB(tx *gorm.DB) error {
+	var existing Model
+	if err := lockForUpdate(tx).First(&existing, mi.Id).Error; err != nil {
+		return err
+	}
+	if mi.VendorID != existing.VendorID {
+		if err := lockModelVendor(tx, mi.VendorID); err != nil {
+			return err
+		}
+	}
+	if existing.NameRule == NameRuleExact && (mi.ModelName != existing.ModelName || mi.NameRule != existing.NameRule) {
+		if err := existing.checkActiveBindings(tx); err != nil {
+			return err
+		}
+	}
 	mi.UpdatedTime = common.GetTimestamp()
-	// 使用 Select 强制更新所有字段，包括零值
-	return DB.Model(&Model{}).Where("id = ?", mi.Id).
+	return tx.Model(&Model{}).Where("id = ?", mi.Id).
 		Select("model_name", "description", "icon", "tags", "vendor_id", "endpoints", "status", "sync_official", "name_rule", "updated_time").
 		Updates(mi).Error
 }
 
 func (mi *Model) Delete() error {
-	return DB.Delete(mi).Error
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var existing Model
+		if err := lockForUpdate(tx).First(&existing, mi.Id).Error; err != nil {
+			return err
+		}
+		if err := existing.checkActiveBindings(tx); err != nil {
+			return err
+		}
+		return tx.Delete(&existing).Error
+	})
+}
+
+func (mi *Model) checkActiveBindings(tx *gorm.DB) error {
+	if mi.NameRule != NameRuleExact {
+		return nil
+	}
+	var ids []int
+	err := tx.Table("abilities").
+		Joins("JOIN channels ON channels.id = abilities.channel_id").
+		Where("abilities.model = ? AND abilities.enabled = ? AND channels.status = ?", mi.ModelName, true, common.ChannelStatusEnabled).
+		Limit(1).Pluck("channels.id", &ids).Error
+	if err != nil {
+		return err
+	}
+	if len(ids) > 0 {
+		return fmt.Errorf("model %q is bound to an enabled channel", mi.ModelName)
+	}
+
+	// Explicit routes may refer to a separate public, upstream or billing ID.
+	err = tx.Table("client_model_targets").
+		Joins("JOIN client_model_routes ON client_model_routes.id = client_model_targets.route_id").
+		Joins("JOIN channels ON channels.id = client_model_targets.channel_id").
+		Where("client_model_routes.enabled = ? AND client_model_targets.enabled = ? AND channels.status = ?", true, true, common.ChannelStatusEnabled).
+		Where("(client_model_routes.public_id = ? OR client_model_targets.upstream_model = ? OR client_model_targets.billing_model = ?)", mi.ModelName, mi.ModelName, mi.ModelName).
+		Limit(1).Pluck("client_model_routes.id", &ids).Error
+	if err != nil {
+		return err
+	}
+	if len(ids) > 0 {
+		return fmt.Errorf("model %q is referenced by an enabled client route", mi.ModelName)
+	}
+	return nil
 }
 
 func GetVendorModelCounts() (map[int64]int64, error) {
@@ -116,21 +262,21 @@ func GetBoundChannelsByModelsMap(modelNames []string) (map[string][]BoundChannel
 	}
 	type row struct {
 		Model string
-		Name  string
-		Type  int
+		BoundChannel
 	}
 	var rows []row
 	err := DB.Table("channels").
-		Select("abilities.model as model, channels.name as name, channels.type as type").
+		Select("abilities.model as model, channels.id as id, channels.name as name, channels.type as type, channels.status as status").
 		Joins("JOIN abilities ON abilities.channel_id = channels.id").
-		Where("abilities.model IN ? AND abilities.enabled = ?", modelNames, true).
+		Where("abilities.model IN ? AND abilities.enabled = ? AND channels.status = ?", modelNames, true, common.ChannelStatusEnabled).
 		Distinct().
+		Order("channels.id").
 		Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
 	for _, r := range rows {
-		result[r.Model] = append(result[r.Model], BoundChannel{Name: r.Name, Type: r.Type})
+		result[r.Model] = append(result[r.Model], r.BoundChannel)
 	}
 	return result, nil
 }
@@ -202,7 +348,7 @@ func SearchModels(keyword string, vendor string, status string, syncOfficial str
 		if vid, err := strconv.Atoi(vendor); err == nil {
 			db = db.Where("models.vendor_id = ?", vid)
 		} else {
-			db = db.Joins("JOIN vendors ON vendors.id = models.vendor_id").Where("vendors.name LIKE ?", "%"+vendor+"%")
+			db = db.Joins("JOIN vendors ON vendors.id = models.vendor_id AND vendors.deleted_at IS NULL").Where("vendors.name LIKE ?", "%"+vendor+"%")
 		}
 	}
 	if statusValue, ok := parseModelStatusFilter(status); ok {

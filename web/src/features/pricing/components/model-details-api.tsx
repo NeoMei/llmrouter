@@ -41,13 +41,17 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useStatus } from '@/hooks/use-status'
 
 import {
+  buildEndpointRequestSample,
+  usesDirectEndpointSample,
+} from '../lib/endpoint-request-sample'
+import {
   buildRateLimits,
   buildSupportedParameters,
   formatRateLimit,
   type SupportedParameter,
 } from '../lib/mock-stats'
-import { replaceModelInPath } from '../lib/model-helpers'
-import type { PricingModel } from '../types'
+import { getPricingModelEndpoints } from '../lib/model-helpers'
+import type { PricingEndpointMap, PricingModel } from '../types'
 
 // ---------------------------------------------------------------------------
 // Code-sample registry
@@ -80,6 +84,7 @@ type SampleContext = {
   modelName: string
   endpointType: string
   endpointPath: string
+  endpointMethod: string
 }
 
 function buildChatSample(lang: Lang, ctx: SampleContext): string {
@@ -428,9 +433,12 @@ function buildSample(
   endpointType: string,
   ctx: SampleContext
 ): string {
+  if (usesDirectEndpointSample(ctx)) {
+    return buildEndpointRequestSample(lang, ctx)
+  }
   if (endpointType === 'anthropic') return buildAnthropicSample(lang, ctx)
   if (endpointType === 'gemini') return buildGeminiSample(lang, ctx)
-  if (endpointType === 'embeddings' || endpointType === 'jina-rerank') {
+  if (endpointType === 'embeddings') {
     return buildEmbeddingSample(lang, ctx)
   }
   if (endpointType === 'image-generation') return buildImageSample(lang, ctx)
@@ -443,7 +451,7 @@ function buildSample(
 
 function CodeSamplesSection(props: {
   model: PricingModel
-  endpointMap: Record<string, { path?: string; method?: string }>
+  endpointMap: PricingEndpointMap
 }) {
   const { t } = useTranslation()
   const { status } = useStatus()
@@ -461,19 +469,10 @@ function CodeSamplesSection(props: {
     return 'https://api.example.com'
   }, [status])
 
-  const endpoints = useMemo(() => {
-    const types = props.model.supported_endpoint_types || []
-    return types
-      .map((type) => {
-        const info = props.endpointMap[type] || {}
-        let path = info.path || ''
-        if (path && path.includes('{model}')) {
-          path = replaceModelInPath(path, props.model.model_name || '')
-        }
-        return { type, path, method: info.method || 'POST' }
-      })
-      .filter((e) => Boolean(e.path))
-  }, [props.model, props.endpointMap])
+  const endpoints = useMemo(
+    () => getPricingModelEndpoints(props.model, props.endpointMap),
+    [props.model, props.endpointMap]
+  )
 
   const [endpointType, setEndpointType] = useState<string>(
     endpoints[0]?.type ?? ''
@@ -494,6 +493,7 @@ function CodeSamplesSection(props: {
     modelName: props.model.model_name || '',
     endpointType: activeEndpoint.type,
     endpointPath: activeEndpoint.path,
+    endpointMethod: activeEndpoint.method,
   })
 
   return (
@@ -502,7 +502,7 @@ function CodeSamplesSection(props: {
 
       <div className='flex flex-wrap items-center gap-2'>
         {endpoints.length > 1 && (
-          <Tabs value={endpointType} onValueChange={setEndpointType}>
+          <Tabs value={activeEndpoint.type} onValueChange={setEndpointType}>
             <TabsList className='bg-muted/40 h-8 p-0.5'>
               {endpoints.map((ep) => (
                 <TabsTrigger
@@ -761,7 +761,7 @@ function AuthSection() {
 
 export function ModelDetailsApi(props: {
   model: PricingModel
-  endpointMap: Record<string, { path?: string; method?: string }>
+  endpointMap: PricingEndpointMap
 }) {
   return (
     <div className='space-y-6'>

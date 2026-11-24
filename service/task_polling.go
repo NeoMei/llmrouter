@@ -673,6 +673,11 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		logger.LogError(ctx, fmt.Sprintf("Task %s not found in taskM", taskId))
 		return fmt.Errorf("task %s not found", taskId)
 	}
+	// A replay of the same work item can carry a terminal status even when
+	// another worker won the status CAS. Never bill from that stale quota.
+	if task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure {
+		return nil
+	}
 	key, err := model.TaskAccountKey(ctx, model.DB, ch, task)
 	if err != nil {
 		return err
@@ -800,6 +805,13 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 			task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
 		}
 		shouldSettle = true
+		billing := task.PrivateData.BillingContext
+		if ch.Type == constant.ChannelTypeDoubaoVideo && task.FundingOwner != "native" && task.FundingOwner != "platform" &&
+			billing != nil && !billing.PerCallBilling && quota > 0 && taskResult.TotalTokens <= 0 {
+			// Keep the completed artifact available while the hold awaits usage evidence.
+			billing.SettlementPendingReason = "provider_usage_missing"
+			shouldSettle = false
+		}
 	case model.TaskStatusFailure:
 		logger.LogJson(ctx, fmt.Sprintf("Task %s failed", taskId), task)
 		task.Status = model.TaskStatusFailure
@@ -856,6 +868,8 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 
 	if shouldSettle {
 		settleTaskBillingOnComplete(ctx, adaptor, task, taskResult)
+	} else if billing := task.PrivateData.BillingContext; billing != nil && billing.SettlementPendingReason != "" {
+		logger.LogWarn(ctx, fmt.Sprintf("task %s billing pending: %s", task.TaskID, billing.SettlementPendingReason))
 	}
 	if shouldRefund {
 		RefundTaskQuota(ctx, task, task.FailReason)

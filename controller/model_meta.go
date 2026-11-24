@@ -1,10 +1,8 @@
 package controller
 
 import (
-	"encoding/json"
 	"sort"
 	"strconv"
-	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -25,7 +23,10 @@ func GetAllModelsMeta(c *gin.Context) {
 		return
 	}
 	// 批量填充附加字段，提升列表接口性能
-	enrichModels(modelsMeta)
+	if err := enrichModels(modelsMeta); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 
 	// 统计供应商计数（全部数据，不受分页影响）
 	vendorCounts, _ := model.GetVendorModelCounts()
@@ -56,7 +57,10 @@ func SearchModelsMeta(c *gin.Context) {
 		return
 	}
 	// 批量填充附加字段，提升列表接口性能
-	enrichModels(modelsMeta)
+	if err := enrichModels(modelsMeta); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	vendorCounts, _ := model.GetVendorModelCounts()
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(modelsMeta)
@@ -82,7 +86,10 @@ func GetModelMeta(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	enrichModels([]*model.Model{&m})
+	if err := enrichModels([]*model.Model{&m}); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	common.ApiSuccess(c, &m)
 }
 
@@ -161,7 +168,8 @@ func DeleteModelMeta(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if err := model.DB.Delete(&model.Model{}, id).Error; err != nil {
+	item := model.Model{Id: id}
+	if err := item.Delete(); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -170,10 +178,11 @@ func DeleteModelMeta(c *gin.Context) {
 }
 
 // enrichModels 批量填充附加信息：端点、渠道、分组、计费类型，避免 N+1 查询
-func enrichModels(models []*model.Model) {
+func enrichModels(models []*model.Model) error {
 	if len(models) == 0 {
-		return
+		return nil
 	}
+	pricings := model.GetPricing()
 
 	// 1) 拆分精确与规则匹配
 	exactNames := make([]string, 0)
@@ -192,7 +201,10 @@ func enrichModels(models []*model.Model) {
 	}
 
 	// 2) 批量查询精确模型的绑定渠道
-	channelsByModel, _ := model.GetBoundChannelsByModelsMap(exactNames)
+	channelsByModel, err := model.GetBoundChannelsByModelsMap(exactNames)
+	if err != nil {
+		return err
+	}
 
 	// 3) 精确模型：端点从缓存、渠道批量映射、分组/计费类型从缓存
 	for name, indices := range exactIdx {
@@ -201,7 +213,7 @@ func enrichModels(models []*model.Model) {
 			mm := models[idx]
 			if mm.Endpoints == "" {
 				eps := model.GetModelSupportEndpointTypes(mm.ModelName)
-				if b, err := json.Marshal(eps); err == nil {
+				if b, err := common.Marshal(eps); err == nil {
 					mm.Endpoints = string(b)
 				}
 			}
@@ -212,11 +224,8 @@ func enrichModels(models []*model.Model) {
 	}
 
 	if len(ruleIndices) == 0 {
-		return
+		return nil
 	}
-
-	// 4) 一次性读取定价缓存，内存匹配所有规则模型
-	pricings := model.GetPricing()
 
 	// 为全部规则模型收集匹配名集合、端点并集、分组并集、配额集合
 	matchedNamesByIdx := make(map[int][]string)
@@ -227,18 +236,10 @@ func enrichModels(models []*model.Model) {
 	for _, p := range pricings {
 		for _, idx := range ruleIndices {
 			mm := models[idx]
-			var matched bool
-			switch mm.NameRule {
-			case model.NameRulePrefix:
-				matched = strings.HasPrefix(p.ModelName, mm.ModelName)
-			case model.NameRuleSuffix:
-				matched = strings.HasSuffix(p.ModelName, mm.ModelName)
-			case model.NameRuleContains:
-				matched = strings.Contains(p.ModelName, mm.ModelName)
-			}
-			if !matched {
+			if !mm.MatchesName(p.ModelName) {
 				continue
 			}
+
 			matchedNamesByIdx[idx] = append(matchedNamesByIdx[idx], p.ModelName)
 
 			es := endpointSetByIdx[idx]
@@ -279,7 +280,10 @@ func enrichModels(models []*model.Model) {
 	for n := range allMatchedSet {
 		allMatched = append(allMatched, n)
 	}
-	matchedChannelsByModel, _ := model.GetBoundChannelsByModelsMap(allMatched)
+	matchedChannelsByModel, err := model.GetBoundChannelsByModelsMap(allMatched)
+	if err != nil {
+		return err
+	}
 
 	// 6) 回填每个规则模型的并集信息
 	for _, idx := range ruleIndices {
@@ -291,7 +295,7 @@ func enrichModels(models []*model.Model) {
 			for et := range es {
 				eps = append(eps, et)
 			}
-			if b, err := json.Marshal(eps); err == nil {
+			if b, err := common.Marshal(eps); err == nil {
 				mm.Endpoints = string(b)
 			}
 		}
@@ -317,11 +321,10 @@ func enrichModels(models []*model.Model) {
 
 		// 渠道并集
 		names := matchedNamesByIdx[idx]
-		channelSet := make(map[string]model.BoundChannel)
+		channelSet := make(map[int]model.BoundChannel)
 		for _, n := range names {
 			for _, ch := range matchedChannelsByModel[n] {
-				key := ch.Name + "_" + strconv.Itoa(ch.Type)
-				channelSet[key] = ch
+				channelSet[ch.ID] = ch
 			}
 		}
 		if len(channelSet) > 0 {
@@ -329,6 +332,7 @@ func enrichModels(models []*model.Model) {
 			for _, ch := range channelSet {
 				chs = append(chs, ch)
 			}
+			sort.Slice(chs, func(i, j int) bool { return chs[i].ID < chs[j].ID })
 			mm.BoundChannels = chs
 		}
 
@@ -336,4 +340,5 @@ func enrichModels(models []*model.Model) {
 		mm.MatchedModels = names
 		mm.MatchedCount = len(names)
 	}
+	return nil
 }

@@ -54,6 +54,10 @@ export const STATIC_I18N_KEYS = [
   'Characters',
   'Images',
 
+  // Channel supplier and adapter labels
+  'ByteDance',
+  'VolcEngine Ark',
+
   // Native metering editor dynamic labels
   'Dimension or image tier',
   'Provider namespace',

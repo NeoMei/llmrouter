@@ -40,6 +40,16 @@ export function getChannelTypeLabel(type: number): string {
   return CHANNEL_TYPES[type as keyof typeof CHANNEL_TYPES] || 'Unknown'
 }
 
+export function getChannelAdapterLabel(type: number): string {
+  return type === 45 ? 'VolcEngine Ark' : getChannelTypeLabel(type)
+}
+
+export function getChannelSupplierFamily(
+  type: number
+): 'ByteDance' | undefined {
+  return type === 45 || type === 54 ? 'ByteDance' : undefined
+}
+
 /**
  * Get channel type icon name for getLobeIcon
  * Maps channel types to Lobe icon names using type number (language-independent)

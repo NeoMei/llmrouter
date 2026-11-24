@@ -69,6 +69,7 @@ function ChannelCardComponent({
 
   const selectCell = renderCell('select')
   const typeCell = renderCell('type')
+  const supplierCell = renderCell('supplier_family')
   const nameCell = renderCell('name')
   const statusCell = renderCell('status')
   const actionsCell = renderCell('actions')
@@ -100,7 +101,12 @@ function ChannelCardComponent({
             {!isTagRow && selectCell && (
               <span className='shrink-0'>{selectCell}</span>
             )}
-            <div className='min-w-0 overflow-hidden'>{typeCell}</div>
+            <div className='min-w-0 overflow-hidden'>
+              {!isTagRow && (
+                <div className={labelClass}>{t('Adapter type')}</div>
+              )}
+              {typeCell}
+            </div>
           </div>
           <div className='flex shrink-0 items-center gap-1.5'>
             {showStatusBadge && statusCell}
@@ -116,11 +122,18 @@ function ChannelCardComponent({
             <div className='min-w-0 text-sm'>
               {!isTagRow && (
                 <div className={labelClass}>
-                  #{sensitiveVisible ? row.original.id : SENSITIVE_MASK}
+                  {t('Channel instance')} · #
+                  {sensitiveVisible ? row.original.id : SENSITIVE_MASK}
                 </div>
               )}
               {nameCell}
             </div>
+            {!isTagRow && (
+              <div className='min-w-0 text-sm'>
+                <div className={labelClass}>{t('Supplier family')}</div>
+                {supplierCell}
+              </div>
+            )}
             <div className='min-w-0'>
               <div className={cn('mb-1', labelClass)}>
                 {fieldLabels.balance}

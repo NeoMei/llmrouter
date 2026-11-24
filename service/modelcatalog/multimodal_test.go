@@ -69,11 +69,15 @@ func TestRuntimeEmbeddingSpaceChecksMappedModelAndAdapterOperation(t *testing.T)
 		t.Run(tc.name, func(t *testing.T) {
 			sources := runtimeFixtureSources{channels: map[int]RuntimeChannel{7: {ID: 7, Type: tc.channelType, Enabled: true, ModelMapping: `{"configured-name":"` + tc.mapped + `"}`}}, abilities: map[int][]RuntimeAbility{7: {{Group: "default", Model: tc.mapped, Enabled: true, Weight: 1}}}, priced: map[string]string{"text-embedding-v4": "text-embedding-v4"}}
 			catalog, err := AssembleRuntimeCatalog(context.Background(), RuntimeContext{UserID: 11, Groups: []string{"default"}}, routes, targets, sources, testAuthorizer{})
+			require.NoError(t, err)
 			if tc.invalid {
+				listed, err := catalog.List(context.Background(), 11, []string{"default"}, "")
+				require.NoError(t, err)
+				require.Empty(t, listed)
+				_, err = catalog.Resolve(context.Background(), 11, []string{"default"}, "fixed", "")
 				require.Error(t, err)
 				return
 			}
-			require.NoError(t, err)
 			candidates, err := catalog.ResolveCandidates(context.Background(), 11, []string{"default"}, "fixed", "")
 			require.NoError(t, err)
 			require.Len(t, candidates, 1)

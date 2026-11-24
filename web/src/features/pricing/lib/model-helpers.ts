@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { EXCLUDED_GROUPS, FILTER_ALL, QUOTA_TYPE_VALUES } from '../constants'
-import type { PricingModel } from '../types'
+import type { PricingEndpointMap, PricingModel } from '../types'
 
 // ----------------------------------------------------------------------------
 // Model Helper Utilities
@@ -99,6 +99,29 @@ export function getDisplayGroupRatio(
  */
 export function replaceModelInPath(path: string, modelName: string): string {
   return path.replaceAll('{model}', modelName)
+}
+
+export function getPricingModelEndpoints(
+  model: Pick<
+    PricingModel,
+    'model_name' | 'supported_endpoint_types' | 'endpoint_info'
+  >,
+  defaultEndpoints: PricingEndpointMap
+): { type: string; path: string; method: string }[] {
+  const endpointMap = model.endpoint_info ?? defaultEndpoints
+  return (
+    model.supported_endpoint_types ?? Object.keys(model.endpoint_info ?? {})
+  ).flatMap((type) => {
+    const info = endpointMap[type]
+    if (!info?.path) return []
+    return [
+      {
+        type,
+        path: replaceModelInPath(info.path, model.model_name),
+        method: info.method?.trim().toUpperCase() || 'POST',
+      },
+    ]
+  })
 }
 
 /**

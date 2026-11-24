@@ -349,6 +349,7 @@ func TestListModelsIncludesTieredBillingModel(t *testing.T) {
 		Group:    "default",
 		Status:   common.UserStatusEnabled,
 	}).Error)
+	require.NoError(t, db.Create(&model.Channel{Id: 1, Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled}).Error)
 	require.NoError(t, db.Create(&[]model.Ability{
 		{Group: "default", Model: "zz-tiered-visible-model", ChannelId: 1, Enabled: true},
 		{Group: "default", Model: "zz-tiered-empty-expr-model", ChannelId: 1, Enabled: true},

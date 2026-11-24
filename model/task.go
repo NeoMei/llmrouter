@@ -154,8 +154,10 @@ type TaskBillingContext struct {
 	VideoResolution            string             `json:"video_resolution,omitempty"` // Wan 分层原价选定时点
 	VideoResourceOrigins       []string           `json:"video_resource_origins,omitempty"`
 	VideoResourceAllowLoopback bool               `json:"video_resource_allow_loopback,omitempty"`
-	OriginModelName            string             `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
-	PerCallBilling             bool               `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
+	OriginModelName            string             `json:"origin_model_name,omitempty"`  // 模型名称，必须为OriginModelName
+	BillingModelName           string             `json:"billing_model_name,omitempty"` // 显式路由指定的计费模型
+	PerCallBilling             bool               `json:"per_call_billing,omitempty"`   // 按次计费：跳过轮询阶段的差额结算
+	SettlementPendingReason    string             `json:"settlement_pending_reason,omitempty"`
 }
 
 // GetUpstreamTaskID 获取上游真实 task ID（用于与 provider 通信）

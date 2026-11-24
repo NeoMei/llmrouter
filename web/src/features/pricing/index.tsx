@@ -342,12 +342,7 @@ export function Pricing() {
               model={selectedModel}
               groupRatio={groupRatio || {}}
               usableGroup={usableGroup || {}}
-              endpointMap={
-                (endpointMap as Record<
-                  string,
-                  { path?: string; method?: string }
-                >) || {}
-              }
+              endpointMap={endpointMap}
               autoGroups={autoGroups || []}
               priceRate={priceRate ?? 1}
               usdExchangeRate={usdExchangeRate ?? 1}

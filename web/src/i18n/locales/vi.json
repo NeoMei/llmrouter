@@ -1,5 +1,16 @@
 {
   "translation": {
+    "Adapter type": "Loại bộ điều hợp",
+    "ByteDance": "ByteDance",
+    "Channel instance": "Phiên bản kênh",
+    "Complete every target": "Điền thông tin bắt buộc cho mọi đích",
+    "Explicit operations can use an empty protocol list": "Có thể để trống danh sách giao thức cho các thao tác đã khai báo",
+    "Routes for {{model}}": "Tuyến cho {{model}}",
+    "Select supported protocols for each target that requires them": "Chọn giao thức được hỗ trợ cho từng đích yêu cầu giao thức",
+    "Supplier family": "Nhóm nhà cung cấp",
+    "Target": "Đích",
+    "View routes": "Xem tuyến",
+    "VolcEngine Ark": "VolcEngine Ark",
     "360": "360",
     "1000": "1000",
     "10000": "10000",

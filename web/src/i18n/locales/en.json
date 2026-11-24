@@ -1,5 +1,16 @@
 {
   "translation": {
+    "Adapter type": "Adapter type",
+    "ByteDance": "ByteDance",
+    "Channel instance": "Channel instance",
+    "Complete every target": "Complete every target",
+    "Explicit operations can use an empty protocol list": "Explicit operations can use an empty protocol list",
+    "Routes for {{model}}": "Routes for {{model}}",
+    "Select supported protocols for each target that requires them": "Select supported protocols for each target that requires them",
+    "Supplier family": "Supplier family",
+    "Target": "Target",
+    "View routes": "View routes",
+    "VolcEngine Ark": "VolcEngine Ark",
     "360": "360",
     "1000": "1000",
     "10000": "10000",

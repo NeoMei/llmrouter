@@ -167,7 +167,7 @@ func buildProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter,
 	}
 	var routes []model.ClientModelRoute
 	var targets []model.ClientModelTarget
-	if err := model.DB.WithContext(ctx).Where("enabled = ?", true).Order("id").Find(&routes).Error; err != nil {
+	if err := model.DB.WithContext(ctx).Order("id").Find(&routes).Error; err != nil {
 		return out, err
 	}
 	if err := model.DB.WithContext(ctx).Where("enabled = ?", true).Order("id").Find(&targets).Error; err != nil {
@@ -194,15 +194,8 @@ func buildProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter,
 	// Public routes own their identifiers even when a configured target is
 	// unavailable. Falling back to a legacy ability would bypass that contract.
 	for _, route := range routes {
-		reserved[strings.ToLower(route.PublicId)] = true
-		var aliases []string
-		if route.Aliases != "" {
-			if err := common.UnmarshalJsonStr(route.Aliases, &aliases); err != nil {
-				return out, err
-			}
-		}
-		for _, alias := range aliases {
-			reserved[strings.ToLower(alias)] = true
+		for _, name := range modelcatalog.RouteNames(route) {
+			reserved[name] = true
 		}
 	}
 	var channels []model.Channel
@@ -284,9 +277,13 @@ func buildProviderCatalog(ctx context.Context, adapter *platformbilling.Adapter,
 	}
 	// Existing endpoint metadata augments the adapter's native defaults.
 	model.GetPricing()
+	disabledModels, err := model.DisabledModelNames(ctx, model.DB)
+	if err != nil {
+		return out, err
+	}
 	chatAbilityTargets := map[string][]modelcatalog.ResolvedModel{}
 	for _, ability := range abilities {
-		if strings.EqualFold(ability.Model, "qwen3-vl-embedding") || reserved[strings.ToLower(ability.Model)] ||
+		if strings.EqualFold(ability.Model, "qwen3-vl-embedding") || reserved[strings.ToLower(ability.Model)] || disabledModels[strings.ToLower(ability.Model)] ||
 			(!scoped && !helper.HasModelBillingConfig(ability.Model) && !billing_setting.HasModelNativePricing(ability.Model)) {
 			continue
 		}

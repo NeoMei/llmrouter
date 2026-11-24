@@ -615,6 +615,14 @@ export async function getAllModels(): Promise<{
   return res.data
 }
 
+export async function getChannelModelPresets(): Promise<{
+  success: boolean
+  data?: Record<number, string[]>
+}> {
+  const res = await api.get('/api/models')
+  return res.data
+}
+
 /**
  * Get all enabled models
  */

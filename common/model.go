@@ -48,6 +48,16 @@ func IsImageGenerationModel(modelName string) bool {
 	return false
 }
 
+func IsSeedanceModel(modelName string) bool {
+	name := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(modelName)), "doubao-")
+	return strings.HasPrefix(name, "seedance-")
+}
+
+func IsSeedreamModel(modelName string) bool {
+	name := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(modelName)), "doubao-")
+	return strings.HasPrefix(name, "seedream-")
+}
+
 func IsOpenAITextModel(modelName string) bool {
 	modelName = strings.ToLower(modelName)
 	for _, m := range OpenAITextModels {

@@ -220,12 +220,8 @@ func buildChannelReachabilityRequest(channel *model.Channel) (channelReachabilit
 		} else {
 			request.url = appendModelListPath(baseURL, "/api/paas/v4/models")
 		}
-	case constant.ChannelTypeVolcEngine:
-		if plan, ok := constant.ChannelSpecialBases[baseURL]; ok && plan.OpenAIBaseURL != "" {
-			request.url = preserveConfiguredRawQuery(appendModelListPath(plan.OpenAIBaseURL, "/models"), baseURL)
-		} else {
-			request.url = appendModelListPath(baseURL, "/v1/models")
-		}
+	case constant.ChannelTypeVolcEngine, constant.ChannelTypeDoubaoVideo:
+		request.url = arkModelListURL(baseURL)
 	case constant.ChannelTypeMoonshot:
 		if plan, ok := constant.ChannelSpecialBases[baseURL]; ok && plan.OpenAIBaseURL != "" {
 			request.url = preserveConfiguredRawQuery(appendModelListPath(plan.OpenAIBaseURL, "/v1/models"), baseURL)
@@ -251,6 +247,13 @@ func buildChannelReachabilityRequest(channel *model.Channel) (channelReachabilit
 	return request, nil
 }
 
+func arkModelListURL(baseURL string) string {
+	if plan, ok := constant.ChannelSpecialBases[baseURL]; ok && plan.OpenAIBaseURL != "" {
+		return appendModelListPath(plan.OpenAIBaseURL, "/models")
+	}
+	return appendModelListPath(baseURL, "/api/v3/models")
+}
+
 // hasKnownModelListBaseURL limits unattended probes to the provider families
 // whose model-list endpoint is supported by the product's own discovery code.
 // A custom base URL is still allowed for OpenAI-compatible channels because it
@@ -262,7 +265,7 @@ func hasKnownModelListBaseURL(channel *model.Channel, baseURL string) bool {
 	switch channel.Type {
 	case constant.ChannelTypeOpenAI, constant.ChannelTypeCustom, constant.ChannelTypeAnthropic,
 		constant.ChannelTypeAli, constant.ChannelTypeGemini, constant.ChannelTypeOllama,
-		constant.ChannelTypeZhipu_v4, constant.ChannelTypeVolcEngine, constant.ChannelTypeMoonshot,
+		constant.ChannelTypeZhipu_v4, constant.ChannelTypeVolcEngine, constant.ChannelTypeDoubaoVideo, constant.ChannelTypeMoonshot,
 		constant.ChannelTypeOpenRouter, constant.ChannelTypeSiliconFlow, constant.ChannelTypeDeepSeek,
 		constant.ChannelTypeMistral, constant.ChannelTypeXai, constant.ChannelTypeCohere,
 		constant.ChannelTypeMiniMax, constant.ChannelTypePerplexity, constant.ChannelTypeLingYiWanWu,

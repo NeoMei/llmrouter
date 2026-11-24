@@ -329,6 +329,8 @@ func TestReachabilityMetadataPaths(t *testing.T) {
 		{name: "Ali DashScope", channel: constant.ChannelTypeAli, baseURL: "https://dashscope.aliyuncs.com", wantURL: "https://dashscope.aliyuncs.com/compatible-mode/v1/models"},
 		{name: "Ali compatible-mode prefix", channel: constant.ChannelTypeAli, baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", wantURL: "https://dashscope.aliyuncs.com/compatible-mode/v1/models"},
 		{name: "Zhipu coding plan", channel: constant.ChannelTypeZhipu_v4, baseURL: "glm-coding-plan", wantURL: "https://open.bigmodel.cn/api/coding/paas/v4/models"},
+		{name: "VolcEngine usage-based", channel: constant.ChannelTypeVolcEngine, baseURL: "https://ark.cn-beijing.volces.com", wantURL: "https://ark.cn-beijing.volces.com/api/v3/models"},
+		{name: "Doubao Video usage-based", channel: constant.ChannelTypeDoubaoVideo, baseURL: "https://ark.cn-beijing.volces.com", wantURL: "https://ark.cn-beijing.volces.com/api/v3/models"},
 		{name: "VolcEngine coding plan", channel: constant.ChannelTypeVolcEngine, baseURL: "doubao-coding-plan", wantURL: "https://ark.cn-beijing.volces.com/api/coding/v3/models"},
 		{name: "Moonshot coding plan", channel: constant.ChannelTypeMoonshot, baseURL: "kimi-coding-plan", wantURL: "https://api.kimi.com/coding/v1/models"},
 		{name: "Gemini", channel: constant.ChannelTypeGemini, baseURL: "https://generativelanguage.googleapis.com", wantURL: "https://generativelanguage.googleapis.com/v1beta/models", wantFormat: "gemini"},

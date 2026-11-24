@@ -292,3 +292,25 @@ func TestCacheUpdateChannelSyncsAdvancedCustomConfig(t *testing.T) {
 
 	assert.Nil(t, channel2advancedCustomConfig[401])
 }
+
+func TestArkModelMetadataPersistsSupplierAndModalities(t *testing.T) {
+	resetPricingEndpointTestTables(t)
+	insertPricingEndpointChannel(t, 145, constant.ChannelTypeVolcEngine, dto.ChannelOtherSettings{})
+	insertPricingEndpointAbility(t, 145, "doubao-seedream-5-5-261028")
+	insertPricingEndpointAbility(t, 145, "doubao-seedance-2-5-260628")
+
+	byModel := pricingEndpointTypesByModel(t)
+	require.Equal(t, []constant.EndpointType{constant.EndpointTypeImageGeneration}, byModel["doubao-seedream-5-5-261028"])
+	require.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAIVideo}, byModel["doubao-seedance-2-5-260628"])
+
+	var metadata []Model
+	require.NoError(t, DB.Where("model_name IN ?", []string{"doubao-seedream-5-5-261028", "doubao-seedance-2-5-260628"}).Find(&metadata).Error)
+	require.Len(t, metadata, 2)
+	for _, item := range metadata {
+		require.NotZero(t, item.VendorID)
+		var vendor Vendor
+		require.NoError(t, DB.First(&vendor, item.VendorID).Error)
+		assert.Equal(t, "字节跳动", vendor.Name)
+		assert.Equal(t, "Doubao.Color", item.Icon)
+	}
+}

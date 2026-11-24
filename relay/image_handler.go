@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
@@ -45,6 +46,9 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
 	adaptor.Init(info)
+	if err := openai.ValidateArkImageBilling(info, request); err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
 
 	var requestBody io.Reader
 
@@ -145,6 +149,13 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	}
 	if info.NativeUsageImages == nil && usage.(*dto.Usage).PromptTokens == 0 {
 		usage.(*dto.Usage).PromptTokens = 1
+	}
+	if info.ChannelType == constant.ChannelTypeVolcEngine {
+		// Ark image prices are per output image, with text input separate.
+		// Do not reinterpret its prompt token metadata as output-image tokens.
+		usage.(*dto.Usage).PromptTokens = 0
+		usage.(*dto.Usage).CompletionTokens = 0
+		usage.(*dto.Usage).TotalTokens = 0
 	}
 
 	quality := request.Quality

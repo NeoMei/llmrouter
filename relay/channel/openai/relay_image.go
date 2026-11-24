@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -23,10 +24,19 @@ import (
 )
 
 func updateOpenAIImageCount(info *relaycommon.RelayInfo, count int64) {
-	if info == nil || !info.PriceData.UsePrice || count <= 0 || count > int64(dto.MaxImageN) {
+	if info == nil || count <= 0 || count > int64(dto.MaxImageN) {
 		return
 	}
-	info.PriceData.AddOtherRatio("n", float64(count))
+	if info.PriceData.UsePrice {
+		info.PriceData.AddOtherRatio("n", float64(count))
+	}
+	// Ark reports text input tokens for image generations. Its image charges are
+	// based on completed image outputs, so those input tokens are not billable
+	// image tokens. Other OpenAI image providers keep their token accounting.
+	if info.ChannelType == constant.ChannelTypeVolcEngine {
+		info.NativeUsageImages = new(int)
+		*info.NativeUsageImages = int(count)
+	}
 }
 
 // recordNativeImageJSONUsage extracts completed image outputs from the
@@ -85,6 +95,9 @@ func OpenaiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 	}
 
 	updateOpenAIImageCount(info, gjson.GetBytes(responseBody, "data.#").Int())
+	if err := applyArkImageBilling(info, responseBody); err != nil {
+		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+	}
 	if err := recordNativeImageJSONUsage(c, info, responseBody); err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
@@ -214,6 +227,9 @@ func OpenaiImageStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp 
 		}
 		if upstreamFinished || float64(completedImages) > requestedN {
 			updateOpenAIImageCount(info, completedImages)
+			if err := applyArkImageBilling(info, lastStreamData); err != nil {
+				return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+			}
 		}
 	}
 	if info.NativeBilling != nil {
@@ -312,6 +328,9 @@ func openaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 
 	imageCount := gjson.GetBytes(responseBody, "data.#").Int()
 	updateOpenAIImageCount(info, imageCount)
+	if err := applyArkImageBilling(info, responseBody); err != nil {
+		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+	}
 	if err := recordNativeImageJSONUsage(c, info, responseBody); err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}

@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { createFileRoute, redirect } from '@tanstack/react-router'
+import { z } from 'zod'
 
 import { ClientModelRoutesPage } from '@/features/client-model-routes/client-model-routes-page'
 import { canUseProductFeature } from '@/lib/product-access'
@@ -29,5 +30,9 @@ export const Route = createFileRoute('/_authenticated/client-model-routes')({
       throw redirect({ to: '/403' })
     }
   },
+  validateSearch: z.object({
+    model: z.string().trim().min(1).optional().catch(undefined),
+    match: z.enum(['prefix', 'contains', 'suffix']).optional().catch(undefined),
+  }),
   component: ClientModelRoutesPage,
 })

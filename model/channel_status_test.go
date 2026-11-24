@@ -86,7 +86,7 @@ func TestSaveStatusStateFromSingleKeySnapshotPreservesUnownedColumns(t *testing.
 		"status_reason": "manual operation",
 		"status_time":   int64(1234),
 	})
-	require.NoError(t, stale.saveStatusState())
+	require.NoError(t, stale.saveStatusState(DB))
 
 	var stored Channel
 	require.NoError(t, DB.First(&stored, channel.Id).Error)

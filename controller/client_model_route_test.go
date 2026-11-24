@@ -24,7 +24,7 @@ func setupClientModelRouteControllerTestDB(t *testing.T) *gorm.DB {
 	require.NoError(t, err)
 	model.DB = db
 	ratio_setting.InitRatioSettings()
-	require.NoError(t, db.AutoMigrate(&model.ClientModelRoute{}, &model.ClientModelTarget{}, &model.Channel{}))
+	require.NoError(t, db.AutoMigrate(&model.ClientModelRoute{}, &model.ClientModelTarget{}, &model.Channel{}, &model.Ability{}))
 	t.Cleanup(func() { sqlDB, _ := db.DB(); _ = sqlDB.Close() })
 	return db
 }
@@ -49,6 +49,7 @@ func clientModelRouteRequestContext(t *testing.T, method, path string, payload a
 func TestCreateClientModelRouteRejectsAliasCollisionWithConflict(t *testing.T) {
 	db := setupClientModelRouteControllerTestDB(t)
 	require.NoError(t, db.Create(&model.Channel{Id: 7, Type: constant.ChannelTypeOpenAI, Models: "a,b", Status: common.ChannelStatusEnabled}).Error)
+	require.NoError(t, db.Create(&model.Ability{ChannelId: 7, Model: "b", Group: "default", Enabled: true}).Error)
 	require.NoError(t, db.Create(&model.ClientModelRoute{Id: 1, PublicId: "deepseek/a", Aliases: `["shared"]`, Enabled: true}).Error)
 	require.NoError(t, db.Create(&model.ClientModelTarget{Id: 1, RouteId: 1, ChannelId: 7, UpstreamModel: "a", BillingModel: "a", PreferredWires: `["responses"]`, Weight: 1, Enabled: true}).Error)
 	ctx, recorder := clientModelRouteRequestContext(t, http.MethodPost, "/api/client_model_routes/", clientModelRoutePayload{
@@ -89,6 +90,7 @@ func TestCreateClientModelRouteRejectsMissingOrDisabledChannel(t *testing.T) {
 func TestClientModelRouteCRUDIsTransactionalAndDoesNotExposeKeys(t *testing.T) {
 	db := setupClientModelRouteControllerTestDB(t)
 	require.NoError(t, db.Create(&model.Channel{Id: 7, Type: constant.ChannelTypeOpenAI, Name: "deepseek", Key: "secret-key", Models: "a", Status: common.ChannelStatusEnabled}).Error)
+	require.NoError(t, db.Create(&model.Ability{ChannelId: 7, Model: "a", Group: "default", Enabled: true}).Error)
 	ctx, recorder := clientModelRouteRequestContext(t, http.MethodPost, "/api/client_model_routes/", clientModelRoutePayload{
 		PublicID: "deepseek/a", DisplayName: "DeepSeek", Client: "codex", Aliases: []string{"gpt-5.6-sol"}, Enabled: true,
 		Targets: []model.ClientModelTarget{{ChannelId: 7, UpstreamModel: "a", BillingModel: "gpt-4o-mini", PreferredWires: `["responses","openai_chat"]`, Priority: 4, Weight: 2, Enabled: true}},
@@ -209,6 +211,7 @@ func TestDeleteClientModelRouteRejectsMissingRoute(t *testing.T) {
 func TestClientModelRouteEmbeddingSpaceCannotChangeInPlace(t *testing.T) {
 	db := setupClientModelRouteControllerTestDB(t)
 	require.NoError(t, db.Create(&model.Channel{Id: 7, Type: constant.ChannelTypeOpenAI, Models: "text-embedding-v4", Status: common.ChannelStatusEnabled}).Error)
+	require.NoError(t, db.Create(&model.Ability{ChannelId: 7, Model: "text-embedding-v4", Group: "default", Enabled: true}).Error)
 	metadata := `{"operations":["embeddings.create"],"embedding_space":{"provider":"aliyun","model":"text-embedding-v4","version":"v4","dimensions":1024,"input_semantics":"text/query-document-v1"}}`
 	require.NoError(t, db.Create(&model.ClientModelRoute{Id: 1, PublicId: "fixed-vector", Aliases: `["old-alias"]`, Enabled: true, Metadata: metadata}).Error)
 	target := model.ClientModelTarget{ChannelId: 7, UpstreamModel: "text-embedding-v4", BillingModel: "gpt-4o-mini", PreferredWires: `["openai_chat"]`, Weight: 1, Enabled: true}

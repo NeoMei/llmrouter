@@ -1152,6 +1152,16 @@ func RelayTask(c *gin.Context) {
 		return
 	}
 
+	if common.GetContextKeyBool(c, constant.ContextKeyDeferredModelRoute) {
+		relayInfo.RelayFormat = types.RelayFormatTask
+		routeErr := resolveClientModelRoute(c, relayInfo, 0)
+		recordRouteAdmissionDecision(GetRequestId(c), relayInfo)
+		if routeErr != nil {
+			respondTaskError(c, service.TaskErrorFromAPIError(routeErr))
+			return
+		}
+	}
+
 	// Task adaptors write their 200 JSON inside DoResponse, before RelayTask can
 	// settle the reservation or persist the pollable task. Gate that response
 	// until both have committed so a settlement/handoff failure is a real 503
@@ -1191,7 +1201,15 @@ func RelayTask(c *gin.Context) {
 		taskResponse.reset()
 		var channel *model.Channel
 
-		if lockedCh, ok := relayInfo.LockedChannel.(*model.Channel); ok && lockedCh != nil {
+		if len(relayInfo.RouteCandidates) > 0 {
+			channel, taskErr = selectVideoTaskCandidate(c, relayInfo, retryParam)
+			if taskErr != nil {
+				if retryParam.GetRetry() < common.RetryTimes && advanceRouteCandidate(relayInfo) {
+					continue
+				}
+				break
+			}
+		} else if lockedCh, ok := relayInfo.LockedChannel.(*model.Channel); ok && lockedCh != nil {
 			channel = lockedCh
 			if retryParam.GetRetry() > 0 {
 				if setupErr := middleware.SetupContextForSelectedChannel(c, channel, relayInfo.OriginModelName); setupErr != nil {
@@ -1242,6 +1260,8 @@ func RelayTask(c *gin.Context) {
 		}
 		if samePool {
 			accountpool.State(c).RetryChannel = channel
+		} else if len(relayInfo.RouteCandidates) > 0 && !advanceRouteCandidate(relayInfo) {
+			break
 		}
 	}
 
@@ -1290,12 +1310,13 @@ func RelayTask(c *gin.Context) {
 		task.PrivateData.NodeName = common.NodeName
 		if task.PrivateData.BillingContext == nil {
 			task.PrivateData.BillingContext = &model.TaskBillingContext{
-				ModelPrice:      relayInfo.PriceData.ModelPrice,
-				GroupRatio:      relayInfo.PriceData.GroupRatioInfo.GroupRatio,
-				ModelRatio:      relayInfo.PriceData.ModelRatio,
-				OtherRatios:     relayInfo.PriceData.OtherRatios(),
-				OriginModelName: relayInfo.OriginModelName,
-				PerCallBilling:  common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice,
+				ModelPrice:       relayInfo.PriceData.ModelPrice,
+				GroupRatio:       relayInfo.PriceData.GroupRatioInfo.GroupRatio,
+				ModelRatio:       relayInfo.PriceData.ModelRatio,
+				OtherRatios:      relayInfo.PriceData.OtherRatios(),
+				OriginModelName:  relayInfo.OriginModelName,
+				BillingModelName: relayInfo.BillingModelName,
+				PerCallBilling:   common.StringsContains(constant.TaskPricePatches, relayInfo.BillingModelNameOrOrigin()) || relayInfo.PriceData.UsePrice,
 			}
 		}
 		task.Quota = result.Quota
@@ -1331,6 +1352,32 @@ func RelayTask(c *gin.Context) {
 		return
 	}
 	taskResponse.commit()
+}
+
+// selectVideoTaskCandidate rechecks the resolved route before any task reservation.
+func selectVideoTaskCandidate(c *gin.Context, info *relaycommon.RelayInfo, retry *service.RetryParam) (*model.Channel, *dto.TaskError) {
+	index := info.RouteCandidateIndex
+	if err := selectRouteCandidateForAttempt(c, info, index); err != nil {
+		return nil, service.TaskErrorWrapperLocal(err, "get_channel_failed", http.StatusInternalServerError)
+	}
+	UpdateRouteDecisionSelection(GetRequestId(c), info)
+	candidate := info.RouteCandidates[index]
+	if err := revalidateRouteCandidateAbility(c, candidate); err != nil {
+		accountpool.State(c).RetryChannel = nil
+		return nil, service.TaskErrorWrapperLocal(err, "get_channel_failed", http.StatusServiceUnavailable)
+	}
+	retry.ModelName = candidate.UpstreamModel
+	channel, channelErr := getChannel(c, info, retry)
+	if channelErr != nil {
+		return nil, service.TaskErrorFromAPIError(channelErr)
+	}
+	protocol, operation, err := capability.ResolveRequest(c.Request.Method, c.Request.URL.Path)
+	if err != nil || operation != capability.OperationVideoCreate ||
+		!slices.Contains(candidate.Capabilities.Operations, string(operation)) ||
+		!middleware.ChannelSupportsRequestPath(channel, c.Request.URL.Path, candidate.UpstreamModel, protocol, operation) {
+		return nil, service.TaskErrorWrapperLocal(errors.New("configured target does not support video creation"), "unsupported_operation", http.StatusBadRequest)
+	}
+	return channel, nil
 }
 
 // respondTaskError 统一输出 Task 错误响应（含 429 限流提示改写）
@@ -1585,26 +1632,9 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 
 func hasMatchingClientModelRoute(routes []model.ClientModelRoute, requestedModel, client string) bool {
 	requested := strings.ToLower(strings.TrimSpace(requestedModel))
-	client = strings.ToLower(strings.TrimSpace(client))
 	for _, route := range routes {
-		routeClient := strings.ToLower(strings.TrimSpace(route.Client))
-		if routeClient == "" {
-			routeClient = "all"
-		}
-		if routeClient != "all" && routeClient != client {
-			continue
-		}
-		if strings.EqualFold(strings.TrimSpace(route.PublicId), requested) {
+		if modelcatalog.RouteMatchesClient(route.Client, client) && slices.Contains(modelcatalog.RouteNames(route), requested) {
 			return true
-		}
-		var aliases []string
-		if common.Unmarshal([]byte(route.Aliases), &aliases) != nil {
-			continue
-		}
-		for _, alias := range aliases {
-			if strings.EqualFold(strings.TrimSpace(alias), requested) {
-				return true
-			}
 		}
 	}
 	return false
@@ -1698,17 +1728,7 @@ func clientForRequest(c *gin.Context, relayInfo *relaycommon.RelayInfo) string {
 	if relayInfo.ManagedNativePricing() {
 		return relayInfo.PlatformBilling.NativeOriginProduct()
 	}
-	if client := strings.TrimSpace(c.Query("client")); client != "" {
-		return client
-	}
-	path := c.Request.URL.Path
-	if strings.Contains(path, "/v1/messages") {
-		return "claude"
-	}
-	if strings.Contains(path, "/v1beta/models") || (strings.Contains(path, "/v1/models/") && strings.Contains(path, ":")) {
-		return "gemini"
-	}
-	return "codex"
+	return modelcatalog.RequestClient(c.Query("client"), c.Request.URL.Path)
 }
 
 func selectWireForRequest(relayInfo *relaycommon.RelayInfo, resolved *modelcatalog.ResolvedModel) (relayprotocol.Decision, error) {

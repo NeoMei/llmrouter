@@ -14,6 +14,15 @@ func (s managedRuntimeSources) CanonicalBillingModel(_ context.Context, name str
 	name = strings.TrimSpace(name)
 	return name, name != "", nil
 }
+func (s managedRuntimeSources) DisabledModels(ctx context.Context) (map[string]bool, error) {
+	if availability, ok := s.RuntimeSources.(interface {
+		DisabledModels(context.Context) (map[string]bool, error)
+	}); ok {
+		return availability.DisabledModels(ctx)
+	}
+	return nil, nil
+}
+
 func AssembleManagedRuntimeCatalog(ctx context.Context, runtime RuntimeContext, routes []ClientModelRoute, targets []ClientModelTarget, sources RuntimeSources, auth VisibilityAuthorizer) (*Catalog, error) {
 	if sources == nil {
 		return AssembleRuntimeCatalog(ctx, runtime, routes, targets, nil, auth)

@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { getRouteApi, Link } from '@tanstack/react-router'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -23,6 +24,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { SectionPageLayout } from '@/components/layout'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { getChannelAdapterLabel } from '@/features/channels/lib/channel-utils'
 import { canUseProductFeature } from '@/lib/product-access'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -41,12 +43,17 @@ import {
 import { validateFixedSpace, readMetadata } from './metadata'
 import { MetadataEditor } from './metadata-editor'
 import {
+  getRouteWirePolicy,
+  matchRouteModel,
   parsePreferredWires,
   serializePreferredWires,
   validateAliases,
+  validateTargetWires,
   WIRE_PROTOCOLS,
   type WireProtocol,
 } from './validation'
+
+const routeApi = getRouteApi('/_authenticated/client-model-routes')
 
 const emptyTarget = (): ClientModelTarget => ({
   channel_id: 0,
@@ -72,6 +79,7 @@ export function ClientModelRoutesPage() {
   const user = useAuthStore((state) => state.auth.user)
   const canWrite = canUseProductFeature(user, 'routing', 'write')
   const { t } = useTranslation()
+  const search = routeApi.useSearch()
   const [routes, setRoutes] = useState<ClientModelRoute[]>([])
   const [channels, setChannels] = useState<ClientModelRouteChannelOption[]>([])
   const [billingModels, setBillingModels] = useState<string[]>([])
@@ -83,6 +91,17 @@ export function ClientModelRoutesPage() {
     null
   )
   const [deleting, setDeleting] = useState(false)
+
+  const wirePolicy = useMemo(
+    () => getRouteWirePolicy(form.metadata || ''),
+    [form.metadata]
+  )
+  const modelFilter = search.model
+  const visibleRoutes = modelFilter
+    ? routes.filter((route) =>
+        matchRouteModel(route, modelFilter, search.match)
+      )
+    : routes
 
   const channelsByID = useMemo(
     () => new Map(channels.map((channel) => [channel.id, channel])),
@@ -138,18 +157,12 @@ export function ClientModelRoutesPage() {
         target.channel_id <= 0 ||
         !target.upstream_model.trim() ||
         !target.billing_model.trim() ||
-        parsePreferredWires(target.preferred_wires).length === 0 ||
         target.weight < 1
     )
     if (invalidTarget) {
-      setError(t('Complete every target and select at least one protocol'))
+      setError(t('Complete every target'))
       return
     }
-    if (form.enabled && !form.targets.some((target) => target.enabled)) {
-      setError(t('An enabled route needs at least one enabled target'))
-      return
-    }
-
     const metadataError = validateFixedSpace(
       form.metadata || '',
       form.targets,
@@ -157,6 +170,26 @@ export function ClientModelRoutesPage() {
     )
     if (metadataError) {
       setError(t(metadataError))
+      return
+    }
+
+    if (
+      form.targets.some(
+        (target) =>
+          !validateTargetWires(
+            target.preferred_wires,
+            wirePolicy,
+            channelsByID.get(target.channel_id)?.wires
+          )
+      )
+    ) {
+      setError(
+        t('Select supported protocols for each target that requires them')
+      )
+      return
+    }
+    if (form.enabled && !form.targets.some((target) => target.enabled)) {
+      setError(t('An enabled route needs at least one enabled target'))
       return
     }
 
@@ -190,10 +223,10 @@ export function ClientModelRoutesPage() {
       public_id: route.public_id,
       display_name: route.display_name,
       client: route.client,
-      aliases: [...route.aliases],
+      aliases: [...(route.aliases ?? [])],
       metadata: route.metadata || '',
       enabled: route.enabled,
-      targets: route.targets.map((target) => ({ ...target })),
+      targets: (route.targets ?? []).map((target) => ({ ...target })),
     })
   }
 
@@ -246,44 +279,89 @@ export function ClientModelRoutesPage() {
             }
           >
             <div className='rounded-md border'>
+              {search.model && (
+                <div className='flex flex-wrap items-center justify-between gap-2 border-b p-4 text-sm'>
+                  <span className='[overflow-wrap:anywhere]'>
+                    {t('Routes for {{model}}', { model: search.model })}
+                  </span>
+                  <Link
+                    to='/client-model-routes'
+                    search={{}}
+                    className='text-primary hover:underline'
+                  >
+                    {t('Clear filters')}
+                  </Link>
+                </div>
+              )}
               {loading && (
                 <p className='text-muted-foreground p-4 text-sm'>
                   {t('Loading...')}
                 </p>
               )}
-              {!loading && routes.length === 0 && (
-                <p className='text-muted-foreground p-4 text-sm'>
-                  {t('No client model routes')}
+              {!loading && error && !canWrite && (
+                <p role='alert' className='text-destructive p-4 text-sm'>
+                  {error}
                 </p>
               )}
-              {!loading && routes.length > 0 && (
+              {!loading && visibleRoutes.length === 0 && (
+                <p className='text-muted-foreground p-4 text-sm'>
+                  {search.model
+                    ? t('No matches found')
+                    : t('No client model routes')}
+                </p>
+              )}
+              {!loading && visibleRoutes.length > 0 && (
                 <div className='divide-y'>
-                  {routes.map((route) => (
+                  {visibleRoutes.map((route) => (
                     <div
                       className='flex items-start justify-between gap-3 p-4'
                       key={route.id}
                     >
                       <div className='min-w-0'>
-                        <p className='font-medium'>{route.public_id}</p>
+                        <p className='font-medium [overflow-wrap:anywhere]'>
+                          {route.public_id}{' '}
+                          <span className='text-muted-foreground text-xs'>
+                            #{route.id}
+                          </span>
+                        </p>
                         <p className='text-muted-foreground text-xs'>
-                          {t('Aliases')}: {route.aliases.join(', ') || '—'} ·{' '}
+                          {t('Aliases')}: {route.aliases?.join(', ') || '—'} ·{' '}
                           {t('Client')}: {route.client} ·{' '}
                           {route.enabled ? t('Enabled') : t('Disabled')}
                         </p>
                         <p className='text-muted-foreground mt-1 text-xs'>
                           {t('{{count}} targets', {
-                            count: route.targets.length,
+                            count: route.targets?.length ?? 0,
                           })}
-                          :{' '}
-                          {route.targets
-                            .map((target) => {
-                              const channel = channelsByID.get(
-                                target.channel_id
-                              )
-                              return `${channel?.name ?? `#${target.channel_id}`}/${target.upstream_model}`
-                            })
-                            .join(', ')}
                         </p>
+                        <ul className='mt-1 space-y-2 text-xs [overflow-wrap:anywhere]'>
+                          {(route.targets ?? []).map((target, index) => {
+                            const channel = channelsByID.get(target.channel_id)
+                            return (
+                              <li key={target.id ?? index}>
+                                <div>
+                                  {t('Target')}{' '}
+                                  {target.id ? `#${target.id}` : index + 1}
+                                  {' · '}
+                                  {target.enabled
+                                    ? t('Enabled')
+                                    : t('Disabled')}
+                                </div>
+                                <div className='text-muted-foreground'>
+                                  {t('Channel')} #{target.channel_id}
+                                  {channel &&
+                                    ` · ${channel.name} · ${t(getChannelAdapterLabel(channel.type))} (${channel.type})`}
+                                </div>
+                                <div className='text-muted-foreground'>
+                                  {t('Upstream model')} ·{' '}
+                                  {target.upstream_model}
+                                  {' / '}
+                                  {t('Billing model')} · {target.billing_model}
+                                </div>
+                              </li>
+                            )
+                          })}
+                        </ul>
                       </div>
                       {canWrite && (
                         <div className='flex shrink-0 gap-2'>
@@ -340,6 +418,16 @@ export function ClientModelRoutesPage() {
                     <option value='codex'>Codex</option>
                     <option value='claude'>Claude Code</option>
                     <option value='gemini'>Gemini</option>
+                    <option value='llmrouter'>LLMRouter</option>
+                    {![
+                      'all',
+                      'codex',
+                      'claude',
+                      'gemini',
+                      'llmrouter',
+                    ].includes(form.client) && (
+                      <option value={form.client}>{form.client}</option>
+                    )}
                   </select>
                 </label>
                 <TextField
@@ -366,7 +454,8 @@ export function ClientModelRoutesPage() {
                 {form.targets.map((target, index) => {
                   const channel = channelsByID.get(target.channel_id)
                   const selectedWires = parsePreferredWires(
-                    target.preferred_wires
+                    target.preferred_wires,
+                    wirePolicy
                   )
                   return (
                     <div
@@ -406,7 +495,10 @@ export function ClientModelRoutesPage() {
                               channel_id: nextChannel?.id ?? 0,
                               upstream_model: nextChannel?.models[0] ?? '',
                               preferred_wires: serializePreferredWires(
-                                nextChannel?.wires ?? []
+                                wirePolicy === 'media-only' ||
+                                  wirePolicy === 'video-only'
+                                  ? []
+                                  : (nextChannel?.wires ?? [])
                               ),
                             })
                           }}
@@ -414,7 +506,9 @@ export function ClientModelRoutesPage() {
                           <option value=''>{t('Select a channel')}</option>
                           {channels.map((option) => (
                             <option key={option.id} value={option.id}>
-                              {option.name} (#{option.id})
+                              #{option.id} · {option.name} ·{' '}
+                              {t(getChannelAdapterLabel(option.type))} (
+                              {option.type})
                             </option>
                           ))}
                         </select>
@@ -488,8 +582,20 @@ export function ClientModelRoutesPage() {
                         <legend className='text-sm'>
                           {t('Preferred protocols')}
                         </legend>
+                        {wirePolicy !== 'required' && (
+                          <p className='text-muted-foreground text-xs'>
+                            {t(
+                              'Explicit operations can use an empty protocol list'
+                            )}
+                          </p>
+                        )}
                         <div className='mt-2 flex flex-wrap gap-4'>
-                          {WIRE_PROTOCOLS.map((wire) => (
+                          {WIRE_PROTOCOLS.filter(
+                            (wire) =>
+                              wirePolicy !== 'video-only' ||
+                              wire !== 'openai_chat' ||
+                              selectedWires.includes(wire)
+                          ).map((wire) => (
                             <label
                               className='flex items-center gap-2 text-sm'
                               key={wire}
@@ -497,7 +603,9 @@ export function ClientModelRoutesPage() {
                               <Checkbox
                                 checked={selectedWires.includes(wire)}
                                 disabled={
-                                  !!channel && !channel.wires.includes(wire)
+                                  !!channel &&
+                                  !channel.wires.includes(wire) &&
+                                  !selectedWires.includes(wire)
                                 }
                                 onCheckedChange={(checked) => {
                                   const nextWires = checked

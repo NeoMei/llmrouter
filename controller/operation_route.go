@@ -11,13 +11,17 @@ import (
 )
 
 // operationOnlyCandidate uses the endpoint's fixed native protocol, without
-// inventing a Chat wire for image, embedding, rerank or audio requests.
+// inventing a Chat wire for operation-only requests.
 func operationOnlyCandidate(info *relaycommon.RelayInfo, resolved *modelcatalog.ResolvedModel) bool {
 	if info == nil || resolved == nil || len(resolved.PreferredWires) != 0 || !modelcatalog.OperationOnlyRoute(resolved.Capabilities.Operations) {
 		return false
 	}
 	var operation capability.Operation
 	switch info.RelayFormat {
+	case types.RelayFormatTask:
+		if info.RelayMode == relayconstant.RelayModeVideoSubmit {
+			operation = capability.OperationVideoCreate
+		}
 	case types.RelayFormatOpenAIImage:
 		switch info.RelayMode {
 		case relayconstant.RelayModeImagesGenerations:

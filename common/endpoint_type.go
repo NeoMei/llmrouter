@@ -42,7 +42,7 @@ func GetEndpointTypesByChannelType(channelType int, modelName string) []constant
 			return []constant.EndpointType{constant.EndpointTypeImageGeneration}
 		}
 		if IsSeedanceModel(modelName) {
-			return []constant.EndpointType{constant.EndpointTypeOpenAIVideo}
+			return nil
 		}
 		endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAI}
 	case constant.ChannelTypeDoubaoVideo, constant.ChannelTypeSora:

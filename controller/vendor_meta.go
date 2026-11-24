@@ -78,6 +78,7 @@ func CreateVendorMeta(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	model.InvalidatePricingCache()
 	common.ApiSuccess(c, &v)
 }
 
@@ -105,6 +106,7 @@ func UpdateVendorMeta(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	model.InvalidatePricingCache()
 	common.ApiSuccess(c, &v)
 }
 
@@ -116,9 +118,11 @@ func DeleteVendorMeta(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if err := model.DB.Delete(&model.Vendor{}, id).Error; err != nil {
+	vendor := model.Vendor{Id: id}
+	if err := vendor.Delete(); err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	model.InvalidatePricingCache()
 	common.ApiSuccess(c, nil)
 }

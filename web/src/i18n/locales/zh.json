@@ -1,5 +1,16 @@
 {
   "translation": {
+    "Adapter type": "适配器类型",
+    "ByteDance": "字节跳动",
+    "Channel instance": "渠道实例",
+    "Complete every target": "请填写所有目标的必填信息",
+    "Explicit operations can use an empty protocol list": "已显式声明操作时，可以留空协议列表",
+    "Routes for {{model}}": "{{model}} 的路由",
+    "Select supported protocols for each target that requires them": "请为需要协议的目标选择受支持的协议",
+    "Supplier family": "供应商归属",
+    "Target": "目标",
+    "View routes": "查看路由",
+    "VolcEngine Ark": "火山方舟",
     "360": "360",
     "1000": "1000",
     "10000": "10000",

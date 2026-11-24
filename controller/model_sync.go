@@ -180,10 +180,10 @@ func fetchJSON[T any](ctx context.Context, url string, out *upstreamEnvelope[T])
 				cacheMutex.Unlock()
 
 				// Try decode as envelope first
-				if err := json.Unmarshal(buf, out); err != nil {
+				if err := common.Unmarshal(buf, out); err != nil {
 					// Try decode as pure array
 					var arr []T
-					if err2 := json.Unmarshal(buf, &arr); err2 != nil {
+					if err2 := common.Unmarshal(buf, &arr); err2 != nil {
 						lastErr = err
 						return
 					}
@@ -205,9 +205,9 @@ func fetchJSON[T any](ctx context.Context, url string, out *upstreamEnvelope[T])
 					lastErr = errors.New("cache miss for 304 response")
 					return
 				}
-				if err := json.Unmarshal(buf, out); err != nil {
+				if err := common.Unmarshal(buf, out); err != nil {
 					var arr []T
-					if err2 := json.Unmarshal(buf, &arr); err2 != nil {
+					if err2 := common.Unmarshal(buf, &arr); err2 != nil {
 						lastErr = err
 						return
 					}
@@ -234,32 +234,19 @@ func fetchJSON[T any](ctx context.Context, url string, out *upstreamEnvelope[T])
 	return lastErr
 }
 
-func ensureVendorID(vendorName string, vendorByName map[string]upstreamVendor, vendorIDCache map[string]int, createdVendors *int) int {
+func ensureUpstreamVendor(tx *gorm.DB, vendorName string, vendorByName map[string]upstreamVendor) (int, bool, error) {
 	if vendorName == "" {
-		return 0
+		return 0, false, nil
 	}
-	if id, ok := vendorIDCache[vendorName]; ok {
-		return id
-	}
-	var existing model.Vendor
-	if err := model.DB.Where("name = ?", vendorName).First(&existing).Error; err == nil {
-		vendorIDCache[vendorName] = existing.Id
-		return existing.Id
-	}
-	uv := vendorByName[vendorName]
-	v := &model.Vendor{
+	upstream := vendorByName[vendorName]
+	vendor := &model.Vendor{
 		Name:        vendorName,
-		Description: uv.Description,
-		Icon:        coalesce(uv.Icon, ""),
-		Status:      chooseStatus(uv.Status, 1),
+		Description: upstream.Description,
+		Icon:        upstream.Icon,
+		Status:      chooseStatus(upstream.Status, 1),
 	}
-	if err := v.Insert(); err == nil {
-		*createdVendors++
-		vendorIDCache[vendorName] = v.Id
-		return v.Id
-	}
-	vendorIDCache[vendorName] = 0
-	return 0
+	created, err := vendor.FindOrInsertWithDB(tx)
+	return vendor.Id, created, err
 }
 
 // SyncUpstreamModels 同步上游模型与供应商：
@@ -349,9 +336,7 @@ func SyncUpstreamModels(c *gin.Context) {
 	createdList := make([]string, 0)
 	updatedList := make([]string, 0)
 
-	// 本地缓存：vendorName -> id
-	vendorIDCache := make(map[string]int)
-
+	db := model.DB.WithContext(c.Request.Context())
 	for _, name := range missing {
 		up, ok := modelByName[name]
 		if !ok {
@@ -359,95 +344,108 @@ func SyncUpstreamModels(c *gin.Context) {
 			continue
 		}
 
-		// 若本地已存在且设置为不同步，则跳过（极端情况：缺失列表与本地状态不同步时）
-		var existing model.Model
-		if err := model.DB.Where("model_name = ?", name).First(&existing).Error; err == nil {
-			if existing.SyncOfficial == 0 {
-				skipped = append(skipped, name)
-				continue
+		var createdModel, createdVendor bool
+		err := db.Transaction(func(tx *gorm.DB) error {
+			if _, err := model.GetModelMetadataForUpdate(tx, name); err == nil {
+				return nil
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
 			}
-		}
 
-		// 确保 vendor 存在
-		vendorID := ensureVendorID(up.VendorName, vendorByName, vendorIDCache, &createdVendors)
-
-		// 创建模型
-		mi := &model.Model{
-			ModelName:   name,
-			Description: up.Description,
-			Icon:        up.Icon,
-			Tags:        up.Tags,
-			VendorID:    vendorID,
-			Status:      chooseStatus(up.Status, 1),
-			NameRule:    up.NameRule,
+			vendorID, created, err := ensureUpstreamVendor(tx, up.VendorName, vendorByName)
+			if err != nil {
+				return err
+			}
+			item := &model.Model{
+				ModelName:   name,
+				Description: up.Description,
+				Icon:        up.Icon,
+				Tags:        up.Tags,
+				VendorID:    vendorID,
+				Status:      chooseStatus(up.Status, 1),
+				NameRule:    up.NameRule,
+			}
+			if err := item.InsertWithDB(tx); err != nil {
+				return err
+			}
+			createdModel, createdVendor = true, created
+			return nil
+		})
+		if err != nil {
+			common.SysError(fmt.Sprintf("sync model metadata %q: %v", name, err))
+			skipped = append(skipped, name)
+			continue
 		}
-		if err := mi.Insert(); err == nil {
+		if createdVendor {
+			createdVendors++
+		}
+		if createdModel {
 			createdModels++
 			createdList = append(createdList, name)
-		} else {
-			skipped = append(skipped, name)
 		}
 	}
 
-	// 4) 处理可选覆盖（更新本地已有模型的差异字段）
-	if len(req.Overwrite) > 0 {
-		// vendorIDCache 已用于创建阶段，可复用
-		for _, ow := range req.Overwrite {
-			up, ok := modelByName[ow.ModelName]
-			if !ok {
-				continue
-			}
-			var local model.Model
-			if err := model.DB.Where("model_name = ?", ow.ModelName).First(&local).Error; err != nil {
-				continue
-			}
-
-			// 跳过被禁用官方同步的模型
-			if local.SyncOfficial == 0 {
-				continue
-			}
-
-			// 映射 vendor
-			newVendorID := ensureVendorID(up.VendorName, vendorByName, vendorIDCache, &createdVendors)
-
-			// 应用字段覆盖（事务）
-			_ = model.DB.Transaction(func(tx *gorm.DB) error {
-				needUpdate := false
-				if containsField(ow.Fields, "description") {
-					local.Description = up.Description
-					needUpdate = true
-				}
-				if containsField(ow.Fields, "icon") {
-					local.Icon = up.Icon
-					needUpdate = true
-				}
-				if containsField(ow.Fields, "tags") {
-					local.Tags = up.Tags
-					needUpdate = true
-				}
-				if containsField(ow.Fields, "vendor") {
-					local.VendorID = newVendorID
-					needUpdate = true
-				}
-				if containsField(ow.Fields, "name_rule") {
-					local.NameRule = up.NameRule
-					needUpdate = true
-				}
-				if containsField(ow.Fields, "status") {
-					local.Status = chooseStatus(up.Status, local.Status)
-					needUpdate = true
-				}
-				if !needUpdate {
-					return nil
-				}
-				if err := tx.Save(&local).Error; err != nil {
-					return err
-				}
-				updatedModels++
-				updatedList = append(updatedList, ow.ModelName)
-				return nil
-			})
+	for _, overwrite := range req.Overwrite {
+		up, ok := modelByName[overwrite.ModelName]
+		if !ok {
+			continue
 		}
+		var changed, createdVendor bool
+		err := db.Transaction(func(tx *gorm.DB) error {
+			local, err := model.GetModelMetadataForUpdate(tx, overwrite.ModelName)
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if local.SyncOfficial == 0 {
+				return nil
+			}
+			for _, field := range overwrite.Fields {
+				switch field {
+				case "description":
+					local.Description = up.Description
+				case "icon":
+					local.Icon = up.Icon
+				case "tags":
+					local.Tags = up.Tags
+				case "vendor":
+					vendorID, created, err := ensureUpstreamVendor(tx, up.VendorName, vendorByName)
+					if err != nil {
+						return err
+					}
+					local.VendorID = vendorID
+					createdVendor = createdVendor || created
+				case "name_rule":
+					local.NameRule = up.NameRule
+				case "status":
+					local.Status = chooseStatus(up.Status, local.Status)
+				default:
+					continue
+				}
+				changed = true
+			}
+			if !changed {
+				return nil
+			}
+			return local.UpdateWithDB(tx)
+		})
+		if err != nil {
+			common.SysError(fmt.Sprintf("update synced model metadata %q: %v", overwrite.ModelName, err))
+			skipped = append(skipped, overwrite.ModelName)
+			continue
+		}
+		if createdVendor {
+			createdVendors++
+		}
+		if changed {
+			updatedModels++
+			updatedList = append(updatedList, overwrite.ModelName)
+		}
+	}
+	if createdModels > 0 || updatedModels > 0 {
+		model.InvalidatePricingCache()
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -466,23 +464,6 @@ func SyncUpstreamModels(c *gin.Context) {
 			},
 		},
 	})
-}
-
-func containsField(fields []string, key string) bool {
-	key = strings.ToLower(strings.TrimSpace(key))
-	for _, f := range fields {
-		if strings.ToLower(strings.TrimSpace(f)) == key {
-			return true
-		}
-	}
-	return false
-}
-
-func coalesce(a, b string) string {
-	if strings.TrimSpace(a) != "" {
-		return a
-	}
-	return b
 }
 
 func chooseStatus(primary, fallback int) int {

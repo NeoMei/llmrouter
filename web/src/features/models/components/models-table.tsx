@@ -161,7 +161,6 @@ export function ModelsTable() {
     totalCount,
     initialColumnVisibility: {
       description: false,
-      bound_channels: false,
       quota_types: false,
     },
     columnFilters,

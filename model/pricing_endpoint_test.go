@@ -15,14 +15,14 @@ func resetPricingEndpointTestTables(t *testing.T) {
 	t.Helper()
 	originalMemoryCacheEnabled := common.MemoryCacheEnabled
 	common.MemoryCacheEnabled = true
-	require.NoError(t, DB.AutoMigrate(&Channel{}, &Ability{}, &Model{}, &Vendor{}))
-	for _, table := range []string{"abilities", "channels", "models", "vendors"} {
+	require.NoError(t, DB.AutoMigrate(&Channel{}, &Ability{}, &Model{}, &Vendor{}, &ClientModelRoute{}, &ClientModelTarget{}))
+	for _, table := range []string{"abilities", "channels", "models", "vendors", "client_model_targets", "client_model_routes"} {
 		require.NoError(t, DB.Exec("DELETE FROM "+table).Error)
 	}
 	InitChannelCache()
 	InvalidatePricingCache()
 	t.Cleanup(func() {
-		for _, table := range []string{"abilities", "channels", "models", "vendors"} {
+		for _, table := range []string{"abilities", "channels", "models", "vendors", "client_model_targets", "client_model_routes"} {
 			require.NoError(t, DB.Exec("DELETE FROM "+table).Error)
 		}
 		InitChannelCache()
@@ -293,26 +293,84 @@ func TestCacheUpdateChannelSyncsAdvancedCustomConfig(t *testing.T) {
 	assert.Nil(t, channel2advancedCustomConfig[401])
 }
 
-func TestArkModelMetadataPersistsSupplierAndModalities(t *testing.T) {
+func TestPricingArkFallbackIsReadOnlyAndReflectsChannelModality(t *testing.T) {
 	resetPricingEndpointTestTables(t)
 	insertPricingEndpointChannel(t, 145, constant.ChannelTypeVolcEngine, dto.ChannelOtherSettings{})
+	insertPricingEndpointChannel(t, 154, constant.ChannelTypeDoubaoVideo, dto.ChannelOtherSettings{})
 	insertPricingEndpointAbility(t, 145, "doubao-seedream-5-5-261028")
-	insertPricingEndpointAbility(t, 145, "doubao-seedance-2-5-260628")
+	insertPricingEndpointAbility(t, 145, "doubao-seedance-misconfigured")
+	insertPricingEndpointAbility(t, 154, "doubao-seedance-2-5-260628")
+	require.NoError(t, (&Model{
+		ModelName: "doubao-seedance-misconfigured",
+		Status:    1,
+		Endpoints: `{"openai-video":"/v1/videos"}`,
+	}).Insert())
 
-	byModel := pricingEndpointTypesByModel(t)
-	require.Equal(t, []constant.EndpointType{constant.EndpointTypeImageGeneration}, byModel["doubao-seedream-5-5-261028"])
-	require.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAIVideo}, byModel["doubao-seedance-2-5-260628"])
-
-	var metadata []Model
-	require.NoError(t, DB.Where("model_name IN ?", []string{"doubao-seedream-5-5-261028", "doubao-seedance-2-5-260628"}).Find(&metadata).Error)
-	require.Len(t, metadata, 2)
-	for _, item := range metadata {
-		require.NotZero(t, item.VendorID)
-		var vendor Vendor
-		require.NoError(t, DB.First(&vendor, item.VendorID).Error)
-		assert.Equal(t, "字节跳动", vendor.Name)
-		assert.Equal(t, "Doubao.Color", item.Icon)
+	for _, refresh := range []func(){func() { GetPricing() }, RefreshPricing} {
+		refresh()
+		var modelCount, vendorCount int64
+		require.NoError(t, DB.Model(&Model{}).Count(&modelCount).Error)
+		require.NoError(t, DB.Model(&Vendor{}).Count(&vendorCount).Error)
+		assert.EqualValues(t, 1, modelCount)
+		assert.Zero(t, vendorCount)
 	}
+
+	prices := make(map[string]Pricing)
+	for _, row := range GetPricing() {
+		prices[row.ModelName] = row
+	}
+	vendors := make(map[int]PricingVendor)
+	for _, vendor := range GetVendors() {
+		vendors[vendor.ID] = vendor
+	}
+	for _, name := range []string{"doubao-seedream-5-5-261028", "doubao-seedance-2-5-260628"} {
+		assert.Equal(t, "字节跳动", vendors[prices[name].VendorID].Name)
+		assert.Equal(t, "Doubao.Color", prices[name].Icon)
+	}
+	assert.Equal(t, []constant.EndpointType{constant.EndpointTypeImageGeneration}, prices["doubao-seedream-5-5-261028"].SupportedEndpointTypes)
+	assert.Empty(t, prices["doubao-seedance-misconfigured"].SupportedEndpointTypes)
+	assert.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAIVideo}, prices["doubao-seedance-2-5-260628"].SupportedEndpointTypes)
+	assert.Equal(t, common.EndpointInfo{Path: "/v1/videos", Method: "POST"}, GetSupportedEndpointMap()["openai-video"])
+}
+
+func TestPricingEndpointInfoIsScopedToEachModel(t *testing.T) {
+	resetPricingEndpointTestTables(t)
+	insertPricingEndpointChannel(t, 1, constant.ChannelTypeOpenAI, dto.ChannelOtherSettings{})
+	for _, name := range []string{"custom-chat", "ordinary-chat"} {
+		insertPricingEndpointAbility(t, 1, name)
+	}
+	require.NoError(t, (&Model{
+		ModelName: "custom-chat",
+		Status:    1,
+		Endpoints: `{"openai":"/v1/chat/custom","custom":{"path":"/v1/custom","method":"get"}}`,
+	}).Insert())
+
+	body, err := common.Marshal(GetPricing())
+	require.NoError(t, err)
+	var rows []struct {
+		Name         string                         `json:"model_name"`
+		EndpointInfo map[string]common.EndpointInfo `json:"endpoint_info"`
+	}
+	require.NoError(t, common.Unmarshal(body, &rows))
+	require.Len(t, rows, 2)
+	for _, row := range rows {
+		switch row.Name {
+		case "custom-chat":
+			assert.Equal(t, map[string]common.EndpointInfo{
+				"openai": {Path: "/v1/chat/custom", Method: "POST"},
+				"custom": {Path: "/v1/custom", Method: "GET"},
+			}, row.EndpointInfo)
+		case "ordinary-chat":
+			assert.Equal(t, map[string]common.EndpointInfo{
+				"openai": {Path: "/v1/chat/completions", Method: "POST"},
+			}, row.EndpointInfo)
+		default:
+			t.Fatalf("unexpected model %s", row.Name)
+		}
+	}
+	assert.Equal(t, map[string]common.EndpointInfo{
+		"openai": {Path: "/v1/chat/completions", Method: "POST"},
+	}, GetSupportedEndpointMap())
 }
 
 func TestPricingFallbackLeavesUncoveredNonArkMetadataReadOnly(t *testing.T) {
@@ -357,4 +415,19 @@ func TestPricingFallbackKeepsLegacyVendorPresentation(t *testing.T) {
 	require.NoError(t, DB.Model(&Vendor{}).Count(&vendors).Error)
 	assert.Zero(t, models)
 	assert.EqualValues(t, 1, vendors)
+}
+
+func TestPricingReadLeavesInvalidAdvancedChannelSettingsUntouched(t *testing.T) {
+	resetPricingEndpointTestTables(t)
+	common.MemoryCacheEnabled = false
+	insertPricingEndpointChannel(t, 58, constant.ChannelTypeAdvancedCustom, dto.ChannelOtherSettings{})
+	insertPricingEndpointAbility(t, 58, "advanced-fallback")
+	const invalid = "{bad json"
+	require.NoError(t, DB.Model(&Channel{}).Where("id = ?", 58).Update("settings", invalid).Error)
+
+	result := pricingEndpointTypesFromPricing(GetPricing())
+	assert.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAI}, result["advanced-fallback"])
+	channel, err := GetChannelById(58, true)
+	require.NoError(t, err)
+	assert.Equal(t, invalid, channel.OtherSettings)
 }

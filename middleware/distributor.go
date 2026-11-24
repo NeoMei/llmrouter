@@ -57,6 +57,17 @@ func Distribute() func(c *gin.Context) {
 			abortWithOpenAiMessage(c, http.StatusBadRequest, err.Error(), types.ErrorCodeUnsupportedOperation)
 			return
 		}
+		if shouldSelectChannel {
+			disabled, err := model.DisabledModelNames(c.Request.Context(), model.DB)
+			if err != nil {
+				abortWithOpenAiMessage(c, http.StatusServiceUnavailable, "model availability unavailable", types.ErrorCodeQueryDataError)
+				return
+			}
+			if disabled[strings.ToLower(strings.TrimSpace(modelRequest.Model))] {
+				abortWithOpenAiMessage(c, http.StatusNotFound, "model is disabled", types.ErrorCodeAccessDenied)
+				return
+			}
+		}
 		// Recognition grants no authority. Unsupported handler lifecycles must
 		// fail closed rather than reusing a legacy ability with the same name.
 		canDefer := false
@@ -64,16 +75,20 @@ func Distribute() func(c *gin.Context) {
 		case capability.OperationChatCreate, capability.OperationCompletionCreate, capability.OperationResponseCreate, capability.OperationResponseCompact, capability.OperationClaudeMessageCreate, capability.OperationEmbeddingCreate, capability.OperationMultimodalEmbedding, capability.OperationAudioTranscription, capability.OperationAudioTranslation, capability.OperationAudioSpeech, capability.OperationImageGeneration, capability.OperationImageEdit, capability.OperationImageVariation, capability.OperationRerankCreate, capability.OperationGeminiGenerate, capability.OperationGeminiEmbed, capability.OperationVideoCreate:
 			canDefer = true
 		}
+		client := modelcatalog.RequestClient(c.Query("client"), c.Request.URL.Path)
+		if platformSession != nil && platformSession.NativeOriginProduct() != "" && !platformSession.PinnedKnowledge() {
+			client = platformSession.NativeOriginProduct()
+		}
 		recognized, routeErr := false, error(nil)
 		if shouldSelectChannel {
-			recognized, routeErr = modelcatalog.RecognizesPublicModel(c.Request.Context(), model.DB, modelRequest.Model)
+			recognized, routeErr = modelcatalog.RecognizesPublicModel(c.Request.Context(), model.DB, modelRequest.Model, client)
 		}
 		if routeErr != nil {
 			abortWithOpenAiMessage(c, http.StatusInternalServerError, routeErr.Error(), types.ErrorCodeQueryDataError)
 			return
 		}
 		if recognized && operation == capability.OperationVideoCreate {
-			videoRoute, videoErr := modelcatalog.PublicModelSupportsOperation(c.Request.Context(), model.DB, modelRequest.Model, string(operation))
+			videoRoute, videoErr := modelcatalog.PublicModelSupportsOperation(c.Request.Context(), model.DB, modelRequest.Model, string(operation), client)
 			if videoErr != nil {
 				abortWithOpenAiMessage(c, http.StatusInternalServerError, videoErr.Error(), types.ErrorCodeQueryDataError)
 				return
@@ -252,6 +267,12 @@ func Distribute() func(c *gin.Context) {
 			}
 		}
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
+		if !shouldSelectChannel && !ok {
+			// Task reads and continuations use the channel recorded with the
+			// caller's task. There is no new channel or account to select.
+			c.Next()
+			return
+		}
 		var setupErr *types.NewAPIError
 		if ok {
 			setupErr = SetupContextForSelectedChannel(c, channel, modelRequest.Model)

@@ -61,8 +61,9 @@ import {
   formatRelativeTime,
   formatResponseTime,
   getBalanceVariant,
+  getChannelAdapterLabel,
+  getChannelSupplierFamily,
   getChannelTypeIcon,
-  getChannelTypeLabel,
   getResponseTimeConfig,
   isMultiKeyChannel,
   parseModelsList,
@@ -580,7 +581,7 @@ export function useChannelsColumns(
       // Name column
       {
         accessorKey: 'name',
-        header: t('Name'),
+        header: t('Channel instance'),
         meta: { mobileTitle: true },
         cell: ({ row }) => {
           const isTagRow = isTagAggregateRow(row.original)
@@ -692,7 +693,7 @@ export function useChannelsColumns(
       // Type column
       {
         accessorKey: 'type',
-        header: t('Type'),
+        header: t('Adapter type'),
         cell: ({ row }) => {
           const isTagRow = isTagAggregateRow(row.original)
 
@@ -709,8 +710,7 @@ export function useChannelsColumns(
           }
 
           const type = row.getValue('type') as number
-          const typeNameKey = getChannelTypeLabel(type)
-          const typeName = t(typeNameKey)
+          const typeName = `${t(getChannelAdapterLabel(type))} (${type})`
           const iconName = getChannelTypeIcon(type)
           const channel = row.original as Channel
           const isMultiKey = isMultiKeyChannel(channel)
@@ -821,6 +821,18 @@ export function useChannelsColumns(
           return value.includes(String(row.getValue(id)))
         },
         size: 220,
+        enableSorting: false,
+      },
+
+      {
+        id: 'supplier_family',
+        header: t('Supplier family'),
+        cell: ({ row }) => {
+          if (isTagAggregateRow(row.original)) return null
+          const supplier = getChannelSupplierFamily(row.original.type)
+          return supplier ? t(supplier) : t('Unknown')
+        },
+        size: 120,
         enableSorting: false,
       },
 

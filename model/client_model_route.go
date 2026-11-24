@@ -11,7 +11,7 @@ type ClientModelRoute struct {
 	Client              string `json:"client" gorm:"size:32;index;not null;default:all"`
 	Aliases             string `json:"aliases" gorm:"type:text"`
 	Metadata            string `json:"metadata" gorm:"type:text"`
-	Enabled             bool   `json:"enabled" gorm:"index;not null;default:true"`
+	Enabled             bool   `json:"enabled" gorm:"index;not null"`
 	CreatedTime         int64  `json:"created_time"`
 	UpdatedTime         int64  `json:"updated_time"`
 }
@@ -31,7 +31,7 @@ type ClientModelTarget struct {
 	PreferredWires     string `json:"preferred_wires" gorm:"type:text;not null"`
 	Priority           int    `json:"priority" gorm:"not null;default:0"`
 	Weight             int    `json:"weight" gorm:"not null;default:1"`
-	Enabled            bool   `json:"enabled" gorm:"index;not null;default:true"`
+	Enabled            bool   `json:"enabled" gorm:"index;not null"`
 	Metadata           string `json:"metadata,omitempty" gorm:"type:text"`
 	ContextWindow      int    `json:"context_window"`
 	ContextFitRequired bool   `json:"context_fit_required"`

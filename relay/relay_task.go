@@ -161,7 +161,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 
 	// 1. 确定 platform → 创建适配器 → 验证请求
 	platform := constant.TaskPlatform(c.GetString("platform"))
-	if platform == "" {
+	if len(info.RouteCandidates) > 0 || platform == "" {
 		platform = GetTaskPlatform(c)
 	}
 	if platform == "" && info.ChannelType > 0 {
@@ -201,13 +201,14 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		info.NativeBilling.VideoResolution = resolution
 	}
 
+	billingModel := info.BillingModelNameOrOrigin()
 	// Native funding is admitted once, independently of legacy per-call prices.
 	if !info.PlatformMode && info.NativeBilling == nil {
-		if price, ok := billing_setting.ResolveModelNativePrice(modelName, "video"); ok {
+		if price, ok := billing_setting.ResolveModelNativePrice(billingModel, "video"); ok {
 			if info.Action == constant.TaskActionRemix {
 				return nil, service.TaskErrorWrapperLocal(errors.New("native extension/remix billing policy is not enabled"), "native_policy", 400)
 			}
-			reserve, err := NativeVideoReservation(c, modelName, price)
+			reserve, err := NativeVideoReservation(c, billingModel, price)
 			if err != nil {
 				return nil, service.TaskErrorWrapperLocal(err, "native_reservation", 400)
 			}
@@ -240,7 +241,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		}
 
 		// 6. 将 OtherRatios 应用到基础额度（饱和转换，防止溢出成负数）
-		if !common.StringsContains(constant.TaskPricePatches, modelName) {
+		if !common.StringsContains(constant.TaskPricePatches, billingModel) {
 			quotaWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.Quota))
 			quota, clamp := common.QuotaFromFloatChecked(quotaWithRatios)
 			info.PriceData.Quota = quota

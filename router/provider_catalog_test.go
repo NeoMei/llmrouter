@@ -395,3 +395,29 @@ func TestProviderCatalogRequiresExplicitMultimodalEmbeddingRoute(t *testing.T) {
 	require.Len(t, catalog.Models, 1)
 	require.Equal(t, "qwen3-vl-embedding", catalog.Models[0].ID)
 }
+
+func TestProviderCatalogIsolatesIncompatibleTargetsAndTheirClient(t *testing.T) {
+	adapter, db := providerCatalogFixture(t)
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"healthy-chat":0.01,"bad-video":0.01}`))
+	for _, name := range []string{"healthy-chat", "bad-video"} {
+		require.NoError(t, db.Create(&model.Ability{Group: "native", Model: name, ChannelId: 1, Enabled: true}).Error)
+	}
+	for _, spec := range []struct{ name, client, operation string }{
+		{"healthy-chat", "superwagie", "chat.completions.create"},
+		{"bad-video", "superwagie", "videos.create"},
+		{"not-in-client", "llmrouter", "videos.create"},
+	} {
+		route := model.ClientModelRoute{PublicId: spec.name, Client: spec.client, Metadata: fmt.Sprintf(`{"operations":[%q]}`, spec.operation), Enabled: true}
+		require.NoError(t, db.Create(&route).Error)
+		upstream := spec.name
+		if spec.client == "llmrouter" {
+			upstream = "bad-video"
+		}
+		require.NoError(t, db.Create(&model.ClientModelTarget{RouteId: route.Id, ChannelId: 1, UpstreamModel: upstream, BillingModel: upstream, PreferredWires: `["openai_chat"]`, Weight: 1, Enabled: true}).Error)
+	}
+	got, err := readProviderCatalog(context.Background(), adapter, platformbilling.Claims{OriginProductID: "superwagie", InstanceID: "fixture", ActorID: "actor", AccountID: "team"})
+	require.NoError(t, err)
+	require.Len(t, got.Models, 1)
+	require.Equal(t, "healthy-chat", got.Models[0].ID)
+	require.Equal(t, []string{"chat"}, got.Models[0].Operations)
+}

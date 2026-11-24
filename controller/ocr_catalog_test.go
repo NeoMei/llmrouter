@@ -24,6 +24,7 @@ func TestOCRCatalogNativeWireAndOptions(t *testing.T) {
 	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"ocr-price":0.001}`))
 	ch := model.Channel{Type: constant.ChannelTypePaddleOCR, Status: common.ChannelStatusEnabled, Models: "ocr", Name: "OCR", Key: "never-public"}
 	require.NoError(t, db.Create(&ch).Error)
+	require.NoError(t, db.Create(&model.Ability{ChannelId: ch.Id, Model: "ocr", Group: "default", Enabled: true}).Error)
 	payload := clientModelRoutePayload{PublicID: "public", Enabled: true, Metadata: `{"operations":["ocr.jobs.create","ocr.jobs.retrieve"],"async":true}`, Targets: []model.ClientModelTarget{{ChannelId: ch.Id, UpstreamModel: "ocr", BillingModel: "ocr-price", PreferredWires: `["paddleocr_jobs"]`, Enabled: true, Weight: 1}}}
 	require.NoError(t, validateClientModelRoutePayload(db, payload))
 	payload.Targets[0].PreferredWires = `["openai_chat"]`

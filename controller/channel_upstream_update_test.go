@@ -411,13 +411,14 @@ func TestFetchArkPayAsYouGoCatalog(t *testing.T) {
 
 func TestArkAdminModelPresetsSeparateVideoFromImages(t *testing.T) {
 	require.Contains(t, channelId2Models[constant.ChannelTypeVolcEngine], "doubao-seedream-5-5-261028")
-	require.Contains(t, channelId2Models[constant.ChannelTypeVolcEngine], "doubao-seedance-2-5-260628")
+	require.NotContains(t, channelId2Models[constant.ChannelTypeVolcEngine], "doubao-seedance-2-5-260628")
 	require.Contains(t, channelId2Models[constant.ChannelTypeDoubaoVideo], "doubao-seedance-2-5-260628")
 	require.NotContains(t, channelId2Models[constant.ChannelTypeDoubaoVideo], "doubao-seedream-5-5-261028")
 	require.Equal(t, []constant.EndpointType{constant.EndpointTypeImageGeneration},
 		common.GetEndpointTypesByChannelType(constant.ChannelTypeVolcEngine, "doubao-seedream-5-5-261028"))
+	require.Empty(t, common.GetEndpointTypesByChannelType(constant.ChannelTypeVolcEngine, "doubao-seedance-2-5-260628"))
 	require.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAIVideo},
-		common.GetEndpointTypesByChannelType(constant.ChannelTypeVolcEngine, "doubao-seedance-2-5-260628"))
+		common.GetEndpointTypesByChannelType(constant.ChannelTypeDoubaoVideo, "doubao-seedance-2-5-260628"))
 }
 
 func TestNormalizeModelNames(t *testing.T) {

@@ -56,6 +56,14 @@ For commercial licensing, please contact support@quantumnous.com
   html {
     @apply overflow-x-hidden font-sans;
   }
+  /* Match the 72rem desktop content width used by the landing page and
+   * keep the workbench scrollable when the browser window is narrower. */
+  html:has(.desktop-console) {
+    overflow-x: auto;
+  }
+  .desktop-console {
+    min-width: 72rem;
+  }
   body {
     @apply bg-background text-foreground has-[div[data-variant='inset']]:bg-sidebar min-h-svh w-full;
     /* Font is driven by the theme's font axis via `--font-body`
@@ -77,9 +85,7 @@ For commercial licensing, please contact support@quantumnous.com
 
   /* Prevent focus zoom on mobile devices */
   @media screen and (max-width: 767px) {
-    input,
-    select,
-    textarea {
+    html:not(:has(.desktop-console)) :is(input, select, textarea) {
       font-size: 16px !important;
     }
   }

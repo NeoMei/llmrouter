@@ -209,14 +209,6 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
           {channelFilter}
         </>
       }
-      mobilePinnedFilters={dateRangeFilter}
-      mobileFilters={
-        <>
-          {taskIdFilter}
-          {channelFilter}
-        </>
-      }
-      mobileFilterCount={[filterValue, filters.channel].filter(Boolean).length}
       hasActiveFilters={hasAdditionalFilters}
       onSearch={handleApply}
       searchLoading={fetchingLogs > 0}

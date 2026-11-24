@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Pencil, Plus, Search, Trash2 } from 'lucide-react'
+import { Plus, Search } from 'lucide-react'
 import { useState, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -180,7 +180,7 @@ export function CreemProductsVisualEditor({
         <div className='rounded-md border'>
           {/* Desktop table view */}
           <StaticDataTable
-            className='hidden rounded-none border-0 md:block'
+            className='rounded-none border-0'
             data={filteredProducts}
             getRowKey={(product) => product.productId}
             columns={[
@@ -234,66 +234,6 @@ export function CreemProductsVisualEditor({
               },
             ]}
           />
-
-          {/* Mobile card view */}
-          <div className='divide-y md:hidden'>
-            {filteredProducts.map((product) => (
-              <div key={product.productId} className='p-4'>
-                <div className='mb-3 flex items-start justify-between'>
-                  <div className='flex-1'>
-                    <div className='mb-1 font-medium'>{product.name}</div>
-                    <code className='bg-muted rounded px-1.5 py-0.5 text-xs'>
-                      {product.productId}
-                    </code>
-                  </div>
-                  <div className='flex gap-1'>
-                    <Button
-                      type='button'
-                      variant='ghost'
-                      size='sm'
-                      onClick={(e) => {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        handleEdit(product)
-                      }}
-                    >
-                      <Pencil className='h-4 w-4' />
-                    </Button>
-                    <Button
-                      type='button'
-                      variant='ghost'
-                      size='sm'
-                      onClick={(e) => {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        handleDelete(product)
-                      }}
-                    >
-                      <Trash2 className='h-4 w-4' />
-                    </Button>
-                  </div>
-                </div>
-                <div className='space-y-2 text-sm'>
-                  <div className='flex items-center gap-2'>
-                    <span className='text-muted-foreground min-w-16'>
-                      {t('Price')}:
-                    </span>
-                    <span className='font-mono'>
-                      {formatCreemPrice(product.price, product.currency)}
-                    </span>
-                  </div>
-                  <div className='flex items-center gap-2'>
-                    <span className='text-muted-foreground min-w-16'>
-                      {t('Quota')}:
-                    </span>
-                    <span className='font-mono'>
-                      {formatQuotaShort(product.quota)}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
         </div>
       )}
 

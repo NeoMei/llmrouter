@@ -5,8 +5,8 @@ continue importing from `@/components/data-table`.
 
 - `core/`: TanStack table rendering primitives, headers, rows, pagination,
   loading, empty states, and pinned-column behavior.
-- `layout/`: responsive page-level composition that combines toolbar, desktop
-  table, mobile list, bulk actions, and pagination placement.
+- `layout/`: page-level composition that combines toolbar, table or optional
+  card grid, bulk actions, and pagination placement.
 - `toolbar/`: filter/search/view-option controls and selection action toolbar.
 - `static/`: lightweight table rendering for local/static arrays that do not
   need TanStack state.

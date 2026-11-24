@@ -30,7 +30,6 @@ import { useTranslation } from 'react-i18next'
 
 import {
   DISABLED_ROW_DESKTOP,
-  DISABLED_ROW_MOBILE,
   DataTablePage,
   useDebouncedColumnFilter,
   useDataTable,
@@ -42,7 +41,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { useMediaQuery } from '@/hooks'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { getLobeIcon } from '@/lib/lobe-icon'
 
@@ -95,7 +93,6 @@ export function ChannelsTable() {
     sensitiveVisible,
     setSensitiveVisible,
   } = useChannels()
-  const isMobile = useMediaQuery('(max-width: 640px)')
 
   // Table state
   const [sorting, setSorting] = useState<SortingState>([])
@@ -114,7 +111,7 @@ export function ChannelsTable() {
     navigate: route.useNavigate(),
     pagination: {
       defaultPage: 1,
-      defaultPageSize: isMobile ? 10 : DEFAULT_PAGE_SIZE,
+      defaultPageSize: DEFAULT_PAGE_SIZE,
     },
     globalFilter: { enabled: true, key: 'filter' },
     columnFilters: [
@@ -317,9 +314,7 @@ export function ChannelsTable() {
       tag: false,
     },
     columnVisibilityStorageKey: CHANNELS_COLUMN_VISIBILITY_STORAGE_KEY,
-    columnSizingStorageKey: isMobile
-      ? false
-      : CHANNELS_COLUMN_SIZING_STORAGE_KEY,
+    columnSizingStorageKey: CHANNELS_COLUMN_SIZING_STORAGE_KEY,
     columnFilters,
     pagination,
     globalFilter,
@@ -335,7 +330,7 @@ export function ChannelsTable() {
     manualSorting: true,
     manualFiltering: true,
     withExpandedRowModel: true,
-    enableColumnResizing: !isMobile,
+    enableColumnResizing: true,
     ensurePageInRange,
   })
 
@@ -480,12 +475,9 @@ export function ChannelsTable() {
           </Tooltip>
         ),
       }}
-      getRowClassName={(row, { isMobile }) => {
+      getRowClassName={(row) => {
         if (!isDisabledChannelRow(row.original)) {
           return undefined
-        }
-        if (isMobile) {
-          return DISABLED_ROW_MOBILE
         }
         return DISABLED_ROW_DESKTOP
       }}

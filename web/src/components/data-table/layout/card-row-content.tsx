@@ -40,10 +40,7 @@ function orderCardCells<TData>(
 /**
  * Shared, column-meta-driven card content rendering for TanStack rows.
  *
- * Both {@link MobileCardList} (mobile) and {@link DataTableCardGrid} (desktop
- * card view) render the same inner content; only the surrounding container
- * differs (single bordered list vs. responsive grid of cards). Keeping the
- * per-row content here guarantees the two stay visually consistent.
+ * Used by the optional desktop card grid.
  *
  * Column meta extensions (see `card-cell-utils.ts`):
  * - `mobileTitle`  — card header (left, larger text)

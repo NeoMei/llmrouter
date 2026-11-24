@@ -32,7 +32,6 @@ import {
   EmptyTitle,
 } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
-import { useIsMobile } from '@/hooks/use-mobile'
 
 import { getMissingModels } from '../../api'
 import { DEFAULT_PAGE_SIZE } from '../../constants'
@@ -51,7 +50,6 @@ export function MissingModelsDialog({
 }: MissingModelsDialogProps) {
   const { t } = useTranslation()
   const { setOpen, setCurrentRow } = useModels()
-  const isMobile = useIsMobile()
   const [searchTerm, setSearchTerm] = useState('')
   const [currentPage, setCurrentPage] = useState(1)
 
@@ -122,7 +120,7 @@ export function MissingModelsDialog({
       headerClassName='flex-shrink-0 text-start'
       contentHeight='min(74vh, 760px)'
       bodyClassName='space-y-4'
-      initialFocus={!isMobile}
+      initialFocus
     >
       {isLoading ? (
         <div className='flex items-center justify-center py-12'>

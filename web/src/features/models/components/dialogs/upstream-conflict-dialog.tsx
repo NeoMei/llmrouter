@@ -18,13 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQueryClient } from '@tanstack/react-query'
 import type { ColumnDef, RowSelectionState } from '@tanstack/react-table'
-import {
-  Search,
-  Info,
-  MousePointerClick,
-  ChevronLeft,
-  ChevronRight,
-} from 'lucide-react'
+import { Search, Info, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -36,11 +30,6 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover'
-import {
   Select,
   SelectContent,
   SelectGroup,
@@ -48,7 +37,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { useIsMobile } from '@/hooks/use-mobile'
 
 import { applyUpstreamOverwrite } from '../../api'
 import { modelsQueryKeys, vendorsQueryKeys } from '../../lib'
@@ -115,7 +103,6 @@ export function UpstreamConflictDialog({
     setUpstreamConflicts,
     syncWizardOptions,
   } = useModels()
-  const isMobile = useIsMobile()
   const [search, setSearch] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
@@ -200,84 +187,15 @@ export function UpstreamConflictDialog({
       header: 'Model',
       cell: ({ row }) => (
         <div className='flex items-start gap-3'>
-          {isMobile ? (
-            <Checkbox
-              checked={row.getIsSelected()}
-              onCheckedChange={(value) => row.toggleSelected(!!value)}
-              aria-label='Select row'
-            />
-          ) : null}
           <div className='space-y-1'>
             <p className='leading-none font-medium'>{row.original.modelName}</p>
             <span className='text-muted-foreground font-mono text-xs'>
               {row.original.fieldKey}
             </span>
-            {isMobile ? (
-              <StatusBadge
-                label={row.original.fieldLabel}
-                variant='neutral'
-                size='sm'
-                copyable={false}
-              />
-            ) : null}
           </div>
         </div>
       ),
       size: 220,
-    }
-
-    const diffColumn: ColumnDef<ConflictFieldRow> = {
-      id: 'actions',
-      header: 'Diff',
-      enableSorting: false,
-      enableHiding: false,
-      cell: ({ row }) => (
-        <Popover>
-          <PopoverTrigger
-            render={
-              <Button
-                variant='ghost'
-                size='sm'
-                className={isMobile ? 'h-7 w-7 p-0' : 'h-7 gap-2 px-2 text-xs'}
-              />
-            }
-          >
-            <MousePointerClick className='h-3.5 w-3.5' />
-            {!isMobile && 'View diff'}
-          </PopoverTrigger>
-          <PopoverContent className='w-[min(90vw,24rem)] space-y-4 text-sm'>
-            <div>
-              <StatusBadge
-                label='Local'
-                variant='neutral'
-                size='sm'
-                copyable={false}
-                className='mb-1'
-              />
-              <pre className='bg-muted rounded-md p-2 text-xs'>
-                {formatValue(row.original.localValue)}
-              </pre>
-            </div>
-            <div>
-              <StatusBadge
-                label='Upstream'
-                variant='info'
-                size='sm'
-                copyable={false}
-                className='mb-1'
-              />
-              <pre className='bg-muted rounded-md p-2 text-xs'>
-                {formatValue(row.original.upstreamValue)}
-              </pre>
-            </div>
-          </PopoverContent>
-        </Popover>
-      ),
-      size: isMobile ? 50 : 140,
-    }
-
-    if (isMobile) {
-      return [modelColumn, diffColumn]
     }
 
     const selectionColumn: ColumnDef<ConflictFieldRow> = {
@@ -330,7 +248,7 @@ export function UpstreamConflictDialog({
         cell: ({ row }) => <ValuePreview value={row.original.upstreamValue} />,
       },
     ]
-  }, [isMobile])
+  }, [])
 
   const { table } = useDataTable({
     data: conflictRows,
@@ -445,7 +363,7 @@ export function UpstreamConflictDialog({
       contentClassName='w-full sm:max-w-5xl'
       contentHeight='min(72vh, 720px)'
       bodyClassName='flex flex-col gap-4'
-      initialFocus={!isMobile}
+      initialFocus
       footerClassName='sm:justify-between'
       footer={
         <div className='flex w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
@@ -532,9 +450,7 @@ export function UpstreamConflictDialog({
                     table={table}
                     rows={paginatedRows}
                     containerClassName='border-0'
-                    tableContainerClassName={
-                      isMobile ? 'min-w-full' : 'min-w-[720px]'
-                    }
+                    tableContainerClassName='min-w-[720px]'
                   />
                 </div>
 

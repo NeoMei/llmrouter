@@ -27,7 +27,6 @@ import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
-import { useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
 
 import { syncUpstream, previewUpstreamDiff } from '../../api'
@@ -53,7 +52,6 @@ export function SyncWizardDialog({
     setSyncWizardOptions,
     syncWizardOptions,
   } = useModels()
-  const isMobile = useIsMobile()
   const [locale, setLocale] = useState<SyncLocale>('zh')
   const [source, setSource] = useState<SyncSource>('official')
   const [isSyncing, setIsSyncing] = useState(false)
@@ -125,7 +123,7 @@ export function SyncWizardDialog({
       onOpenChange={onOpenChange}
       title={t('Sync Upstream Models')}
       description={t('Synchronize models and vendors from an upstream source')}
-      initialFocus={!isMobile}
+      initialFocus
       contentHeight='auto'
       bodyClassName='flex flex-col gap-6'
       footer={

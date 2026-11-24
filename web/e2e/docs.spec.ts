@@ -63,12 +63,7 @@ test('renders the public concise LLMRouter connection guide', async ({
 
 test('follows the site-wide language switcher and persists the choice', async ({
   page,
-}, testInfo) => {
-  test.skip(
-    testInfo.project.name !== 'chromium',
-    'The public header language switcher is desktop-only in this app.'
-  )
-
+}) => {
   await page.goto('/docs')
 
   const languageSwitcher = page.getByRole('button', {
@@ -173,13 +168,27 @@ test('keeps the configure-agent anchor after a refresh', async ({ page }) => {
   await expect(page.locator('#configure-agent')).toBeVisible()
 })
 
-test('shows documentation navigation on mobile', async ({ page }, testInfo) => {
-  test.skip(
-    testInfo.project.name !== 'mobile-chromium',
-    'The desktop project has persistent sidebar navigation instead.'
+test('keeps one desktop navigation and reachable header controls at a narrow width', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 560, height: 800 })
+  await page.route('**/api/user/auth/refresh', (route) =>
+    route.fulfill({ status: 401 })
   )
-
   await page.goto('/docs')
+
+  await expect(
+    page.getByRole('button', { name: 'Toggle navigation menu' })
+  ).toHaveCount(0)
+  const signIn = page
+    .getByRole('banner')
+    .getByRole('button', { name: 'Sign in' })
+  await expect(signIn).toBeVisible()
+  await signIn.scrollIntoViewIfNeeded()
+  await expect
+    .poll(() => page.evaluate(() => window.scrollX))
+    .toBeGreaterThan(0)
+  await expect(signIn).toBeInViewport()
 
   const navigation = page.getByRole('navigation', {
     name: 'Documentation navigation',

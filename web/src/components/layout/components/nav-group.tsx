@@ -61,7 +61,7 @@ import { ChatPresetsItem } from './chat-presets-item'
  * Renders a group of navigation items, supporting regular links and collapsible submenus
  */
 export function NavGroup({ title, items }: NavGroupProps) {
-  const { state, isMobile } = useSidebar()
+  const { state } = useSidebar()
   const href = useLocation({ select: (location) => location.href })
 
   return (
@@ -85,8 +85,8 @@ export function NavGroup({ title, items }: NavGroupProps) {
             )
           }
 
-          // In collapsed state on non-mobile, render dropdown menu
-          if (state === 'collapsed' && !isMobile) {
+          // In collapsed state, render dropdown menu
+          if (state === 'collapsed') {
             return (
               <SidebarMenuCollapsedDropdown
                 key={key}
@@ -121,13 +121,12 @@ function NavBadge({ children }: { children: ReactNode }) {
  * Sidebar menu link item
  */
 function SidebarMenuLink({ item, href }: { item: NavLink; href: string }) {
-  const { setOpenMobile } = useSidebar()
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
         isActive={checkIsActive(href, item)}
         tooltip={item.title}
-        render={<Link to={item.url} onClick={() => setOpenMobile(false)} />}
+        render={<Link to={item.url} />}
       >
         {item.icon && <item.icon className='shrink-0' />}
         <span className='min-w-0 flex-1 truncate'>{item.title}</span>
@@ -147,7 +146,6 @@ function SidebarMenuCollapsible({
   item: NavCollapsible
   href: string
 }) {
-  const { setOpenMobile } = useSidebar()
   // 检查当前路径是否匹配子菜单项
   const isSubItemActive = checkIsActive(href, item)
   // 使用受控状态，初始值基于当前路径是否匹配
@@ -183,9 +181,7 @@ function SidebarMenuCollapsible({
             <SidebarMenuSubItem key={subItem.title}>
               <SidebarMenuSubButton
                 isActive={checkIsActive(href, subItem)}
-                render={
-                  <Link to={subItem.url} onClick={() => setOpenMobile(false)} />
-                }
+                render={<Link to={subItem.url} />}
               >
                 {subItem.icon && <subItem.icon className='shrink-0' />}
                 <span className='min-w-0 flex-1 truncate'>{subItem.title}</span>

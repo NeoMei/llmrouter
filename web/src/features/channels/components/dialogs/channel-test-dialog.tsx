@@ -85,7 +85,6 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
-import { useIsMobile } from '@/hooks/use-mobile'
 
 import { updateChannel } from '../../api'
 import {
@@ -1480,18 +1479,13 @@ function FailureDetailsSheet({
   onOpenChange: (open: boolean) => void
 }) {
   const { t } = useTranslation()
-  const isMobile = useIsMobile()
   const { copiedText, copyToClipboard } = useCopyToClipboard({ notify: false })
 
   return (
     <Sheet open={Boolean(details)} onOpenChange={onOpenChange}>
       <SheetContent
-        side={isMobile ? 'bottom' : 'right'}
-        className={
-          isMobile
-            ? sideDrawerContentClassName('h-auto max-h-[85dvh] rounded-t-xl')
-            : sideDrawerContentClassName('sm:max-w-lg')
-        }
+        side='right'
+        className={sideDrawerContentClassName('sm:max-w-lg')}
       >
         {details && (
           <>

@@ -99,7 +99,7 @@ export type StatusVariant = keyof typeof dotColorMap
  */
 export type StatusBadgeType = 'badge' | 'text' | 'underline'
 
-/** Context that lets ancestor components (e.g. MobileCardList field area)
+/** Context that lets ancestor components (e.g. card field area)
  *  override the badge type without modifying every call site. */
 export const StatusBadgeTypeContext =
   React.createContext<StatusBadgeType>('badge')

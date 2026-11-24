@@ -27,13 +27,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover'
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from '@/components/ui/sheet'
 import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -41,7 +34,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
 
 import {
@@ -67,18 +59,13 @@ type PlaygroundParameterPanelProps = {
   parameterEnabled: ParameterEnabled
 }
 
-type PlaygroundParameterContentProps = PlaygroundParameterPanelProps & {
-  compact?: boolean
-}
-
 function PlaygroundParameterContent({
-  compact = false,
   config,
   disabled,
   onConfigChange,
   onParameterEnabledChange,
   parameterEnabled,
-}: PlaygroundParameterContentProps) {
+}: PlaygroundParameterPanelProps) {
   const { t } = useTranslation()
 
   const updateParameterConfig = (
@@ -95,11 +82,7 @@ function PlaygroundParameterContent({
 
   return (
     <div
-      className={cn(
-        'grid gap-3',
-        PLAYGROUND_PARAMETER_PANEL_SCROLL_CLASS,
-        compact ? 'px-4 pb-4' : 'p-1'
-      )}
+      className={cn('grid gap-3 p-1', PLAYGROUND_PARAMETER_PANEL_SCROLL_CLASS)}
     >
       {PLAYGROUND_PARAMETER_CONTROLS.map((control) => {
         const enabled = parameterEnabled[control.key]
@@ -197,7 +180,6 @@ function PlaygroundParameterContent({
 
 export function PlaygroundParameterPanel(props: PlaygroundParameterPanelProps) {
   const { t } = useTranslation()
-  const isMobile = useIsMobile()
   const activeCount = PLAYGROUND_PARAMETER_CONTROLS.filter(
     (control) => props.parameterEnabled[control.key]
   ).length
@@ -215,28 +197,6 @@ export function PlaygroundParameterPanel(props: PlaygroundParameterPanelProps) {
       </span>
     </PromptInputButton>
   )
-
-  if (isMobile) {
-    return (
-      <Sheet>
-        <Tooltip>
-          <TooltipTrigger render={<SheetTrigger render={trigger} />} />
-          <TooltipContent>
-            <p>{t('Parameters')}</p>
-          </TooltipContent>
-        </Tooltip>
-        <SheetContent
-          className='max-h-[85vh] overflow-hidden rounded-t-xl'
-          side='bottom'
-        >
-          <SheetHeader>
-            <SheetTitle>{t('Parameter settings')}</SheetTitle>
-          </SheetHeader>
-          <PlaygroundParameterContent {...props} compact />
-        </SheetContent>
-      </Sheet>
-    )
-  }
 
   return (
     <Popover>

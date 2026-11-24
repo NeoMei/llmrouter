@@ -25,7 +25,6 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  useSidebar,
 } from '@/components/ui/sidebar'
 import { cn } from '@/lib/utils'
 
@@ -43,7 +42,6 @@ type SidebarViewHeaderProps = {
  */
 export function SidebarViewHeader(props: SidebarViewHeaderProps) {
   const { t } = useTranslation()
-  const { setOpenMobile } = useSidebar()
 
   return (
     <SidebarHeader className='border-sidebar-border border-b px-2 py-2'>
@@ -55,12 +53,7 @@ export function SidebarViewHeader(props: SidebarViewHeaderProps) {
               'text-muted-foreground hover:text-foreground',
               'gap-1.5 font-medium'
             )}
-            render={
-              <Link
-                to={props.view.parent.to}
-                onClick={() => setOpenMobile(false)}
-              />
-            }
+            render={<Link to={props.view.parent.to} />}
           >
             <ChevronLeft className='size-4 shrink-0' />
             <span className='truncate'>{t(props.view.parent.label)}</span>

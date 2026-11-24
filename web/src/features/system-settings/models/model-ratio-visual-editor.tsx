@@ -48,14 +48,12 @@ import {
 } from '@/components/data-table'
 import { Button } from '@/components/ui/button'
 import { combineBillingExpr } from '@/features/pricing/lib/billing-expr'
-import { useMediaQuery } from '@/hooks'
 
 import { safeJsonParse } from '../utils/json-parser'
 import type { PricingMode } from './model-pricing-core'
 import {
   ModelPricingEditorPanel,
   type ModelPricingEditorPanelHandle,
-  ModelPricingSheet,
   type ModelRatioData,
 } from './model-pricing-sheet'
 import {
@@ -136,8 +134,6 @@ const ModelRatioVisualEditorComponent = forwardRef<
   ref
 ) {
   const { t } = useTranslation()
-  const isMobile = useMediaQuery('(max-width: 767px)')
-  const [sheetOpen, setSheetOpen] = useState(false)
   const [editorOpen, setEditorOpen] = useState(false)
   const [editData, setEditData] = useState<ModelRatioData | null>(null)
   const [sorting, setSorting] = useState<SortingState>([])
@@ -288,40 +284,35 @@ const ModelRatioVisualEditorComponent = forwardRef<
     [models]
   )
 
-  const handleEdit = useCallback(
-    (model: ModelRow) => {
-      const editableModel = model.draft ?? model.saved ?? model
-      let editBillingMode: PricingMode = 'per-token'
-      if (editableModel.billingMode === 'tiered_expr') {
-        editBillingMode = 'tiered_expr'
-      } else if (editableModel.price && editableModel.price !== '') {
-        editBillingMode = 'per-request'
-      }
-      setEditData({
-        name: editableModel.name,
-        price: editableModel.price,
-        ratio: editableModel.ratio,
-        cacheRatio: editableModel.cacheRatio,
-        createCacheRatio: editableModel.createCacheRatio,
-        completionRatio: editableModel.completionRatio,
-        imageRatio: editableModel.imageRatio,
-        audioRatio: editableModel.audioRatio,
-        audioCompletionRatio: editableModel.audioCompletionRatio,
-        billingMode: editBillingMode,
-        billingExpr: editableModel.billingExpr,
-        requestRuleExpr: editableModel.requestRuleExpr,
-      })
-      setEditorOpen(true)
-      if (isMobile) setSheetOpen(true)
-    },
-    [isMobile]
-  )
+  const handleEdit = useCallback((model: ModelRow) => {
+    const editableModel = model.draft ?? model.saved ?? model
+    let editBillingMode: PricingMode = 'per-token'
+    if (editableModel.billingMode === 'tiered_expr') {
+      editBillingMode = 'tiered_expr'
+    } else if (editableModel.price && editableModel.price !== '') {
+      editBillingMode = 'per-request'
+    }
+    setEditData({
+      name: editableModel.name,
+      price: editableModel.price,
+      ratio: editableModel.ratio,
+      cacheRatio: editableModel.cacheRatio,
+      createCacheRatio: editableModel.createCacheRatio,
+      completionRatio: editableModel.completionRatio,
+      imageRatio: editableModel.imageRatio,
+      audioRatio: editableModel.audioRatio,
+      audioCompletionRatio: editableModel.audioCompletionRatio,
+      billingMode: editBillingMode,
+      billingExpr: editableModel.billingExpr,
+      requestRuleExpr: editableModel.requestRuleExpr,
+    })
+    setEditorOpen(true)
+  }, [])
 
   const handleAdd = useCallback(() => {
     setEditData(null)
     setEditorOpen(true)
-    if (isMobile) setSheetOpen(true)
-  }, [isMobile])
+  }, [])
 
   const handleGlobalFilterChange = useCallback<OnChangeFn<string>>(
     (updater) => {
@@ -330,7 +321,6 @@ const ModelRatioVisualEditorComponent = forwardRef<
         if (next !== previous) {
           setEditData(null)
           setEditorOpen(false)
-          setSheetOpen(false)
         }
         return next
       })
@@ -415,7 +405,6 @@ const ModelRatioVisualEditorComponent = forwardRef<
       if (editData?.name === name) {
         setEditData(null)
         setEditorOpen(false)
-        setSheetOpen(false)
       }
     },
     [
@@ -677,7 +666,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
 
   return (
     <div className='flex flex-col gap-4'>
-      <div className='grid h-[clamp(720px,calc(100vh-12rem),900px)] min-h-0 gap-4 md:grid-cols-[minmax(300px,0.72fr)_minmax(520px,1.28fr)] xl:grid-cols-[minmax(320px,0.68fr)_minmax(640px,1.32fr)]'>
+      <div className='grid h-[clamp(720px,calc(100vh-12rem),900px)] min-h-0 grid-cols-[minmax(300px,0.72fr)_minmax(520px,1.28fr)] gap-4 xl:grid-cols-[minmax(320px,0.68fr)_minmax(640px,1.32fr)]'>
         <div className='flex min-h-0 min-w-0 flex-col gap-3'>
           <DataTableToolbar
             table={table}
@@ -772,7 +761,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
           {hasRows && <DataTablePagination table={table} />}
         </div>
 
-        <div className='hidden min-h-0 min-w-0 md:block'>
+        <div className='min-h-0 min-w-0'>
           {editorOpen ? (
             <ModelPricingEditorPanel
               ref={editorPanelRef}
@@ -810,17 +799,6 @@ const ModelRatioVisualEditorComponent = forwardRef<
             : t('Open a source model first')}
         </Button>
       </DataTableBulkActions>
-
-      {isMobile && (
-        <ModelPricingSheet
-          ref={editorPanelRef}
-          open={sheetOpen}
-          onOpenChange={setSheetOpen}
-          editData={editData}
-          onSave={onSave}
-          isSaving={isSaving}
-        />
-      )}
     </div>
   )
 })

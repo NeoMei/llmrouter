@@ -125,8 +125,7 @@ function CardGridSkeleton(props: {
 /**
  * Desktop card view for table data — a responsive grid of bordered cards.
  *
- * Renders the same per-row content as {@link MobileCardList} (via
- * {@link CardRowContent}) unless a custom `renderCard` is supplied. This keeps
+ * Renders each row using {@link CardRowContent} unless a custom `renderCard` is supplied. This keeps
  * the card view reusable across any table with zero per-feature work while
  * still allowing a bespoke card design when desired.
  *

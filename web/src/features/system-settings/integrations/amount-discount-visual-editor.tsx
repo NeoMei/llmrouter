@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Pencil, Plus, Trash2 } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { useState, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -144,7 +144,7 @@ export function AmountDiscountVisualEditor({
         <div className='rounded-md border'>
           {/* Desktop table view */}
           <StaticDataTable
-            className='hidden rounded-none border-0 sm:block'
+            className='rounded-none border-0'
             data={discounts}
             getRowKey={(discount) => discount.amount}
             columns={[
@@ -194,62 +194,6 @@ export function AmountDiscountVisualEditor({
               },
             ]}
           />
-
-          {/* Mobile card view */}
-          <div className='divide-y sm:hidden'>
-            {discounts.map((discount) => (
-              <div key={discount.amount} className='p-4'>
-                <div className='mb-3 flex items-start justify-between'>
-                  <div className='flex-1'>
-                    <div className='mb-2 font-mono text-base font-medium'>
-                      ${discount.amount}
-                    </div>
-                    <StatusBadge
-                      variant={discount.discountRate < 1 ? 'info' : 'neutral'}
-                      className='font-mono'
-                      copyable={false}
-                    >
-                      {formatPercentage(discount.discountRate)} {t('off')}
-                    </StatusBadge>
-                  </div>
-                  <div className='flex gap-1'>
-                    <Button
-                      type='button'
-                      variant='ghost'
-                      size='sm'
-                      onClick={(e) => {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        handleEdit(discount)
-                      }}
-                    >
-                      <Pencil className='h-4 w-4' />
-                    </Button>
-                    <Button
-                      type='button'
-                      variant='ghost'
-                      size='sm'
-                      onClick={(e) => {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        handleDelete(discount.amount)
-                      }}
-                    >
-                      <Trash2 className='h-4 w-4' />
-                    </Button>
-                  </div>
-                </div>
-                <div className='text-sm'>
-                  <span className='text-muted-foreground'>
-                    {t('Discount Rate:')}{' '}
-                  </span>
-                  <code className='bg-muted rounded px-1.5 py-0.5 text-xs'>
-                    {discount.discountRate.toFixed(2)}
-                  </code>
-                </div>
-              </div>
-            ))}
-          </div>
         </div>
       )}
 

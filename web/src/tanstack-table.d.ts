@@ -24,7 +24,7 @@ declare module '@tanstack/react-table' {
     description?: string
     className?: string
     pinned?: 'left' | 'right'
-    // Mobile card list layout hints (used by MobileCardList)
+    // Card view layout hints
     mobileTitle?: boolean // card title area (left, larger text)
     mobileBadge?: boolean // status badge alongside title (right)
     mobileHidden?: boolean // hide this column on mobile entirely

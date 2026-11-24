@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -293,6 +294,7 @@ func validateClientModelRoutePayload(tx *gorm.DB, payload clientModelRoutePayloa
 	if err != nil {
 		return err
 	}
+	sources := modelcatalog.NewGormRuntimeSources(tx)
 	targets := make([]model.ClientModelTarget, 0, len(payload.Targets))
 	for i, target := range payload.Targets {
 		if target.Id == 0 {
@@ -323,11 +325,22 @@ func validateClientModelRoutePayload(tx *gorm.DB, payload clientModelRoutePayloa
 		if err := modelcatalog.ValidateChannelOperations(metadata, channel.Type); err != nil {
 			return err
 		}
-		if err := modelcatalog.NewGormRuntimeSources(tx).ValidateTargetPricing(channel.Type, mappedModel, billingModel, metadata.Operations); err != nil {
+		if err := sources.ValidateTargetPricing(channel.Type, mappedModel, billingModel, metadata.Operations); err != nil {
 			return fmt.Errorf("target %d: %w", target.Id, err)
 		}
 		if err := validateTargetWiresForChannel(target, channel.Type, metadata.Operations...); err != nil {
 			return err
+		}
+		if route.Enabled && target.Enabled {
+			abilities, err := sources.Abilities(tx.Statement.Context, channel.Id, mappedModel)
+			if err != nil {
+				return err
+			}
+			if !slices.ContainsFunc(abilities, func(ability modelcatalog.RuntimeAbility) bool {
+				return strings.TrimSpace(ability.Group) != "" && strings.EqualFold(strings.TrimSpace(ability.Model), mappedModel)
+			}) {
+				return fmt.Errorf("target %d model %q has no enabled group ability on channel %d", target.Id, mappedModel, channel.Id)
+			}
 		}
 		if target.Enabled {
 			targets = append(targets, target)

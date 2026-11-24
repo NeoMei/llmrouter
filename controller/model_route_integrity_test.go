@@ -19,6 +19,7 @@ import (
 func TestImageRouteCanRoundTripThroughAdmin(t *testing.T) {
 	db := setupClientModelRouteControllerTestDB(t)
 	require.NoError(t, db.Create(&model.Channel{Id: 25, Type: constant.ChannelTypeVolcEngine, Status: common.ChannelStatusEnabled, Models: "doubao-seedream-5-0-260128"}).Error)
+	require.NoError(t, db.Create(&model.Ability{ChannelId: 25, Model: "doubao-seedream-5-0-260128", Group: "default", Enabled: true}).Error)
 	payload := clientModelRoutePayload{PublicID: "doubao-seedream-5-0-260128", Client: "llmrouter", Enabled: true, Metadata: `{"operations":["images.generations.create"]}`,
 		Targets: []model.ClientModelTarget{{Id: 1, RouteId: 1, ChannelId: 25, UpstreamModel: "doubao-seedream-5-0-260128", BillingModel: "gpt-4o-mini", PreferredWires: "[]", Weight: 1, Enabled: true}}}
 	route := payload.routeRecord()
@@ -35,8 +36,64 @@ func TestImageRouteCanRoundTripThroughAdmin(t *testing.T) {
 	payload.Targets[0].BillingModel = "ark-image-fixture-price"
 	ctx, w := clientModelRouteRequestContext(t, http.MethodPost, "/api/client_model_routes/", payload)
 	CreateClientModelRoute(ctx)
-	require.Equal(t, 200, w.Code, w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	require.Contains(t, w.Body.String(), `"preferred_wires":"[]"`)
+
+	var stored model.ClientModelRoute
+	require.NoError(t, db.First(&stored).Error)
+	payload.ID = stored.Id
+	ctx, w = clientModelRouteRequestContext(t, http.MethodPut, "/api/client_model_routes/", payload)
+	UpdateClientModelRoute(ctx)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var savedTarget model.ClientModelTarget
+	require.NoError(t, db.Where("route_id = ?", stored.Id).First(&savedTarget).Error)
+	require.JSONEq(t, "[]", savedTarget.PreferredWires)
+	require.Equal(t, "ark-image-fixture-price", savedTarget.BillingModel)
+}
+
+func TestRouteSaveRequiresEnabledGroupAbilityForMappedModel(t *testing.T) {
+	db := setupClientModelRouteControllerTestDB(t)
+	const upstream = "gpt-4o-mini"
+	const mappedFrom = "provider-alias"
+	require.NoError(t, db.Create(&model.Channel{Id: 25, Type: constant.ChannelTypeOpenAI,
+		Status: common.ChannelStatusEnabled, Models: upstream,
+		ModelMapping: common.GetPointer(`{"provider-alias":"gpt-4o-mini"}`)}).Error)
+	require.NoError(t, db.Create(&[]model.Ability{
+		{ChannelId: 25, Model: mappedFrom, Group: "default", Enabled: true},
+		{ChannelId: 25, Model: upstream, Group: "default", Enabled: false},
+		{ChannelId: 25, Model: upstream, Group: "", Enabled: true},
+	}).Error)
+	payload := clientModelRoutePayload{PublicID: "mapped-chat", Client: "llmrouter", Enabled: true,
+		Targets: []model.ClientModelTarget{{ChannelId: 25, UpstreamModel: mappedFrom,
+			BillingModel: upstream, PreferredWires: `["openai_chat"]`, Weight: 1, Enabled: true}}}
+	ctx, w := clientModelRouteRequestContext(t, http.MethodPost, "/api/client_model_routes/", payload)
+	CreateClientModelRoute(ctx)
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), upstream)
+	var count int64
+	require.NoError(t, db.Model(&model.ClientModelRoute{}).Count(&count).Error)
+	require.Zero(t, count)
+
+	ability := db.Model(&model.Ability{ChannelId: 25, Model: upstream, Group: "default"})
+	require.NoError(t, ability.Update("enabled", true).Error)
+	ctx, w = clientModelRouteRequestContext(t, http.MethodPost, "/api/client_model_routes/", payload)
+	CreateClientModelRoute(ctx)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var saved model.ClientModelRoute
+	require.NoError(t, db.First(&saved).Error)
+	payload.ID = saved.Id
+	require.NoError(t, ability.Update("enabled", false).Error)
+	ctx, w = clientModelRouteRequestContext(t, http.MethodPut, "/api/client_model_routes/", payload)
+	UpdateClientModelRoute(ctx)
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+
+	payload.Enabled = false
+	ctx, w = clientModelRouteRequestContext(t, http.MethodPut, "/api/client_model_routes/", payload)
+	UpdateClientModelRoute(ctx)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.NoError(t, db.First(&saved, saved.Id).Error)
+	require.False(t, saved.Enabled)
 }
 
 func TestDisabledRouteAndTargetStayDisabled(t *testing.T) {
@@ -44,6 +101,7 @@ func TestDisabledRouteAndTargetStayDisabled(t *testing.T) {
 	for _, id := range []int{25, 26} {
 		require.NoError(t, db.Create(&model.Channel{Id: id, Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled, Models: "gpt-4o-mini"}).Error)
 	}
+	require.NoError(t, db.Create(&model.Ability{ChannelId: 25, Model: "gpt-4o-mini", Group: "default", Enabled: true}).Error)
 	payload := clientModelRoutePayload{PublicID: "audit-chat", Enabled: true, Targets: []model.ClientModelTarget{
 		{ChannelId: 25, UpstreamModel: "gpt-4o-mini", BillingModel: "gpt-4o-mini", PreferredWires: `["openai_chat"]`, Weight: 1, Enabled: true},
 		{ChannelId: 26, UpstreamModel: "gpt-4o-mini", BillingModel: "gpt-4o-mini", PreferredWires: `["openai_chat"]`, Weight: 1, Enabled: false},

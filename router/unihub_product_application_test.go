@@ -244,7 +244,7 @@ func TestUniHubProductSSOApplicationDestinations(t *testing.T) {
 
 func TestUniHubProductClientRoutingCRUDAndRevocation(t *testing.T) {
 	f := newUniHubRegressionFixture(t)
-	require.NoError(t, f.db.AutoMigrate(&model.Channel{}, &model.ClientModelRoute{}, &model.ClientModelTarget{}, &model.Log{}))
+	require.NoError(t, f.db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ClientModelRoute{}, &model.ClientModelTarget{}, &model.Log{}))
 	oldLog := model.LOG_DB
 	model.LOG_DB = f.db
 	t.Cleanup(func() {
@@ -256,6 +256,7 @@ func TestUniHubProductClientRoutingCRUDAndRevocation(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(oldRatio)) })
 	channel := model.Channel{Type: 1, Name: "product-routing-target", Key: "provider-secret", Status: 1, Models: "test-model", Group: "default"}
 	require.NoError(t, f.db.Create(&channel).Error)
+	require.NoError(t, f.db.Create(&model.Ability{ChannelId: channel.Id, Model: "test-model", Group: "default", Enabled: true}).Error)
 	viewer, _ := decodeUniHubBundle(t, f.request("POST", "/api/unihub/session", "product-viewer", nil))
 	admin, _ := decodeUniHubBundle(t, f.request("POST", "/api/unihub/session", "product-admin", nil))
 	request := func(method, path, token, body string) *httptest.ResponseRecorder {

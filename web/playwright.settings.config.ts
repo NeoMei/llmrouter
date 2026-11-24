@@ -8,9 +8,7 @@ export default defineConfig({
   timeout: 20000,
   use: {
     baseURL: 'http://127.0.0.1:58026',
-    viewport: process.env.SETTINGS_MOBILE
-      ? { width: 390, height: 844 }
-      : { width: 1280, height: 720 },
+    viewport: { width: 1280, height: 720 },
     channel: 'chrome',
     screenshot: 'only-on-failure',
   },

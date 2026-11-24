@@ -100,6 +100,26 @@ async function fixture(
     const url = new URL(request.url())
     const path = url.pathname
     const now = Math.floor(Date.now() / 1000)
+    const user = {
+      id: 91,
+      username: 'task9-fixture',
+      display_name: 'Task9 Fixture',
+      role: 10,
+      status: 1,
+      permissions: {
+        admin_permissions: {
+          routing: { read: true, write: true },
+          channel: {
+            read: options.read !== false,
+            operate: options.operate !== false,
+            write: options.write !== false,
+          },
+        },
+      },
+    }
+    if (path === '/api/user/self') {
+      return route.fulfill({ json: { success: true, data: user } })
+    }
     if (path === '/api/user/auth/refresh') {
       return route.fulfill({
         json: {
@@ -108,22 +128,7 @@ async function fixture(
             access_token: 'fixture-only',
             token_type: 'Bearer',
             access_expires_at: now + 3600,
-            user: {
-              id: 91,
-              username: 'task9-fixture',
-              display_name: 'Task9 Fixture',
-              role: 10,
-              status: 1,
-              permissions: {
-                admin_permissions: {
-                  channel: {
-                    read: options.read !== false,
-                    operate: options.operate !== false,
-                    write: options.write !== false,
-                  },
-                },
-              },
-            },
+            user,
             session: {
               sid: 'task9-isolated',
               current: true,

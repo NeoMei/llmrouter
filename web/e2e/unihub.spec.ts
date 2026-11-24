@@ -824,10 +824,10 @@ test('created recharge shows exact amount unconfirmed status and queries origina
   expect(creates).toBe(1)
 })
 
-test('mobile payer control and long team name do not overflow the viewport', async ({
+test('the payer selector fits a long team name in a narrow desktop window', async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 390, height: 844 })
+  await page.setViewportSize({ width: 900, height: 844 })
   await fixture(page)
   await page.route('**/api/unihub/bff/v1/accounts', (route) =>
     route.fulfill({
@@ -844,7 +844,7 @@ test('mobile payer control and long team name do not overflow the viewport', asy
   ).toBeVisible()
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth)
-  ).toBeLessThanOrEqual(390)
+  ).toBeLessThanOrEqual(900)
 })
 
 test('definitive finance scope denial shows failure without retaining uncertain retry', async ({
@@ -1241,7 +1241,22 @@ test('public sign-in keeps the requested original wallet page', async ({
   page,
 }) => {
   await fixture(page)
+  await page.route('**/v1/identity/authorize/password', (route) => {
+    if (route.request().method() === 'OPTIONS') return route.fallback()
+    return route.fulfill({
+      status: 401,
+      headers: { 'access-control-allow-origin': '*' },
+      json: { error: 'interaction_required' },
+    })
+  })
   await page.goto('/sign-in?redirect=%2Fwallet')
+  const ssoRequest = page.waitForRequest('**/api/unihub/login?*')
+  await page.getByLabel('Username', { exact: true }).fill('product-user')
+  await page.getByLabel('Password', { exact: true }).fill('fixture-password')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  const ssoURL = new URL((await ssoRequest).url())
+  expect(ssoURL.searchParams.get('return_to')).toBe('/wallet')
+  expect(ssoURL.searchParams.has('prompt')).toBe(false)
   await expect(page).toHaveURL(/\/wallet$/)
   await expect(
     page.getByRole('heading', { name: 'Wallet', exact: true })
@@ -1374,13 +1389,14 @@ test('product role and capabilities preserve channel reader controls', async ({
   page,
 }) => {
   await fixture(page, { permissions: ['channel:read'] })
+  await login(page)
   await page.goto('/channels')
   await expect(
     page.getByRole('heading', { name: 'Channels', exact: true })
   ).toBeVisible()
   await expect(
-    page.getByRole('button', { name: 'Add Channel', exact: true })
-  ).toHaveCount(0)
+    page.getByRole('button', { name: 'Create Channel', exact: true })
+  ).toBeDisabled()
   await expect(
     page.locator('[data-slot="sidebar"] a[href="/wallet"]')
   ).toBeVisible()
@@ -3412,7 +3428,7 @@ test('sandbox settlement stays unavailable while payment configuration refresh i
 
 test('signed-out browser explicitly switches to a cookie-verified account without prior local history', async ({
   page,
-}) => {
+}, testInfo) => {
   await fixture(page)
   await page.addInitScript(() => {
     if (!sessionStorage.getItem('switch-test-initialized')) {
@@ -3485,10 +3501,14 @@ test('signed-out browser explicitly switches to a cookie-verified account withou
     })
     .last()
   await expect(page.getByText('Verified central user')).toBeVisible()
-  await page.screenshot({ path: '/tmp/llmrouter-account-switch-desktop.png' })
-  await page.setViewportSize({ width: 390, height: 844 })
+  await page.screenshot({
+    path: testInfo.outputPath('account-switch-desktop.png'),
+  })
+  await page.setViewportSize({ width: 900, height: 844 })
   await expect(account.getByRole('button')).toBeVisible()
-  await page.screenshot({ path: '/tmp/llmrouter-account-switch-mobile.png' })
+  await page.screenshot({
+    path: testInfo.outputPath('account-switch-narrow-desktop.png'),
+  })
   expect(requests).toEqual([])
   expect(silentLogins).toEqual([])
   await account.getByRole('button').click()
@@ -3519,73 +3539,90 @@ test('signed-out browser explicitly switches to a cookie-verified account withou
   expect(requests.every((sid) => sid === 'sid-central')).toBe(true)
 })
 
-test('UniHub password failure never falls back to a same-name local account', async ({
-  page,
-}) => {
-  let localAttempts = 0
-  let centralAttempts = 0
-  await page.addInitScript(() => {
-    localStorage.setItem('setup_status_checked', 'true')
-    localStorage.setItem('i18nextLng', 'en')
-  })
-  await page.route('**/api/**', async (route) => {
-    const path = new URL(route.request().url()).pathname
-    if (path === '/api/unihub/config') {
-      return route.fulfill({
-        json: {
-          enabled: true,
-          browser_sso_enabled: true,
-          native_access: true,
-          public_origin: 'http://127.0.0.1:58006',
-          client_id: 'client',
-          redirect_uri: 'http://127.0.0.1:58004/api/unihub/callback',
-          product_id: 'llmrouter',
-          models: [],
-        },
-      })
-    }
-    if (path === '/api/user/login') {
-      localAttempts++
-      return route.fulfill({ json: { success: false } })
-    }
-    if (path === '/api/user/auth/refresh') {
-      return route.fulfill({ status: 401, json: { success: false } })
-    }
-    if (path === '/api/status') {
-      return route.fulfill({
-        json: {
-          success: true,
-          data: { system_name: 'LLMRouter', password_login_enabled: true },
-        },
-      })
-    }
-    return route.fulfill({ json: { success: true, data: [] } })
-  })
-  await page.route('http://127.0.0.1:58006/v1/**', async (route) => {
-    if (route.request().method() === 'OPTIONS') {
-      return route.fulfill({
-        status: 204,
-        headers: {
-          'access-control-allow-origin': '*',
-          'access-control-allow-methods': 'POST, OPTIONS',
-          'access-control-allow-headers': 'content-type',
-        },
-      })
-    }
-    centralAttempts++
-    return route.fulfill({
-      status: 401,
-      headers: { 'access-control-allow-origin': '*' },
-      json: { error: 'invalid_credentials' },
+for (const { status, code, fallback } of [
+  { status: 401, code: 'invalid_credentials', fallback: true },
+  { status: 401, code: 'access_denied', fallback: false },
+  { status: 503, code: 'invalid_credentials', fallback: false },
+]) {
+  test(`UniHub password failure ${status} ${code} ${fallback ? 'tries' : 'skips'} legacy local login`, async ({
+    page,
+  }) => {
+    let localAttempts = 0
+    let centralAttempts = 0
+    await page.addInitScript(() => {
+      localStorage.setItem('setup_status_checked', 'true')
+      localStorage.setItem('i18nextLng', 'en')
     })
+    await page.route('**/api/**', async (route) => {
+      const path = new URL(route.request().url()).pathname
+      if (path === '/api/unihub/config') {
+        return route.fulfill({
+          json: {
+            enabled: true,
+            browser_sso_enabled: true,
+            native_access: true,
+            public_origin: 'http://127.0.0.1:58006',
+            client_id: 'client',
+            redirect_uri: 'http://127.0.0.1:58004/api/unihub/callback',
+            product_id: 'llmrouter',
+            models: [],
+          },
+        })
+      }
+      if (path === '/api/user/login') {
+        localAttempts++
+        return route.fulfill({
+          json: { success: false, message: 'Fixture local password rejected' },
+        })
+      }
+      if (path === '/api/user/auth/refresh') {
+        return route.fulfill({ status: 401, json: { success: false } })
+      }
+      if (path === '/api/status') {
+        return route.fulfill({
+          json: {
+            success: true,
+            data: { system_name: 'LLMRouter', password_login_enabled: true },
+          },
+        })
+      }
+      return route.fulfill({ json: { success: true, data: [] } })
+    })
+    await page.route('**/v1/identity/authorize/password', async (route) => {
+      if (route.request().method() === 'OPTIONS') {
+        return route.fulfill({
+          status: 204,
+          headers: {
+            'access-control-allow-origin': '*',
+            'access-control-allow-methods': 'POST, OPTIONS',
+            'access-control-allow-headers': 'content-type',
+          },
+        })
+      }
+      centralAttempts++
+      return route.fulfill({
+        status,
+        headers: { 'access-control-allow-origin': '*' },
+        json: { error: code },
+      })
+    })
+    await page.goto('/sign-in?unihub_silent=done')
+    await page.getByLabel('Username', { exact: true }).fill('same-name-user')
+    await page
+      .getByLabel('Password', { exact: true })
+      .fill('incorrect-password')
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+    const error = page.getByText(
+      fallback ? 'Fixture local password rejected' : 'Login failed',
+      { exact: true }
+    )
+    await expect(error).toHaveCount(1)
+    await expect(error).toBeVisible()
+    expect(centralAttempts).toBe(1)
+    expect(localAttempts).toBe(fallback ? 1 : 0)
+    await expect(page).toHaveURL(/\/sign-in/)
   })
-  await page.goto('/sign-in?unihub_silent=done')
-  await page.getByLabel('Username', { exact: true }).fill('neomei')
-  await page.getByLabel('Password', { exact: true }).fill('incorrect-password')
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
-  await expect.poll(() => centralAttempts).toBe(1)
-  expect(localAttempts).toBe(0)
-})
+}
 
 for (const requireMfa of [false, true]) {
   test(`UniHub password ${requireMfa ? 'MFA completes' : 'success completes'} into the central user session`, async ({

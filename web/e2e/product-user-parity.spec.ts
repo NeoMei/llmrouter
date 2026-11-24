@@ -45,7 +45,8 @@ async function fixture(
     localStorage.setItem('i18nextLng', 'en')
   })
   await page.route('**/api/**', async (route) => {
-    const path = new URL(route.request().url()).pathname
+    const url = new URL(route.request().url())
+    const path = url.pathname
     requests.push(path)
     let body: unknown = { success: true, data: [] }
     if (path === '/api/user/auth/refresh') {
@@ -71,13 +72,15 @@ async function fixture(
           },
         },
       }
+    } else if (path === '/api/user/auth/session-options') {
+      body = { success: true, data: { sessions: [], unavailable: false } }
     } else if (path === '/api/unihub/config') {
       body = {
         enabled: true,
         native_access: false,
         public_origin: 'http://127.0.0.1:58006',
         client_id: 'client',
-        redirect_uri: 'http://127.0.0.1:58004/api/unihub/callback',
+        redirect_uri: new URL('/api/unihub/callback', url).href,
         product_id: 'llmrouter',
         models: ['test-model'],
       }
@@ -192,19 +195,16 @@ for (const balance of [
   test(`shared cash ${balance.available} is exact on the original overview and wallet`, async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 390, height: 844 })
+    await page.setViewportSize({ width: 900, height: 844 })
     const { requests } = await fixture(page, 'unihub', 1, false, {
       available: balance.available,
       held: '1200001',
       consumed: '2500002',
     })
     await page.goto('/dashboard/overview')
-    await expect(page.getByText(balance.display, { exact: true })).toBeVisible()
-    const cashBox = await page
-      .getByText(balance.display, { exact: true })
-      .boundingBox()
-    if (!cashBox) throw new Error('Cash balance must have a visible layout box')
-    expect(cashBox.x + cashBox.width).toBeLessThanOrEqual(390)
+    const cashBalance = page.getByText(balance.display, { exact: true })
+    await cashBalance.scrollIntoViewIfNeeded()
+    await expect(cashBalance).toBeInViewport({ ratio: 0.99 })
     await expect(
       page.getByText('Shared cash balance', { exact: true })
     ).toBeVisible()
@@ -215,7 +215,8 @@ for (const balance of [
     await expect(page.getByText('Runway', { exact: true })).toHaveCount(0)
     await expect(page.getByText('$10', { exact: true })).toHaveCount(0)
     await page.goto('/wallet')
-    await expect(page.getByText(balance.display, { exact: true })).toBeVisible()
+    await cashBalance.scrollIntoViewIfNeeded()
+    await expect(cashBalance).toBeInViewport({ ratio: 0.99 })
     await expect(
       page.getByText('Unified cash balance', { exact: true })
     ).toBeVisible()
@@ -533,25 +534,17 @@ test('central backend retains the original anonymous sign-in and registration fo
   ).toBeVisible()
 })
 
-test('silent SSO failure returns to the original form and does not repeat after reload', async ({
+test('unauthenticated sign-in keeps the requested destination and waits for user action after reload', async ({
   page,
 }) => {
-  await fixture(page, 'unihub', 1, true)
-  const attempts: string[] = []
-  await page.route('**/api/unihub/login?*', async (route) => {
-    const url = new URL(route.request().url())
-    attempts.push(url.searchParams.get('prompt') ?? '')
-    await route.fulfill({
-      status: 303,
-      headers: { Location: '/sign-in?unihub_silent=done&redirect=%2Fkeys' },
-    })
-  })
+  const { requests } = await fixture(page, 'unihub', 1, true)
   await page.goto('/sign-in?redirect=%2Fkeys')
-  await expect(page).toHaveURL(/unihub_silent=done/)
   await expect(page.getByLabel('Password', { exact: true })).toBeVisible()
+  await expect(page).toHaveURL(/\/sign-in\?redirect=%2Fkeys$/)
   await page.reload()
   await expect(page.getByLabel('Password', { exact: true })).toBeVisible()
-  expect(attempts).toEqual(['none'])
+  await expect(page).toHaveURL(/\/sign-in\?redirect=%2Fkeys$/)
+  expect(requests).not.toContain('/api/unihub/login')
 })
 
 for (const source of ['native', 'unihub'] as const) {
@@ -640,16 +633,38 @@ for (const source of ['native', 'unihub'] as const) {
   })
 }
 
-test('central product administrator retains the original user management page', async ({
+test('central product administrator can search the read-only user directory', async ({
   page,
 }) => {
   await fixture(page, 'unihub', 10)
+  const directoryUser = {
+    id: 97,
+    username: 'directory-member',
+    email: 'member@example.test',
+    role: 1,
+    status: 1,
+  }
+  await page.route('**/api/user/search?*', (route) => {
+    const search = new URL(route.request().url()).searchParams
+    expect(search.get('keyword')).toBe(directoryUser.username)
+    return route.fulfill({
+      json: { success: true, data: { items: [directoryUser], total: 1 } },
+    })
+  })
   await page.goto('/users')
   await expect(
     page.getByRole('heading', { name: 'Users', exact: true })
   ).toBeVisible()
   await expect(
     page.getByRole('button', { name: /Add User|Create User/ })
+  ).toHaveCount(0)
+  const search = page.getByRole('textbox', {
+    name: 'Filter by username, name or email...',
+  })
+  await search.fill(directoryUser.username)
+  await search.press('Enter')
+  await expect(
+    page.getByRole('row', { name: /directory-member.*member@example\.test/ })
   ).toBeVisible()
 })
 

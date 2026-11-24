@@ -189,7 +189,11 @@ export function UserAuthForm({
     })
 
     if (!res.success) {
-      throw new Error(res.message || loginFailedMessage)
+      const messageKey = getServerErrorMessageKey(res)
+      toast.error(
+        messageKey ? t(messageKey) : res.message || loginFailedMessage
+      )
+      return
     }
     if (res.data && 'require_2fa' in res.data && res.data.require_2fa) {
       if (!res.data.flow_token) {

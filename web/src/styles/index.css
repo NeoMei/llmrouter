@@ -56,13 +56,14 @@ For commercial licensing, please contact support@quantumnous.com
   html {
     @apply overflow-x-hidden font-sans;
   }
-  /* Match the 72rem desktop content width used by the landing page and
-   * keep the workbench scrollable when the browser window is narrower. */
-  html:has(.desktop-console) {
-    overflow-x: auto;
-  }
-  .desktop-console {
-    min-width: 72rem;
+  /* Keep the desktop layout reachable in windows narrower than 1024px. */
+  @media (width < 64rem) {
+    html:has(.desktop-console) {
+      overflow-x: auto;
+    }
+    .desktop-console {
+      min-width: 64rem;
+    }
   }
   body {
     @apply bg-background text-foreground has-[div[data-variant='inset']]:bg-sidebar min-h-svh w-full;

@@ -10,7 +10,9 @@ export function registerOwnedNetworkChecks() {
       unowned: string[]
     }
   >()
-  test.beforeEach(async ({ context, page }, testInfo) => {
+  test.beforeEach(async ({ baseURL, context, page }, testInfo) => {
+    if (!baseURL) throw new Error('Owned network checks require a baseURL')
+    const appOrigin = new URL(baseURL).origin
     const unowned: string[] = []
     const requests: { method: string; origin: string; path: string }[] = []
     page.on('request', (request) => {
@@ -26,7 +28,7 @@ export function registerOwnedNetworkChecks() {
     await context.route('**/*', async (route) => {
       const url = new URL(route.request().url())
       if (
-        url.origin === 'http://127.0.0.1:58004' &&
+        url.origin === appOrigin &&
         !url.pathname.startsWith('/api/') &&
         !url.pathname.startsWith('/platform/')
       ) {

@@ -341,6 +341,7 @@ export const ModelPricingEditorPanel = forwardRef<
   }
 
   const watchedValues = form.watch()
+  const isArkVideoModel = watchedValues.name.includes('seedance')
   const previewRows = useMemo(
     () =>
       buildPreviewRows(
@@ -559,14 +560,22 @@ export const ModelPricingEditorPanel = forwardRef<
                   <TabsContent value='per-token' className='pt-0'>
                     <FieldGroup className='gap-5'>
                       <Field>
-                        <FieldLabel>{t('Input price')}</FieldLabel>
+                        <FieldLabel>
+                          {isArkVideoModel
+                            ? t('Video output price')
+                            : t('Input price')}
+                        </FieldLabel>
                         <PriceInput
                           value={promptPrice}
                           placeholder='3'
                           onChange={handlePromptPriceChange}
                         />
                         <FieldDescription>
-                          {t('USD price per 1M input tokens.')}
+                          {isArkVideoModel
+                            ? t(
+                                'USD per 1M output tokens for 480p/720p video without video input. Resolution and video-input rates apply automatically.'
+                              )
+                            : t('USD price per 1M input tokens.')}
                         </FieldDescription>
                       </Field>
 

@@ -384,6 +384,42 @@ func TestFetchModelsUsesSharedChannelFetchBehavior(t *testing.T) {
 	require.JSONEq(t, `{"success":true,"message":"","data":["claude-sonnet"]}`, recorder.Body.String())
 }
 
+func TestFetchArkPayAsYouGoCatalog(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v3/models" || r.Header.Get("Authorization") != "Bearer fixture-key" {
+			t.Errorf("unexpected Ark request: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"doubao-seed-2-1-lite-260915","domain":"LLM"},{"id":"doubao-seedream-5-5-261028","domain":"ImageGeneration"},{"id":"doubao-seedance-2-5-260628","domain":"VideoGeneration"},{"id":"doubao-seedance-2-0-260128"}]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	for _, tc := range []struct {
+		channelType int
+		want        []string
+	}{
+		{constant.ChannelTypeVolcEngine, []string{"doubao-seed-2-1-lite-260915", "doubao-seedream-5-5-261028", "doubao-seedance-2-5-260628", "doubao-seedance-2-0-260128"}},
+		{constant.ChannelTypeDoubaoVideo, []string{"doubao-seedance-2-5-260628", "doubao-seedance-2-0-260128"}},
+	} {
+		channel := &model.Channel{Type: tc.channelType, Key: "fixture-key", BaseURL: &server.URL}
+		modelIDs, err := fetchChannelUpstreamModelIDs(channel)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, modelIDs)
+	}
+}
+
+func TestArkAdminModelPresetsSeparateVideoFromImages(t *testing.T) {
+	require.Contains(t, channelId2Models[constant.ChannelTypeVolcEngine], "doubao-seedream-5-5-261028")
+	require.Contains(t, channelId2Models[constant.ChannelTypeVolcEngine], "doubao-seedance-2-5-260628")
+	require.Contains(t, channelId2Models[constant.ChannelTypeDoubaoVideo], "doubao-seedance-2-5-260628")
+	require.NotContains(t, channelId2Models[constant.ChannelTypeDoubaoVideo], "doubao-seedream-5-5-261028")
+	require.Equal(t, []constant.EndpointType{constant.EndpointTypeImageGeneration},
+		common.GetEndpointTypesByChannelType(constant.ChannelTypeVolcEngine, "doubao-seedream-5-5-261028"))
+	require.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAIVideo},
+		common.GetEndpointTypesByChannelType(constant.ChannelTypeVolcEngine, "doubao-seedance-2-5-260628"))
+}
+
 func TestNormalizeModelNames(t *testing.T) {
 	result := normalizeModelNames([]string{
 		" gpt-4o ",

@@ -27,6 +27,7 @@ export type ComboboxInputOption = {
   value: string
   label: string
   icon?: React.ReactNode
+  keywords?: string[]
 }
 
 interface ComboboxInputProps {
@@ -39,6 +40,19 @@ interface ComboboxInputProps {
   id?: string
   allowCustomValue?: boolean
   openOnFocus?: boolean
+}
+
+export function filterComboboxOptions(
+  options: ComboboxInputOption[],
+  searchValue: string
+) {
+  if (!searchValue.trim()) return options
+  const search = searchValue.toLowerCase().trim()
+  return options.filter((option) =>
+    [option.label, option.value, ...(option.keywords ?? [])].some((keyword) =>
+      keyword.toLowerCase().includes(search)
+    )
+  )
 }
 
 export function ComboboxInput({
@@ -66,15 +80,10 @@ export function ComboboxInput({
   )
   const displayValue = open ? searchValue : (selectedOption?.label ?? value)
 
-  const filteredOptions = React.useMemo(() => {
-    if (!searchValue.trim()) return options
-    const search = searchValue.toLowerCase().trim()
-    return options.filter(
-      (option) =>
-        option.label.toLowerCase().includes(search) ||
-        option.value.toLowerCase().includes(search)
-    )
-  }, [options, searchValue])
+  const filteredOptions = React.useMemo(
+    () => filterComboboxOptions(options, searchValue),
+    [options, searchValue]
+  )
 
   // Reset highlight when filtered options change
   React.useEffect(() => {

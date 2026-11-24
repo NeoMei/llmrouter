@@ -131,6 +131,7 @@ import {
   getAllModels,
   getChannel,
   getChannelKey,
+  getChannelModelPresets,
   getGroups,
   getPrefillGroups,
   refreshCodexCredential,
@@ -716,6 +717,17 @@ export function ChannelMutateDrawer({
   const currentType = form.watch('type')
   const currentStatus = form.watch('status')
   const currentBaseUrl = form.watch('base_url')
+  const isArkChannel = currentType === 45 || currentType === 54
+  const isArkCodingPlan =
+    currentType === 45 &&
+    (currentBaseUrl === 'doubao-coding-plan' ||
+      currentBaseUrl === 'https://ark.cn-beijing.volces.com/api/coding' ||
+      currentBaseUrl === 'https://ark.cn-beijing.volces.com/api/coding/v3')
+  const { data: channelPresets } = useQuery({
+    queryKey: ['channel-model-presets'],
+    queryFn: getChannelModelPresets,
+    enabled: open && isArkChannel && !isArkCodingPlan,
+  })
   const currentKey = form.watch('key')
   const currentOther = form.watch('other')
   const currentModels = form.watch('models')
@@ -880,6 +892,8 @@ export function ChannelMutateDrawer({
 
   // Get basic models for the current channel type
   const basicModels = useMemo(() => {
+    if (isArkCodingPlan) return []
+    if (isArkChannel) return channelPresets?.data?.[currentType] ?? []
     if (!allModelsList.length) return []
     // Filter models based on common patterns for specific types
     if (currentType === 1) {
@@ -888,7 +902,13 @@ export function ChannelMutateDrawer({
       )
     }
     return allModelsList
-  }, [allModelsList, currentType])
+  }, [
+    allModelsList,
+    channelPresets,
+    currentType,
+    isArkChannel,
+    isArkCodingPlan,
+  ])
 
   // Get prefill groups
   const prefillGroups = useMemo(
@@ -923,12 +943,27 @@ export function ChannelMutateDrawer({
     const options = CHANNEL_TYPE_OPTIONS.map((option) => ({
       value: String(option.value),
       label: t(option.label),
+      keywords:
+        option.value === 45 || option.value === 54
+          ? [
+              'VolcEngine',
+              'Volcengine',
+              'Doubao',
+              'DoubaoVideo',
+              'ByteDance',
+              '字节跳动',
+              '火山引擎',
+              '火山方舟',
+              '豆包',
+            ]
+          : undefined,
       icon: <ChannelTypeLogo type={option.value} size={16} />,
     }))
     if (!options.some((option) => Number(option.value) === currentType)) {
       options.push({
         value: String(currentType),
         label: `#${currentType}`,
+        keywords: undefined,
         icon: <ChannelTypeLogo type={currentType} size={16} />,
       })
     }
@@ -1261,7 +1296,7 @@ export function ChannelMutateDrawer({
     if (isEditing) return // Don't auto-set defaults when editing
 
     // Type 45 (VolcEngine) - set default base_url
-    if (currentType === 45) {
+    if (currentType === 45 || currentType === 54) {
       const currentBaseUrlValue = form.getValues('base_url')
       if (!currentBaseUrlValue || currentBaseUrlValue === '') {
         form.setValue('base_url', 'https://ark.cn-beijing.volces.com')
@@ -1276,15 +1311,6 @@ export function ChannelMutateDrawer({
       }
     }
   }, [currentType, isEditing, form])
-
-  useEffect(() => {
-    if (currentType !== 45 || currentBaseUrl !== 'doubao-coding-plan') return
-
-    form.setValue('base_url', 'https://ark.cn-beijing.volces.com', {
-      shouldDirty: false,
-      shouldValidate: true,
-    })
-  }, [currentBaseUrl, currentType, form])
 
   useEffect(() => {
     if (isEditing || supportsMultiKeyAddMode) return
@@ -2659,7 +2685,7 @@ export function ChannelMutateDrawer({
                                           value:
                                             'https://ark.cn-beijing.volces.com',
                                           label: t(
-                                            'https://ark.cn-beijing.volces.com'
+                                            'Ark pay-as-you-go (Beijing)'
                                           ),
                                         },
                                         {
@@ -2669,11 +2695,15 @@ export function ChannelMutateDrawer({
                                             'https://ark.ap-southeast.bytepluses.com'
                                           ),
                                         },
+                                        {
+                                          value: 'doubao-coding-plan',
+                                          label: t('Ark Coding Plan'),
+                                        },
                                       ]}
                                       onValueChange={field.onChange}
                                       value={
-                                        field.value === 'doubao-coding-plan'
-                                          ? 'https://ark.cn-beijing.volces.com'
+                                        isArkCodingPlan
+                                          ? 'doubao-coding-plan'
                                           : field.value ||
                                             'https://ark.cn-beijing.volces.com'
                                       }
@@ -2688,9 +2718,10 @@ export function ChannelMutateDrawer({
                                       >
                                         <SelectGroup>
                                           <SelectItem value='https://ark.cn-beijing.volces.com'>
-                                            {t(
-                                              'https://ark.cn-beijing.volces.com'
-                                            )}
+                                            {t('Ark pay-as-you-go (Beijing)')}
+                                          </SelectItem>
+                                          <SelectItem value='doubao-coding-plan'>
+                                            {t('Ark Coding Plan')}
                                           </SelectItem>
                                           <SelectItem value='https://ark.ap-southeast.bytepluses.com'>
                                             {t(

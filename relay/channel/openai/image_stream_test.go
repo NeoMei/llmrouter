@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -349,6 +350,25 @@ func TestOpenaiImageStreamJSONFallbackRecordsNativeUsage(t *testing.T) {
 				assert.Empty(t, observed[0].Measurements)
 			}
 			assert.Contains(t, recorder.Body.String(), "data: [DONE]")
+		})
+	}
+}
+
+func TestArkImageResponseUsesImageOutputsForMeteredBilling(t *testing.T) {
+	for _, usePrice := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fixed_price_%t", usePrice), func(t *testing.T) {
+			body := `{"data":[{"url":"https://example.com/one"},{"url":"https://example.com/two"}],"usage":{"prompt_tokens":120}}`
+			c, _, resp, info := newImageTestContext(t, body, "application/json", false)
+			info.ChannelType = constant.ChannelTypeVolcEngine
+			info.PriceData.UsePrice = usePrice
+
+			usage, err := OpenaiImageHandler(c, info, resp)
+
+			require.Nil(t, err)
+			require.NotNil(t, info.NativeUsageImages)
+			assert.Equal(t, 2, *info.NativeUsageImages)
+			assert.Equal(t, usePrice, info.PriceData.HasOtherRatio("n"))
+			assert.Equal(t, 120, usage.TotalTokens)
 		})
 	}
 }

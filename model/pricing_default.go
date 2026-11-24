@@ -2,6 +2,9 @@ package model
 
 import (
 	"strings"
+
+	"github.com/QuantumNous/new-api/common"
+	"gorm.io/gorm"
 )
 
 // 简化的供应商映射规则
@@ -33,6 +36,8 @@ var defaultVendorRules = map[string]string{
 	"grok":     "xAI",
 	"llama":    "Meta",
 	"doubao":   "字节跳动",
+	"seedream": "字节跳动",
+	"seedance": "字节跳动",
 	"kling":    "快手",
 	"jimeng":   "即梦",
 	"vidu":     "Vidu",
@@ -86,13 +91,31 @@ func initDefaultVendorMapping(metaMap map[string]*Model, vendorMap map[int]*Vend
 			}
 		}
 
-		// 创建模型元数据
-		metaMap[modelName] = &Model{
+		icon := ""
+		if vendorID != 0 {
+			icon = vendorMap[vendorID].Icon
+		}
+
+		meta := &Model{
 			ModelName: modelName,
 			VendorID:  vendorID,
 			Status:    1,
 			NameRule:  NameRuleExact,
+			Icon:      icon,
 		}
+		var existing Model
+		if err := DB.Where("model_name = ?", modelName).First(&existing).Error; err == nil {
+			metaMap[modelName] = &existing
+			continue
+		} else if err != gorm.ErrRecordNotFound {
+			common.SysLog("lookup model metadata failed: " + err.Error())
+			continue
+		}
+		if err := meta.Insert(); err != nil {
+			common.SysLog("create model metadata failed: " + err.Error())
+			continue
+		}
+		metaMap[modelName] = meta
 	}
 }
 

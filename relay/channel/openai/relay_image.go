@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -23,10 +24,19 @@ import (
 )
 
 func updateOpenAIImageCount(info *relaycommon.RelayInfo, count int64) {
-	if info == nil || !info.PriceData.UsePrice || count <= 0 || count > int64(dto.MaxImageN) {
+	if info == nil || count <= 0 || count > int64(dto.MaxImageN) {
 		return
 	}
-	info.PriceData.AddOtherRatio("n", float64(count))
+	if info.PriceData.UsePrice {
+		info.PriceData.AddOtherRatio("n", float64(count))
+	}
+	// Ark reports text input tokens for image generations. Its image charges are
+	// based on completed image outputs, so those input tokens are not billable
+	// image tokens. Other OpenAI image providers keep their token accounting.
+	if info.ChannelType == constant.ChannelTypeVolcEngine {
+		info.NativeUsageImages = new(int)
+		*info.NativeUsageImages = int(count)
+	}
 }
 
 // recordNativeImageJSONUsage extracts completed image outputs from the

@@ -146,6 +146,13 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	if info.NativeUsageImages == nil && usage.(*dto.Usage).PromptTokens == 0 {
 		usage.(*dto.Usage).PromptTokens = 1
 	}
+	if info.ChannelType == constant.ChannelTypeVolcEngine {
+		// Ark image prices are per output image, with text input separate.
+		// Do not reinterpret its prompt token metadata as output-image tokens.
+		usage.(*dto.Usage).PromptTokens = 0
+		usage.(*dto.Usage).CompletionTokens = 0
+		usage.(*dto.Usage).TotalTokens = 0
+	}
 
 	quality := request.Quality
 	if quality == "" {

@@ -2,6 +2,10 @@ package model
 
 import (
 	"strings"
+
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"gorm.io/gorm"
 )
 
 // 简化的供应商映射规则
@@ -70,39 +74,74 @@ var defaultVendorIcons = map[string]string{
 
 // initDefaultVendorMapping 简化的默认供应商映射
 func initDefaultVendorMapping(metaMap map[string]*Model, vendorMap map[int]*Vendor, enableAbilities []AbilityWithChannel) {
+	arkModels := make(map[string]bool)
+	for _, ability := range enableAbilities {
+		if ability.Enabled && ability.ChannelType == constant.ChannelTypeVolcEngine && ability.ChannelStatus == common.ChannelStatusEnabled {
+			arkModels[ability.Model] = true
+		}
+	}
 	for _, ability := range enableAbilities {
 		modelName := ability.Model
 		if _, exists := metaMap[modelName]; exists {
 			continue
 		}
 
-		// 匹配供应商
+		persist := arkModels[modelName]
 		vendorID := 0
-		modelLower := strings.ToLower(modelName)
-		for pattern, vendorName := range defaultVendorRules {
-			if strings.Contains(modelLower, pattern) {
-				vendorID = getOrCreateVendor(vendorName, vendorMap)
-				break
+		icon := ""
+		if persist && (common.IsSeedreamModel(modelName) || common.IsSeedanceModel(modelName)) {
+			vendorID = pricingVendorID("字节跳动", vendorMap, true)
+		} else {
+			modelLower := strings.ToLower(modelName)
+			for pattern, vendorName := range defaultVendorRules {
+				if strings.Contains(modelLower, pattern) {
+					vendorID = pricingVendorID(vendorName, vendorMap, persist)
+					break
+				}
 			}
 		}
+		if persist && vendorID != 0 {
+			icon = vendorMap[vendorID].Icon
+		}
 
-		// 创建模型元数据
-		metaMap[modelName] = &Model{
+		meta := &Model{
 			ModelName: modelName,
 			VendorID:  vendorID,
 			Status:    1,
 			NameRule:  NameRuleExact,
+			Icon:      icon,
 		}
+		// Pricing and catalog reads can synthesize legacy metadata in memory.
+		// Only active Ark abilities opt into persistent discovery.
+		if !persist {
+			metaMap[modelName] = meta
+			continue
+		}
+		var existing Model
+		if err := DB.Where("model_name = ?", modelName).First(&existing).Error; err == nil {
+			metaMap[modelName] = &existing
+			continue
+		} else if err != gorm.ErrRecordNotFound {
+			common.SysLog("lookup model metadata failed: " + err.Error())
+			continue
+		}
+		if err := meta.Insert(); err != nil {
+			common.SysLog("create model metadata failed: " + err.Error())
+			continue
+		}
+		metaMap[modelName] = meta
 	}
 }
 
-// 查找或创建供应商
-func getOrCreateVendor(vendorName string, vendorMap map[int]*Vendor) int {
+func pricingVendorID(vendorName string, vendorMap map[int]*Vendor, persist bool) int {
 	// 查找现有供应商
 	for id, vendor := range vendorMap {
 		if vendor.Name == vendorName {
 			return id
 		}
+	}
+	if !persist {
+		return 0
 	}
 
 	// 创建新供应商

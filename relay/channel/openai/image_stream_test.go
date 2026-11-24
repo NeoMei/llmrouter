@@ -353,6 +353,22 @@ func TestOpenaiImageStreamJSONFallbackRecordsNativeUsage(t *testing.T) {
 	}
 }
 
+func TestArkImageResponseUsesImageOutputsForMeteredBilling(t *testing.T) {
+	body := `{"data":[{"url":"https://example.com/one"},{"url":"https://example.com/two"}],"usage":{"prompt_tokens":120}}`
+	c, _, resp, info := newImageTestContext(t, body, "application/json", false)
+	info.ChannelType = constant.ChannelTypeVolcEngine
+	info.UpstreamModelName = "doubao-seedream-5-0-flash-260915"
+	info.PriceData.UsePrice = true
+
+	usage, err := OpenaiImageHandler(c, info, resp)
+
+	require.Nil(t, err)
+	require.NotNil(t, info.NativeUsageImages)
+	assert.Equal(t, 2, *info.NativeUsageImages)
+	assert.Equal(t, 2.0, info.PriceData.OtherRatios()["n"])
+	assert.Equal(t, 120, usage.TotalTokens)
+}
+
 func TestOpenaiImageHandlerUsesPositiveActualCountForFixedPrice(t *testing.T) {
 	oldMode := gin.Mode()
 	gin.SetMode(gin.TestMode)

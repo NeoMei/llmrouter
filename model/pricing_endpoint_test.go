@@ -292,3 +292,69 @@ func TestCacheUpdateChannelSyncsAdvancedCustomConfig(t *testing.T) {
 
 	assert.Nil(t, channel2advancedCustomConfig[401])
 }
+
+func TestArkModelMetadataPersistsSupplierAndModalities(t *testing.T) {
+	resetPricingEndpointTestTables(t)
+	insertPricingEndpointChannel(t, 145, constant.ChannelTypeVolcEngine, dto.ChannelOtherSettings{})
+	insertPricingEndpointAbility(t, 145, "doubao-seedream-5-5-261028")
+	insertPricingEndpointAbility(t, 145, "doubao-seedance-2-5-260628")
+
+	byModel := pricingEndpointTypesByModel(t)
+	require.Equal(t, []constant.EndpointType{constant.EndpointTypeImageGeneration}, byModel["doubao-seedream-5-5-261028"])
+	require.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAIVideo}, byModel["doubao-seedance-2-5-260628"])
+
+	var metadata []Model
+	require.NoError(t, DB.Where("model_name IN ?", []string{"doubao-seedream-5-5-261028", "doubao-seedance-2-5-260628"}).Find(&metadata).Error)
+	require.Len(t, metadata, 2)
+	for _, item := range metadata {
+		require.NotZero(t, item.VendorID)
+		var vendor Vendor
+		require.NoError(t, DB.First(&vendor, item.VendorID).Error)
+		assert.Equal(t, "字节跳动", vendor.Name)
+		assert.Equal(t, "Doubao.Color", item.Icon)
+	}
+}
+
+func TestPricingFallbackLeavesUncoveredNonArkMetadataReadOnly(t *testing.T) {
+	resetPricingEndpointTestTables(t)
+	insertPricingEndpointChannel(t, 146, constant.ChannelTypeOpenAI, dto.ChannelOtherSettings{})
+	insertPricingEndpointChannel(t, 147, constant.ChannelTypeVolcEngine, dto.ChannelOtherSettings{})
+	require.NoError(t, DB.Model(&Channel{}).Where("id = ?", 147).Update("status", common.ChannelStatusManuallyDisabled).Error)
+	insertPricingEndpointAbility(t, 146, "qwen-legacy-uncovered")
+	insertPricingEndpointAbility(t, 146, "doubao-seedream-on-other-channel")
+	insertPricingEndpointAbility(t, 147, "doubao-seedream-on-disabled-channel")
+
+	byModel := pricingEndpointTypesByModel(t)
+	require.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAI}, byModel["qwen-legacy-uncovered"])
+	require.Contains(t, byModel, "doubao-seedream-on-other-channel")
+
+	var models, vendors int64
+	require.NoError(t, DB.Model(&Model{}).Count(&models).Error)
+	require.NoError(t, DB.Model(&Vendor{}).Count(&vendors).Error)
+	assert.Zero(t, models)
+	assert.Zero(t, vendors)
+}
+
+func TestPricingFallbackKeepsLegacyVendorPresentation(t *testing.T) {
+	resetPricingEndpointTestTables(t)
+	insertPricingEndpointChannel(t, 148, constant.ChannelTypeOpenAI, dto.ChannelOtherSettings{})
+	vendor := &Vendor{Name: "字节跳动", Icon: "Doubao.Color"}
+	require.NoError(t, vendor.Insert())
+	insertPricingEndpointAbility(t, 148, "doubao-legacy-uncovered")
+	insertPricingEndpointAbility(t, 148, "seedream-legacy-uncovered")
+	prices := make(map[string]Pricing)
+	for _, item := range GetPricing() {
+		prices[item.ModelName] = item
+	}
+	require.Contains(t, prices, "doubao-legacy-uncovered")
+	require.Contains(t, prices, "seedream-legacy-uncovered")
+	assert.Equal(t, vendor.Id, prices["doubao-legacy-uncovered"].VendorID)
+	assert.Empty(t, prices["doubao-legacy-uncovered"].Icon)
+	assert.Zero(t, prices["seedream-legacy-uncovered"].VendorID)
+
+	var models, vendors int64
+	require.NoError(t, DB.Model(&Model{}).Count(&models).Error)
+	require.NoError(t, DB.Model(&Vendor{}).Count(&vendors).Error)
+	assert.Zero(t, models)
+	assert.EqualValues(t, 1, vendors)
+}

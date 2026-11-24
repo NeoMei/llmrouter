@@ -37,7 +37,15 @@ func GetEndpointTypesByChannelType(channelType int, modelName string) []constant
 		endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAI}
 	case constant.ChannelTypeXai:
 		endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAI, constant.EndpointTypeOpenAIResponse}
-	case constant.ChannelTypeSora:
+	case constant.ChannelTypeVolcEngine:
+		if IsSeedreamModel(modelName) {
+			return []constant.EndpointType{constant.EndpointTypeImageGeneration}
+		}
+		if IsSeedanceModel(modelName) {
+			return []constant.EndpointType{constant.EndpointTypeOpenAIVideo}
+		}
+		endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAI}
+	case constant.ChannelTypeDoubaoVideo, constant.ChannelTypeSora:
 		endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAIVideo}
 	default:
 		if IsOpenAIResponseOnlyModel(modelName) {

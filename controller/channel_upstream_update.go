@@ -399,12 +399,8 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 		} else {
 			url = fmt.Sprintf("%s/api/paas/v4/models", baseURL)
 		}
-	case constant.ChannelTypeVolcEngine:
-		if plan, ok := constant.ChannelSpecialBases[baseURL]; ok && plan.OpenAIBaseURL != "" {
-			url = fmt.Sprintf("%s/v1/models", plan.OpenAIBaseURL)
-		} else {
-			url = fmt.Sprintf("%s/v1/models", baseURL)
-		}
+	case constant.ChannelTypeVolcEngine, constant.ChannelTypeDoubaoVideo:
+		url = arkModelListURL(baseURL)
 	case constant.ChannelTypeMoonshot:
 		if plan, ok := constant.ChannelSpecialBases[baseURL]; ok && plan.OpenAIBaseURL != "" {
 			url = fmt.Sprintf("%s/models", plan.OpenAIBaseURL)
@@ -435,12 +431,17 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 	if err := common.Unmarshal(body, &result); err != nil {
 		return nil, err
 	}
-	ids := lo.Map(result.Data, func(item OpenAIModel, _ int) string {
-		if channel.Type == constant.ChannelTypeGemini {
-			return strings.TrimPrefix(item.ID, "models/")
+	ids := make([]string, 0, len(result.Data))
+	for _, item := range result.Data {
+		if channel.Type == constant.ChannelTypeDoubaoVideo {
+			videoModel := item.Domain == "VideoGeneration" ||
+				(item.Domain == "" && common.IsSeedanceModel(item.ID))
+			if !videoModel {
+				continue
+			}
 		}
-		return item.ID
-	})
+		ids = append(ids, item.ID)
+	}
 	return normalizeModelNames(ids), nil
 }
 

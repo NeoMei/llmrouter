@@ -81,7 +81,7 @@ func isImageGenerationTestModel(modelName string) bool {
 // probed as chat or image requests.
 func isVideoGenerationTestModel(modelName string) bool {
 	name := strings.ToLower(strings.TrimSpace(modelName))
-	for _, prefix := range []string{"wan2.", "wanx2.", "wan-2.", "sora", "veo-kling", "kling-"} {
+	for _, prefix := range []string{"wan2.", "wanx2.", "wan-2.", "sora", "seedance", "doubao-seedance", "veo-kling", "kling-"} {
 		if strings.HasPrefix(name, prefix) {
 			return true
 		}

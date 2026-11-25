@@ -16,8 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-// Opaque product configuration is never read back. Submit only explicit edits;
-// object configuration is sent as a patch so server-owned hidden keys survive.
+// Product configuration is partially redacted. Send object settings as a patch
+// so fields outside the editor's view survive.
 export function productChannelUpdate<T extends Record<string, unknown>>(
   payload: T,
   dirty: Record<string, unknown>
@@ -62,6 +62,14 @@ export function productChannelUpdate<T extends Record<string, unknown>>(
         Object.entries(objects[field]).find(([, name]) => name === key)?.[0] ??
         key
       if (dirty[source]) patch[key] = next
+    }
+    if (
+      field === 'settings' &&
+      dirty.upstream_model_update_check_enabled &&
+      value.upstream_model_update_check_enabled === false &&
+      value.upstream_model_update_auto_sync_enabled === false
+    ) {
+      patch.upstream_model_update_auto_sync_enabled = false
     }
     if (Object.keys(patch).length) result[field] = JSON.stringify(patch)
     else delete result[field]

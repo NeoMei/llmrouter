@@ -155,6 +155,88 @@ func TestUniHubStandaloneNativeAdminStillManagesChannels(t *testing.T) {
 	assert.Equal(t, 200, got.Code, got.Body.String())
 }
 
+func TestUniHubProductChannelUpstreamSettingsRoundTrip(t *testing.T) {
+	f := newUniHubRegressionFixture(t)
+	require.NoError(t, f.db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.Log{}))
+	oldLogDB := model.LOG_DB
+	model.LOG_DB = f.db
+	t.Cleanup(func() {
+		require.Eventually(t, func() bool { return gopool.WorkerCount() == 0 }, 5*time.Second, 10*time.Millisecond)
+		model.LOG_DB = oldLogDB
+	})
+	baseURL := "https://hidden-upstream.test"
+	header := `{"Authorization":"supplier-header-secret"}`
+	channel := model.Channel{
+		Type: 1, Name: "official", Key: "supplier-key", BaseURL: &baseURL,
+		HeaderOverride: &header, Status: 1, Models: "test-model", Group: "default",
+		OtherSettings: `{"opaque_provider_setting":"supplier-settings-secret"}`,
+	}
+	require.NoError(t, f.db.Create(&channel).Error)
+	admin, _ := decodeUniHubBundle(t, f.request("POST", "/api/unihub/session", "product-admin", nil))
+	viewer, _ := decodeUniHubBundle(t, f.request("POST", "/api/unihub/session", "product-viewer", nil))
+	detailPath := fmt.Sprintf("/api/channel/%d", channel.Id)
+
+	for _, edit := range []struct {
+		name     string
+		settings string
+		want     string
+	}{
+		{
+			name:     "enable checks and auto sync with an ignore pattern",
+			settings: `{"upstream_model_update_check_enabled":true,"upstream_model_update_auto_sync_enabled":true,"upstream_model_update_ignored_models":["regex:^preview-"]}`,
+			want:     `{"upstream_model_update_check_enabled":true,"upstream_model_update_auto_sync_enabled":true,"upstream_model_update_ignored_models":["regex:^preview-"]}`,
+		},
+		{
+			name:     "disable checks and clear the ignore pattern",
+			settings: `{"upstream_model_update_check_enabled":false,"upstream_model_update_auto_sync_enabled":false,"upstream_model_update_ignored_models":[]}`,
+			want:     `{"upstream_model_update_check_enabled":false,"upstream_model_update_auto_sync_enabled":false,"upstream_model_update_ignored_models":[]}`,
+		},
+	} {
+		t.Run(edit.name, func(t *testing.T) {
+			payload, err := common.Marshal(map[string]any{"id": channel.Id, "settings": edit.settings})
+			require.NoError(t, err)
+			req := httptest.NewRequest("PUT", "https://dashboard.test/api/channel/", strings.NewReader(string(payload)))
+			req.Header.Set("Origin", "https://dashboard.test")
+			req.Header.Set("Authorization", "Bearer "+admin.Data.AccessToken)
+			req.Header.Set("Content-Type", "application/json")
+			updated := httptest.NewRecorder()
+			f.router.ServeHTTP(updated, req)
+			require.Equal(t, http.StatusOK, updated.Code, updated.Body.String())
+			require.Contains(t, updated.Body.String(), `"success":true`)
+
+			var saved model.Channel
+			require.NoError(t, f.db.First(&saved, channel.Id).Error)
+			assert.Contains(t, saved.OtherSettings, "supplier-settings-secret")
+			assert.Equal(t, "supplier-key", saved.Key)
+
+			detail := f.request("GET", detailPath, admin.Data.AccessToken, nil)
+			for _, response := range []*httptest.ResponseRecorder{detail, updated} {
+				require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+				var result struct {
+					Success bool `json:"success"`
+					Data    struct {
+						Settings string `json:"settings"`
+					} `json:"data"`
+				}
+				require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+				require.True(t, result.Success)
+				assert.JSONEq(t, edit.want, result.Data.Settings)
+				assert.NotContains(t, response.Body.String(), "supplier-settings-secret")
+				assert.NotContains(t, response.Body.String(), "supplier-header-secret")
+				assert.NotContains(t, response.Body.String(), "supplier-key")
+				assert.NotContains(t, response.Body.String(), "hidden-upstream.test")
+			}
+		})
+	}
+	for _, response := range []*httptest.ResponseRecorder{
+		f.request("GET", detailPath, viewer.Data.AccessToken, nil),
+		f.request("GET", "/api/channel/", admin.Data.AccessToken, nil),
+	} {
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		assert.NotContains(t, response.Body.String(), `"settings":`)
+	}
+}
+
 func TestUniHubExpiredProofAndLocalRevocationRejectAndPurge(t *testing.T) {
 	f := newUniHubRegressionFixture(t)
 	b, cookie := decodeUniHubBundle(t, f.request("POST", "/api/unihub/session", "viewer", nil))

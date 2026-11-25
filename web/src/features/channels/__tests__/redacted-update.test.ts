@@ -57,3 +57,22 @@ test('explicit product credential edit sends changed config only, preserving unk
     settings: '{"allow_service_tier":false}',
   })
 })
+
+test('turning off upstream checking also submits the resulting disabled auto sync state', () => {
+  const updated = productChannelUpdate(
+    {
+      id: 1,
+      settings: JSON.stringify({
+        upstream_model_update_check_enabled: false,
+        upstream_model_update_auto_sync_enabled: false,
+        upstream_model_update_ignored_models: ['preview'],
+      }),
+    },
+    { upstream_model_update_check_enabled: true }
+  )
+  assert.ok(updated.settings)
+  assert.deepEqual(JSON.parse(updated.settings), {
+    upstream_model_update_check_enabled: false,
+    upstream_model_update_auto_sync_enabled: false,
+  })
+})

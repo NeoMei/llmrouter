@@ -10,14 +10,14 @@ import (
 // productChannelView is an allowlist, not a credential denylist. Opaque config,
 // URLs, overrides and provider error metadata can contain supplier credentials.
 // Native operators retain their existing configuration response contract.
-func productChannelView(c *gin.Context, ch *model.Channel) any {
+func productChannelView(c *gin.Context, ch *model.Channel, detail bool) any {
 	if _, product := authz.ProductPrincipal(c); !product || ch == nil {
 		return ch
 	}
 	info := ch.ChannelInfo
 	info.MultiKeyDisabledReason = nil
 	info.MultiKeyDisabledTime = nil
-	return gin.H{
+	view := gin.H{
 		"id": ch.Id, "type": ch.Type, "key": "", "name": ch.Name, "test_model": ch.TestModel, "status": ch.Status,
 		"models": ch.Models, "group": ch.Group, "model_mapping": ch.ModelMapping, "status_code_mapping": ch.StatusCodeMapping,
 		"weight": ch.Weight, "priority": ch.Priority, "auto_ban": ch.AutoBan, "tag": ch.Tag, "channel_info": info,
@@ -25,17 +25,31 @@ func productChannelView(c *gin.Context, ch *model.Channel) any {
 		"balance": ch.Balance, "balance_updated_time": ch.BalanceUpdatedTime, "used_quota": ch.UsedQuota,
 		"configuration_redacted": true,
 	}
+	if detail && authz.CanRequest(c, authz.ChannelSensitiveWrite) {
+		settings := ch.GetOtherSettings()
+		// The editor receives only model detection settings. Keep opaque provider
+		// configuration out of the product response even for sensitive editors.
+		encoded, err := common.Marshal(gin.H{
+			"upstream_model_update_check_enabled":     settings.UpstreamModelUpdateCheckEnabled,
+			"upstream_model_update_auto_sync_enabled": settings.UpstreamModelUpdateAutoSyncEnabled,
+			"upstream_model_update_ignored_models":    settings.UpstreamModelUpdateIgnoredModels,
+		})
+		if err == nil {
+			view["settings"] = string(encoded)
+		}
+	}
+	return view
 }
 func productChannelViews(c *gin.Context, channels []*model.Channel) []any {
 	out := make([]any, 0, len(channels))
 	for _, ch := range channels {
-		out = append(out, productChannelView(c, ch))
+		out = append(out, productChannelView(c, ch, false))
 	}
 	return out
 }
 
-// Product forms receive opaque configuration without its contents. Merge only
-// submitted object keys into the saved config; omitted keys never mean deletion.
+// Product forms receive a restricted configuration view. Merge only submitted
+// object keys into the saved config; omitted keys never mean deletion.
 func mergeProductChannelSettings(c *gin.Context, channel *PatchChannel, origin *model.Channel, request map[string]any) error {
 	if _, product := authz.ProductPrincipal(c); !product {
 		return nil

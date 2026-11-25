@@ -288,7 +288,18 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if err := service.MarkProductFundingDispatched(c.Request.Context(), info); err != nil {
 		return nil, service.TaskErrorWrapperLocal(err, "product_funding_dispatch", 409)
 	}
+	if err := accountpool.BeginSend(c); err != nil {
+		return nil, service.TaskErrorWrapperLocal(err, "account_pool_begin_send", http.StatusServiceUnavailable)
+	}
+	accountpool.State(c).InFlight = true
 	resp, err := adaptor.DoRequest(c, info, requestBody)
+	accountpool.State(c).InFlight = false
+	if observeErr := accountpool.Observe(c, resp, err); observeErr != nil {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		return nil, service.TaskErrorWrapperLocal(observeErr, "account_pool_observe", http.StatusServiceUnavailable)
+	}
 	if err != nil {
 		return nil, service.TaskErrorWrapper(err, "do_request_failed", http.StatusInternalServerError)
 	}

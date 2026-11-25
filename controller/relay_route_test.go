@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -841,3 +842,55 @@ func (s *relayRouteBillingSpy) Refund(*gin.Context)              {}
 func (s *relayRouteBillingSpy) NeedsRefund() bool                { return false }
 func (s *relayRouteBillingSpy) MarkReconciliationPending(string) {}
 func (s *relayRouteBillingSpy) IsSettled() bool                  { return false }
+
+func TestResolveClientModelRouteDistributesSamePriorityWeightsWithoutProductCredit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	configureRouteBillingRatios(t)
+	db := setupRelayRouteRuntimeDB(t)
+
+	require.NoError(t, db.Create(&model.ClientModelRoute{
+		Id: 1, PublicId: "public-weighted", Client: "all", Aliases: `["weighted"]`, Enabled: true,
+	}).Error)
+	for i, weight := range []int{1, 9} {
+		chID := 301 + i
+		targetID := 401 + i
+		upstream := "upstream-w-" + strconv.Itoa(i)
+		require.NoError(t, db.Create(&model.Channel{
+			Id: chID, Name: upstream, Type: constant.ChannelTypeOpenAI, Key: "test-key",
+			Models: upstream, Group: "default", Status: common.ChannelStatusEnabled,
+		}).Error)
+		require.NoError(t, db.Create(&model.Ability{
+			Group: "default", Model: upstream, ChannelId: chID, Enabled: true, Weight: uint(weight),
+		}).Error)
+		require.NoError(t, db.Create(&model.ClientModelTarget{
+			Id: targetID, RouteId: 1, ChannelId: chID, UpstreamModel: upstream,
+			BillingModel: "route-paid-a", PreferredWires: `["openai_chat"]`, Priority: 10, Weight: weight, Enabled: true,
+		}).Error)
+	}
+
+	selectedChannels := map[int]int{}
+	for i := 0; i < 30; i++ {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"weighted","messages":[]}`))
+		c.Request.Header.Set("Content-Type", "application/json")
+		c.Set("id", 99)
+		c.Set(common.RequestIdKey, "weighted-req-"+strconv.Itoa(i))
+		common.SetContextKey(c, constant.ContextKeyTokenGroup, "default")
+		common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+		info := &relaycommon.RelayInfo{
+			RelayMode:       relayconstant.RelayModeChatCompletions,
+			RelayFormat:     types.RelayFormatOpenAI,
+			OriginModelName: "weighted",
+			UsingGroup:      "default",
+			TokenGroup:      "default",
+			RequestURLPath:  "/v1/chat/completions",
+		}
+		err := resolveClientModelRoute(c, info, 10)
+		common.CleanupBodyStorage(c)
+		require.Nil(t, err)
+		require.Len(t, info.RouteCandidates, 2)
+		selectedChannels[info.RouteCandidates[0].ChannelID]++
+	}
+	assert.Positive(t, selectedChannels[301])
+	assert.Positive(t, selectedChannels[302])
+}

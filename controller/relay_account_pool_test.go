@@ -363,3 +363,166 @@ func TestPooledAzureAuthenticationCannotBeOverridden(t *testing.T) {
 func TestRelayAccountPoolNativeCacheRefresh(t *testing.T) {
 	testRelayAccountPoolHTTP(t, "cache-legacy", "failover")
 }
+
+func TestRelayTaskAccountPoolRotatesOn429WithoutDisablingChannel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	savedDB, savedLogDB := model.DB, model.LOG_DB
+	savedRedis, savedBatch := common.RedisEnabled, common.BatchUpdateEnabled
+	savedMemory := common.MemoryCacheEnabled
+	savedMain, savedLog := common.MainDatabaseType(), common.LogDatabaseType()
+	savedRetries, savedDisable, savedErrors := common.RetryTimes, common.AutomaticDisableChannelEnabled, constant.ErrorLogEnabled
+	savedPrices := ratio_setting.ModelPrice2JSONString()
+	savedGroups := ratio_setting.GroupRatio2JSONString()
+
+	db := setupTieredRelayBillingDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.Task{}, &model.UpstreamAccountPool{}, &model.UpstreamAccountMember{}, &model.UpstreamAccountState{}, &model.Log{}))
+	model.DB, model.LOG_DB = db, db
+	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	common.RedisEnabled, common.BatchUpdateEnabled = false, false
+	common.MemoryCacheEnabled = false
+	common.RetryTimes, common.AutomaticDisableChannelEnabled, constant.ErrorLogEnabled = 1, true, false
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"task-pool-model":0}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
+	t.Cleanup(func() {
+		require.Eventually(t, func() bool { return gopool.WorkerCount() == 0 }, 2*time.Second, time.Millisecond)
+		model.DB, model.LOG_DB = savedDB, savedLogDB
+		common.RedisEnabled, common.BatchUpdateEnabled = savedRedis, savedBatch
+		common.MemoryCacheEnabled = savedMemory
+		common.SetDatabaseTypes(savedMain, savedLog)
+		common.RetryTimes, common.AutomaticDisableChannelEnabled, constant.ErrorLogEnabled = savedRetries, savedDisable, savedErrors
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedPrices))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(savedGroups))
+	})
+
+	createTieredRelayWalletFixtures(t, db, 930, 931, 100000, 100000, "task-pool-token")
+	autoBan := 1
+	ch := model.Channel{
+		Id: 932, Name: "task-pool-suno", Type: constant.ChannelTypeSunoAPI,
+		Key: "task-key-A\ntask-key-B", Models: "task-pool-model", Group: "default",
+		Status: common.ChannelStatusEnabled, AutoBan: &autoBan,
+		ChannelInfo: model.ChannelInfo{IsMultiKey: true, MultiKeyMode: constant.MultiKeyModePolling},
+	}
+	require.NoError(t, db.Create(&ch).Error)
+	require.NoError(t, db.Create(&model.Ability{ChannelId: ch.Id, Group: "default", Model: "task-pool-model", Enabled: true}).Error)
+
+	var mu sync.Mutex
+	sends := []string{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		mu.Lock()
+		sends = append(sends, auth)
+		mu.Unlock()
+		if auth == "Bearer task-key-A" {
+			w.Header().Set("Retry-After", "120")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":{"code":"rate_limit","message":"limited"}}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"code":"success","data":"job-from-B"}`))
+	}))
+	defer upstream.Close()
+	require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", ch.Id).Update("base_url", upstream.URL).Error)
+	ch.BaseURL = &upstream.URL
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/suno/submit/LYRICS", strings.NewReader(`{"prompt":"hello"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Params = gin.Params{{Key: "action", Value: constant.SunoActionLyrics}}
+	c.Set("platform", string(constant.TaskPlatformSuno))
+	common.SetContextKey(c, constant.ContextKeyUserId, 930)
+	common.SetContextKey(c, constant.ContextKeyTokenId, 931)
+	common.SetContextKey(c, constant.ContextKeyTokenKey, "task-pool-token")
+	common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+	common.SetContextKey(c, constant.ContextKeyOriginalModel, "task-pool-model")
+	common.SetContextKey(c, constant.ContextKeyUserSetting, dto.UserSetting{BillingPreference: "wallet_only"})
+	require.Nil(t, middleware.SetupContextForSelectedChannel(c, &ch, "task-pool-model"))
+
+	RelayTask(c)
+	require.Eventually(t, func() bool { return gopool.WorkerCount() == 0 }, 2*time.Second, time.Millisecond)
+
+	assert.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Equal(t, []string{"Bearer task-key-A", "Bearer task-key-B"}, sends)
+
+	var updatedChannel model.Channel
+	require.NoError(t, db.First(&updatedChannel, ch.Id).Error)
+	assert.Equal(t, common.ChannelStatusEnabled, updatedChannel.Status, "single-key 429 must not disable multi-key task channel")
+
+	var states []model.UpstreamAccountState
+	require.NoError(t, db.Where("kind = ?", model.UpstreamAccountCooldown).Find(&states).Error)
+	require.Len(t, states, 1)
+	assert.Equal(t, "rate_limit", states[0].Reason)
+}
+
+func TestRelayLegacyRetryExcludesFailedSingleKeyChannel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	savedDB, savedLogDB := model.DB, model.LOG_DB
+	savedMemory, savedLog, savedRetry := common.MemoryCacheEnabled, common.LogConsumeEnabled, common.RetryTimes
+	savedMain, savedLogType := common.MainDatabaseType(), common.LogDatabaseType()
+	savedRatios, savedCompletion := ratio_setting.ModelRatio2JSONString(), ratio_setting.CompletionRatio2JSONString()
+
+	db := setupTieredRelayBillingDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.UpstreamAccountPool{}, &model.UpstreamAccountMember{}, &model.UpstreamAccountState{}, &model.Log{}))
+	model.DB, model.LOG_DB = db, db
+	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	common.MemoryCacheEnabled, common.LogConsumeEnabled, common.RetryTimes = false, false, 1
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"gpt-exclude":1}`))
+	require.NoError(t, ratio_setting.UpdateCompletionRatioByJSONString(`{"gpt-exclude":1}`))
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = savedDB, savedLogDB
+		common.MemoryCacheEnabled, common.LogConsumeEnabled, common.RetryTimes = savedMemory, savedLog, savedRetry
+		common.SetDatabaseTypes(savedMain, savedLogType)
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedRatios))
+		require.NoError(t, ratio_setting.UpdateCompletionRatioByJSONString(savedCompletion))
+	})
+
+	createTieredRelayWalletFixtures(t, db, 940, 941, 100000, 100000, "exclude-token")
+	var mu sync.Mutex
+	sends := []string{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		mu.Lock()
+		sends = append(sends, auth)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if auth == "Bearer single-A" {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":{"message":"boom"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-ex","object":"chat.completion","model":"gpt-exclude","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`))
+	}))
+	defer upstream.Close()
+
+	chA := model.Channel{Id: 942, Name: "single-A", Type: constant.ChannelTypeOpenAI, Key: "single-A", Models: "gpt-exclude", Group: "default", Status: common.ChannelStatusEnabled, BaseURL: &upstream.URL}
+	chB := model.Channel{Id: 943, Name: "single-B", Type: constant.ChannelTypeOpenAI, Key: "single-B", Models: "gpt-exclude", Group: "default", Status: common.ChannelStatusEnabled, BaseURL: &upstream.URL}
+	require.NoError(t, db.Create(&chA).Error)
+	require.NoError(t, db.Create(&chB).Error)
+	require.NoError(t, db.Create(&model.Ability{ChannelId: chA.Id, Group: "default", Model: "gpt-exclude", Enabled: true, Priority: common.GetPointer(int64(10)), Weight: 1}).Error)
+	require.NoError(t, db.Create(&model.Ability{ChannelId: chB.Id, Group: "default", Model: "gpt-exclude", Enabled: true, Priority: common.GetPointer(int64(10)), Weight: 1}).Error)
+
+	// Run 10 iterations starting on chA: retry must deterministically move to chB without re-picking chA.
+	for i := 0; i < 10; i++ {
+		sends = nil
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-exclude","messages":[{"role":"user","content":"hi"}]}`))
+		c.Request.Header.Set("Content-Type", "application/json")
+		common.SetContextKey(c, constant.ContextKeyUserId, 940)
+		common.SetContextKey(c, constant.ContextKeyTokenId, 941)
+		common.SetContextKey(c, constant.ContextKeyTokenKey, "exclude-token")
+		common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+		common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+		common.SetContextKey(c, constant.ContextKeyOriginalModel, "gpt-exclude")
+		common.SetContextKey(c, constant.ContextKeyUserSetting, dto.UserSetting{BillingPreference: "wallet_only"})
+		c.Set("relay_mode", 1)
+		require.Nil(t, middleware.SetupContextForSelectedChannel(c, &chA, "gpt-exclude"))
+
+		Relay(c, types.RelayFormatOpenAI)
+		common.CleanupBodyStorage(c)
+		assert.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+		assert.Equal(t, []string{"Bearer single-A", "Bearer single-B"}, sends)
+	}
+}

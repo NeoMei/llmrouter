@@ -495,8 +495,11 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		accountpool.State(c).ResourceRejected = true
 		return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusConflict, types.ErrOptionWithSkipRetry())
 	}
-	if err := accountpool.BeginSend(c); err != nil {
-		return nil, err
+	ownLifecycle := !accountpool.State(c).InFlight
+	if ownLifecycle {
+		if err := accountpool.BeginSend(c); err != nil {
+			return nil, err
+		}
 	}
 	if info.PlatformMode || accountpool.State(c).Selected != nil {
 		// Redirects otherwise replay a body inside Client.Do, hiding extra sends
@@ -575,11 +578,13 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 			cancelSend()
 		}
 	}
-	if observeErr := accountpool.Observe(c, resp, err); observeErr != nil {
-		if resp != nil && resp.Body != nil {
-			resp.Body.Close()
+	if ownLifecycle {
+		if observeErr := accountpool.Observe(c, resp, err); observeErr != nil {
+			if resp != nil && resp.Body != nil {
+				resp.Body.Close()
+			}
+			return nil, observeErr
 		}
-		return nil, observeErr
 	}
 	if accountpool.State(c).Uncertain {
 		if resp != nil && resp.Body != nil {

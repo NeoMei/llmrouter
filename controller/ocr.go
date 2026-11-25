@@ -479,17 +479,22 @@ func (h *OCRHandler) candidates(c *gin.Context, name string) ([]modelcatalog.Res
 			return nil, user, token, err
 		}
 		candidates, err := catalog.ResolveCandidates(ctx, user.Id, groups, name, client)
-		if err == nil && session.ProductCredit() {
-			weights := make([]int, len(candidates))
-			for i, candidate := range candidates {
-				if candidate.Priority == candidates[0].Priority && slices.Contains(candidate.PreferredWires, modelcatalog.WirePaddleOCR) {
-					weights[i] = candidate.RouteWeight
-				}
+		if err == nil && len(candidates) > 1 {
+			seed := c.GetString(common.RequestIdKey)
+			if session.ProductCredit() {
+				seed = session.CallID()
 			}
-			i := modelcatalog.WeightedTargetIndex(weights, session.CallID())
-			selected := candidates[i]
-			copy(candidates[1:i+1], candidates[:i])
-			candidates[0] = selected
+			modelcatalog.OrderCandidatesByWeight(
+				candidates,
+				func(candidate modelcatalog.ResolvedModel) int { return candidate.Priority },
+				func(candidate modelcatalog.ResolvedModel) int {
+					if !slices.Contains(candidate.PreferredWires, modelcatalog.WirePaddleOCR) {
+						return 0
+					}
+					return candidate.RouteWeight
+				},
+				seed,
+			)
 		}
 		return candidates, user, token, err
 	}

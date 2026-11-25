@@ -280,12 +280,16 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 	}()
 
+	retryProtocol, retryOperation, _ := capability.ResolveRequest(c.Request.Method, c.Request.URL.Path)
 	retryParam := &service.RetryParam{
-		Ctx:         c,
-		TokenGroup:  relayInfo.TokenGroup,
-		ModelName:   relayInfo.ResolvedModelNameOrOrigin(),
-		RequestPath: c.Request.URL.Path,
-		Retry:       common.GetPointer(0),
+		Ctx:              c,
+		ExcludedChannels: map[int]bool{},
+		TokenGroup:       relayInfo.TokenGroup,
+		ModelName:        relayInfo.ResolvedModelNameOrOrigin(),
+		RequestPath:      c.Request.URL.Path,
+		Protocol:         retryProtocol,
+		Operation:        retryOperation,
+		Retry:            common.GetPointer(0),
 	}
 	accountpool.State(c).MaxSends = common.RetryTimes + 1
 	relayInfo.RetryIndex = 0
@@ -452,6 +456,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			accountpool.State(c).RetryChannel = channel
 			continue
 		}
+		if retryParam.ExcludedChannels == nil {
+			retryParam.ExcludedChannels = map[int]bool{}
+		}
+		retryParam.ExcludedChannels[channel.Id] = true
 		if len(relayInfo.RouteCandidates) > 0 {
 			if !advanceRouteCandidate(relayInfo) {
 				break
@@ -1186,12 +1194,16 @@ func RelayTask(c *gin.Context) {
 		}
 	}()
 
+	retryProtocol, retryOperation, _ := capability.ResolveRequest(c.Request.Method, c.Request.URL.Path)
 	retryParam := &service.RetryParam{
-		Ctx:         c,
-		TokenGroup:  relayInfo.TokenGroup,
-		ModelName:   relayInfo.ResolvedModelNameOrOrigin(),
-		RequestPath: c.Request.URL.Path,
-		Retry:       common.GetPointer(0),
+		Ctx:              c,
+		ExcludedChannels: map[int]bool{},
+		TokenGroup:       relayInfo.TokenGroup,
+		ModelName:        relayInfo.ResolvedModelNameOrOrigin(),
+		RequestPath:      c.Request.URL.Path,
+		Protocol:         retryProtocol,
+		Operation:        retryOperation,
+		Retry:            common.GetPointer(0),
 	}
 
 	accountpool.State(c).MaxSends = common.RetryTimes + 1
@@ -1260,8 +1272,14 @@ func RelayTask(c *gin.Context) {
 		}
 		if samePool {
 			accountpool.State(c).RetryChannel = channel
-		} else if len(relayInfo.RouteCandidates) > 0 && !advanceRouteCandidate(relayInfo) {
-			break
+		} else {
+			if retryParam.ExcludedChannels == nil {
+				retryParam.ExcludedChannels = map[int]bool{}
+			}
+			retryParam.ExcludedChannels[channel.Id] = true
+			if len(relayInfo.RouteCandidates) > 0 && !advanceRouteCandidate(relayInfo) {
+				break
+			}
 		}
 	}
 
@@ -1611,18 +1629,17 @@ func resolveClientModelRoute(c *gin.Context, relayInfo *relaycommon.RelayInfo, e
 			types.ErrOptionWithSkipRetry(),
 		)
 	}
-	if relayInfo.PlatformBilling.ProductCredit() {
-		candidates := relayInfo.RouteCandidates
-		weights := make([]int, len(candidates))
-		for i, candidate := range candidates {
-			if candidate.Priority == candidates[0].Priority {
-				weights[i] = candidate.Weight
-			}
+	if len(relayInfo.RouteCandidates) > 1 {
+		seed := GetRequestId(c)
+		if relayInfo.PlatformBilling.ProductCredit() {
+			seed = relayInfo.PlatformBilling.CallID()
 		}
-		i := modelcatalog.WeightedTargetIndex(weights, relayInfo.PlatformBilling.CallID())
-		selected := candidates[i]
-		copy(candidates[1:i+1], candidates[:i])
-		candidates[0] = selected
+		modelcatalog.OrderCandidatesByWeight(
+			relayInfo.RouteCandidates,
+			func(candidate relaycommon.RouteCandidate) int { return candidate.Priority },
+			func(candidate relaycommon.RouteCandidate) int { return candidate.Weight },
+			seed,
+		)
 	}
 	if err := selectRouteCandidateForAttempt(c, relayInfo, 0); err != nil {
 		return types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())

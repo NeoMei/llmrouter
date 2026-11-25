@@ -49,6 +49,7 @@ type Lifecycle struct {
 	ResponsesBackground        bool
 	Uncertain                  bool
 	UnsafeResponse             bool
+	InFlight                   bool
 	PersistenceError           error
 }
 
